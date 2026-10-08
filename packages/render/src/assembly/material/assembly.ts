@@ -1,12 +1,4 @@
 import {
-  type MaterialRenderProjection as AssetMaterialRenderProjection,
-  projectMaterialRecord,
-} from '@forgeax/engine-assets-runtime';
-import {
-  type CookedMaterialRecord,
-  materialLayerPlanIdentity,
-} from '@forgeax/engine-pack/material-cook';
-import {
   createStandardPbrArtifactReceipt,
   type MaterialShaderArtifact,
   type MaterialShaderArtifactReceipt,
@@ -15,33 +7,12 @@ import {
   type MaterialShaderProgram,
   type ShaderRegistry,
 } from '@forgeax/engine-shader';
-import type { MaterialProgramAddress, StandardLayerPlan } from '@forgeax/engine-types';
+import type { MaterialProgramAddress } from '@forgeax/engine-types';
 import { resolveMaterialShaderUvSetCount } from '../material-shader-policy';
-import { projectStandardLayerPlan } from './standard-layer-projection.js';
 
 type ProgramEntry = MaterialShaderEntry & { readonly program: MaterialShaderProgram };
 
 export type { MaterialRenderPassProjection } from '@forgeax/engine-assets-runtime';
-export interface MaterialRenderProjection extends AssetMaterialRenderProjection {
-  readonly layerPlan: StandardLayerPlan;
-}
-
-export function assembleMaterialProjection(record: CookedMaterialRecord): MaterialRenderProjection {
-  const layerPlan = projectStandardLayerPlan(record.resolved.parameters, record.resolved.passes);
-  const expectedLayerPlanIdentity = materialLayerPlanIdentity(record);
-  if (
-    expectedLayerPlanIdentity !== undefined &&
-    record.receipt.derivedInterface.layerPlanIdentity !== expectedLayerPlanIdentity
-  ) {
-    throw new Error(
-      `Standard material layer-plan identity mismatch: expected ${expectedLayerPlanIdentity}, got ${record.receipt.derivedInterface.layerPlanIdentity ?? 'missing'}`,
-    );
-  }
-  return {
-    ...projectMaterialRecord(record),
-    layerPlan,
-  };
-}
 
 /**
  * Assemble the one built-in Standard PBR artifact from the registry-owned entry.
@@ -159,10 +130,7 @@ function assemblePublishedArtifact(
 ): MaterialShaderArtifact | undefined {
   const receipt = shaderEntry.receipt;
   if (receipt === undefined) return undefined;
-  if (
-    options.vertexColorAvailable !== undefined &&
-    receiptHasVertexColor(receipt) !== options.vertexColorAvailable
-  ) {
+  if (options.vertexColorAvailable === false && receiptHasVertexColor(receipt)) {
     return undefined;
   }
   return {
@@ -311,53 +279,6 @@ function isBuiltinStandardPbrMaterialShader(materialShaderId: string): boolean {
   );
 }
 
-/** Resolve the registry-owned Standard PBR artifact, including the historical skin alias. */
-export function resolveStandardPbrArtifact(
-  materialShaderId: string,
-  shader: Pick<ShaderRegistry, 'findMaterialArtifact' | 'materialProgram'> &
-    Partial<Pick<ShaderRegistry, 'materialShaderManifestEntries'>>,
-  options: MaterialShaderArtifactRequest = {},
-): MaterialShaderArtifact | undefined {
-  const lookupIds = materialShaderLookupIds(materialShaderId);
-  for (const lookupId of lookupIds) {
-    const lookup = shader.findMaterialArtifact(lookupId);
-    if (!lookup.ok) continue;
-    let manifestEntry: MaterialShaderManifestEntry | undefined;
-    for (const entry of shader.materialShaderManifestEntries?.() ?? []) {
-      if (entry.identifier === lookupId) {
-        manifestEntry = entry;
-        break;
-      }
-    }
-    const selected =
-      manifestEntry === undefined || manifestEntry.variants.length === 0
-        ? undefined
-        : selectPublishedVariant(manifestEntry, options);
-    const selectedEntry =
-      selected === undefined
-        ? lookup.value
-        : selectedMaterialShaderEntry(
-            lookup.value,
-            shader.materialProgram(selected.composedWgsl),
-            selected.receipt,
-          );
-    const artifact = assembleStandardPbrArtifact(materialShaderId, selectedEntry, options);
-    if (artifact === undefined) return undefined;
-    // A variant source without producer receipt is not safe to admit on a
-    // geometry-specific path. The assembly helper keeps its legacy fallback
-    // only for callers that did not provide a geometry fact.
-    if (
-      options.vertexColorAvailable !== undefined &&
-      artifact.receipt !== undefined &&
-      receiptHasVertexColor(artifact.receipt) !== options.vertexColorAvailable
-    ) {
-      return undefined;
-    }
-    return selected === undefined ? artifact : { ...artifact, variantSet: selected.definesKey };
-  }
-  return undefined;
-}
-
 // Registry entries and manifest publications are immutable. Replace the projection
 // when either owner identity changes; old registrations remain weakly held.
 const publishedArtifacts = new WeakMap<
@@ -369,9 +290,8 @@ const publishedArtifacts = new WeakMap<
 >();
 
 /**
- * Resolve any producer-published material artifact through the same manifest
- * variant relation as Standard. Unlike the Standard compatibility helper this
- * never fabricates a receipt: a custom shader without producer ABI remains
+ * Resolve any producer-published material artifact through its manifest
+ * variant relation. It never fabricates a receipt: a custom shader without producer ABI remains
  * outside the GPU-driven lane with a structured preparation error.
  */
 export function resolveMaterialShaderArtifact(
@@ -406,6 +326,7 @@ export function resolveMaterialShaderArtifact(
       options.clustered,
       options.probeBlend,
       options.reflectionFallback,
+      options.visibleSurface,
       options.variantSet,
       options.address,
       options.pass,

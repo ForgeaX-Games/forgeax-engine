@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import type { AssetGuid } from '@forgeax/engine-types';
+import type { AssetGuid, MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { admitRayMaterial, rayMaterialContract } from '../../../../shader/src/material/ray-program';
 import {
@@ -12,6 +12,29 @@ import { buildRaySurfaceScene } from '../../raytracing/attributes';
 import { plane } from './path-tracer.fixture';
 
 describe('ray Surface admission and source ownership', () => {
+  it('keeps custom ray eligibility independent of canonical Card qualification', () => {
+    const canonical = Materials.standard({ baseColor: [1, 1, 1, 1] });
+    if (canonical.parent !== undefined) throw new Error('expected a root material');
+    expect(admitRayMaterial(canonical, 'canonical', 'card-capture').ok).toBe(true);
+    const forward = canonical.passes?.find((pass) => pass.name.toLowerCase() === 'forward');
+    if (forward === undefined) throw new Error('expected a Forward pass');
+    const custom: MaterialAsset = {
+      ...canonical,
+      passes: [
+        {
+          ...forward,
+          program: { ...forward.program, moduleSlots: { surface: 'game::view_surface' } },
+        },
+      ],
+    };
+    expect(admitRayMaterial(custom, 'custom', 'ray-hit').ok).toBe(true);
+    expect(admitRayMaterial(custom, 'custom', 'raster-probe').ok).toBe(true);
+    expect(admitRayMaterial(custom, 'custom', 'card-capture')).toMatchObject({
+      ok: false,
+      error: { code: 'ray-material-unsupported', detail: { source: 'game::view_surface' } },
+    });
+  });
+
   it('reconstructs indexed source attributes after BVH ordering without borrowing arrays', () => {
     const p = plane();
     const colors = [1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1];
@@ -50,6 +73,20 @@ describe('ray Surface admission and source ownership', () => {
       Materials.standard({ baseColor: [1, 1, 1, 1], alphaHash: true }),
     ])
       expect(admitRayMaterial(asset, 'test').ok).toBe(false);
+  });
+  it('rejects raster-specialized projection instead of tracing it by UV', () => {
+    const projected = [
+      Materials.standard({ baseColor: [1, 1, 1, 1], triplanar: { space: 'world' } }),
+      Materials.standard({ baseColor: [1, 1, 1, 1], triplanar: { space: 'object' } }),
+      Materials.standard({ baseColor: [1, 1, 1, 1], normalTexture: 'n', normalMapSpace: 'object' }),
+    ];
+    for (const asset of projected)
+      expect(admitRayMaterial(asset, 'test')).toMatchObject({
+        ok: false,
+        error: { code: 'ray-material-unsupported' },
+      });
+    expect(admitRayMaterial(Materials.standard({ baseColor: [1, 1, 1, 1] }), 'test').ok).toBe(true);
+    expect(admitRayMaterial(Materials.lambert({ baseColor: [1, 1, 1, 1] }), 'test').ok).toBe(true);
   });
   it('rejects diffuse transmission until the shared ray and cache BSDF supports it', () => {
     for (const options of [

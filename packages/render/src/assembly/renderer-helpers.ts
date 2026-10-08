@@ -1,13 +1,16 @@
 import type { Result, RhiCanvasContext, RhiDevice } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import type { RhiErrorListenerRegistry } from '../lifecycle';
+import type { OutputColorSpaceState } from '../output-color-space';
 import type { PipelineSpecError } from '../pipeline-spec';
-import { configureSurface, type PipelineState } from '../render-system';
+import { configurePipelineSurface, type PipelineState } from '../record/render-context';
 
 /** Minimum device-bound surface contract needed by lazy context configuration. */
 export interface RendererSurfaceInternals {
   readonly device: RhiDevice;
   readonly context: RhiCanvasContext;
+  /** Output colour-space negotiation refreshed by every surface configure. */
+  readonly outputColorSpace?: OutputColorSpaceState | undefined;
   readonly pack: {
     readonly instrumentation?: {
       readonly resolveSurfaceDevice?: (device: RhiDevice) => Result<RhiDevice, RhiError>;
@@ -63,20 +66,14 @@ export function ensureContextConfigured(
     errorRegistry.fire(configuredDevice.error);
     return err(configuredDevice.error);
   }
-  const cfgResult = configureSurface(
+  const configured = configurePipelineSurface(
     context,
     configuredDevice?.value ?? device,
-    state.format,
-    state.colorAttachmentFormat,
+    state,
+    internals.outputColorSpace,
   );
-  if (!cfgResult.ok) {
-    errorRegistry.fire(cfgResult.error);
-    return err(cfgResult.error);
-  }
-  state.perPassResources.configured = true;
-  (globalThis as { __forgeaxSwapChainFormat?: GPUTextureFormat }).__forgeaxSwapChainFormat =
-    state.format;
-  return ok(undefined);
+  if (!configured.ok) errorRegistry.fire(configured.error);
+  return configured;
 }
 
 export function runShimSyncStep<T>(

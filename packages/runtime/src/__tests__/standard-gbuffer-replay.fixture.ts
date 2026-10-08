@@ -43,7 +43,7 @@ export function renderValue<T>(
     | { readonly ok: true; readonly value: T }
     | { readonly ok: false; readonly error: unknown },
 ): T {
-  if (!result.ok) throw result.error;
+  if (!result.ok) throw new Error(JSON.stringify(result.error), { cause: result.error });
   return result.value;
 }
 const rgba = (read: ReplayReadbackResult) => {
@@ -272,9 +272,7 @@ export async function verifyStandardGBufferReplay(
           })
           .unwrap();
       }
-      renderValue(
-        renderer.setProfile({ ...original, renderPath: 'deferred', shadows: 'off', ssao: effects }),
-      );
+      renderValue(renderer.setProfile({ ...original, renderPath: 'deferred', ssao: effects }));
       const draw = async () => {
         world.update(1 / 60).unwrap();
         propagateTransforms(world).unwrap();
@@ -336,9 +334,24 @@ export async function verifyStandardGBufferReplay(
         throw new Error('missing production GBuffer/lighting work');
       expect(geometry.workIndex).toBeLessThan(lighting.workIndex);
       expect(geometry.drawCall).toMatchObject({
-        kind: mode === 'direct' || effects ? 'drawIndexed' : 'drawIndexedIndirect',
+        // Deferred SSR writes its fallback in lighting, so the G-buffer stays GPU-driven.
+        kind: mode === 'direct' ? 'drawIndexed' : 'drawIndexedIndirect',
       });
-      expect(geometry.attachments.colorViewHandleIds).toHaveLength(5);
+      expect(geometry.attachments.colorViewHandleIds).toHaveLength(effects ? 7 : 6);
+      if (effects) {
+        const temporalView = model.resources.find(
+          (resource) => resource.resourceId === geometry.attachments?.colorViewHandleIds[6],
+        );
+        expect(temporalView?.kind).toBe('texture-view');
+        const temporalTexture = model.resources.find(
+          (resource) =>
+            resource.resourceId ===
+            (temporalView?.descriptor as { sourceHandleId?: string } | undefined)?.sourceHandleId,
+        );
+        expect(temporalTexture?.descriptor).toMatchObject({
+          desc: { label: 'standard-scene-temporal', format: 'rgba16float' },
+        });
+      }
       expect(geometry.attachments.colorViewHandleIds[0]).toBe(
         lighting.attachments?.colorViewHandleIds[0],
       );
@@ -408,7 +421,7 @@ export async function verifyStandardGBufferReplay(
           geometryPixels.filter((_, i) => i % 4 === 3),
         );
         const packed: number[] = [];
-        for (const resourceId of geometry.attachments.colorViewHandleIds.slice(1)) {
+        for (const resourceId of geometry.attachments.colorViewHandleIds.slice(1, 5)) {
           const read = (await replay.readResourceAtWork(resourceId, geometry.workIndex)).unwrap();
           expect(read.format).toBe('r32uint');
           expect(read.bytes.byteLength).toBe(64 * 64 * 4);
@@ -472,8 +485,11 @@ export async function verifyStandardGBufferReplay(
           expect(ao.workIndex).toBeGreaterThan(geometry.workIndex);
           expect(ao.workIndex).toBeLessThan(lighting.workIndex);
           const occlusion = await inspect(ao);
-          expect(occlusion.format).toBe('r8unorm');
-          expect(Math.min(...occlusion.bytes)).toBeLessThan(255);
+          // Visibility is .r; .gb carry the encoded normal the AO filter reads.
+          expect(occlusion.format).toBe('rgba8unorm');
+          expect(
+            occlusion.bytes.filter((_, i) => i % 4 === 0).reduce((a, b) => Math.min(a, b), 255),
+          ).toBeLessThan(255);
           const traceOutput = trace.bindings.find(
             (binding) => binding.groupIndex === 0 && binding.binding === 4,
           );

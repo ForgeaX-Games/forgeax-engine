@@ -7,6 +7,7 @@ import {
   type PeerId,
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
+import { alreadyClosed, connectionClosed, connectionFailed, normalizeCause } from './errors';
 import {
   BoundedEventQueue,
   DEFAULT_MAX_QUEUED_BYTES,
@@ -41,6 +42,8 @@ export interface WebSocketClientCoreOptions {
   readonly toBytes: (data: unknown) => Uint8Array | Promise<Uint8Array | undefined> | undefined;
 }
 
+type ClientState = 'connecting' | 'open' | 'failed' | 'remote-closed' | 'locally-closed';
+
 const CLIENT_PEER_ID = 1 as PeerId;
 
 export function createWebSocketClientEndpoint(
@@ -73,10 +76,8 @@ export function createWebSocketClientEndpoint(
     }
 
     const terminalEvents: EndpointEvent[] = [];
-    let opened = false;
-    let settled = false;
-    let closed = false;
-    let locallyClosed = false;
+    let state: ClientState = 'connecting';
+    const closed = (): boolean => state === 'remote-closed' || state === 'locally-closed';
     let messageTail = Promise.resolve();
     let pendingMessages = 0;
     let pendingBytes = 0;
@@ -86,8 +87,8 @@ export function createWebSocketClientEndpoint(
     };
 
     const abortPendingConnection = (): void => {
-      if (opened || settled) return;
-      settled = true;
+      if (state !== 'connecting') return;
+      state = 'failed';
       try {
         socket.close();
       } catch {
@@ -104,8 +105,8 @@ export function createWebSocketClientEndpoint(
     }
 
     const disconnect = (reason: string): void => {
-      if (closed) return;
-      closed = true;
+      if (closed()) return;
+      state = 'remote-closed';
       queue.close(reason);
       terminalEvents.push({ kind: 'peer-disconnected', peerId: clientPeerId });
     };
@@ -113,7 +114,8 @@ export function createWebSocketClientEndpoint(
     const endpoint: NetEndpoint = {
       poll: () => [...queue.drain(), ...terminalEvents.splice(0)],
       send: (peerId, data) => {
-        if (closed) return locallyClosed ? alreadyClosed() : connectionClosed(peerId);
+        if (closed())
+          return state === 'locally-closed' ? alreadyClosed() : connectionClosed(peerId);
         if (peerId !== clientPeerId)
           return err(
             new EndpointError({
@@ -123,15 +125,7 @@ export function createWebSocketClientEndpoint(
               detail: { peerId },
             }),
           );
-        if (socket.readyState !== socket.OPEN)
-          return err(
-            new EndpointError({
-              code: 'connection-closed',
-              expected: ENDPOINT_EXPECTED['connection-closed'],
-              hint: ENDPOINT_ERROR_HINTS['connection-closed'],
-              detail: { peerId },
-            }),
-          );
+        if (socket.readyState !== socket.OPEN) return connectionClosed(peerId);
         try {
           if ((socket.bufferedAmount ?? 0) + data.byteLength > DEFAULT_MAX_QUEUED_BYTES)
             throw new Error('send buffer limit exceeded; retry after the socket drains');
@@ -149,32 +143,23 @@ export function createWebSocketClientEndpoint(
         }
       },
       close: () => {
-        if (closed)
-          return err(
-            new EndpointError({
-              code: 'already-closed',
-              expected: ENDPOINT_EXPECTED['already-closed'],
-              hint: ENDPOINT_ERROR_HINTS['already-closed'],
-              detail: { cause: 'The WebSocket endpoint is already closed.' },
-            }),
-          );
-        locallyClosed = true;
+        if (closed()) return alreadyClosed('The WebSocket endpoint is already closed.');
         disconnect('Endpoint close requested.');
+        state = 'locally-closed';
         socket.close();
         return ok(undefined);
       },
     };
 
     socket.onopen = () => {
-      if (settled) return;
+      if (state !== 'connecting') return;
       removeAbortListener();
-      opened = true;
-      settled = true;
+      state = 'open';
       queue.enqueue({ kind: 'peer-connected', peerId: clientPeerId });
       resolve(ok(endpoint));
     };
     socket.onmessage = ({ data }) => {
-      if (closed || queue.closed) return;
+      if (closed() || queue.closed) return;
       const byteLength =
         data instanceof ArrayBuffer || ArrayBuffer.isView(data)
           ? data.byteLength
@@ -195,9 +180,9 @@ export function createWebSocketClientEndpoint(
       // ordered WebSocket messages retain their wire order after decoding.
       messageTail = messageTail
         .then(async () => {
-          if (closed || queue.closed) return;
+          if (closed() || queue.closed) return;
           const bytes = await options.toBytes(data);
-          if (!bytes || closed) return;
+          if (!bytes || closed()) return;
           if (!queue.enqueue({ kind: 'message', peerId: clientPeerId, data: bytes })) {
             socket.close();
           }
@@ -209,16 +194,16 @@ export function createWebSocketClientEndpoint(
         });
     };
     socket.onerror = (cause) => {
-      if (opened) disconnect(`WebSocket error: ${normalizeCause(cause)}`);
-      else if (!settled) {
-        settled = true;
+      if (state === 'open') disconnect(`WebSocket error: ${normalizeCause(cause)}`);
+      else if (state === 'connecting') {
+        state = 'failed';
         removeAbortListener();
         resolve(connectionFailed(options.url, cause));
       }
     };
     socket.onclose = (cause) => {
-      if (!opened && !settled) {
-        settled = true;
+      if (state === 'connecting') {
+        state = 'failed';
         removeAbortListener();
         resolve(connectionFailed(options.url, cause));
         return;
@@ -226,43 +211,4 @@ export function createWebSocketClientEndpoint(
       disconnect(`WebSocket closed: ${normalizeCause(cause)}`);
     };
   });
-}
-
-function connectionFailed(address: string, cause: unknown): Result<never, EndpointError> {
-  return err(
-    new EndpointError({
-      code: 'connection-failed',
-      expected: ENDPOINT_EXPECTED['connection-failed'],
-      hint: ENDPOINT_ERROR_HINTS['connection-failed'],
-      detail: { address, cause: normalizeCause(cause) },
-    }),
-  );
-}
-
-function alreadyClosed(): Result<never, EndpointError> {
-  return err(
-    new EndpointError({
-      code: 'already-closed',
-      expected: ENDPOINT_EXPECTED['already-closed'],
-      hint: ENDPOINT_ERROR_HINTS['already-closed'],
-      detail: { cause: 'The WebSocket endpoint is closed.' },
-    }),
-  );
-}
-
-function connectionClosed(peerId: PeerId): Result<never, EndpointError> {
-  return err(
-    new EndpointError({
-      code: 'connection-closed',
-      expected: ENDPOINT_EXPECTED['connection-closed'],
-      hint: ENDPOINT_ERROR_HINTS['connection-closed'],
-      detail: { peerId },
-    }),
-  );
-}
-
-function normalizeCause(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  if (typeof cause === 'string') return cause;
-  return 'WebSocket operation failed without a platform error message.';
 }

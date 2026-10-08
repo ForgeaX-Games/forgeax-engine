@@ -14,7 +14,7 @@ describe('Points/Lines conservative transformed culling bounds', () => {
   it('uses line width as the conservative envelope for off-edge segments', () => {
     const expanded = expandPointsLinesBounds([-1, -1, 0, 1, 1, 0], {
       kind: 'lines',
-      widthPx: 4,
+      width: 4,
     });
     expect([...expanded]).toEqual([-9, -9, -8, 9, 9, 8]);
   });

@@ -28,7 +28,7 @@ function input(kind, backend) {
   const isLut = kind === 'positive-lut';
   const stages = active
     ? ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-        id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+        id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
         domain,
         readback: { rawHash: hash(String(index + (isLut ? 4 : 1))), frame: 60 },
         metadata: {

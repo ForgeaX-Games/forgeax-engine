@@ -112,47 +112,25 @@ describe('production-path shared instance bind-group resolver', () => {
   });
 });
 
-// ── Sprite Instances instanceBuffers (D-1a #1) ─────────────────────────────
-
-describe('production-path sprite Instances instanceBuffers world-aware key', () => {
-  it('spriteInst.cacheKey get uses a world-aware key', () => {
-    expectWorldAwareCacheKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.get(', 0),
-      'main-pass-sprite-draws sprite instanceBuffers.get',
-    );
-  });
-
-  it('spriteInst.cacheKey set uses a world-aware key', () => {
-    expectWorldAwareCacheKeyAt(
-      SPRITE_FILE,
-      findLine(SPRITE_FILE, 'frameState.instanceBuffers.set(', 0),
-      'main-pass-sprite-draws sprite instanceBuffers.set',
-    );
-  });
-});
-
-// ── SpriteInstances instanceBuffers (D-1a #1) ──────────────────────────────
+// ── Sprite Instances / SpriteInstances instanceBuffers (D-1a #1) ──────────
 
 const SPRITE_INSTANCES_FILE = fileURLToPath(
   new URL('../../../render/src/record/sprite-instance-buffer.ts', import.meta.url),
 );
 
-describe('production-path SpriteInstances instanceBuffers world-aware key', () => {
-  it('spriteInstancesSnap.cacheKey get uses a world-aware key', () => {
-    expectWorldAwareCacheKeyAt(
-      SPRITE_INSTANCES_FILE,
-      findLine(SPRITE_INSTANCES_FILE, 'frameState.instanceBuffers.get('),
-      'sprite-instance-buffer spriteInstances instanceBuffers.get',
-    );
+describe('production-path sprite instanceBuffers world-aware key', () => {
+  it('Instances and SpriteInstances both upload through the shared owner', () => {
+    const src = readFileSync(SPRITE_FILE, 'utf8');
+    expect(src).toContain('uploadSpriteInstanceBuffer(');
+    expect(src).not.toContain('frameState.instanceBuffers.');
+    expect(readFileSync(SPRITE_INSTANCES_FILE, 'utf8')).toContain('uploadSpriteInstanceBuffer(');
   });
 
-  it('spriteInstancesSnap.cacheKey set uses a world-aware key', () => {
-    expectWorldAwareCacheKeyAt(
-      SPRITE_INSTANCES_FILE,
-      findLine(SPRITE_INSTANCES_FILE, 'frameState.instanceBuffers.set('),
-      'sprite-instance-buffer spriteInstances instanceBuffers.set',
-    );
+  it('the shared owner keys get and set by the world-aware key', () => {
+    const src = readFileSync(SPRITE_INSTANCES_FILE, 'utf8');
+    expect(src).toContain('const key = worldEntityKey(worldId, snapshot.cacheKey);');
+    expect(src).toContain('frameState.instanceBuffers.get(key)');
+    expect(src).toContain('frameState.instanceBuffers.set(key, active)');
   });
 });
 

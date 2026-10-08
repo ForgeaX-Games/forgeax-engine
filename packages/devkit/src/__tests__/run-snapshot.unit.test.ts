@@ -1,8 +1,103 @@
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
 import { createRunSnapshot, snapshotDirectoryInsideProject } from '../run-snapshot.js';
+
+it('preserves the streaming snapshot version and immutable bytes across the small-file boundary', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'engine-snapshot-size-boundary-'));
+  const project = join(directory, 'project');
+  const files = {
+    'package.json': Buffer.from('{}'),
+    'a-empty.bin': Buffer.alloc(0),
+    'b-small.bin': Buffer.alloc(65535, 17),
+    'c-boundary.bin': Buffer.alloc(65536, 23),
+    'd-large.bin': Buffer.alloc(65537, 31),
+    'e-executable.mjs': Buffer.from('export const immutable = true;\n'),
+  };
+  try {
+    await mkdir(project);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(project, name), bytes);
+      await chmod(join(project, name), name === 'e-executable.mjs' ? 0o755 : 0o644);
+    }
+    const snapshot = await createRunSnapshot(project, join(directory, 'snapshot'));
+    if (process.platform !== 'win32') {
+      // Receipt from the original all-streaming producer with these exact bytes/modes.
+      expect(snapshot.version).toBe(
+        'sha256:a3d7007a1f63b01396a1d77677475a199b786ea385a9a6467e2cb6f8d9add51c',
+      );
+    }
+    await rm(project, { recursive: true });
+    for (const [name, bytes] of Object.entries(files)) {
+      const path = join(snapshot.root, name);
+      expect(await readFile(path)).toEqual(bytes);
+      if (process.platform !== 'win32')
+        expect((await stat(path)).mode & 0o777).toBe(name === 'e-executable.mjs' ? 0o555 : 0o444);
+    }
+    await snapshot.dispose();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('keeps the generated wgpu binding in the published snapshot despite wasm-pack ignores', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'engine-snapshot-wgpu-'));
+  try {
+    const project = join(directory, 'project');
+    const dependency = join(directory, 'dependency');
+    const manifest = JSON.parse(
+      await readFile(new URL('../../../wgpu-wasm/package.json', import.meta.url), 'utf8'),
+    );
+    await mkdir(join(project, 'node_modules/@forgeax'), { recursive: true });
+    await mkdir(join(dependency, 'dist'), { recursive: true });
+    await mkdir(join(dependency, 'pkg'));
+    await writeFile(
+      join(project, 'package.json'),
+      JSON.stringify({ dependencies: { [manifest.name]: '*' } }),
+    );
+    await writeFile(join(dependency, 'package.json'), JSON.stringify(manifest));
+    await writeFile(join(dependency, 'pkg/.gitignore'), '*\n');
+    const payload = {
+      'package.json': '{"type":"module"}',
+      'README.md': 'Generated binding',
+      'provenance.json': '{}',
+      'wgpu_wasm.js': 'export const binding = "snapshot-owned";',
+      'wgpu_wasm.d.ts': 'export declare const binding: string;',
+      'wgpu_wasm_bg.wasm': 'generated payload',
+      'wgpu_wasm_bg.wasm.d.ts': 'export {};',
+    };
+    for (const [name, content] of Object.entries(payload))
+      await writeFile(join(dependency, 'pkg', name), content);
+    await writeFile(
+      join(dependency, 'dist/index.mjs'),
+      'export { binding } from "../pkg/wgpu_wasm.js";',
+    );
+    await symlink(dependency, join(project, 'node_modules', manifest.name), 'junction');
+    const snapshot = await createRunSnapshot(project, join(directory, 'snapshot'));
+    await rm(dependency, { recursive: true, force: true });
+    const copied = join(snapshot.root, 'node_modules', manifest.name);
+    expect((await import(pathToFileURL(join(copied, 'dist/index.mjs')).href)).binding).toBe(
+      'snapshot-owned',
+    );
+    for (const [name, content] of Object.entries(payload))
+      expect(await readFile(join(copied, 'pkg', name), 'utf8')).toBe(content);
+    await snapshot.dispose();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 it('copies a linked package payload without its repository fixtures', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'engine-snapshot-package-'));

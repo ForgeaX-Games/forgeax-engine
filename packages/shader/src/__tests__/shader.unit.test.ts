@@ -768,7 +768,9 @@ import {
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.error.code).toBe('material-shader-not-found');
-      const registered = r.error.detail?.registeredShaderIds;
+      const detail = r.error.detail;
+      const registered =
+        detail?.code === 'material-shader-not-found' ? detail.registeredShaderIds : undefined;
       expect(Array.isArray(registered)).toBe(true);
       expect(registered).toEqual(ids);
       expect(registered).toContain('my-game::pulse-material');
@@ -779,7 +781,9 @@ import {
       const r = registry.findMaterialArtifact('forgeax::no-such-shader');
       expect(r.ok).toBe(false);
       if (r.ok) return;
-      const registered = r.error.detail?.registeredShaderIds;
+      const detail = r.error.detail;
+      const registered =
+        detail?.code === 'material-shader-not-found' ? detail.registeredShaderIds : undefined;
       expect(Array.isArray(registered)).toBe(true);
       expect(registered).toEqual([]);
     });
@@ -857,6 +861,7 @@ import {
       const variantAxes = src.match(/#pragma\s+variant_axis\s+\w+/g) ?? [];
       expect(variantAxes).toEqual([
         '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
+        '#pragma variant_axis ATMOSPHERE_AVAILABLE',
         '#pragma variant_axis CLUSTER_FORWARD_AVAILABLE',
         '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
         '#pragma variant_axis PROBE_BLEND_AVAILABLE',
@@ -876,8 +881,10 @@ import {
       const variantAxes = src.match(/#pragma\s+variant_axis\s+\w+/g) ?? [];
       expect(variantAxes).toEqual([
         '#pragma variant_axis STORAGE_BUFFER_AVAILABLE',
+        '#pragma variant_axis ATMOSPHERE_AVAILABLE',
         '#pragma variant_axis VERTEX_COLOR_AVAILABLE',
         '#pragma variant_axis COVERAGE_ONLY',
+        '#pragma variant_axis SKINNING_DISABLED',
       ]);
     });
 
@@ -1900,10 +1907,10 @@ import {
       );
     });
 
-    it('directional CSM samples each cascade from its own depth-array layer', () => {
+    it('directional CSM adds the receiver family base to its logical cascade layer', () => {
       const codeOnly = stripComments(readSource('lighting-directional.wgsl'));
       expect(codeOnly).toMatch(/let\s+uv\s*=\s*tileUv\s*;/);
-      expect(codeOnly).toMatch(/let\s+shadowLayer\s*=\s*i32\(layer\)/);
+      expect(codeOnly).toMatch(/let\s+shadowLayer\s*=\s*i32\(layer\s*\+\s*layerBase\)/);
       expect(codeOnly).not.toMatch(/_atlasTile/);
       expect(stripComments(readSource('common.wgsl'))).toMatch(
         /var\s+shadowMap\s*:\s*texture_depth_2d_array\s*;/,

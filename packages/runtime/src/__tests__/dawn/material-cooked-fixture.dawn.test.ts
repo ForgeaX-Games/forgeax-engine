@@ -207,16 +207,18 @@ describe('custom-shader cooked MaterialAsset fixture', () => {
       const readiness = assets.getMaterialReadiness(root.guid);
       expect(readiness?.status).toBe('Ready');
       if (readiness?.status !== 'Ready') throw new Error('material never became ready');
-      expect(readiness.artifactDigest).toBe(root.payload.cooked?.artifactDigest);
+      expect(readiness.record.artifactDigest).toBe(root.payload.cooked?.artifactDigest);
       const module = loaded.value.passes?.[0]?.program.module;
       if (module === undefined) throw new Error('material has no program');
-      const installed = assets.shaderRegistry.findMaterialArtifact(module);
-      if (!installed.ok) throw installed.error;
-      const program = readiness.programs.find((candidate) =>
+      const forwardPrograms = readiness.record.programs.filter((candidate) =>
         candidate.selections.some((selection) => selection.pass === 'Forward'),
       );
-      if (program === undefined) throw new Error('material has no forward program');
-      expect(installed.value.source).toBe(new TextDecoder().decode(program.artifact.bytes));
+      expect(forwardPrograms.length).toBeGreaterThan(0);
+      for (const program of forwardPrograms) {
+        const installed = assets.shaderRegistry.findMaterialArtifact(program.specializationKey);
+        if (!installed.ok) throw installed.error;
+        expect(installed.value.source).toBe(new TextDecoder().decode(program.artifact.bytes));
+      }
       world
         .spawn(
           { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
@@ -294,7 +296,7 @@ describe('custom-shader cooked MaterialAsset fixture', () => {
             backend: 'dawn-webgpu',
             frames: 60,
             rootGuid: root.guid,
-            rootArtifactDigest: readiness.artifactDigest,
+            rootArtifactDigest: readiness.record.artifactDigest,
             materialIdentity: { ...readiness.record.receipt.identity, materialGuid: root.guid },
             pixel,
             background,

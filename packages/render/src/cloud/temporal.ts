@@ -66,6 +66,17 @@ export interface CloudHistoryReprojection {
   readonly reason: 'accepted' | 'outside' | 'depth-disocclusion';
 }
 
+/** Physical transport history extent; signatures retain the full view extent. */
+export function cloudHistoryExtent(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  return {
+    width: Math.max(1, Math.ceil(width / 2)),
+    height: Math.max(1, Math.ceil(height / 2)),
+  };
+}
+
 export function cloudTemporalSignature(input: CloudTemporalSignature): string {
   return [
     'cloud-temporal-v1',

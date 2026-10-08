@@ -1,7 +1,8 @@
 import { box2, box3, circle2 } from '@forgeax/engine-math';
 import type { AssetError, MeshAsset, PrimitiveTopology } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { degenerate, PROCEDURAL_FLOATS_PER_VERTEX } from './box';
+import { degenerate } from './box';
+import { packInterleavedVertexAttributes } from './vertex-attribute-layout';
 
 export type Vec2 = readonly [number, number];
 
@@ -179,7 +180,7 @@ function buildMesh(
   indices: readonly number[],
   topology: PrimitiveTopology,
   uvProjection?: UvProjection,
-): MeshAsset {
+): Result<MeshAsset, AssetError> {
   const positions = new Float32Array(points.length * 3);
   const normals = new Float32Array(points.length * 3);
   const uvs = new Float32Array(points.length * 2);
@@ -198,7 +199,6 @@ function buildMesh(
 
   const width = Math.max(maxX - minX, 1);
   const height = Math.max(maxY - minY, 1);
-  const vertices = new Float32Array(points.length * PROCEDURAL_FLOATS_PER_VERTEX);
   for (let i = 0; i < points.length; i++) {
     const point = points[i];
     if (!point) continue;
@@ -206,7 +206,6 @@ function buildMesh(
     const positionOffset = i * 3;
     const uvOffset = i * 2;
     const tangentOffset = i * 4;
-    const vertexOffset = i * PROCEDURAL_FLOATS_PER_VERTEX;
     positions[positionOffset] = x;
     positions[positionOffset + 1] = y;
     normals[positionOffset + 2] = 1;
@@ -226,20 +225,16 @@ function buildMesh(
     uvs[uvOffset + 1] = v;
     tangents[tangentOffset] = 1;
     tangents[tangentOffset + 3] = 1;
-    vertices[vertexOffset] = x;
-    vertices[vertexOffset + 1] = y;
-    vertices[vertexOffset + 5] = 1;
-    vertices[vertexOffset + 6] = u;
-    vertices[vertexOffset + 7] = v;
-    vertices[vertexOffset + 8] = 1;
-    vertices[vertexOffset + 11] = 1;
   }
 
-  return {
+  const attributes = { position: positions, normal: normals, uv: uvs, tangent: tangents };
+  const packed = packInterleavedVertexAttributes(attributes, points.length);
+  if (!packed.ok) return packed;
+  return ok({
     kind: 'mesh',
-    vertices,
+    vertices: packed.value.vertices,
     indices: new Uint32Array(indices),
-    attributes: { position: positions, normal: normals, uv: uvs, tangent: tangents },
+    attributes,
     submeshes: [
       {
         indexOffset: 0,
@@ -251,10 +246,10 @@ function buildMesh(
     ],
     materialSlots: [{ slotName: 'Default' }],
     aabb: box3.fromPositions(box3.create(), positions),
-  };
+  });
 }
 
-function fill(points: readonly Vec2[], uvProjection?: UvProjection): MeshAsset {
+function fill(points: readonly Vec2[], uvProjection?: UvProjection): Result<MeshAsset, AssetError> {
   const boundary = counterClockwise(points);
   const center = centroid(boundary);
   const vertices = [center, ...boundary];
@@ -266,7 +261,7 @@ function fill(points: readonly Vec2[], uvProjection?: UvProjection): MeshAsset {
   return buildMesh(vertices, indices, 'triangle-list', uvProjection);
 }
 
-function ring(outer: readonly Vec2[], inner: readonly Vec2[]): MeshAsset {
+function ring(outer: readonly Vec2[], inner: readonly Vec2[]): Result<MeshAsset, AssetError> {
   const outside = counterClockwise(outer);
   const inside = counterClockwise(inner);
   const count = Math.min(outside.length, inside.length);
@@ -279,16 +274,19 @@ function ring(outer: readonly Vec2[], inner: readonly Vec2[]): MeshAsset {
   return buildMesh(vertices, indices, 'triangle-list');
 }
 
-function segment(points: readonly Vec2[]): MeshAsset {
+function segment(points: readonly Vec2[]): Result<MeshAsset, AssetError> {
   const indices: number[] = [];
   for (let i = 0; i + 1 < points.length; i += 1) indices.push(i, i + 1);
   return buildMesh(points, indices, 'line-list');
 }
 
-function shapeBoundary(shape: Shape2d, count: number): Vec2[] | undefined {
+/** Outer outline of any shape: an annulus's outer circle, an open path's own vertices. */
+function shapeBoundary(shape: Shape2d, count: number): Vec2[] {
   switch (shape.kind) {
     case 'circle':
       return circleBoundary(shape.radius, count);
+    case 'annulus':
+      return circleBoundary(shape.outerRadius, count);
     case 'circular-sector':
       return [
         ...arcBoundary(shape.radius, shape.angle, count, -Math.PI / 2 - shape.angle / 2),
@@ -320,11 +318,9 @@ function shapeBoundary(shape: Shape2d, count: number): Vec2[] | undefined {
         return [Math.cos(angle) * shape.radius, Math.sin(angle) * shape.radius] as const;
       });
     case 'triangle':
-      return [...shape.vertices];
-    case 'annulus':
     case 'segment':
     case 'polyline':
-      return undefined;
+      return [...shape.vertices];
   }
 }
 
@@ -437,21 +433,12 @@ export function create2dGeometry(
   if (!checked.ok) return checked;
   const meshOptions = validateMeshOptions(shape, options);
   if (!meshOptions.ok) return meshOptions;
-  if (shape.kind === 'segment' || shape.kind === 'polyline') return ok(segment(shape.vertices));
+  const boundary = shapeBoundary(shape, checked.value);
+  if (shape.kind === 'segment' || shape.kind === 'polyline') return segment(boundary);
   if (shape.kind === 'annulus') {
-    const outer = circleBoundary(shape.outerRadius, checked.value);
-    const inner = circleBoundary(shape.innerRadius, checked.value);
-    return ok(ring(outer, inner));
+    return ring(boundary, circleBoundary(shape.innerRadius, checked.value));
   }
-  const points = shapeBoundary(shape, checked.value);
-  if (!points) return invalid(`unsupported 2d shape kind=${shape.kind}`);
-  return ok(fill(points, meshOptions.value));
-}
-
-function boundsPoints(shape: Shape2d, count: number): Vec2[] | undefined {
-  if (shape.kind === 'annulus') return circleBoundary(shape.outerRadius, count);
-  if (shape.kind === 'segment' || shape.kind === 'polyline') return [...shape.vertices];
-  return shapeBoundary(shape, count);
+  return fill(boundary, meshOptions.value);
 }
 
 export function compute2dBounds(
@@ -465,9 +452,7 @@ export function compute2dBounds(
   if (!finitePoint(translation) || !Number.isFinite(rotation)) {
     return invalid('2d bounds pose must contain finite translation and rotation');
   }
-  const points = boundsPoints(shape, checked.value);
-  if (points === undefined || points.length === 0)
-    return invalid(`unsupported 2d bounds kind=${shape.kind}`);
+  const points = shapeBoundary(shape, checked.value);
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
   const transformed = points.map(
@@ -496,10 +481,9 @@ export function create2dRingGeometry(
   const count = resolutionOverride === undefined ? checked.value : resolution(resolutionOverride);
   if (count === undefined) return invalid(`ring resolution=${resolutionOverride}`);
   const outer = shapeBoundary(shape, count);
-  if (!outer) return invalid(`unsupported ring shape kind=${shape.kind}`);
   const extent = Math.max(...outer.map(([x, y]) => Math.hypot(x, y)));
   const factor = (extent - thickness) / extent;
   if (!(factor > 1e-5))
     return invalid(`ring thickness=${thickness} exceeds shape extent=${extent}`);
-  return ok(ring(outer, scaleAround(outer, factor)));
+  return ring(outer, scaleAround(outer, factor));
 }

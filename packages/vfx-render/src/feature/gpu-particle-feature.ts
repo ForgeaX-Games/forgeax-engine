@@ -11,11 +11,13 @@ import { GlobalTransform } from '@forgeax/engine-scene';
 import { err, type MaterialAsset, type MeshAsset, ok } from '@forgeax/engine-types';
 import type {
   ParticleRendererSourceV3,
+  ParticleTopologyRendererSourceV3,
   VfxDataInterfaceResource,
   VfxDataInterfaceToken,
 } from '@forgeax/engine-vfx';
 import {
   buildVfxRecoveryIntents,
+  isParticleTopologyRenderer,
   VFX_GPU_RUNTIME_RESOURCE_KEY,
   VFX_PARTICLE_CORE_STRIDE,
   type VfxGpuEmitterSource,
@@ -88,8 +90,7 @@ const rendererOnlyEntryPoints = new Map<string, ParticleRendererKind>([
   ['forgeax_vfx_trail_offsets_main', 'trail'],
 ]);
 type ParticleRenderer = ParticleRendererSourceV3;
-type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;
-type ParticleTopologyKind = ParticleTopologyRenderer['kind'];
+type ParticleTopologyKind = ParticleTopologyRendererSourceV3['kind'];
 type VfxStageOutput = VfxStagePlanObservation['stageOutput'];
 
 interface VfxRenderStageState {
@@ -264,8 +265,8 @@ function finite(value: unknown, fallback: number): number {
 }
 
 function rendererSortingMode(renderer: ParticleRenderer | undefined): 0 | 1 | 2 | 3 | 4 | 5 {
-  if (renderer?.kind !== 'billboard' && renderer?.kind !== 'mesh') return 0;
-  switch (renderer.sorting) {
+  if (renderer === undefined || isParticleTopologyRenderer(renderer)) return 0;
+  switch (renderer.sorting ?? 'none') {
     case 'view-depth':
       return 2;
     case 'view-distance':
@@ -274,7 +275,7 @@ function rendererSortingMode(renderer: ParticleRenderer | undefined): 0 | 1 | 2 
       return 3;
     case 'custom-descending':
       return 4;
-    default:
+    case 'none':
       return 0;
   }
 }
@@ -330,7 +331,7 @@ function runtimeData(
         ? renderer.historyLength
         : (meshDraw?.count ?? 0);
   words[62] =
-    renderer?.kind === 'ribbon' || renderer?.kind === 'trail' || renderer?.kind === 'beam'
+    renderer !== undefined && isParticleTopologyRenderer(renderer)
       ? renderer.capacity
       : intent.emitter.capacity;
   words[63] = meshDraw?.firstIndex ?? 0;
@@ -338,7 +339,7 @@ function runtimeData(
   floats[64] =
     renderer?.kind === 'billboard'
       ? (renderer.pivot?.[0] ?? 0)
-      : renderer?.kind === 'ribbon' || renderer?.kind === 'trail' || renderer?.kind === 'beam'
+      : renderer !== undefined && isParticleTopologyRenderer(renderer)
         ? (renderer.width ?? 0.1)
         : 0.1;
   floats[65] = renderer?.kind === 'billboard' ? (renderer.pivot?.[1] ?? 0) : 0;
@@ -530,13 +531,41 @@ export function gpuParticleRenderFeature(
     readonly requiredPasses: readonly string[];
   }
   const pendingFrames = new Map<number, readonly PendingEntry[]>();
-  const submittedDeviceGenerationByRuntime = new Map<number, number>();
-  // A sealed successor can still contain intents whose source ACK is in transit.
-  // Retain only terminal sequences present in its bounded source queue.
-  const submittedIntents = new Map<
-    number,
-    { generation: number; device: number; terminal: Map<number, IntentOutcomeState> }
-  >();
+  interface RuntimeState {
+    submittedDeviceGeneration: number | undefined;
+    // A sealed successor may precede source ACK. Keep only its live terminal sequences.
+    submitted:
+      | {
+          generation: number;
+          device: number;
+          terminal: Map<number, IntentOutcomeState>;
+        }
+      | undefined;
+    readonly emitters: Map<string, { readonly id: number; epoch: number }>;
+    // Aborted plans retain reset reservations; submission alone commits epochs.
+    readonly reservations: Map<
+      number,
+      {
+        readonly generation: number;
+        readonly emitterKey: string;
+        readonly epoch: number;
+      }
+    >;
+  }
+  const runtimeStates = new Map<number, RuntimeState>();
+  const runtimeState = (identity: number): RuntimeState => {
+    let state = runtimeStates.get(identity);
+    if (state === undefined) {
+      state = {
+        submittedDeviceGeneration: undefined,
+        submitted: undefined,
+        emitters: new Map(),
+        reservations: new Map(),
+      };
+      runtimeStates.set(identity, state);
+    }
+    return state;
+  };
   const sourceRuntimes = new Map<number, VfxGpuRuntime>();
   let lastObservation: VfxRenderObservation = Object.freeze({
     frameNumber: -1,
@@ -546,7 +575,6 @@ export function gpuParticleRenderFeature(
   });
   const worldIds = new WeakMap<World, number>();
   const runtimeIds = new WeakMap<VfxGpuRuntime, number>();
-  const resourcesByEmitter = new Map<number, Map<string, { readonly id: number; epoch: number }>>();
   let nextEmitterResourceId = 0;
   const emitterResource = (
     states: Map<string, { readonly id: number; epoch: number }>,
@@ -559,17 +587,6 @@ export function gpuParticleRenderFeature(
     }
     return state;
   };
-  // Sequences are local to a VfxGpuRuntime.  Scope reset reservations by the
-  // runtime instance so detach/reattach on the same World cannot borrow old
-  // epochs.  Reservations survive an aborted frame, but are only promoted to
-  // the emitter's committed epoch on submission.
-  const resetEpochByIntent = new Map<
-    number,
-    Map<
-      number,
-      { readonly generation: number; readonly emitterKey: string; readonly epoch: number }
-    >
-  >();
   let nextWorldId = 0;
   let nextRuntimeId = 0;
   const worldId = (world: World): number => {
@@ -719,7 +736,8 @@ export function gpuParticleRenderFeature(
               entry.views.find((candidate) => candidate.identity === view.identity)?.camera ??
               camera,
           }));
-          let submitted = submittedIntents.get(entry.runtimeId);
+          const state = runtimeState(entry.runtimeId);
+          let submitted = state.submitted;
           if (
             submitted?.generation !== entry.renderGeneration ||
             submitted.device !== context.generation
@@ -729,7 +747,7 @@ export function gpuParticleRenderFeature(
               device: context.generation,
               terminal: new Map(),
             };
-            submittedIntents.set(entry.runtimeId, submitted);
+            state.submitted = submitted;
           }
           const live = new Set(entry.intents.map((intent) => intent.sequence));
           for (const sequence of submitted.terminal.keys())
@@ -768,18 +786,11 @@ export function gpuParticleRenderFeature(
           return { ...entry, camera, views, intents, retained: [...retained.values()] };
         }),
       };
-      const presentRuntimes = new Set(frame.worlds.map((entry) => entry.runtimeId));
-      for (const identity of submittedIntents.keys())
-        if (!presentRuntimes.has(identity)) submittedIntents.delete(identity);
+      const liveRuntimes = new Set(frame.worlds.map((entry) => entry.runtimeId));
+      for (const identity of runtimeStates.keys())
+        if (!liveRuntimes.has(identity)) runtimeStates.delete(identity);
       for (const frameNumber of pendingFrames.keys())
         if (frameNumber + 4 < frame.frameNumber) pendingFrames.delete(frameNumber);
-      const liveRuntimes = new Set(frame.worlds.map((entry) => entry.runtimeId));
-      for (const map of [
-        submittedDeviceGenerationByRuntime,
-        resourcesByEmitter,
-        resetEpochByIntent,
-      ])
-        for (const identity of map.keys()) if (!liveRuntimes.has(identity)) map.delete(identity);
       const resources: PlanResource[] = [];
       const passes: PlanPass[] = [];
       const sharedDataInterfaces = new Map<string, PlanResource>();
@@ -807,16 +818,7 @@ export function gpuParticleRenderFeature(
         const effectiveEpochByEmitter = new Map<string, number>();
         const renderGeneration = entry.renderGeneration;
         const attachmentId = entry.runtimeId;
-        let emitterEpochs = resourcesByEmitter.get(entry.runtimeId);
-        if (emitterEpochs === undefined) {
-          emitterEpochs = new Map();
-          resourcesByEmitter.set(entry.runtimeId, emitterEpochs);
-        }
-        let reservations = resetEpochByIntent.get(entry.runtimeId);
-        if (reservations === undefined) {
-          reservations = new Map();
-          resetEpochByIntent.set(entry.runtimeId, reservations);
-        }
+        const { emitters: emitterEpochs, reservations } = runtimeState(entry.runtimeId);
         const liveResetSequences = new Set(
           entry.intents.filter((intent) => intent.reset).map((intent) => intent.sequence),
         );
@@ -981,13 +983,10 @@ export function gpuParticleRenderFeature(
       for (const [worldIndex, entry] of frame.worlds.entries()) {
         const renderGeneration = entry.renderGeneration;
         const attachmentId = entry.runtimeId;
-        const submittedDeviceGeneration = submittedDeviceGenerationByRuntime.get(entry.runtimeId);
+        const { submittedDeviceGeneration, emitters: emitterEpochs } = runtimeState(
+          entry.runtimeId,
+        );
         const rebuildingDeviceState = submittedDeviceGeneration !== context.generation;
-        let emitterEpochs = resourcesByEmitter.get(entry.runtimeId);
-        if (emitterEpochs === undefined) {
-          emitterEpochs = new Map();
-          resourcesByEmitter.set(entry.runtimeId, emitterEpochs);
-        }
         for (const retained of entry.retained ?? []) {
           const baseKey =
             `${entry.worldId}:${renderGeneration}:` +
@@ -1196,10 +1195,7 @@ export function gpuParticleRenderFeature(
           const submesh =
             renderer.kind === 'mesh' ? mesh?.submeshes[renderer.submesh ?? 0] : undefined;
           if (renderer.kind === 'mesh' && submesh === undefined) return err(planFailure());
-          if (
-            (renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam') &&
-            !createTopologyResourcePlan(renderer).ok
-          ) {
+          if (isParticleTopologyRenderer(renderer) && !createTopologyResourcePlan(renderer).ok) {
             return err(planFailure());
           }
           indirectWords[rendererIndex * 5] =
@@ -1480,8 +1476,7 @@ export function gpuParticleRenderFeature(
             if (!visible && !castsShadow) continue;
             const rendererPrefix = `${viewPrefix}.renderer-${rendererIndex}`;
             const isBillboard = renderer.kind === 'billboard';
-            const isTopology =
-              renderer.kind === 'ribbon' || renderer.kind === 'trail' || renderer.kind === 'beam';
+            const isTopology = isParticleTopologyRenderer(renderer);
             const topologyPlan = isTopology ? createTopologyResourcePlan(renderer) : undefined;
             if (topologyPlan !== undefined && !topologyPlan.ok) return err(planFailure());
             const publishedMaterial = group.entry.materials.get(renderer.material);
@@ -1665,15 +1660,7 @@ export function gpuParticleRenderFeature(
                 workgroups: [Math.max(1, workgroups)],
               });
             };
-            if (
-              (isBillboard || renderer.kind === 'mesh') &&
-              (renderer.sorting === 'view-depth' ||
-                renderer.sorting === 'view-distance' ||
-                renderer.sorting === 'custom-ascending' ||
-                renderer.sorting === 'custom-descending')
-            ) {
-              pushProjection('forgeax_vfx_sort_main', 1);
-            }
+            if (rendererSortingMode(renderer) !== 0) pushProjection('forgeax_vfx_sort_main', 1);
             if (renderer.kind === 'trail') pushProjection('forgeax_vfx_trail_offsets_main', 1);
             const projectionCount =
               renderer.kind === 'trail'
@@ -1682,11 +1669,7 @@ export function gpuParticleRenderFeature(
                   ? renderer.capacity
                   : capacity;
             pushProjection(
-              renderer.kind === 'billboard'
-                ? 'forgeax_vfx_billboard_main'
-                : renderer.kind === 'mesh'
-                  ? 'forgeax_vfx_mesh_main'
-                  : `forgeax_vfx_${renderer.kind}_main`,
+              `forgeax_vfx_${renderer.kind}_main`,
               Math.ceil(projectionCount / WORKGROUP_SIZE),
             );
             if (projectionDispatches.length > 0) {
@@ -1988,31 +1971,30 @@ export function gpuParticleRenderFeature(
           return;
       }
       for (const entry of pending) {
-        submittedDeviceGenerationByRuntime.set(entry.source.runtimeId, entry.generation);
+        const state = runtimeState(entry.source.runtimeId);
+        state.submittedDeviceGeneration = entry.generation;
         // A deferred provider or target is an ordered barrier for its own
         // player/emitter stream. Other streams may still have terminal work in
         // this frame, so acknowledge those exact sequences without dropping
         // the deferred intents that must retry later.
         for (const outcome of entry.outcomes) {
           if (outcome.state === 'deferred') continue;
-          submittedIntents
-            .get(entry.source.runtimeId)
-            ?.terminal.set(outcome.intent.sequence, outcome.state);
+          state.submitted?.terminal.set(outcome.intent.sequence, outcome.state);
           if (outcome.state === 'dispatched') {
             if (outcome.resetEpoch !== undefined) {
               const baseKey =
                 `${entry.source.worldId}:` +
                 `${entry.source.renderGeneration}:` +
                 `${Number(outcome.intent.player)}:${outcome.intent.emitter.id}`;
-              const state = resourcesByEmitter.get(entry.source.runtimeId)?.get(baseKey);
-              if (state !== undefined) state.epoch = outcome.resetEpoch;
-              resetEpochByIntent.get(entry.source.runtimeId)?.delete(outcome.intent.sequence);
+              const emitter = state.emitters.get(baseKey);
+              if (emitter !== undefined) emitter.epoch = outcome.resetEpoch;
+              state.reservations.delete(outcome.intent.sequence);
             }
           } else if (outcome.state === 'skipped' && outcome.resetEpoch !== undefined) {
             // A skipped reset never touched GPU state.  Drop only its retry
             // reservation; a future dispatched reset must allocate a new
             // epoch from the last committed emitter state.
-            resetEpochByIntent.get(entry.source.runtimeId)?.delete(outcome.intent.sequence);
+            state.reservations.delete(outcome.intent.sequence);
           }
         }
       }

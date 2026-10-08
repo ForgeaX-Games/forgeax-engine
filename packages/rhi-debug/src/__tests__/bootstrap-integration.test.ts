@@ -148,7 +148,7 @@ describe('bootstrap integration (m3-3)', () => {
 
     // Fire onFrameEnd (simulates renderer._onFrameEnd callback)
     debugInst.onFrameEnd();
-    expect(debugInst.getState()).toBe('idle'); // 1 frame complete -> finalizing -> idle
+    expect(debugInst.getState()).toBe('idle'); // 1 frame complete -> idle
 
     // Check tape events
     const tape = debugInst.getTape() as any;

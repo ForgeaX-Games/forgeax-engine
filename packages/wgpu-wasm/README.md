@@ -102,6 +102,10 @@ features.
 
 `pkg/`（`wgpu_wasm_bg.wasm` + `wgpu_wasm.js` glue + 两个 `.d.ts` + `package.json`）是 wasm-pack 产物，**不入 git**（ufbx 式 release，对齐 `packages/fbx/`）。两条获取路径：
 
+包的 `files` 明确列出这组产物及 README、provenance。wasm-pack 生成的
+`pkg/.gitignore` 会排除整个目录；只声明 `"pkg"` 无法保证 npm 发布或独立运行快照
+包含绑定。逐文件声明保持原生成目录和忽略规则，同时交付完整的 JS/WASM 闭包。
+
 ```bash
 # A. 有 Rust 工具链 —— 本地构建（首次或 src/*.rs / Cargo.* 改动后）
 bash packages/wgpu-wasm/build.sh            # 或 pnpm -F @forgeax/engine-wgpu-wasm build:wasm
@@ -131,3 +135,12 @@ descriptors and temporary commands are released after finish instead of being le
 The WebGL2 `mapAsync` path polls the buffer's own device and yields between pending
 polls. This completes readback even after the final submission and delivers mapping
 errors through the existing Promise/Result boundary. It does not poll other devices.
+
+## Source compiler execution budget
+
+The release Rust profile optimizes execution at level 3. Full Engine source
+production repeatedly parses and composes real Naga modules, so size-only
+optimization consumed the original build deadline. The existing 5 MiB gzip
+metric remains unchanged. Source code, validation and the complete variant fleet
+remain the same; generated bundles keep their source key, byte hashes and
+compiler fingerprint. See the [measured source compiler recovery](../../scripts/ci/README.md#forced-source-closure-hash-recovery).

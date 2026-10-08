@@ -8,15 +8,21 @@
 // distinct `reinhard` mode is Three's per-channel Reinhard curve.
 
 #import forgeax_view::common::{FullscreenOutput, ditherUnorm8, fullscreen_triangle}
-#import forgeax_view::output_encoding::{encodeOutput}
+#import forgeax_view::output_encoding::{clampToOutputGamut, encodeOutput}
 
 const TONEMAP_LUMINANCE_EPSILON : f32 = 1e-5;
 
+// 32-byte layout mirrored by TONEMAP_PARAMS_LAYOUT in tonemap.ts.
 struct TonemapParams {
   exposure   : f32,
   whitePoint : f32,
   mode       : u32,
   ditherEnabled : f32,
+  // OUTPUT_GAMUT_* written by the renderer at record time.
+  outputGamut : u32,
+  padA : u32,
+  padB : u32,
+  padC : u32,
 };
 
 @group(1) @binding(0) var hdr  : texture_2d<f32>;
@@ -36,8 +42,10 @@ fn tonemapReinhardExtended(color : vec3<f32>) -> vec3<f32> {
   return color * scale;
 }
 
+// Linear LDR is bounded by the output gamut: a Display-P3 output keeps
+// P3-authored colours that lie outside Rec.709 instead of clipping them here.
 fn toneMapLinearLdr(color : vec3<f32>) -> vec3<f32> {
-  return clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+  return clampToOutputGamut(color, params.outputGamut);
 }
 
 fn tonemapReinhard(color : vec3<f32>) -> vec3<f32> {
@@ -168,7 +176,7 @@ fn mapTonemap(sample : vec3<f32>) -> vec3<f32> {
 }
 
 fn encodeFinal(linearColor : vec3<f32>, alpha : f32, position : vec4<f32>) -> vec4<f32> {
-  let encoded = encodeOutput(linearColor, alpha);
+  let encoded = encodeOutput(linearColor, alpha, params.outputGamut);
   let outputRgb = select(
     encoded.rgb,
     ditherUnorm8(encoded.rgb, position.xy),

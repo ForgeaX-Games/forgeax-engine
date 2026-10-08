@@ -168,7 +168,7 @@ export async function verifyRayPath(fixture: RayPathFixture) {
   } finally {
     (await replay.dispose()).unwrap();
   }
-  // F0=0 is diffuse dominated but retains Standard Schlick grazing reflection.
+  // F0=0 derives F90=0, so the Standard lobe is purely diffuse.
   // Check two independent seeds and both terminal-bounce MIS policies.
   const gpu = (await (await webgpu.rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
   const results = [];

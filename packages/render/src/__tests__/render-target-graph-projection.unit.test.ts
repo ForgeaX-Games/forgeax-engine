@@ -67,7 +67,7 @@ describe('RenderTarget graph projection', () => {
     const graph = new RenderGraphBuilder<Frame>();
     const projected = projectRenderTargetGraph(graph, targetInput(descriptor), {
       mipLevel: 0,
-      face: 4,
+      layer: 4,
     });
     expect(projected.ok).toBe(true);
     if (!projected.ok) return;

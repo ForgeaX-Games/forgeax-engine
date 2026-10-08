@@ -29,7 +29,11 @@ it.each([
   const compile = async (name: string, id: string) => {
     const result = await compiler.compileShader(source(name), {
       id,
-      imports: { 'forgeax_view::common': source('common'), 'forgeax_pbr::gbuffer': gbufferSource },
+      imports: {
+        'forgeax_view::common': source('common'),
+        'forgeax_pbr::gbuffer': gbufferSource,
+        'forgeax_depth_pyramid::sample': source('depth-pyramid-sample'),
+      },
     });
     if (!result.ok) throw result.error;
     return result.value.wgsl;
@@ -77,7 +81,7 @@ it.each([
       radiance = color(),
       fallback = color(),
       temporal = color();
-    const hiz = device.createTexture({
+    const pyramid = device.createTexture({
       size: [half, half],
       mipLevelCount: 9,
       format: 'r32float',
@@ -139,12 +143,12 @@ struct Out { @builtin(frag_depth) depth:f32, @location(0) normal:u32, @location(
           entryPoint,
         },
       });
-    const seedHiz = await compute(
+    const seedPyramid = await compute(
       'depth-pyramid-seed',
       'forgeax_depth_pyramid::seed',
       'depth_pyramid_seed',
     );
-    const reduceHiz = await compute(
+    const reducePyramid = await compute(
       'depth-pyramid-reduce',
       'forgeax_depth_pyramid::reduce',
       'depth_pyramid_reduce',
@@ -191,16 +195,16 @@ struct Out { @builtin(frag_depth) depth:f32, @location(0) normal:u32, @location(
     };
     for (let level = 0; level < 9; level++) {
       dispatch(
-        level === 0 ? seedHiz : reduceHiz,
+        level === 0 ? seedPyramid : reducePyramid,
         [
           {
             binding: 0,
             resource:
               level === 0
                 ? depth.createView()
-                : hiz.createView({ baseMipLevel: level - 1, mipLevelCount: 1 }),
+                : pyramid.createView({ baseMipLevel: level - 1, mipLevelCount: 1 }),
           },
-          { binding: 1, resource: hiz.createView({ baseMipLevel: level, mipLevelCount: 1 }) },
+          { binding: 1, resource: pyramid.createView({ baseMipLevel: level, mipLevelCount: 1 }) },
           ...(level === 0 ? [{ binding: 2, resource: { buffer: view } }] : []),
         ],
         half >> level,
@@ -208,7 +212,7 @@ struct Out { @builtin(frag_depth) depth:f32, @location(0) normal:u32, @location(
     }
     dispatch(
       trace,
-      [depth, normal, radiance, hiz, traced]
+      [depth, normal, radiance, pyramid, traced]
         .map<GPUBindGroupEntry>((t, binding) => ({ binding, resource: t.createView() }))
         .concat([
           { binding: 5, resource: { buffer: view } },
@@ -231,7 +235,7 @@ struct Out { @builtin(frag_depth) depth:f32, @location(0) normal:u32, @location(
     const words = new Uint16Array(readback.getMappedRange().slice(0));
     readback.unmap();
     const hits = new Uint8Array(half * half);
-    // Mirror-box slab intersections are independent of the GPU march and Hi-Z.
+    // Mirror-box slab intersections are independent of the GPU march and depth-pyramid.
     for (let y = 0; y < half; y++)
       for (let x = 0; x < half; x++) {
         const sx = (((2 * x + 0.5) / size) * 2 - 1) / Math.sqrt(3),

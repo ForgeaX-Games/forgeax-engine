@@ -64,7 +64,7 @@ describe('GPU-driven baseline characterization', () => {
 
   it('keeps probe-bearing rows on the GPU lane with the shared probe buffer', () => {
     expect(frameRecord).toContain(
-      'const frameGpuDriven = reflectionFallbackCandidate ? undefined : gpuDriven;',
+      'const frameGpuDriven = fallbackLaneLimit ? undefined : gpuDriven;',
     );
     expect(frameRecord).not.toContain('const probeBlendFrame =');
     expect(frameRecord).toContain('frameGpuDriven.scene?.probeBlend');

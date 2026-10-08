@@ -32,7 +32,7 @@ const FOCUSED_FALSIFIERS = ['point-square', 'line-width', 'depth-sort', 'lane'];
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   console.error(`[smoke] FAIL - dawn.node import failed: ${errorMessage(error)}`);
   process.exit(1);
@@ -250,7 +250,7 @@ const meshEntity = world.spawn(
   { component: Transform, data: { quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
   { component: MeshFilter, data: { assetHandle: meshHandle } },
   { component: MeshRenderer, data: { materials: [materialHandle] } },
-  { component: Lines, data: { widthPx: FALSIFY === 'line-width' ? 1 : 4 } },
+  { component: Lines, data: { width: FALSIFY === 'line-width' ? 1 : 4 } },
 );
 if (!meshEntity.ok) {
   console.error(`[smoke] FAIL - mesh spawn: ${meshEntity.error.code}`);
@@ -358,7 +358,7 @@ if (FALSIFY === '') {
   if (pointInspection?.style?.kind !== 'points' || pointInspection.style.sizePx !== 16) {
     failures.push('Points authoring did not remain resident in inspection');
   }
-  if (lineInspection?.style?.kind !== 'lines' || lineInspection.style.widthPx !== 4) {
+  if (lineInspection?.style?.kind !== 'lines' || lineInspection.style.width !== 4) {
     failures.push('Lines authoring did not remain resident in inspection');
   }
   if (foreground === 0) failures.push('line-list has zero foreground pixels');
@@ -377,7 +377,7 @@ if (FALSIFY === '') {
 if (FALSIFY === 'point-square' && pointInspection?.style?.shape !== 'square') {
   failures.push('point-square falsifier did not reach Points authoring');
 }
-if (FALSIFY === 'line-width' && lineInspection?.style?.widthPx !== 1) {
+if (FALSIFY === 'line-width' && lineInspection?.style?.width !== 1) {
   failures.push('line-width falsifier did not reach Lines authoring');
 }
 

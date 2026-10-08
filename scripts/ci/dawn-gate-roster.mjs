@@ -10,6 +10,14 @@ export const VFX_DEPTH_DAWN_TEST_FILE =
 // Vitest configuration and local/PR/nightly execution derive from these groups.
 export const DAWN_ISOLATED_GROUPS = [
   {
+    id: 'surface-pipelines',
+    files: [
+      'packages/runtime/src/__tests__/surface-standard-pipeline.dawn.test.ts',
+      'packages/runtime/src/__tests__/standard-deferred-parity.dawn.test.ts',
+      'packages/runtime/src/__tests__/clipping-planes.dawn.test.ts',
+    ],
+  },
+  {
     id: 'renderer',
     files: [
       'packages/runtime/src/__tests__/point-light-shadow.dawn.test.ts',
@@ -50,48 +58,131 @@ export const DAWN_ISOLATED_GROUPS = [
     id: 'shadow-fields',
     files: ['packages/runtime/src/__tests__/shadow-fields-observable.dawn.test.ts'],
   },
+  {
+    id: 'specular-aa',
+    files: ['packages/runtime/src/__tests__/specular-aa.dawn.test.ts'],
+  },
+  // Global-illumination owners grow together; complete file groups keep them
+  // off the discovered ordinary shards and leave room for later GI files.
+  {
+    id: 'gi-1',
+    files: [
+      'packages/runtime/src/__tests__/renderer-probe-global.dawn.test.ts',
+      'packages/render/src/__tests__/raytracing/raster-source.dawn.test.ts',
+    ],
+  },
+  {
+    id: 'gi-2',
+    files: [
+      'packages/runtime/src/__tests__/renderer-reflections.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-probe-placement.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-radiance-cache.dawn.test.ts',
+      'packages/render/src/__tests__/raytracing/path-buffer.dawn.test.ts',
+      'packages/render/src/__tests__/raytracing/material-publication.dawn.test.ts',
+      'packages/render/src/__tests__/raytracing/diffuse-gi.dawn.test.ts',
+    ],
+  },
+  {
+    id: 'gi-3',
+    files: [
+      'packages/runtime/src/__tests__/renderer-irradiance-field-edit.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-gi-coverage.dawn.test.ts',
+    ],
+  },
+  {
+    id: 'gi-4',
+    files: [
+      'packages/runtime/src/__tests__/renderer-irradiance-field-add.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-irradiance-field-clipmap.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-reflection-denoise.dawn.test.ts',
+    ],
+  },
+  {
+    id: 'gi-5',
+    files: [
+      'packages/runtime/src/__tests__/renderer-irradiance-field-residency.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-irradiance-field-multiview.dawn.test.ts',
+      'packages/runtime/src/__tests__/renderer-baked-field.dawn.test.ts',
+      'packages/render/src/__tests__/raytracing/irradiance-bake.dawn.test.ts',
+    ],
+  },
+  {
+    id: 'gi-6',
+    files: ['packages/runtime/src/__tests__/renderer-irradiance-field.dawn.test.ts'],
+  },
+  {
+    id: 'screen-probe',
+    files: ['packages/runtime/src/__tests__/renderer-screen-probe.dawn.test.ts'],
+  },
 ];
 
 export const DAWN_ISOLATED_TEST_FILES = DAWN_ISOLATED_GROUPS.flatMap(({ files }) => files);
 
 export const DAWN_GATE_GROUPS = [
-  // The ordinary project is discovered by Vitest, so its two halves use
+  // The ordinary project is discovered by Vitest, so its four partitions use
   // Vitest's deterministic file shards; together they run every file once.
-  { id: 'ordinary-1', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '1/2' },
-  { id: 'ordinary-2', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '2/2' },
-  { id: 'compact', files: DAWN_COMPACT_TEST_FILES, env: { FORGEAX_DAWN_COMPACT: '1' } },
+  { id: 'ordinary-1', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '1/4' },
+  { id: 'ordinary-2', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '2/4' },
+  { id: 'ordinary-3', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '3/4' },
+  { id: 'ordinary-4', files: [], env: {}, retryMode: 'vitest-dawn', vitestShard: '4/4' },
+  ...Array.from({ length: 3 }, (_, partition) => ({
+    id: `compact-${partition + 1}`,
+    files: DAWN_COMPACT_TEST_FILES.filter((_file, index) => index % 3 === partition),
+    env: { FORGEAX_DAWN_COMPACT: '1' },
+  })),
   ...DAWN_ISOLATED_GROUPS.map((group) => ({ ...group, env: { FORGEAX_DAWN_ISOLATED: '1' } })),
   { id: 'direct-light', files: [DIRECT_LIGHT_DAWN_TEST_FILE], env: {} },
 ];
 
-// Run 36123229770 measured these complete groups on the heavy pool (seconds):
-// ordinary 625, direct-light 308, compact 273, shadow-fields 119,
-// transmission 82, vfx-depth 81, feature-depth 56, vfx-mesh 52,
-// material-publication 38, renderer 38, heavy-N 15-38, gpu-timing 20,
-// timing-lifecycle 18. Three lanes took 15m00s, 12m46s and 9m09s because the
-// ordinary project alone filled lane 1. Its Vitest hash shards carry about
-// 56% and 44% of its per-file time, so the remaining groups are placed by
-// longest processing time around them: four lanes of about 480-500s each.
-// Groups stay whole, native execution stays serial, and every assertion owner
-// is retained.
-// Lanes list groups in roster order, which is also their execution order.
+// Four jobs cap runner demand. Each job executes its complete native owners
+// serially; ordinary discovery remains four disjoint Vitest file partitions.
+// Preserve whole owners and all four ordinary partitions. Final06 lane1's
+// completed prefix already consumed1473.684s before three GI owners finished.
+// The new placement retains both earlier complete epoch budget guards and
+// reserves headroom under the observed06 prefix; uncompleted GI costs remain
+// estimates requiring complete final-head CI.
 export const DAWN_GATE_SHARDS = Object.freeze([
-  Object.freeze(['ordinary-1', 'vfx-depth', 'heavy-7', 'heavy-8']),
+  Object.freeze([
+    'ordinary-1',
+    'compact-1',
+    'gi-3',
+    'gi-4',
+    'heavy-4',
+    'gi-6',
+    'gpu-timing',
+    'heavy-7',
+    'heavy-8',
+    'vfx-mesh',
+    'gi-5',
+  ]),
   Object.freeze([
     'ordinary-2',
-    'material-publication',
     'feature-depth',
-    'vfx-mesh',
-    'heavy-4',
-    'heavy-5',
-  ]),
-  Object.freeze(['transmission', 'heavy-1', 'heavy-2', 'heavy-3', 'heavy-9', 'direct-light']),
-  Object.freeze([
-    'compact',
-    'renderer',
-    'timing-lifecycle',
-    'gpu-timing',
     'heavy-6',
+    'transmission',
+    'compact-2',
+    'material-publication',
     'shadow-fields',
+  ]),
+  Object.freeze([
+    'ordinary-3',
+    'heavy-3',
+    'heavy-9',
+    'timing-lifecycle',
+    'heavy-5',
+    'heavy-2',
+    'gi-1',
+    'specular-aa',
+  ]),
+  Object.freeze([
+    'ordinary-4',
+    'compact-3',
+    'renderer',
+    'screen-probe',
+    'vfx-depth',
+    'gi-2',
+    'direct-light',
+    'surface-pipelines',
+    'heavy-1',
   ]),
 ]);

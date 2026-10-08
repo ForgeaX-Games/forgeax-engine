@@ -230,8 +230,26 @@ allowed.
 
 After applying source/sidecar bounds, the FBX importer derives missing bounds
 from control-point influences, inverse bind matrices, node hierarchy, morph
-deltas and the same resampled clips it publishes. Unique full joint paths or
+deltas and the same native baked clips it publishes. Unique full joint paths or
 unambiguous source joint names must resolve. The shared [animation enclosure
 contract](../animation/README.md#imported-animation-bounds) defines coverage and
 fail-closed cases. No per-frame import or bind-pose guess is needed to enter the
 GPU skin lane.
+
+## Animation fidelity and cost
+
+The native ufbx producer evaluates the original composed animation (including layers), seeds ordinary LINEAR lerp/slerp tracks from the bounded ufbx bake, and refines source intervals at quarter, half and three-quarter times. Refinement reuses parent quarter-point evaluations as child midpoints and requests only the required ufbx transform components (translation retains its pivot dependencies). Refinement uses source-local translation error 0.0002, scale error 0.00001 and quaternion angle 0.01 degrees. Authored constant tracks remain present for blending. Native bridge JSON encodes animation values as nine-digit Float32 decimals; source evaluation remains double precision. This reduces native transport and JSON decode cost; the normalized AnimationClip POD and its final Cook bytes remain unchanged. Unrepresentable Float32 values fail the bounded bake. The TypeScript bridge retains nonuniform native times and clip tails, converts to Float32 and normalizes quaternion keys; it performs no second 30 Hz resample.
+
+| Bound | Result |
+|:--|:--|
+| ufbx temporary and result allocation | 256 MiB each |
+| Retained native keys | Two million across the import |
+| Recursive subdivision | At most 14 levels per seed interval |
+| Mixed step transitions in LINEAR tracks | At most max(10 microseconds, four Float32 time ULPs); arbitrary instantaneous steps are not exact |
+| Unresolved error at recursion/key/allocation limit | Structured `fbx-parse-failed`, with no partial asset publication |
+
+These are producer bounds, not a proof for every possible source curve. The independent original-source evaluator checks non-key times after Float32/JSON publication; the committed weighted-curve and multi-turn fixtures additionally execute ordinary ECS playback against frozen source evaluations. Their acceptance limits are 0.001 Euclidean translation in source-local units, 0.1 degrees rotation and 0.0001 Euclidean scale.
+
+Build the pinned native producer with `pnpm --filter @forgeax/engine-fbx build:wasm`. `scripts/verify-animation-fidelity.mjs <source.fbx> ...` compares the selected baseline native producer with the revised producer, writes raw ABBA import timings and source-pose errors under `artifacts/asset-format-fidelity/fbx`, and fails the pose thresholds. More retained samples increase import CPU, WASM memory and payload bytes; report that cost with accuracy. The package stays compiler-free at playback time.
+
+FBX mesh publication retains source UV-set presence and sends a dense canonical attribute map to Geometry for interleaved vertex packing and portable encoding. Skin joints remain uint16, weights remain float32, missing intermediate UV slots are zero-filled, and FBX normal/tangent defaults remain producer-owned. Invalid attribute storage or cardinality fails through the Geometry packing error before publication.

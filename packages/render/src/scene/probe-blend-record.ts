@@ -1,8 +1,7 @@
 export const PROBE_BLEND_RECORD_BYTE_SIZE = 160;
 /** Dynamic-offset stride; 160B payload plus WebGPU's 256B alignment. */
 export const PROBE_BLEND_RECORD_STRIDE = 256;
-export const PROBE_BLEND_RECORD_FLOAT_COUNT =
-  PROBE_BLEND_RECORD_BYTE_SIZE / Float32Array.BYTES_PER_ELEMENT;
+
 export const PROBE_BLEND_RECORD_CAPACITY = 64;
 export const PROBE_BLEND_SENTINEL = -1;
 

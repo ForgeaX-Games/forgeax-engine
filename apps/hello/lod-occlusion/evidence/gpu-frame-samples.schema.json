@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "forgeax::hello-lod-occlusion::gpu-frame-samples::v2",
+  "$id": "forgeax::hello-lod-occlusion::gpu-frame-samples::v3",
   "type": "object",
   "$defs": {
     "submitIdentity": {
@@ -15,15 +15,13 @@
     },
     "inspectionCondition": {
       "type": "object",
-      "required": ["frames", "candidates", "visible", "occluded", "lodHistogram", "pagePressure", "lodCoverage", "submittedInstanceRatio", "geometryWorkReduction", "batchCount", "indirectDrawCount", "cpuP50Us", "cpuP95Us", "queryP50Us", "queryP95Us", "queryMemoryBytes"],
+      "required": ["frames", "candidates", "visible", "occluded", "lodHistogram", "lodCoverage", "submittedInstanceRatio", "geometryWorkReduction", "batchCount", "indirectDrawCount", "cpuP50Us", "cpuP95Us"],
       "properties": {
         "frames": { "type": "integer", "minimum": 1 },
         "candidates": { "type": "integer", "minimum": 1 },
         "visible": { "type": "integer", "minimum": 0 },
         "occluded": { "type": "integer", "minimum": 0 },
         "lodHistogram": { "type": "array", "items": { "type": "object", "required": ["level", "count"], "properties": { "level": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 0 } }, "additionalProperties": false } },
-        "fallbackFrames": { "type": "integer", "minimum": 0 },
-        "pagePressure": { "type": "object", "required": ["used", "capacity"], "properties": { "used": { "type": "integer", "minimum": 0 }, "capacity": { "type": "integer", "minimum": 1 } }, "additionalProperties": false },
         "lodCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
         "submittedInstanceRatio": { "type": "number", "minimum": 0, "maximum": 1 },
         "geometryWorkReduction": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -31,10 +29,7 @@
         "indirectDrawCount": { "type": "integer", "minimum": 1 },
         "cpuP50Us": { "type": "number", "minimum": 0 },
         "cpuP95Us": { "type": "number", "minimum": 0 },
-        "cpuP95Regression": { "type": "number" },
-        "queryP50Us": { "type": "number", "minimum": 0 },
-        "queryP95Us": { "type": "number", "minimum": 0 },
-        "queryMemoryBytes": { "type": "number", "exclusiveMinimum": 0 }
+        "cpuP95Regression": { "type": "number" }
       },
       "additionalProperties": false
     },
@@ -42,7 +37,7 @@
       "type": "object",
       "required": ["case", "verdict", "evidence"],
       "properties": {
-        "case": { "enum": ["forced-lod0", "all-visible", "occlusion-off-on", "page-exhaustion", "delayed-map", "world-reorder"] },
+        "case": { "enum": ["forced-lod0", "all-visible", "occlusion-off-on", "gpu-occlusion-off", "world-reorder"] },
         "verdict": { "enum": ["pass", "fail", "unavailable"] },
         "reason": { "type": "string", "minLength": 1 },
         "evidence": {
@@ -180,7 +175,7 @@
   "required": ["schema", "identity", "warmupSubmits", "retainedSamples", "metrics", "falsification", "verdict"],
   "properties": {
     "samples": { "type": "array", "items": { "$ref": "#/$defs/sample" } },
-    "schema": { "const": "forgeax::hello-lod-occlusion::gpu-frame-samples::v2" },
+    "schema": { "const": "forgeax::hello-lod-occlusion::gpu-frame-samples::v3" },
     "identity": {
       "type": "object",
       "required": ["build", "scene", "sourceKey", "sidecarDigest", "packDigest", "seed", "viewport", "adapter", "backend", "capabilities", "fixture"],
@@ -214,20 +209,13 @@
       "required": ["timestampAvailable"],
       "properties": {
         "timestampAvailable": { "type": "boolean" },
-        "configuredQueryBudget": { "type": "integer", "minimum": 1 },
-        "effectiveQueryBudget": { "type": "integer", "minimum": 1, "maximum": 4096 },
         "settleSubmits": { "type": "integer", "minimum": 1 },
-        "retestSubmits": { "type": "integer", "minimum": 1 },
-        "expirySubmits": { "type": "integer", "minimum": 1 },
         "lodCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
         "submittedInstanceRatio": { "type": "number", "minimum": 0, "maximum": 1 },
         "geometryWorkReduction": { "type": "number", "minimum": 0, "maximum": 1 },
         "cpuP50Us": { "type": "number", "minimum": 0 },
         "cpuP95Us": { "type": "number", "minimum": 0 },
         "cpuP95Regression": { "type": "number" },
-        "queryP50Us": { "type": "number", "minimum": 0 },
-        "queryP95Us": { "type": "number", "minimum": 0 },
-        "queryMemoryBytes": { "type": "number", "exclusiveMinimum": 0 },
         "gpuMedianImprovement": { "type": "number" },
         "gpuP95Regression": { "type": "number" },
         "reason": { "type": "string", "minLength": 1 },
@@ -265,12 +253,12 @@
       "allOf": [
         {
           "if": { "properties": { "timestampAvailable": { "const": true } } },
-          "then": { "required": ["configuredQueryBudget", "effectiveQueryBudget", "settleSubmits", "retestSubmits", "expirySubmits", "workload", "lodCoverage", "submittedInstanceRatio", "geometryWorkReduction", "cpuP50Us", "cpuP95Us", "cpuP95Regression", "queryP50Us", "queryP95Us", "queryMemoryBytes", "gpuMedianImprovement", "gpuP95Regression", "inspection", "groups"] }
+          "then": { "required": ["settleSubmits", "workload", "lodCoverage", "submittedInstanceRatio", "geometryWorkReduction", "cpuP50Us", "cpuP95Us", "cpuP95Regression", "gpuMedianImprovement", "gpuP95Regression", "inspection", "groups"] }
         }
       ],
       "additionalProperties": false
     },
-    "falsification": { "type": "array", "minItems": 6, "maxItems": 6, "items": { "$ref": "#/$defs/falsification" } },
+    "falsification": { "type": "array", "minItems": 5, "maxItems": 5, "items": { "$ref": "#/$defs/falsification" } },
     "verdict": { "enum": ["production-ready", "not-production-ready", "unavailable", "identity-mismatch", "software-deferred"] },
     "executionMode": { "enum": ["physical", "simulated"] },
     "physicalGpu": { "type": "boolean" },

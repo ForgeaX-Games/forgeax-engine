@@ -29,11 +29,12 @@ import { decomposeNodeTransform } from '../transform.js';
   describe('attribute-decode.test.ts', () => {
     describe('parseGltf attribute decode (T-M2-02)', () => {
       function buildPositionNormalTexcoordTangentJson(includeTangent: boolean): unknown {
-        const posBytes = new Uint8Array(12);
+        const posBytes = new Uint8Array(36);
         const posF32 = new Float32Array(posBytes.buffer);
         posF32[0] = 1.0;
         posF32[1] = 2.0;
         posF32[2] = 3.0;
+        posF32.set([1, 2, 3, 1, 2, 3], 3);
 
         const normBytes = new Uint8Array(36);
         const normF32 = new Float32Array(normBytes.buffer);
@@ -91,7 +92,7 @@ import { decomposeNodeTransform } from '../transform.js';
           return acIdx;
         }
 
-        const posIdx = addBuf(posBytes, 12, 'VEC3', 1);
+        const posIdx = addBuf(posBytes, 36, 'VEC3', 3);
         const normIdx = addBuf(normBytes, 36, 'VEC3', 3);
         const texIdx = addBuf(texBytes, 24, 'VEC2', 3);
         const tanIdx = includeTangent ? addBuf(tanBytes, 48, 'VEC4', 3) : -1;
@@ -204,7 +205,7 @@ import { decomposeNodeTransform } from '../transform.js';
         expect(mesh).toBeDefined();
         if (!mesh) return;
 
-        expect(mesh.positions.length).toBe(3);
+        expect(mesh.positions.length).toBe(9);
         expect(mesh.positions[0]).toBeCloseTo(1.0);
         expect(mesh.positions[1]).toBeCloseTo(2.0);
         expect(mesh.positions[2]).toBeCloseTo(3.0);
@@ -273,8 +274,8 @@ import { decomposeNodeTransform } from '../transform.js';
             count: 4,
             type: 'VEC3',
           },
-          bufferView: { buffer: 0, byteLength: positions.byteLength },
-          buffer,
+          bufferViews: [{ buffer: 0, byteLength: positions.byteLength }],
+          buffers: [buffer],
           role: 'attribute',
         });
         expect(result.ok).toBe(true);
@@ -291,10 +292,14 @@ import { decomposeNodeTransform } from '../transform.js';
             componentType: COMPONENT_TYPE.F32,
             count: 4,
             type: 'VEC3',
-            sparse: { count: 1, indices: {}, values: {} },
+            sparse: {
+              count: 1,
+              indices: { bufferView: 8, componentType: 5119 },
+              values: { bufferView: 9 },
+            },
           },
-          bufferView: { buffer: 0, byteLength: 48 },
-          buffer: new Uint8Array(48),
+          bufferViews: [{ buffer: 0, byteLength: 48 }],
+          buffers: [new Uint8Array(48)],
           role: 'attribute',
         });
         expect(result.ok).toBe(false);
@@ -305,31 +310,7 @@ import { decomposeNodeTransform } from '../transform.js';
         expect(result.error.detail.reason).toBe('sparse');
       });
 
-      it('(c) rejects morph-target accessor (caller flag)', () => {
-        const result = decodeAccessor(
-          {
-            accessorIndex: 7,
-            accessor: {
-              bufferView: 0,
-              componentType: COMPONENT_TYPE.F32,
-              count: 4,
-              type: 'VEC3',
-            },
-            bufferView: { buffer: 0, byteLength: 48 },
-            buffer: new Uint8Array(48),
-            role: 'attribute',
-          },
-          { morph: true },
-        );
-        expect(result.ok).toBe(false);
-        if (result.ok) return;
-        expect(result.error.code).toBe('gltf-accessor-type-mismatch');
-        if (result.error.code !== 'gltf-accessor-type-mismatch') return;
-        expect(result.error.detail.accessorIndex).toBe(7);
-        expect(result.error.detail.reason).toBe('morph');
-      });
-
-      it('(d) rejects interleaved layout (byteStride != elementSize)', () => {
+      it('(d) rejects truncated interleaved layout', () => {
         const result = decodeAccessor({
           accessorIndex: 1,
           accessor: {
@@ -338,15 +319,13 @@ import { decomposeNodeTransform } from '../transform.js';
             count: 4,
             type: 'VEC3',
           },
-          bufferView: { buffer: 0, byteLength: 32, byteStride: 32 },
-          buffer: new Uint8Array(64),
+          bufferViews: [{ buffer: 0, byteLength: 32, byteStride: 32 }],
+          buffers: [new Uint8Array(64)],
           role: 'attribute',
         });
         expect(result.ok).toBe(false);
         if (result.ok) return;
-        expect(result.error.code).toBe('gltf-accessor-type-mismatch');
-        if (result.error.code !== 'gltf-accessor-type-mismatch') return;
-        expect(result.error.detail.reason).toBe('interleaved');
+        expect(result.error.code).toBe('gltf-buffer-out-of-bounds');
       });
 
       it('(e) widens U8 INDICES to U16', () => {
@@ -359,8 +338,8 @@ import { decomposeNodeTransform } from '../transform.js';
             count: 6,
             type: 'SCALAR',
           },
-          bufferView: { buffer: 0, byteLength: 6 },
-          buffer: indices,
+          bufferViews: [{ buffer: 0, byteLength: 6 }],
+          buffers: [indices],
           role: 'indices',
         });
         expect(result.ok).toBe(true);
@@ -379,8 +358,8 @@ import { decomposeNodeTransform } from '../transform.js';
             count: 4,
             type: 'VEC3',
           },
-          bufferView: { buffer: 0, byteLength: 48 },
-          buffer: new Uint8Array(48),
+          bufferViews: [{ buffer: 0, byteLength: 48 }],
+          buffers: [new Uint8Array(48)],
           role: 'attribute',
         });
         expect(result.ok).toBe(false);
@@ -401,8 +380,8 @@ import { decomposeNodeTransform } from '../transform.js';
             count: 6,
             type: 'SCALAR',
           },
-          bufferView: { buffer: 0, byteLength: indices.byteLength },
-          buffer: new Uint8Array(indices.buffer),
+          bufferViews: [{ buffer: 0, byteLength: indices.byteLength }],
+          buffers: [new Uint8Array(indices.buffer)],
           role: 'indices',
         });
         expect(result.ok).toBe(true);
@@ -564,7 +543,7 @@ import { decomposeNodeTransform } from '../transform.js';
         expect(r.value[0]?.channels[0]?.sampler.interpolation).toBe('STEP');
       });
 
-      it('fail-fast on CUBICSPLINE interpolation', () => {
+      it('rejects missing accessors for cubic interpolation', () => {
         const r = parseAnimation(
           [
             {
@@ -578,7 +557,7 @@ import { decomposeNodeTransform } from '../transform.js';
           [],
         );
         expect(r.ok).toBe(false);
-        if (!r.ok) expect(r.error.code).toBe('gltf-animation-cubicspline-unsupported');
+        if (!r.ok) expect(r.error.code).toBe('gltf-buffer-out-of-bounds');
       });
 
       it('preserves morph weights channel output for playback', () => {
@@ -597,7 +576,7 @@ import { decomposeNodeTransform } from '../transform.js';
           [{ name: 'j' }],
           [
             { componentType: 5126, type: 'SCALAR', count: 2, bufferView: 0 },
-            { componentType: 5126, type: 'VEC3', count: 2, bufferView: 1 },
+            { componentType: 5126, type: 'SCALAR', count: 6, bufferView: 1 },
           ],
           [
             { buffer: 0, byteLength: inputBuf.byteLength },

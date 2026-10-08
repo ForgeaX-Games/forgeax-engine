@@ -30,6 +30,7 @@ const inputFields = [
   ['frontFacing', 'bool'],
   ['uvFootprint0', 'vec4<f32>'],
   ['uvFootprint1', 'vec4<f32>'],
+  ['frameTime', 'f32'],
 ] as const;
 
 const dataFields = [

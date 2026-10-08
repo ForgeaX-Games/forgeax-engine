@@ -1,33 +1,33 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
 
-let source = '';
+const source = (file: string) =>
+  readFileSync(fileURLToPath(new URL(`../${file}.wgsl`, import.meta.url)), 'utf8');
 
-beforeAll(async () => {
-  const fs = await import(/* @vite-ignore */ 'node:fs');
-  const path = await import(/* @vite-ignore */ 'node:path');
-  const url = await import(/* @vite-ignore */ 'node:url');
-  source = fs.readFileSync(
-    path.resolve(
-      path.dirname(url.fileURLToPath(import.meta.url)),
-      '..',
-      'atmosphere-background.wgsl',
-    ),
-    'utf8',
-  );
-});
-
-describe('analytic atmosphere background ray and disc', () => {
-  it('reconstructs a camera-relative world ray before comparing the Sun direction', () => {
-    expect(source).toMatch(/world\.xyz\s*\/\s*world\.w\s*-\s*view\.cameraPos/);
-    expect(source).toContain('atmosphere_sun_disc_radiance');
-    expect(source).toMatch(/dot\(normalize\(viewDirection\),\s*normalize\(sunDirection\)\)/);
+describe('physical atmosphere background ray and disc', () => {
+  it('shares the world ray with aerial perspective and evaluates the disc along that ray', () => {
+    const background = source('atmosphere-background');
+    expect(background).toContain('atmosphere_view_ray(view,input.uv)');
+    expect(background).toContain('dot(ray.direction,sun)');
+    expect(background).toContain(
+      'atmosphere_solar_transmittance(view.atmosphere,origin,ray.direction',
+    );
+    const coordinates = source('atmosphere-coordinates');
+    expect(coordinates).toContain('v.inverseViewProj');
+    expect(coordinates).toContain('v.temporalProjection.z');
+    expect(source('atmosphere-sampling')).toContain('atmosphere_view_ray');
   });
 
-  it('keeps the Sun disc out of the generated cube and IBL path', () => {
-    expect(source).toContain('sunDiscEnabled');
-    expect(source).toContain('atmosphere.sunDirection.y > 0.0');
-    expect(source).toContain('solidAngle');
-    expect(source).toContain('textureSample(sky, skySampler, cubeDirection)');
-    expect(source).toContain('vec3<f32>(direction.x, -direction.y, direction.z)');
+  it('adds finite-solid-angle Sun radiance only in the background, excluding cube and IBL integration', () => {
+    const background = source('atmosphere-background');
+    expect(background).toContain('let radius=view.atmosphereControl.y;');
+    expect(background).toContain('if radius>0.0');
+    expect(background).toContain('solidAngle');
+    for (const file of ['atmosphere-cubemap', 'atmosphere-ibl']) {
+      const integration = source(file);
+      expect(integration).not.toContain('solidAngle');
+      expect(integration).not.toContain('atmosphereControl.y');
+    }
   });
 });

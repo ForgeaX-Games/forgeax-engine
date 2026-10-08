@@ -55,6 +55,8 @@ export interface ActionConfig {
  */
 export interface ActionState {
   readonly action: string;
+  /** Resolved at frame sampling; radial vector reads use this value. */
+  readonly deadzone: number;
   /** true when ANY binding contributes a press (OR aggregation). */
   readonly pressed: boolean;
   /**
@@ -114,24 +116,21 @@ function applyDeadzone(rawAbs: number, deadzone: number): number {
 
 /**
  * Extract the raw contribution from a single binding against the sample.
- * Returns { rawAbs: number, pressed: boolean }.
+ * Returns the raw magnitude before the action-level deadzone.
  *
  * - Digital types (key/mouseButton/gamepadButton): rawAbs = 1.0 if pressed, 0 otherwise.
  * - Analog type (gamepadAxis): rawAbs = max(0, |value| or max(0, value*sign)).
  *   For gamepadAxis, aggregates across ALL connected standardMapping slots (D-9).
  */
-function bindingContribution(
-  binding: ActionBinding,
-  sample: InputBackendSample,
-): { rawAbs: number; pressed: boolean } {
+function bindingContribution(binding: ActionBinding, sample: InputBackendSample): number {
   switch (binding.type) {
     case 'key': {
       const down = sample.downKeys.has(binding.key);
-      return { rawAbs: down ? 1.0 : 0, pressed: down };
+      return down ? 1 : 0;
     }
     case 'mouseButton': {
       const down = sample.buttons[binding.button] === true;
-      return { rawAbs: down ? 1.0 : 0, pressed: down };
+      return down ? 1 : 0;
     }
     case 'gamepadButton': {
       // D-9: aggregate across ALL connected standardMapping slots.
@@ -144,7 +143,7 @@ function bindingContribution(
           break;
         }
       }
-      return { rawAbs: anyPressed ? 1.0 : 0, pressed: anyPressed };
+      return anyPressed ? 1 : 0;
     }
     case 'gamepadAxis': {
       // D-9: aggregate across ALL connected standardMapping slots (MAX).
@@ -167,7 +166,7 @@ function bindingContribution(
           if (v > maxRawAbs) maxRawAbs = v;
         }
       }
-      return { rawAbs: maxRawAbs, pressed: false };
+      return maxRawAbs;
     }
   }
 }
@@ -218,7 +217,7 @@ export function deriveActionStates(
     let aggregatedRaw = 0;
 
     for (const binding of config.bindings) {
-      const { rawAbs } = bindingContribution(binding, sample);
+      const rawAbs = bindingContribution(binding, sample);
 
       // Update raw: MAX aggregation.
       if (rawAbs > aggregatedRaw) aggregatedRaw = rawAbs;
@@ -241,6 +240,7 @@ export function deriveActionStates(
 
     results.push({
       action: config.action,
+      deadzone,
       pressed: aggregatedPressed,
       justPressed,
       justReleased,
@@ -275,17 +275,11 @@ export interface GetVectorOptions {
  * - Neither registered: returns 0.
  * - Same action for both ends (E-12): always 0.
  *
- * @param inputMap - Input map (ActionConfig[]), used to look up per-action deadzone for getVector default.
  * @param actionStates - Derived action states (from deriveActionStates).
  * @param neg - Action name for the negative direction (e.g. 'moveLeft').
  * @param pos - Action name for the positive direction (e.g. 'moveRight').
  */
-export function getAxis(
-  _inputMap: readonly ActionConfig[],
-  actionStates: readonly ActionState[],
-  neg: string,
-  pos: string,
-): number {
+export function getAxis(actionStates: readonly ActionState[], neg: string, pos: string): number {
   const posState = actionStates.find((s) => s.action === pos);
   const negState = actionStates.find((s) => s.action === neg);
   const posStrength = posState?.strength ?? 0;
@@ -308,7 +302,6 @@ export function getAxis(
  * Default deadzone = average of the 4 actions' per-action deadzones.
  * `opts.deadzone` overrides it.
  *
- * @param inputMap - Input map, used for per-action deadzone lookup.
  * @param actionStates - Derived action states.
  * @param negX - Action name for negative X (e.g. 'moveLeft').
  * @param posX - Action name for positive X (e.g. 'moveRight').
@@ -317,7 +310,6 @@ export function getAxis(
  * @param opts - Optional override (deadzone).
  */
 export function getVector(
-  inputMap: readonly ActionConfig[],
   actionStates: readonly ActionState[],
   negX: string,
   posX: string,
@@ -338,7 +330,7 @@ export function getVector(
 
   // Compute radial deadzone.
   // Default = average of the 4 per-action deadzones, using only registered actions.
-  const deadzone = opts?.deadzone ?? computeAverageDeadzone(inputMap, negX, posX, negY, posY);
+  const deadzone = opts?.deadzone ?? computeAverageDeadzone(actionStates, negX, posX, negY, posY);
 
   const length = Math.sqrt(x * x + y * y);
 
@@ -362,16 +354,13 @@ export function getVector(
  * Actions not registered contribute DEFAULT_DEADZONE.
  */
 function computeAverageDeadzone(
-  inputMap: readonly ActionConfig[],
+  actionStates: readonly ActionState[],
   negX: string,
   posX: string,
   negY: string,
   posY: string,
 ): number {
-  const map = new Map<string, number>();
-  for (const c of inputMap) {
-    map.set(c.action, c.deadzone ?? DEFAULT_DEADZONE);
-  }
+  const map = new Map(actionStates.map((state) => [state.action, state.deadzone]));
   const dzNegX = map.get(negX) ?? DEFAULT_DEADZONE;
   const dzPosX = map.get(posX) ?? DEFAULT_DEADZONE;
   const dzNegY = map.get(negY) ?? DEFAULT_DEADZONE;

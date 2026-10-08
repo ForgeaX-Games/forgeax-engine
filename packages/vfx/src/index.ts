@@ -46,10 +46,13 @@ export type {
   ParticleRendererSemanticMap,
   ParticleRendererSortingV3,
   ParticleRendererSourceV3,
+  ParticleTopologyRendererSourceV3,
 } from './code-source-v3.js';
 export {
   defaultParticleRendererAttributes,
   defineParticleEffectSourceV3,
+  isParticleRendererSortingV3,
+  isParticleTopologyRenderer,
   PARTICLE_RENDERER_SEMANTICS,
   parseParticleEffectSourceV3,
 } from './code-source-v3.js';

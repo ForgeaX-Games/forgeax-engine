@@ -5,7 +5,7 @@ import { resolveTransparencyView } from '../src/oit/view';
 import type { RenderResourceScope } from '../src/publication/resource-scope';
 import type { CameraSnapshot } from '../src/render-contract';
 import type { DispatchEntry, RenderableSnapshot } from '../src/render-system-extract';
-import { sortTransparentDispatch } from '../src/systems/transparent-dispatch';
+import { TransparentSortCache } from '../src/systems/transparent-dispatch';
 
 /**
  * CPU cost of the per-frame transparent work in both view modes: the existing
@@ -72,8 +72,8 @@ export function transparentFrameWork(
   workload: ReturnType<typeof oitWorkload>,
   requested: Transparency,
 ): number {
-  const ordered = sortTransparentDispatch(
-    [...workload.dispatch],
+  const ordered = new TransparentSortCache().sort(
+    workload.dispatch,
     workload.scope,
     workload.cameras,
     workload.renderables,

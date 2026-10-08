@@ -1,0 +1,26 @@
+{
+  "node": "v22.22.3",
+  "sourceHead": "287897f75b1a6b222989e058dcd471b425afd071",
+  "profiles": [
+    {
+      "name": "base-ssao",
+      "inputFingerprint": "sha256:9e022ae62bc1e0331221ff4bfad3184d45ac5c09c184b4d6afd0221b09eebaa9",
+      "payloadSha256": "167f864b635a35230fae6e7976e7ccbbe3535462643cda3e5368b13244438587",
+      "entries": 67,
+      "materialShaders": 26,
+      "uniqueSources": 3433,
+      "strictReceiptSourceProfilePayloadAndPublicBuilderAdmission": true
+    },
+    {
+      "name": "point-ssao",
+      "inputFingerprint": "sha256:98ad30ecfdd9f4f546d232f8750788a85c31a2989e37bd1cc8778be3afe0d1a9",
+      "payloadSha256": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b",
+      "entries": 67,
+      "materialShaders": 26,
+      "uniqueSources": 3433,
+      "strictReceiptSourceProfilePayloadAndPublicBuilderAdmission": true
+    }
+  ],
+  "qualification": "Original owner tested these historical exact inputs; current local236a dist changed and remains unqualified. No bytes or receipts were copied to own producer.",
+  "boundary": "12855 same-key coalescing and70b9 Host cacheDir remain original-owner scope; no competing workflow or adoption during frozen preparation."
+}

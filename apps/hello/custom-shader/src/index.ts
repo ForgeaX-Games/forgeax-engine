@@ -386,8 +386,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   const rootReady = rootResult.value;
   const derivedReady = derivedResult.value;
   const sharesCookedSpecialization =
-    rootReady.specializationKey === derivedReady.specializationKey &&
-    rootReady.artifactDigest === derivedReady.artifactDigest &&
+    rootReady.record.specializationKey === derivedReady.record.specializationKey &&
+    rootReady.record.artifactDigest === derivedReady.record.artifactDigest &&
     rootReady.record.receipt.identity.cookIdentity ===
       derivedReady.record.receipt.identity.cookIdentity;
   if (
@@ -548,8 +548,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     webgpu: typeof navigator !== 'undefined' && navigator.gpu !== undefined,
     rootGuid: ACTIVE_ROOT_MATERIAL_GUID,
     derivedGuid: ACTIVE_DERIVED_MATERIAL_GUID,
-    rootArtifactDigest: rootReady.artifactDigest,
-    derivedArtifactDigest: derivedReady.artifactDigest,
+    rootArtifactDigest: rootReady.record.artifactDigest,
+    derivedArtifactDigest: derivedReady.record.artifactDigest,
     rootCookInputDigest: rootReady.record.receipt.identity.cookIdentity,
     derivedCookInputDigest: derivedReady.record.receipt.identity.cookIdentity,
     renderedMaterialGuids: [rootReady.record.guid, derivedReady.record.guid],
@@ -572,7 +572,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       normalSlotChanged: renderedTextureHandles.normal !== liveReplacementTextureHandles[1],
       afterComponentMaterialHandle: null,
       sourceDerivedGuid: derivedReady.record.guid,
-      sourceArtifactDigest: derivedReady.artifactDigest,
+      sourceArtifactDigest: derivedReady.record.artifactDigest,
       sourceCookInputDigest: derivedReady.record.receipt.identity.cookIdentity,
     },
     resizeRebuild: {
@@ -592,7 +592,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
       shader: {
         status: 'ok',
         module: materialModule,
-        artifactDigest: rootReady.artifactDigest,
+        artifactDigest: rootReady.record.artifactDigest,
       },
       readback: { status: 'pending' },
     },
@@ -670,8 +670,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
           published: false,
           error: { code: stale.error.code, detail: stale.error.detail },
           diagnostic: materialCache.generationError(DERIVED_MATERIAL_GUID)?.detail,
-          staleArtifactDigest: derivedReady.artifactDigest,
-          siblingArtifactDigest: rootReady.artifactDigest,
+          staleArtifactDigest: derivedReady.record.artifactDigest,
+          siblingArtifactDigest: rootReady.record.artifactDigest,
           currentMaterialHandle: currentDerivedHandle,
           sameWorld: world === stableWorld,
           sameRenderer: renderer === stableRenderer,
@@ -721,12 +721,12 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     freshEvidence = {
       status: 'fresh',
       published: true,
-      artifactDigest: fresh.value.artifactDigest,
+      artifactDigest: fresh.value.record.artifactDigest,
       inputDigest: fresh.value.record.receipt.identity.cookIdentity,
       generation: lastMaterialGeneration,
       diagnostic: materialCache.generationError(DERIVED_MATERIAL_GUID),
-      oldArtifactDigest: derivedReady.artifactDigest,
-      siblingArtifactDigest: rootReady.artifactDigest,
+      oldArtifactDigest: derivedReady.record.artifactDigest,
+      siblingArtifactDigest: rootReady.record.artifactDigest,
       currentMaterialHandle: currentDerivedHandle,
       allocationRelease: { ok: allocationRelease.ok },
       materialRefcount: world.sharedRefs.refcount(currentDerivedHandle),

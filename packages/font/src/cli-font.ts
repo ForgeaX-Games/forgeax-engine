@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { deflateSync } from 'node:zlib';
 import { FontError, type GlyphMetric } from '@forgeax/engine-types';
+import { atlasFontData } from './atlas-font-data.js';
 import { NodeWorkerAdapter } from './node-worker-adapter.js';
 
 /**
@@ -186,36 +187,13 @@ export function encodePng(width: number, height: number, rgba: Uint8Array): Uint
 
 /** Map a @zappar atlas into the FontAsset glyph-metrics sidecar shape. */
 export function atlasToSidecar(atlas: BakeAtlas, sourcePng: string): BakeSidecar {
-  const glyphs: Record<number, GlyphMetric> = {};
-  for (const g of atlas.glyphs) {
-    glyphs[g.unicode] = {
-      advance: g.advance,
-      bearingX: g.xoffset,
-      bearingY: g.yoffset,
-      size: { w: g.atlasSize[0], h: g.atlasSize[1] },
-      region: {
-        x: g.atlasPosition[0],
-        y: g.atlasPosition[1],
-        w: g.atlasSize[0],
-        h: g.atlasSize[1],
-      },
-    };
-  }
   return {
     schemaVersion: '1.0.0',
     kind: 'external-asset-package',
     importer: 'font',
     source: sourcePng,
     importSettings: { colorSpace: 'linear', mipmap: 'none' },
-    common: {
-      lineHeight: atlas.metrics.lineHeight,
-      base: atlas.metrics.ascender,
-      distanceRange: atlas.fieldRange,
-      pxRange: atlas.fieldRange,
-      atlasWidth: atlas.textureSize[0],
-      atlasHeight: atlas.textureSize[1],
-    },
-    glyphs,
+    ...atlasFontData(atlas),
   };
 }
 

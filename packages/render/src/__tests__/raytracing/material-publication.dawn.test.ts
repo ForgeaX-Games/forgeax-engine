@@ -2,16 +2,19 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { it } from 'vitest';
 import { verifyPublishedRayMaterial } from './material-publication.gpu-fixture';
-import { prepareRayPathFixture } from './path-tracer.commands';
+import { rayPathCommands } from './path-tracer.commands';
 
 it('traces with accepted material snapshots and replays retired parameter, Surface and transport outputs', async () => {
   const directory = process.env.FORGEAX_RAY_EVIDENCE;
-  const result = await verifyPublishedRayMaterial(await prepareRayPathFixture(), async (bytes) => {
-    if (directory) {
-      await mkdir(directory, { recursive: true });
-      await writeFile(join(directory, 'material-publication.rhitape'), bytes);
-    }
-  });
+  const result = await verifyPublishedRayMaterial(
+    await rayPathCommands.prepareRayPublicationFixture(undefined, 'emission'),
+    async (bytes) => {
+      if (directory) {
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, 'material-publication.rhitape'), bytes);
+      }
+    },
+  );
   if (directory) {
     await mkdir(directory, { recursive: true });
     await writeFile(

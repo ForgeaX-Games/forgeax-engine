@@ -81,6 +81,8 @@ describe('LoaderRegistry', () => {
       'font',
       'render-pipeline',
       'tileset',
+      'terrain',
+      'navigation-mesh',
       'video',
       'skeleton',
       'skin',

@@ -24,6 +24,7 @@ export function selectHdrpPbrPrewarmVariants(
   transmissionCapable = true,
   directionalPcssAvailable = true,
   projectorAvailable: boolean = true,
+  atmosphereAvailable = false,
 ): readonly MaterialShaderManifestEntry['variants'][number][] {
   const variants = manifestEntry?.variants ?? [];
   const hasExtendedLightingAxis = variants.some(
@@ -40,6 +41,7 @@ export function selectHdrpPbrPrewarmVariants(
     variants.filter(
       (variant) =>
         isOrdinaryMaterialVariant(variant) &&
+        (variant.defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereAvailable &&
         variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
         (!('EXTENDED_LIGHTING_AVAILABLE' in variant.defines) ||
           variant.defines.EXTENDED_LIGHTING_AVAILABLE === extendedLightingShaderAvailable) &&
@@ -62,12 +64,14 @@ export function selectSkinPrewarmVariants(
   directionalPcssAvailable = true,
   projectorAvailable = true,
   transmissionCapable = true,
+  atmosphereAvailable = false,
 ): readonly MaterialShaderManifestEntry['variants'][number][] {
   return (
     manifestEntry?.variants.filter(
       ({ defines }) =>
         defines.COVERAGE_ONLY !== true &&
         defines.VISIBLE_SURFACE_AVAILABLE !== true &&
+        (defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereAvailable &&
         defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
         (storageBufferCapable || defines.CLUSTER_FORWARD_AVAILABLE !== true) &&
         defines.PROBE_BLEND_AVAILABLE !== true &&
@@ -93,12 +97,14 @@ export function selectGpuDrivenSceneIndexVariant(
   directionalPcssAvailable: boolean,
   projectorAvailable: boolean,
   vertexColorAvailable = false,
+  atmosphereAvailable = false,
 ): MaterialShaderManifestEntry['variants'][number] | undefined {
   return manifestEntry?.variants.find(
     (variant) =>
       isOrdinaryMaterialVariant(variant) &&
       variant.defines.STORAGE_BUFFER_AVAILABLE === true &&
       variant.defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE === true &&
+      (variant.defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereAvailable &&
       (!('CLUSTER_FORWARD_AVAILABLE' in variant.defines) ||
         variant.defines.CLUSTER_FORWARD_AVAILABLE === false) &&
       (variant.defines.VERTEX_COLOR_AVAILABLE === true) === vertexColorAvailable &&
@@ -126,6 +132,7 @@ export function selectProbePrewarmVariants(
   directionalPcssAvailable = true,
   projectorAvailable: boolean = true,
   webgl2Downlevel = false,
+  atmosphereAvailable = false,
 ): readonly MaterialShaderManifestEntry['variants'][number][] {
   if (!storageBufferCapable) return [];
   return (
@@ -133,6 +140,7 @@ export function selectProbePrewarmVariants(
       const defines = variant.defines;
       return (
         isOrdinaryMaterialVariant(variant) &&
+        (defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereAvailable &&
         defines.PROBE_BLEND_AVAILABLE === true &&
         defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
         (!('WEBGL2_COMPAT' in defines) || defines.WEBGL2_COMPAT === webgl2Downlevel) &&
@@ -148,6 +156,33 @@ export function selectProbePrewarmVariants(
   );
 }
 
+/**
+ * Select the variant whose lazy module label a boot seed must cover. Every
+ * named axis must match, and an axis a row omits counts as false, so a device
+ * axis such as ATMOSPHERE_AVAILABLE can never fall back to the first row.
+ */
+export function selectBootVariant(
+  manifestEntry: MaterialShaderManifestEntry | undefined,
+  axes: Readonly<Record<string, boolean>>,
+): MaterialShaderManifestEntry['variants'][number] | undefined {
+  const required = Object.entries(axes);
+  return manifestEntry?.variants.find(({ defines }) =>
+    required.every(([axis, value]) => (defines[axis] ?? false) === value),
+  );
+}
+
+/**
+ * Which exact variant module labels a ready build compiles eagerly. Boot admits
+ * every device-reachable variant so no first draw waits on a module; recovery
+ * admits only the labels the replaced generation drew with, because the whole
+ * rebuild must fit the bounded recovery deadline. Variants a scene reaches
+ * later use the ordinary lazy module adapter.
+ */
+export type VariantPrewarmAdmission = (moduleLabel: string) => boolean;
+
+/** Boot admission: every device-reachable variant is prewarmed. */
+export const ADMIT_EVERY_VARIANT: VariantPrewarmAdmission = () => true;
+
 /** Compile a bounded batch, settle every request, then seed exact draw labels. */
 export async function prewarmMaterialShaderVariants(
   materialShaderId: string,
@@ -158,9 +193,15 @@ export async function prewarmMaterialShaderVariants(
     moduleLabel: string,
   ) => Promise<Result<ShaderModule, RhiError>>,
   seed: (moduleLabel: string, module: ShaderModule) => void,
+  admits: VariantPrewarmAdmission,
 ): Promise<void> {
-  for (let offset = 0; offset < variants.length; offset += 8) {
-    const batch = variants.slice(offset, offset + 8);
+  const admitted = variants.filter(
+    (variant) =>
+      prewarmedModules.has(variant.composedWgsl) ||
+      admits(`module-${materialShaderId}#${variant.definesKey}`),
+  );
+  for (let offset = 0; offset < admitted.length; offset += 8) {
+    const batch = admitted.slice(offset, offset + 8);
     const pending = new Map<string, Promise<Result<ShaderModule, RhiError>>>();
     for (const variant of batch) {
       if (prewarmedModules.has(variant.composedWgsl) || pending.has(variant.composedWgsl)) continue;
@@ -198,15 +239,17 @@ export function selectStandardPbrTransmissionPrewarmVariants(
   directionalPcssAvailable = true,
   projectorAvailable: boolean = true,
   extendedLightingShaderAvailable = true,
+  atmosphereAvailable = false,
 ): readonly MaterialShaderManifestEntry['variants'][number][] {
-  if (manifestEntry === undefined) {
-    throw new Error('Standard material shader manifest row is missing');
-  }
+  // Like the sibling selections, an absent Standard row has nothing to prewarm;
+  // a declared row must still carry both exact transmission variants.
+  if (manifestEntry === undefined) return [];
   const selected: MaterialShaderManifestEntry['variants'][number][] = [];
   for (const transmissionAvailable of [false, true]) {
     const declared = manifestEntry.variants.find(
       (variant) =>
         isOrdinaryMaterialVariant(variant) &&
+        (variant.defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereAvailable &&
         variant.defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE !== true &&
         variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
         variant.defines.CLUSTER_FORWARD_AVAILABLE === standardBootClusterAxis() &&

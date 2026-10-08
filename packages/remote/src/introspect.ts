@@ -1,5 +1,6 @@
 import { REMOTE_ERROR_MESSAGES } from './error-messages';
 import { REMOTE_ERROR_CODE_TO_JSONRPC, type RemoteErrorCode } from './errors';
+import type { ExecuteContext } from './execute';
 
 export interface ComponentIntrospectionDescriptor {
   readonly name: string;
@@ -8,17 +9,7 @@ export interface ComponentIntrospectionDescriptor {
   readonly meta: Readonly<Record<string, unknown>>;
 }
 
-export interface RemoteRootValues {
-  readonly world: unknown;
-  readonly renderer: unknown;
-  readonly assets: unknown;
-  readonly rhiCapture?: unknown;
-  readonly profiler?: unknown;
-  readonly execution?: unknown;
-  /** Host-owned simulation operations and realm Context. */
-  readonly simulation?: unknown;
-  /** Read-only projection of the DevKit plugin desired/live tree. */
-  readonly plugins?: unknown;
+export interface RemoteRootValues extends Omit<ExecuteContext, 'importModule'> {
   readonly introspection?: readonly ComponentIntrospectionDescriptor[];
 }
 

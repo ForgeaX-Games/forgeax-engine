@@ -21,14 +21,32 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-shader-material-2d smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "app bundle downstream of engine package metrics" },
-      "fps": { "enabled": false, "reason": "custom material behavior is the demo witness" },
-      "bench": { "enabled": false, "reason": "custom material behavior is not a benchmark" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-shader-material-2d smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "app bundle downstream of engine package metrics"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "custom material behavior is the demo witness"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "custom material behavior is not a benchmark"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-shader-material-2d smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
     },
     "rhiDebug": {
-      "riskFamilies": ["programmable-pipelines", "materials-textures"]
+      "riskFamilies": [
+        "programmable-pipelines",
+        "materials-textures"
+      ]
     }
   },
   "dependencies": {
@@ -43,8 +61,8 @@
     "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

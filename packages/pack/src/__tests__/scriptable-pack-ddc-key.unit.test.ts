@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   type ProducerSemanticIdentityInput,
-  producerRelativeDdcIdentity,
   producerRelativeDdcKey,
   producerRelativeLogicalPath,
-} from '../evidence/source-inventory.js';
-import { scriptablePackDdcKey } from '../scriptable-pack-node.js';
+} from '../evidence/producer-identity.js';
 
 const base = (
   overrides: Partial<ProducerSemanticIdentityInput> = {},
@@ -48,16 +46,5 @@ describe('producer-relative ScriptablePack DDC identity', () => {
     ['schema', { schemaVersion: '2.0.0' }],
   ])('misses when semantic input %s changes', (_name, change) => {
     expect(producerRelativeDdcKey(base(change))).not.toBe(producerRelativeDdcKey(base()));
-  });
-
-  it('returns an inspectable identity and preserves producer-relative path in the key input', () => {
-    const identity = producerRelativeDdcIdentity(base());
-
-    expect(identity).toMatchObject({
-      logicalPath: 'assets/vehicle.pack.ts',
-      sourceDigest: 'sha256:source',
-      key: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-    expect(scriptablePackDdcKey(base())).toBe(identity.key);
   });
 });

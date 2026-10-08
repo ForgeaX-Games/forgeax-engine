@@ -1,19 +1,87 @@
 import type { RenderGraphBuilder, RenderGraphError } from '@forgeax/engine-render-graph';
-import type { BindGroup, BindGroupLayout, RenderPipeline, Sampler } from '@forgeax/engine-rhi';
+import type {
+  BindGroup,
+  BindGroupLayout,
+  Buffer,
+  RenderPipeline,
+  RhiDevice,
+  Sampler,
+  TextureView,
+} from '@forgeax/engine-rhi';
 import { RhiError } from '@forgeax/engine-rhi';
-import type { Result } from '@forgeax/engine-types';
+import { ok, type Result } from '@forgeax/engine-types';
 import type { _InternalRenderPipelineContext } from '../record/render-context';
 import { VIEW_UNIFORM_BYTES } from '../record/view-ubo';
 import type { RenderPipelineFrame, RenderPipelineTarget } from '../render-pipeline';
 import { addAtmosphereIbl, type GraphEnvironment } from './ibl';
-import { atmosphereStorage } from './storage';
+import { addAtmosphereLuts } from './luts';
+import { atmosphereStorage, stageAtmospherePublish } from './storage';
+import { writeAtmosphereUniform } from './uniform';
+import {
+  type AtmosphereVisibility,
+  atmosphereVisibilityAccesses,
+  atmosphereVisibilityGroup,
+  atmosphereVisibilityLayout,
+} from './visibility';
 
 const CUBE_SIZE = 128;
+
+/** Group 0 of the `atmosphere_background` program, shared by scene and capture backgrounds. */
+export function createAtmosphereBackgroundLayout(device: RhiDevice): BindGroupLayout {
+  return device
+    .createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
+        { binding: 1, visibility: 2, sampler: { type: 'filtering' } },
+        {
+          binding: 2,
+          visibility: 2,
+          buffer: { type: 'uniform', minBindingSize: VIEW_UNIFORM_BYTES },
+        },
+        { binding: 3, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
+        { binding: 4, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
+      ],
+    })
+    .unwrap();
+}
+
+export function createAtmosphereBackgroundGroup(
+  device: RhiDevice,
+  layout: BindGroupLayout,
+  input: {
+    readonly sky: TextureView;
+    readonly sampler: Sampler;
+    readonly viewBuffer: Buffer;
+    readonly viewOffset: number;
+    readonly transmittance: TextureView;
+    readonly multiple: TextureView;
+  },
+): BindGroup {
+  return device
+    .createBindGroup({
+      layout,
+      entries: [
+        { binding: 0, resource: { kind: 'textureView', value: input.sky } },
+        { binding: 1, resource: { kind: 'sampler', value: input.sampler } },
+        {
+          binding: 2,
+          resource: {
+            kind: 'buffer',
+            value: { buffer: input.viewBuffer, offset: input.viewOffset, size: VIEW_UNIFORM_BYTES },
+          },
+        },
+        { binding: 3, resource: { kind: 'textureView', value: input.transmittance } },
+        { binding: 4, resource: { kind: 'textureView', value: input.multiple } },
+      ],
+    })
+    .unwrap();
+}
 
 /** One device-owned sky cube feeds the graph background; the sun disc is added only there. */
 export function addAtmosphereBackground(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
   color: RenderPipelineTarget,
+  visibility: AtmosphereVisibility = {},
 ): Result<GraphEnvironment, RenderGraphError> {
   const cube = graph.importTexture(
     'atmosphere-sky',
@@ -29,7 +97,7 @@ export function addAtmosphereBackground(
   if (!cubeView.ok) return cubeView;
   const params = graph.importBuffer(
     'atmosphere-params',
-    { size: 64, usage: 0x48 },
+    { size: VIEW_UNIFORM_BYTES, usage: 0x48 },
     (frame) => atmosphereStorage(frame).params,
   );
   if (!params.ok) return params;
@@ -59,7 +127,8 @@ export function addAtmosphereBackground(
   const frameOf = (frame: RenderPipelineFrame) => frame as _InternalRenderPipelineContext;
   const dirty = (frame: RenderPipelineFrame) =>
     frameOf(frame).frameState.environmentFrame?.environmentSignature !==
-    atmosphereStorage(frame).submittedSignature;
+      atmosphereStorage(frame).submittedSignature &&
+    atmosphereStorage(frame).recordedEncoder !== frame.encoder;
   const upload = graph.addCopyPass('atmosphere-prepare', {
     accesses: [
       { resource: params.value, usage: 'copy-dst' },
@@ -77,20 +146,17 @@ export function addAtmosphereBackground(
         });
       }
       const settings = environment.source.atmosphere;
-      const values = new Float32Array([
-        ...sun.direction,
-        sun.intensity,
-        ...sun.color,
-        0,
-        settings.turbidity,
-        settings.rayleigh,
-        settings.mieCoefficient,
-        settings.mieDirectionalG,
-        settings.sunAngularRadius,
-        settings.sunAngularRadius > 0 ? 1 : 0,
-        settings.circumsolarStrength,
-        settings.circumsolarWidth,
-      ]);
+      const values = new Float32Array(VIEW_UNIFORM_BYTES / 4);
+      values.set(
+        sun.direction.map((v) => -v),
+        16,
+      );
+      values.set(
+        sun.color.map((v) => v * sun.intensity),
+        20,
+      );
+      values.set(settings.capturePosition, 24);
+      writeAtmosphereUniform(values, 292, settings, 96000);
       frame.runtime.device.queue
         .writeBuffer(resources.buffer(params.value).unwrap(), 0, values)
         .unwrap();
@@ -104,6 +170,8 @@ export function addAtmosphereBackground(
     },
   });
   if (!upload.ok) return upload;
+  const tables = addAtmosphereLuts(graph, params.value, dirty, visibility);
+  if (!tables.ok) return tables;
   const ensureState = (frame: RenderPipelineFrame) => {
     if (state !== undefined) return state;
     const sources = frame.atmosphereShaders;
@@ -124,23 +192,18 @@ export function addAtmosphereBackground(
       .unwrap();
     const cubeLayout = device
       .createBindGroupLayout({
-        entries: [{ binding: 0, visibility: 2, buffer: { type: 'uniform', minBindingSize: 64 } }],
-      })
-      .unwrap();
-    const backgroundLayout = device
-      .createBindGroupLayout({
         entries: [
-          { binding: 0, visibility: 2, texture: { sampleType: 'float', viewDimension: 'cube' } },
-          { binding: 1, visibility: 2, sampler: { type: 'filtering' } },
           {
-            binding: 2,
+            binding: 0,
             visibility: 2,
             buffer: { type: 'uniform', minBindingSize: VIEW_UNIFORM_BYTES },
           },
-          { binding: 3, visibility: 2, buffer: { type: 'uniform', minBindingSize: 64 } },
+          { binding: 1, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
+          { binding: 3, visibility: 2, sampler: { type: 'filtering' } },
         ],
       })
       .unwrap();
+    const backgroundLayout = createAtmosphereBackgroundLayout(device);
     const cubePipeline = device
       .createRenderPipeline({
         label: 'atmosphere_cube',
@@ -166,7 +229,11 @@ export function addAtmosphereBackground(
     const backgroundPipeline = device
       .createRenderPipeline({
         label: 'atmosphere_background',
-        layout: device.createPipelineLayout({ bindGroupLayouts: [backgroundLayout] }).unwrap(),
+        layout: device
+          .createPipelineLayout({
+            bindGroupLayouts: [backgroundLayout, atmosphereVisibilityLayout(device)],
+          })
+          .unwrap(),
         vertex: { module: backgroundModule, entryPoint: 'atmosphere_background_vs', buffers: [] },
         fragment: {
           module: backgroundModule,
@@ -195,12 +262,13 @@ export function addAtmosphereBackground(
         { resource: faceView.value, usage: 'color-attachment' },
         { resource: params.value, usage: 'uniform-read' },
         { resource: vertices.value, usage: 'vertex-read' },
+        { resource: tables.value.captureSky, usage: 'sampled-read' },
       ],
       colorAttachments: [{ view: faceView.value, loadOp: 'clear', storeOp: 'store' }],
       executeIf: dirty,
       encode: ({ pass, frame, resources }) => {
         const current = ensureState(frame);
-        current.cubeGroup ??= frame.runtime.device
+        current.cubeGroup = frame.runtime.device
           .createBindGroup({
             layout: current.cubeLayout,
             entries: [
@@ -208,9 +276,20 @@ export function addAtmosphereBackground(
                 binding: 0,
                 resource: {
                   kind: 'buffer',
-                  value: { buffer: resources.buffer(params.value).unwrap(), size: 64 },
+                  value: {
+                    buffer: resources.buffer(params.value).unwrap(),
+                    size: VIEW_UNIFORM_BYTES,
+                  },
                 },
               },
+              {
+                binding: 1,
+                resource: {
+                  kind: 'textureView',
+                  value: resources.textureView(tables.value.captureSky).unwrap(),
+                },
+              },
+              { binding: 3, resource: { kind: 'sampler', value: current.sampler } },
             ],
           })
           .unwrap();
@@ -220,9 +299,10 @@ export function addAtmosphereBackground(
         pass.draw(3, 1, face * 3, 0);
         if (face === 5) {
           const signature = frameOf(frame).frameState.environmentFrame?.environmentSignature;
-          frameOf(frame).frameState.pendingAtmospherePublish = () => {
-            atmosphereStorage(frame).submittedSignature = signature;
-          };
+          const storage = atmosphereStorage(frame);
+          stageAtmospherePublish(frameOf(frame).frameState, () => {
+            storage.submittedSignature = signature;
+          });
         }
       },
     });
@@ -232,8 +312,10 @@ export function addAtmosphereBackground(
   if (!ibl.ok) return ibl;
   const background = graph.addRasterPass('atmosphere-background', {
     accesses: [
-      { resource: cubeView.value, usage: 'sampled-read' },
-      { resource: params.value, usage: 'uniform-read' },
+      ...atmosphereVisibilityAccesses(visibility),
+      { resource: tables.value.skyView, usage: 'sampled-read' },
+      { resource: tables.value.transmittance, usage: 'sampled-read' },
+      { resource: tables.value.multipleScattering, usage: 'sampled-read' },
       { resource: view.value, usage: 'uniform-read' },
       { resource: color.view, usage: 'color-attachment' },
     ],
@@ -243,39 +325,36 @@ export function addAtmosphereBackground(
     colorAttachments: [{ view: color.view, loadOp: 'clear', storeOp: 'store' }],
     encode: ({ pass, frame, resources }) => {
       const current = ensureState(frame);
-      current.backgroundGroup ??= frame.runtime.device
-        .createBindGroup({
-          layout: current.backgroundLayout,
-          entries: [
-            {
-              binding: 0,
-              resource: {
-                kind: 'textureView',
-                value: resources.textureView(cubeView.value).unwrap(),
-              },
-            },
-            { binding: 1, resource: { kind: 'sampler', value: current.sampler } },
-            {
-              binding: 2,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: resources.buffer(view.value).unwrap(), size: VIEW_UNIFORM_BYTES },
-              },
-            },
-            {
-              binding: 3,
-              resource: {
-                kind: 'buffer',
-                value: { buffer: resources.buffer(params.value).unwrap(), size: 64 },
-              },
-            },
-          ],
-        })
-        .unwrap();
+      current.backgroundGroup = createAtmosphereBackgroundGroup(
+        frame.runtime.device,
+        current.backgroundLayout,
+        {
+          sky: resources.textureView(tables.value.skyView).unwrap(),
+          sampler: current.sampler,
+          viewBuffer: resources.buffer(view.value).unwrap(),
+          viewOffset: 0,
+          transmittance: resources.textureView(tables.value.transmittance).unwrap(),
+          multiple: resources.textureView(tables.value.multipleScattering).unwrap(),
+        },
+      );
       pass.setPipeline(current.backgroundPipeline);
       pass.setBindGroup(0, current.backgroundGroup);
+      pass.setBindGroup(
+        1,
+        atmosphereVisibilityGroup(
+          frame,
+          resources.buffer(view.value).unwrap(),
+          0,
+          visibility.directional === undefined
+            ? undefined
+            : resources.textureView(visibility.directional).unwrap(),
+          visibility.cloud === undefined
+            ? undefined
+            : resources.textureView(visibility.cloud).unwrap(),
+        ),
+      );
       pass.draw(3);
     },
   });
-  return background.ok ? ibl : background;
+  return background.ok ? ok({ ...ibl.value, atmosphere: tables.value }) : background;
 }

@@ -24,7 +24,7 @@ it.each([
   [8, 0],
   [1024, 0],
   [1024, 4],
-])('finds depth-texel crossings without extending the silhouette (%i pixels, Hi-Z mip cap %i)', async (width, hizMaxMip) => {
+])('finds depth-texel crossings without extending the silhouette (%i pixels, depth-pyramid mip cap %i)', async (width, pyramidMaxMip) => {
   const compiler = (await import(
     /* @vite-ignore */ new URL('../../../shader-compiler/dist/index.mjs', import.meta.url).href
   )) as {
@@ -43,7 +43,7 @@ it.each([
     // A 921.6-pixel projected span: a 512-step march skips texel 598.
     let hit = traceScreenRay(vec3<f32>(-0.8, 0.0, -1.0),
       normalize(vec3<f32>(1.0, 0.0, -0.2)), 6.0, 0.2,
-      vec2<u32>(${width}u, 3u), 1.2, ${hizMaxMip}u);
+      vec2<u32>(${width}u, 3u), 1.2, ${pyramidMaxMip}u);
     crossingProbe[0] = vec4<f32>(hit.hit, hit.uv, hit.thickness);
     crossingProbe[10] = vec4<f32>(hit.reactivity);
     // Exercise the rescue fraction helper on both projected axes and signs;
@@ -76,7 +76,11 @@ it.each([
 }`,
     {
       id: 'forgeax_ssr::trace',
-      imports: { 'forgeax_view::common': shader('common'), 'forgeax_pbr::gbuffer': gbufferSource },
+      imports: {
+        'forgeax_view::common': shader('common'),
+        'forgeax_pbr::gbuffer': gbufferSource,
+        'forgeax_depth_pyramid::sample': shader('depth-pyramid-sample'),
+      },
     },
   );
   if (!compiled.ok || !compiled.value) throw new Error(JSON.stringify(compiled.error));
@@ -108,13 +112,13 @@ it.each([
       usage: GPU_TEXTURE_USAGE_COPY_DST | GPU_TEXTURE_USAGE_TEXTURE_BINDING,
     })
     .unwrap();
-  const hizWidth = Math.max(1, Math.floor(width / 2));
-  const hizHeight = 1;
-  const hizMipLevels = width === 1024 ? 4 : 1;
-  const hiz = device
+  const pyramidWidth = Math.max(1, Math.floor(width / 2));
+  const pyramidHeight = 1;
+  const pyramidMipLevels = width === 1024 ? 4 : 1;
+  const pyramid = device
     .createTexture({
-      size: { width: hizWidth, height: hizHeight, depthOrArrayLayers: 1 },
-      mipLevelCount: hizMipLevels,
+      size: { width: pyramidWidth, height: pyramidHeight, depthOrArrayLayers: 1 },
+      mipLevelCount: pyramidMipLevels,
       format: 'r32float',
       textureBindingViewDimension: '2d',
       usage: GPU_TEXTURE_USAGE_COPY_DST | GPU_TEXTURE_USAGE_TEXTURE_BINDING,
@@ -243,7 +247,7 @@ it.each([
     const depthView = device.createTextureView(depth, {}).unwrap();
     const normalView = device.createTextureView(normal, {}).unwrap();
     const dataView = device.createTextureView(data, {}).unwrap();
-    const hizView = device.createTextureView(hiz, {}).unwrap();
+    const pyramidView = device.createTextureView(pyramid, {}).unwrap();
     const temporalView = device.createTextureView(temporal, {}).unwrap();
     const inputGroup = device
       .createBindGroup({
@@ -263,7 +267,7 @@ it.each([
                       : dataView,
             },
           })),
-          { binding: 3, resource: { kind: 'textureView', value: hizView } },
+          { binding: 3, resource: { kind: 'textureView', value: pyramidView } },
           { binding: 5, resource: { kind: 'buffer', value: { buffer: view } } },
         ],
       })
@@ -290,8 +294,8 @@ it.each([
       // Mirror the production minimum hierarchy for this long-ray probe:
       // the wall is in mip 0 texel 299 and in each ancestor selected by the
       // reduction chain. The trace must descend it back to source x=598.
-      for (let level = 0; level < hizMipLevels; level += 1) {
-        const levelWidth = Math.max(1, hizWidth >> level);
+      for (let level = 0; level < pyramidMipLevels; level += 1) {
+        const levelWidth = Math.max(1, pyramidWidth >> level);
         const levelData = new Float32Array(levelWidth).fill(3.402823e38);
         if (width === 1024) {
           const wallCell = Math.min(levelWidth - 1, Math.floor(598 / 2 ** (level + 1)));
@@ -299,7 +303,7 @@ it.each([
         }
         device.queue
           .writeTexture(
-            { texture: hiz, mipLevel: level },
+            { texture: pyramid, mipLevel: level },
             levelData,
             { bytesPerRow: levelWidth * 4, rowsPerImage: 1 },
             { width: levelWidth, height: 1, depthOrArrayLayers: 1 },
@@ -470,7 +474,7 @@ it.each([
     device.destroyTexture(depth).unwrap();
     device.destroyTexture(data).unwrap();
     device.destroyTexture(normal).unwrap();
-    device.destroyTexture(hiz).unwrap();
+    device.destroyTexture(pyramid).unwrap();
     device.destroyTexture(temporal).unwrap();
     for (const buffer of [view, output, readback]) device.destroyBuffer(buffer).unwrap();
   }

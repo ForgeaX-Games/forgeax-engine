@@ -44,6 +44,7 @@ it('cooks the same local policy for Unlit without moving texture coordinates int
           { name: 'baseColor', type: 'color' },
           { name: 'alphaCutoff', type: 'f32' },
           { name: 'alphaHash', type: 'f32', default: 0 },
+          { name: 'shading', type: 'f32', default: 0 },
           { name: 'baseColorTexture', type: 'texture' },
         ],
         passes: [

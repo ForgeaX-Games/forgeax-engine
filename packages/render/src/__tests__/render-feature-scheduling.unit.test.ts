@@ -25,7 +25,10 @@ const caps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: true,
   float32Filterable: true,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
+  rayQuery: { supported: false, reason: 'backend-has-no-ray-query' },
 } satisfies RhiCaps;
 
 function feature(identity: string, events: string[], failStage?: 'extract' | 'plan') {

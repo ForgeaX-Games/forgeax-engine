@@ -8,6 +8,7 @@ const probes = vi.hoisted(() => {
   const sessionListeners: SessionListener[] = [];
   return {
     audioDispose: vi.fn(),
+    browserCompleted: vi.fn(),
     sessionDispose: vi.fn(),
     sessionListen: vi.fn((listener: SessionListener) => {
       sessionListeners.push(listener);
@@ -64,6 +65,12 @@ vi.mock('@forgeax/engine-audio-webaudio', () => ({
     dispose: probes.audioDispose,
     state: () => ({ contextState: 'suspended', activeSourceCount: 0, lastError: null }),
   })),
+}));
+
+vi.mock('../browser-frame-signal', () => ({
+  publishBrowserFrameCompleted: probes.browserCompleted,
+  publishBrowserFrameSubmitted: vi.fn(),
+  resetBrowserFrameSubmitted: vi.fn(),
 }));
 
 import { createWorkerExecutionApp } from '../execution/host-controller';
@@ -182,6 +189,65 @@ describe('Worker frame admission watchdog', () => {
     await app.dispose();
   });
 
+  it('settles rejected-frame credit before a throwing error listener and admits a real retry', async () => {
+    const { app, callbacks, frame } = await createRunningApp();
+    const unsubscribe = app.onError(() => {
+      throw new Error('listener fixture');
+    });
+    expect(() =>
+      listener()({
+        ...completeMessage(frame),
+        kind: 'simulation-complete',
+        renderRejection: {
+          code: 'frame-submit-rejected',
+          expected: 'no queue acceptance',
+          hint: 'retry',
+          detail: { operation: 'draw', stage: 'submit', accepted: false },
+        },
+      } as EngineToHostMessage),
+    ).toThrow('listener fixture');
+    unsubscribe();
+    expect(app.execution.report().frame.completed).toBe(1); // Simulation credit, not a Render receipt.
+    expect(probes.browserCompleted).not.toHaveBeenCalled();
+    callbacks.at(-1)?.(16);
+    const next = probes.sessionPost.mock.calls.at(-1)?.[0] as ExecutionFrameMessage;
+    expect(next).toMatchObject({ kind: 'frame', frameId: 2 });
+    listener()(completeMessage(next));
+    expect(app.execution.report().frame.completed).toBe(2);
+    expect(probes.browserCompleted).toHaveBeenCalledTimes(1);
+    expect(probes.sessionDispose).not.toHaveBeenCalled();
+    await app.dispose();
+  });
+
+  it('retains the resume reset through a rejected picture until a successful retry', async () => {
+    const { app, callbacks, frame } = await createRunningApp();
+    listener()(completeMessage(frame));
+    app.pause().unwrap();
+    app.resume().unwrap();
+    callbacks.at(-1)?.(16);
+    const rejected = probes.sessionPost.mock.calls.at(-1)?.[0] as ExecutionFrameMessage;
+    expect(rejected.temporalReset).toBe(true);
+    listener()({
+      ...completeMessage(rejected),
+      kind: 'simulation-complete',
+      renderRejection: {
+        code: 'frame-submit-rejected',
+        expected: 'no queue acceptance',
+        hint: 'retry',
+        detail: { operation: 'draw', stage: 'submit', accepted: false },
+      },
+    } as EngineToHostMessage);
+    callbacks.at(-1)?.(32);
+    const retried = probes.sessionPost.mock.calls.at(-1)?.[0] as ExecutionFrameMessage;
+    expect(retried.temporalReset).toBe(true);
+    listener()(completeMessage(retried));
+    callbacks.at(-1)?.(48);
+    expect(
+      (probes.sessionPost.mock.calls.at(-1)?.[0] as ExecutionFrameMessage).temporalReset,
+    ).not.toBe(true);
+    await app.dispose();
+  });
+
   it('still reports a fatal frame timeout when the Worker never submits', async () => {
     const { app } = await createRunningApp();
 
@@ -277,5 +343,97 @@ describe('Worker frame admission watchdog', () => {
       completed: 1,
       inFlight: 1,
     });
+  });
+});
+
+describe('Worker inspection replies', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    probes.sessionListeners.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  async function inspect() {
+    const { app } = await createRunningApp();
+    const remoteEval = app.remoteEval;
+    if (remoteEval === undefined) throw new Error('Worker App exposes remoteEval');
+    const run = remoteEval('return 1', 'worker-world');
+    const request = probes.sessionPost.mock.calls.at(-1)?.[0] as { readonly requestId: number };
+    return { app, run, requestId: request.requestId, emit: listener() };
+  }
+
+  it('settles started and result from the same World', async () => {
+    const { app, run, requestId, emit } = await inspect();
+    emit({ kind: 'inspect-started', requestId, worldIdentity: 'worker-world' });
+    await expect(run.started).resolves.toBeUndefined();
+    emit({
+      kind: 'inspect-result',
+      requestId,
+      worldIdentity: 'worker-world',
+      result: { ok: true, value: 7 },
+    });
+    await expect(run).resolves.toBe(7);
+    await app.dispose();
+  });
+
+  it('keeps an admitted cancel attached to the later result', async () => {
+    const { app, run, requestId, emit } = await inspect();
+    const cancelled = run.cancel();
+    emit({ kind: 'inspect-canceled', requestId, worldIdentity: 'worker-world', admitted: true });
+    await expect(cancelled).resolves.toBe(true);
+    await expect(run.started).resolves.toBeUndefined();
+    emit({
+      kind: 'inspect-result',
+      requestId,
+      worldIdentity: 'worker-world',
+      result: { ok: false, error: { code: 'live-eval-failed' } },
+    });
+    await expect(run).rejects.toMatchObject({ code: 'live-eval-failed' });
+    await app.dispose();
+  });
+
+  it('rejects a cancel before admission without waiting for a result', async () => {
+    const { app, run, requestId, emit } = await inspect();
+    const cancelled = run.cancel();
+    emit({ kind: 'inspect-canceled', requestId, worldIdentity: 'worker-world', admitted: false });
+    await expect(cancelled).resolves.toBe(false);
+    await expect(run).rejects.toMatchObject({ code: 'live-eval-cancelled-before-execution' });
+    await expect(run.started).rejects.toMatchObject({
+      code: 'live-eval-cancelled-before-execution',
+    });
+    await app.dispose();
+  });
+
+  it.each([
+    'inspect-started',
+    'inspect-canceled',
+    'inspect-result',
+  ] as const)('ends the request as stale when %s comes from another World', async (kind) => {
+    const { app, run, requestId, emit } = await inspect();
+    const cancelled = run.cancel();
+    const base = { requestId, worldIdentity: 'rebuilt-world' };
+    emit(
+      kind === 'inspect-started'
+        ? { kind, ...base }
+        : kind === 'inspect-canceled'
+          ? { kind, ...base, admitted: false }
+          : { kind, ...base, result: { ok: true, value: 7 } },
+    );
+    await expect(cancelled).resolves.toBe(true);
+    await expect(run).rejects.toMatchObject({ code: 'live-world-stale' });
+    await expect(run.started).rejects.toMatchObject({ code: 'live-world-stale' });
+    emit({
+      kind: 'inspect-result',
+      requestId,
+      worldIdentity: 'worker-world',
+      result: { ok: true, value: 7 },
+    });
+    await expect(run).rejects.toMatchObject({ code: 'live-world-stale' });
+    await app.dispose();
   });
 });

@@ -98,29 +98,17 @@ let importer: EncoderImporter = defaultImporter;
 /** Lazy-init singleton (D-10): null = never attempted, cleared on failure to retry. @internal */
 let _initPromise: Promise<BasisEncoderModule> | null = null;
 
-/** Count of importer invocations; observed in tests to prove single-init. @internal */
-let initCount = 0;
-
 /**
  * Lazy-init the Basis encoder WASM module (D-10 main-thread singleton).
  * First call dynamic-imports + initializes; subsequent calls return the cache.
  */
 export function initBasisEncoder(): Promise<BasisEncoderModule> {
   if (_initPromise !== null) return _initPromise;
-  initCount++;
   _initPromise = importer().catch((cause: unknown) => {
     _initPromise = null;
     throw new Error('codec-init-failed', { cause });
   });
   return _initPromise;
-}
-
-/**
- * Test-only: number of times the encoder importer has been invoked.
- * @internal
- */
-export function _basisEncoderInitCount(): number {
-  return initCount;
 }
 
 /**
@@ -131,7 +119,6 @@ export function _basisEncoderInitCount(): number {
 export function _setBasisEncoderImporter(next?: EncoderImporter): void {
   importer = next ?? defaultImporter;
   _initPromise = null;
-  initCount = 0;
 }
 
 /** Map a delivery encoding to the encoder `basis_tex_format` enum value. */

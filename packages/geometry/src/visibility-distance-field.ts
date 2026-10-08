@@ -4,10 +4,10 @@ import {
   distanceFieldFailure,
   distanceFieldMeshDigest,
   type FieldVec3,
-  MAX_DISTANCE_FIELD_SAMPLES,
   MAX_VISIBILITY_DISTANCE_FIELD_AXIS,
   type MeshDistanceField,
 } from './distance-field';
+import { FieldBrickBuilder, fieldBrickLane, fieldBrickStart } from './distance-field-bricks';
 import { createTriangleQuery, type QueryTriangle } from './triangle-query';
 
 /** Fixed stratification; independent deterministic RNG, not an Embree/UE byte reproduction. */
@@ -115,7 +115,7 @@ export async function buildVisibilityDistanceField(
   const mostlyTwoSided = twoSided * 4 >= flags.length;
   const allTwoSided = activeFlags.every((v) => v === 1);
   // Positive plane volume, optional two-sided pullback room, then a distinct
-  // stored gradient border. Dense isotropic cells replace UE's sparse bricks.
+  // stored gradient border. Brick storage retains this isotropic sample lattice.
   const lo: [number, number, number] = [0, 0, 0],
     hi: [number, number, number] = [0, 0, 0];
   for (const a of [0, 1, 2] as const) {
@@ -148,15 +148,11 @@ export async function buildVisibilityDistanceField(
     number,
     number,
   ];
-  const count = dimensions[0] * dimensions[1] * dimensions[2];
   if (
-    dimensions.some(
-      (n) => !Number.isInteger(n) || n < 3 || n > MAX_VISIBILITY_DISTANCE_FIELD_AXIS,
-    ) ||
-    count > MAX_DISTANCE_FIELD_SAMPLES
+    dimensions.some((n) => !Number.isInteger(n) || n < 3 || n > MAX_VISIBILITY_DISTANCE_FIELD_AXIS)
   )
     return distanceFieldFailure(
-      `visibility field exceeds ${MAX_VISIBILITY_DISTANCE_FIELD_AXIS} samples per axis or ${MAX_DISTANCE_FIELD_SAMPLES} total; choose voxel size or repair representation granularity`,
+      `visibility field exceeds ${MAX_VISIBILITY_DISTANCE_FIELD_AXIS} samples per axis; choose voxel size or repair representation granularity`,
       'distance-field-limit',
     );
   for (const axis of [0, 1, 2] as const) {
@@ -176,69 +172,97 @@ export async function buildVisibilityDistanceField(
   const query = createTriangleQuery(triangles);
   const nearestBudget = { remaining: 134_217_728 };
   const rayBudget = { remaining: 1_073_741_824 };
-  const values = new Float32Array(count);
+  const storage = new FieldBrickBuilder(dimensions),
+    brick = new Float32Array(64);
   const hit = { primitive: -1, distance: 0, frontFace: false };
   let negativeSamples = 0;
-  for (let z = 0; z < dimensions[2]; z++)
-    for (let y = 0; y < dimensions[1]; y++)
-      for (let x = 0; x < dimensions[0]; x++) {
-        const p: FieldVec3 = [
-          Math.fround(origin[0] + Math.fround(x * spacing)),
-          Math.fround(origin[1] + Math.fround(y * spacing)),
-          Math.fround(origin[2] + Math.fround(z * spacing)),
-        ];
-        const nearest = query.nearestSquared(p, distanceBand, nearestBudget);
-        if (nearest === null)
-          return distanceFieldFailure(
-            'visibility closest-point budget exhausted',
-            'distance-field-limit',
-          );
-        const distance = Math.sqrt(nearest);
-        let back = 0;
-        let remaining = DIRECTIONS.length;
-        // A capped nearest result contains no geometry reachable by a sign ray:
-        // its pulled-back start puts the far endpoint strictly inside the band.
-        if (!allTwoSided && nearest < distanceBand * distanceBand)
-          for (const d of DIRECTIONS) {
-            const start: FieldVec3 = [
-              p[0] - 1e-4 * distanceBand * d[0],
-              p[1] - 1e-4 * distanceBand * d[1],
-              p[2] - 1e-4 * distanceBand * d[2],
+  for (let index = 0; index < storage.bricks.length; index++) {
+    const start = fieldBrickStart(dimensions, index);
+    const lower = start.map((v, a) => Math.fround((origin[a] ?? 0) + Math.fround(v * spacing)));
+    const upper = start.map((v, a) =>
+      Math.fround(
+        (origin[a] ?? 0) + Math.fround(Math.min(v + 3, (dimensions[a] ?? 0) - 1) * spacing),
+      ),
+    );
+    const center = lower.map((v, a) => (v + (upper[a] ?? 0)) / 2) as [number, number, number];
+    const radius = Math.hypot(...upper.map((v, a) => (v - (lower[a] ?? 0)) / 2));
+    // The unsigned distance is 1-Lipschitz. An outward guard covers coordinate
+    // and nearest-query rounding; no sample within the band is discarded.
+    const guard =
+      distanceBand + radius + Math.max(spacing * 1e-5, ...center.map((v) => Math.abs(v) * 1e-7));
+    const nearest = query.nearestSquared(center, guard, nearestBudget);
+    if (nearest === null)
+      return distanceFieldFailure(
+        'visibility brick closest-point budget exhausted',
+        'distance-field-limit',
+      );
+    if (nearest >= guard * guard) brick.fill(distanceBand);
+    else
+      for (let k = 0; k < 4; k++)
+        for (let j = 0; j < 4; j++)
+          for (let i = 0; i < 4; i++) {
+            const lane = (k * 4 + j) * 4 + i;
+            if (fieldBrickLane(dimensions, start, i, j, k) !== lane) continue;
+            const x = start[0] + i,
+              y = start[1] + j,
+              z = start[2] + k;
+            const p: FieldVec3 = [
+              Math.fround(origin[0] + Math.fround(x * spacing)),
+              Math.fround(origin[1] + Math.fround(y * spacing)),
+              Math.fround(origin[2] + Math.fround(z * spacing)),
             ];
-            const found = query.trace(hit, start, d, 0, distanceBand, rayBudget);
-            if (found === null)
+            const nearest = query.nearestSquared(p, distanceBand, nearestBudget);
+            if (nearest === null)
               return distanceFieldFailure(
-                'visibility sign-ray budget exhausted',
+                'visibility closest-point budget exhausted',
                 'distance-field-limit',
               );
-            if (found && !hit.frontFace && activeFlags[hit.primitive] === 0) back++;
-            remaining--;
-            // Remaining votes cannot undo a negative decision, or supply enough
-            // backfaces for one. Preserve the complete 98-direction predicate.
-            if (back > DIRECTIONS.length * 0.25 || back + remaining <= DIRECTIONS.length * 0.25)
-              break;
+            const distance = Math.sqrt(nearest);
+            let back = 0;
+            let remaining = DIRECTIONS.length;
+            // A capped nearest result contains no geometry reachable by a sign ray:
+            // its pulled-back start puts the far endpoint strictly inside the band.
+            if (!allTwoSided && nearest < distanceBand * distanceBand)
+              for (const d of DIRECTIONS) {
+                const start: FieldVec3 = [
+                  p[0] - 1e-4 * distanceBand * d[0],
+                  p[1] - 1e-4 * distanceBand * d[1],
+                  p[2] - 1e-4 * distanceBand * d[2],
+                ];
+                const found = query.trace(hit, start, d, 0, distanceBand, rayBudget);
+                if (found === null)
+                  return distanceFieldFailure(
+                    'visibility sign-ray budget exhausted',
+                    'distance-field-limit',
+                  );
+                if (found && !hit.frontFace && activeFlags[hit.primitive] === 0) back++;
+                remaining--;
+                // Remaining votes cannot undo a negative decision, or supply enough
+                // backfaces for one. Preserve the complete 98-direction predicate.
+                if (back > DIRECTIONS.length * 0.25 || back + remaining <= DIRECTIONS.length * 0.25)
+                  break;
+              }
+            const value = Math.fround(
+              Math.min(distance, distanceBand) * (back > DIRECTIONS.length * 0.25 ? -1 : 1),
+            );
+            brick[lane] = value;
+            if (value < 0) negativeSamples++;
           }
-        const value = Math.fround(
-          Math.min(distance, distanceBand) * (back > DIRECTIONS.length * 0.25 ? -1 : 1),
-        );
-        values[(z * dimensions[1] + y) * dimensions[0] + x] = value;
-        if (value < 0) negativeSamples++;
-      }
+    if (!storage.store(index, brick))
+      return distanceFieldFailure(
+        'visibility field storage exceeds 32 MiB',
+        'distance-field-limit',
+      );
+  }
   const meshDigest = await distanceFieldMeshDigest(canonical, topology);
-  const sourceBytes = new Uint8Array(64 + flags.length);
-  sourceBytes.set(new TextEncoder().encode(meshDigest));
-  sourceBytes.set(flags, 64);
-  const sourceDigest = Array.from(
-    new Uint8Array(await crypto.subtle.digest('SHA-256', sourceBytes)),
-    (b) => b.toString(16).padStart(2, '0'),
-  ).join('');
+  const sourceDigest = await visibilityDistanceFieldSourceDigest(meshDigest, flags);
   return ok({
     meshDigest,
     bounds: { min, max },
     dimensions,
     origin,
     spacing,
-    values,
+    ...storage.finish(),
     policy: {
       kind: 'sampled-visibility',
       sourceDigest,
@@ -248,4 +272,17 @@ export async function buildVisibilityDistanceField(
     },
     quality: { negativeSamples, testedTriangles: triangles.length },
   });
+}
+
+/** Same canonical geometry and sidedness identity at cook and asset admission. */
+export async function visibilityDistanceFieldSourceDigest(
+  meshDigest: string,
+  flags: Uint8Array,
+): Promise<string> {
+  const sourceBytes = new Uint8Array(64 + flags.length);
+  sourceBytes.set(new TextEncoder().encode(meshDigest));
+  sourceBytes.set(flags, 64);
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', sourceBytes)), (b) =>
+    b.toString(16).padStart(2, '0'),
+  ).join('');
 }

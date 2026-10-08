@@ -1,5 +1,6 @@
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { copyPackData, packArrayStorage } from '@forgeax/engine-pack/runtime';
+import { validateTerrain } from '@forgeax/engine-terrain';
 import {
   type Asset,
   AssetError,
@@ -56,23 +57,37 @@ export function copyPreparedAsset(asset: Asset): Asset {
 /** Domain preparation has no Catalog, World or GPU side effects. */
 export function prepareAssetPayload(asset: Asset): Result<Asset, AssetError> {
   let prepared = asset;
+  if (asset.kind === 'terrain') {
+    const valid = validateTerrain(asset);
+    if (!valid.ok)
+      return err(
+        new AssetError({
+          code: 'asset-parse-failed',
+          expected: valid.error.expected,
+          hint: valid.error.hint,
+        }),
+      );
+  }
   if (asset.kind === 'material' && 'parentGuid' in asset && typeof asset.parentGuid === 'string') {
-    const parent = AssetGuid.parse(String(asset.parentGuid));
+    const parentGuid = String(asset.parentGuid);
+    const parent = AssetGuid.parse(parentGuid);
     if (!parent.ok)
       return err(
         new AssetError({
           code: 'asset-parse-failed',
           expected: 'a valid material parent GUID',
-          hint: 'repair the parent reference',
+          hint: `parent GUID '${parentGuid}' is not a valid UUID format`,
         }),
       );
     const child = { ...asset, parent: parent.value };
-    if (materialChildForbiddenFields(child as unknown as MaterialAsset).length)
+    const forbidden = materialChildForbiddenFields(child as unknown as MaterialAsset);
+    if (forbidden.length)
       return err(
         new AssetError({
           code: 'asset-parse-failed',
           expected: 'parent-bearing material to contain only parent and values',
           hint: 'remove root-owned colorSpace, passes, and parameters from the child payload',
+          detail: { field: 'material-child-contract', got: forbidden },
         }),
       );
     prepared = {
@@ -88,8 +103,7 @@ export function prepareAssetPayload(asset: Asset): Result<Asset, AssetError> {
     if (error) return err(error);
   }
   if (prepared.kind === 'material') {
-    const error =
-      validateMaterialPasses(undefined, prepared) ?? validateSpriteSlices(undefined, prepared);
+    const error = validateMaterialPasses(prepared) ?? validateSpriteSlices(prepared);
     if (error) return err(error);
   }
   return ok(prepared.kind === 'mesh' ? withMeshAabb(prepared) : prepared);

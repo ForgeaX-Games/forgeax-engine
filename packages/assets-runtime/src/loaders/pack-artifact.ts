@@ -19,33 +19,11 @@ import type {
   TextureAsset,
   TilesetAsset,
 } from '@forgeax/engine-types';
-import { AssetError, deriveTextureLayout } from '@forgeax/engine-types';
-import {
-  type TexturePackVerificationDetail,
-  TexturePackVerificationError,
-} from '../errors/asset.js';
+import { AssetError } from '@forgeax/engine-types';
 import type { PackLoaderInput } from '../loader-registry';
 import { traceAssetLoadPhase } from '../registry/load-trace';
 
 type PackArtifact = PackLoaderInput['artifacts'][string];
-
-export interface TexturePackLoadInput {
-  readonly pack: PackLoaderInput;
-  readonly sourceKey: string;
-  readonly generation: number;
-  readonly expectedDigest: string;
-}
-
-export type VerifiedTexturePack = {
-  readonly asset: TextureAsset;
-  readonly sourceKey: string;
-  readonly generation: number;
-  readonly digest: string;
-};
-
-export type VerifiedTexturePackResult =
-  | { readonly ok: true; readonly value: VerifiedTexturePack }
-  | { readonly ok: false; readonly error: TexturePackVerificationError | AssetError };
 
 type CodecFailureProjection = {
   readonly code: string;
@@ -119,32 +97,6 @@ function finiteNumber(value: unknown): value is number {
 
 function positiveInteger(value: unknown): value is number {
   return finiteNumber(value) && Number.isInteger(value) && value > 0;
-}
-
-async function textureDigest(bytes: Uint8Array): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle === undefined) throw new Error('Web Crypto API is required for texture verification');
-  const digest = await subtle.digest('SHA-256', bytes.slice().buffer as ArrayBuffer);
-  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
-}
-
-function textureVerificationError(
-  input: TexturePackLoadInput,
-  cause: TexturePackVerificationDetail['cause'],
-  expected: string,
-  fields: Partial<TexturePackVerificationDetail> = {},
-): TexturePackVerificationError {
-  return new TexturePackVerificationError(
-    {
-      guid: input.pack.guid,
-      sourceKey: input.sourceKey,
-      generation: input.generation,
-      stage: 'loader',
-      cause,
-      ...fields,
-    },
-    expected,
-  );
 }
 
 function validRenderPipelineConfig(value: unknown): value is Record<string, unknown> {
@@ -399,140 +351,83 @@ async function loadTexturePack(
   const model =
     codec?.name === 'basis' && profile !== undefined ? transcodeModel(profile) : undefined;
 
-  if (codec?.name === 'basis' && codec.container === 'basis') {
-    const basisCodec = codec;
-    if (model === undefined) {
-      return {
-        ok: false,
-        error: codecContextFailure(
-          input,
-          basisCodec,
-          ctx.transcodeCaps,
-          {
-            code: 'basis-profile-unsupported',
-            detail: { profile: codec.profile ?? 'missing' },
-          },
-          'raw Basis artifact with an explicit ETC1S or UASTC-LDR profile',
-          'set assetCodec.profile to etc1s or uastc-ldr and re-cook the source',
-        ),
-      };
-    }
-    try {
-      const target = selectTranscodeTarget(
-        { model, srgb: colorSpace === 'srgb', channels: 'rgba' },
+  const rawBasis = codec?.name === 'basis' && codec.container === 'basis';
+  if (rawBasis && model === undefined) {
+    return {
+      ok: false,
+      error: codecContextFailure(
+        input,
+        codec,
         ctx.transcodeCaps,
-      );
-      traceAssetLoadPhase('codec.basis.transcode.start', {
-        guid: input.guid,
-        detail: { target },
-      });
-      const transcoded = await transcodeBasis(artifact.bytes, target);
-      traceAssetLoadPhase('codec.basis.transcode.complete', {
-        guid: input.guid,
-        detail: { ok: transcoded.ok, target },
-      });
-      if (!transcoded.ok) {
-        return {
-          ok: false,
-          error: codecFailure(input, basisCodec, ctx.transcodeCaps, transcoded.error, target),
-        };
-      }
-      const data = new Uint8Array(
-        transcoded.value.mips.reduce((size, mip) => size + mip.data.length, 0),
-      );
-      let offset = 0;
-      for (const mip of transcoded.value.mips) {
-        data.set(mip.data, offset);
-        offset += mip.data.length;
-      }
-      return {
-        ok: true,
-        value: {
-          kind: 'texture',
-          shape: {
-            viewDimension: '2d',
-            extent: { width: transcoded.value.width, height: transcoded.value.height },
-          },
-          format: target,
-          data,
-          colorSpace,
-          mips: { kind: 'packed', levelCount: Math.max(1, transcoded.value.mips.length) },
+        {
+          code: 'basis-profile-unsupported',
+          detail: { profile: codec.profile ?? 'missing' },
         },
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        error: new AssetError({
-          code: 'asset-fetch-failed',
-          expected: 'loadable raw Basis texture artifact',
-          hint: error instanceof Error ? error.message : String(error),
-          detail: {
-            sourcePath: input.guid,
-            codecCode: 'runtime-loader-exception',
-            codecExpected: 'loadable raw Basis texture artifact',
-            codecHint: error instanceof Error ? error.message : String(error),
-            codecDetail: { reason: 'runtime-loader-exception' },
-            container: basisCodec.container ?? 'basis',
-            ...(basisCodec.profile === undefined ? {} : { profile: basisCodec.profile }),
-            capabilities: ctx.transcodeCaps,
-          },
-        }),
-      };
-    }
+        'raw Basis artifact with an explicit ETC1S or UASTC-LDR profile',
+        'set assetCodec.profile to etc1s or uastc-ldr and re-cook the source',
+      ),
+    };
   }
 
   if (model !== undefined && codec !== undefined) {
-    const ktx2Codec = codec;
     try {
-      traceAssetLoadPhase('codec.ktx2.parse.start', { guid: input.guid });
-      const parsed = await parseKtx2(artifact.bytes);
-      traceAssetLoadPhase('codec.ktx2.parse.complete', {
-        guid: input.guid,
-        detail: { ok: parsed.ok },
-      });
-      if (!parsed.ok) {
-        return {
-          ok: false,
-          error: codecFailure(input, ktx2Codec, ctx.transcodeCaps, parsed.error),
-        };
-      }
-      const projectedColorSpace = ktx2ColorSpace(parsed.value);
-      if (projectedColorSpace === undefined || projectedColorSpace !== colorSpace) {
-        return {
-          ok: false,
-          error: codecContextFailure(
-            input,
-            ktx2Codec,
-            ctx.transcodeCaps,
-            {
-              code: 'ktx2-color-space-mismatch',
-              detail: {
-                authoredColorSpace: colorSpace,
-                dfdColorSpace: projectedColorSpace ?? 'unknown',
+      let parsedKtx: Parameters<typeof transcodeKtx2>[0] | undefined;
+      if (!rawBasis) {
+        traceAssetLoadPhase('codec.ktx2.parse.start', { guid: input.guid });
+        const parsed = await parseKtx2(artifact.bytes);
+        traceAssetLoadPhase('codec.ktx2.parse.complete', {
+          guid: input.guid,
+          detail: { ok: parsed.ok },
+        });
+        if (!parsed.ok) {
+          return {
+            ok: false,
+            error: codecFailure(input, codec, ctx.transcodeCaps, parsed.error),
+          };
+        }
+        const projectedColorSpace = ktx2ColorSpace(parsed.value);
+        if (projectedColorSpace === undefined || projectedColorSpace !== colorSpace) {
+          return {
+            ok: false,
+            error: codecContextFailure(
+              input,
+              codec,
+              ctx.transcodeCaps,
+              {
+                code: 'ktx2-color-space-mismatch',
+                detail: {
+                  authoredColorSpace: colorSpace,
+                  dfdColorSpace: projectedColorSpace ?? 'unknown',
+                },
               },
-            },
-            'Basis KTX2 DFD transfer function matching the texture colorSpace',
-            'align the texture payload colorSpace with the KTX2 DFD and re-cook the source',
-          ),
-        };
+              'Basis KTX2 DFD transfer function matching the texture colorSpace',
+              'align the texture payload colorSpace with the KTX2 DFD and re-cook the source',
+            ),
+          };
+        }
+        parsedKtx = parsed.value;
       }
       const target = selectTranscodeTarget(
         { model, srgb: colorSpace === 'srgb', channels: 'rgba' },
         ctx.transcodeCaps,
       );
-      traceAssetLoadPhase('codec.ktx2.transcode.start', {
+      const phase = rawBasis ? 'codec.basis' : 'codec.ktx2';
+      traceAssetLoadPhase(`${phase}.transcode.start`, {
         guid: input.guid,
         detail: { target },
       });
-      const transcoded = await transcodeKtx2(parsed.value, target);
-      traceAssetLoadPhase('codec.ktx2.transcode.complete', {
+      const transcoded =
+        parsedKtx === undefined
+          ? await transcodeBasis(artifact.bytes, target)
+          : await transcodeKtx2(parsedKtx, target);
+      traceAssetLoadPhase(`${phase}.transcode.complete`, {
         guid: input.guid,
         detail: { ok: transcoded.ok, target },
       });
       if (!transcoded.ok) {
         return {
           ok: false,
-          error: codecFailure(input, ktx2Codec, ctx.transcodeCaps, transcoded.error, target),
+          error: codecFailure(input, codec, ctx.transcodeCaps, transcoded.error, target),
         };
       }
       const data = new Uint8Array(
@@ -558,21 +453,25 @@ async function loadTexturePack(
         },
       };
     } catch (error) {
-      if (error instanceof AssetError) return { ok: false, error };
+      if (!rawBasis && error instanceof AssetError) return { ok: false, error };
+      const expected = rawBasis
+        ? 'loadable raw Basis texture artifact'
+        : 'loadable Basis KTX2 texture artifact';
+      const hint = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
         error: new AssetError({
           code: 'asset-fetch-failed',
-          expected: 'loadable Basis KTX2 texture artifact',
-          hint: error instanceof Error ? error.message : String(error),
+          expected,
+          hint,
           detail: {
             sourcePath: input.guid,
             codecCode: 'runtime-loader-exception',
-            codecExpected: 'loadable Basis KTX2 texture artifact',
-            codecHint: error instanceof Error ? error.message : String(error),
+            codecExpected: expected,
+            codecHint: hint,
             codecDetail: { reason: 'runtime-loader-exception' },
-            container: ktx2Codec.container ?? 'ktx2',
-            ...(ktx2Codec.profile === undefined ? {} : { profile: ktx2Codec.profile }),
+            container: codec.container ?? (rawBasis ? 'basis' : 'ktx2'),
+            ...(codec.profile === undefined ? {} : { profile: codec.profile }),
             capabilities: ctx.transcodeCaps,
           },
         }),
@@ -598,125 +497,6 @@ async function loadTexturePack(
       data: artifact.bytes,
       colorSpace,
       mips,
-    },
-  };
-}
-
-/** Verify producer facts and then expose one accepted texture projection. */
-export async function loadVerifiedTexturePack(
-  input: TexturePackLoadInput,
-  ctx: LoadContext,
-): Promise<VerifiedTexturePackResult> {
-  const artifact = firstArtifact(input.pack);
-  if (artifact === undefined) {
-    return {
-      ok: false,
-      error: textureVerificationError(input, 'byte-length', 'one asset-local body artifact', {
-        expectedBytes: 0,
-        actualBytes: 0,
-      }),
-    };
-  }
-  const actualBytes = artifact.bytes.byteLength;
-  const declaredBytes = artifact.descriptor.byteLength;
-  if (declaredBytes !== undefined && declaredBytes !== actualBytes) {
-    return {
-      ok: false,
-      error: textureVerificationError(
-        input,
-        'byte-length',
-        `artifact byte length ${declaredBytes}`,
-        { expectedBytes: declaredBytes, actualBytes },
-      ),
-    };
-  }
-  const payloadOrder = input.pack.payload.packingOrder;
-  if (payloadOrder !== undefined && payloadOrder !== 'mip-major,image-major,row-major') {
-    return {
-      ok: false,
-      error: textureVerificationError(
-        input,
-        'packing-order-mismatch',
-        'mip-major,image-major,row-major packing order',
-      ),
-    };
-  }
-  const shape = payloadTextureShape(input.pack.payload);
-  const mips = payloadTextureMips(input.pack.payload);
-  const format = (input.pack.payload.format ??
-    (payloadColorSpace(input.pack.payload) === 'srgb'
-      ? 'rgba8unorm-srgb'
-      : 'rgba8unorm')) as GPUTextureFormat;
-  if (shape === undefined || mips === undefined) {
-    return {
-      ok: false,
-      error: textureVerificationError(input, 'shape-mismatch', 'valid TextureAsset shape and mips'),
-    };
-  }
-  const layout = deriveTextureLayout({
-    shape,
-    format,
-    mips,
-    actualByteLength: actualBytes,
-    order: 'mip-major,image-major,row-major',
-  });
-  if (!layout.ok) {
-    const expectedBytes =
-      layout.error.code === 'texture-packing-invalid'
-        ? layout.error.detail.expectedBytes
-        : actualBytes;
-    const actualLayoutBytes =
-      layout.error.code === 'texture-packing-invalid'
-        ? layout.error.detail.actualBytes
-        : actualBytes;
-    return {
-      ok: false,
-      error: textureVerificationError(
-        input,
-        'byte-length',
-        `canonical texture byte length ${expectedBytes}`,
-        {
-          expectedBytes,
-          actualBytes: actualLayoutBytes,
-        },
-      ),
-    };
-  }
-  const actualDigest = await textureDigest(artifact.bytes);
-  const descriptorDigest = artifact.descriptor.integrity?.digest;
-  if (descriptorDigest !== input.expectedDigest || actualDigest !== input.expectedDigest) {
-    return {
-      ok: false,
-      error: textureVerificationError(
-        input,
-        'digest-mismatch',
-        `artifact digest ${input.expectedDigest}`,
-        {
-          expectedDigest: input.expectedDigest,
-          actualDigest,
-        },
-      ),
-    };
-  }
-  const loaded = await loadTexturePack(input.pack, ctx);
-  if (!loaded.ok) {
-    if (loaded.error instanceof AssetError) return { ok: false, error: loaded.error };
-    return {
-      ok: false,
-      error: textureVerificationError(
-        input,
-        'shape-mismatch',
-        'runtime texture loader to return a verified TextureAsset',
-      ),
-    };
-  }
-  return {
-    ok: true,
-    value: {
-      asset: loaded.value,
-      sourceKey: input.sourceKey,
-      generation: input.generation,
-      digest: actualDigest,
     },
   };
 }

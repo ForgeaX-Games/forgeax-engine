@@ -9,9 +9,7 @@ export interface PointsLinesViewport {
 
 export type PointsLinesStyle =
   | { readonly kind: 'points'; readonly sizePx: number; readonly shape: PointShape }
-  | ({ readonly kind: 'lines'; readonly widthPx: number } & LinesStyleInput);
-
-export type PointsLinesInvalidation = 'none' | 'mesh' | 'material' | 'style' | 'view' | 'scene';
+  | ({ readonly kind: 'lines'; readonly width: number } & LinesStyleInput);
 
 /**
  * Detached facts retained between frames for the Points/Lines owner.
@@ -70,69 +68,4 @@ export function createPointsLinesSnapshot(
     projection: new Float32Array(input.projection),
     ...(input.component === undefined ? { dedicatedResourceBytes: 0 } : {}),
   };
-}
-
-export function comparePointsLinesSnapshots(
-  previous: PointsLinesRetainedSnapshot,
-  next: PointsLinesRetainedSnapshot,
-): PointsLinesInvalidation {
-  if (
-    previous.meshHandle !== next.meshHandle ||
-    previous.meshGeneration !== next.meshGeneration ||
-    !sameArray(previous.sourceBounds, next.sourceBounds)
-  ) {
-    return 'mesh';
-  }
-  if (
-    previous.materialHandle !== next.materialHandle ||
-    previous.materialGeneration !== next.materialGeneration
-  ) {
-    return 'material';
-  }
-  if (!sameValue(previous.style, next.style)) return 'style';
-  if (
-    previous.viewport.width !== next.viewport.width ||
-    previous.viewport.height !== next.viewport.height ||
-    previous.viewport.dpr !== next.viewport.dpr ||
-    !sameArray(previous.projection, next.projection)
-  ) {
-    return 'view';
-  }
-  if (
-    previous.worldId !== next.worldId ||
-    previous.entityKey !== next.entityKey ||
-    previous.layer !== next.layer ||
-    previous.sortKey !== next.sortKey ||
-    previous.visible !== next.visible
-  ) {
-    return 'scene';
-  }
-  return 'none';
-}
-
-function sameArray(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
-  if (left.length !== right.length) return false;
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return false;
-  }
-  return true;
-}
-
-function sameValue(
-  left: PointsLinesStyle | undefined,
-  right: PointsLinesStyle | undefined,
-): boolean {
-  if (left?.kind !== right?.kind) return false;
-  if (left === undefined || right === undefined) return left === right;
-  if (left.kind === 'points' && right.kind === 'points') {
-    return left.sizePx === right.sizePx && left.shape === right.shape;
-  }
-  return (
-    left.kind === 'lines' &&
-    right.kind === 'lines' &&
-    left.widthPx === right.widthPx &&
-    (left.dashSize ?? 1) === (right.dashSize ?? 1) &&
-    (left.gapSize ?? 0) === (right.gapSize ?? 0) &&
-    (left.dashOffset ?? 0) === (right.dashOffset ?? 0)
-  );
 }

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gltfImporter } from '@forgeax/engine-gltf';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { build as viteBuild } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { pluginPack } from '../index.js';
@@ -74,9 +75,9 @@ describe('unregistered source providers', () => {
       plugins: [pluginPack({ roots: [assets], importers: [gltfImporter] })],
     });
 
-    const catalog = JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')) as Array<{
-      guid: string;
-    }>;
+    const catalog = decodeCatalogWire(
+      JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')),
+    ).unwrap();
     expect(catalog.some((entry) => entry.guid.toLowerCase() === CUBE_GUID)).toBe(false);
   });
 });

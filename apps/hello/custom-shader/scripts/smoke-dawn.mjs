@@ -3,9 +3,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { teardownDawnInstance } from '../../../../scripts/lib/dawn-teardown.mjs';
 import { emitSmokeReceipt } from '../../../shared/scripts/smoke-receipt.mjs';
 import { createMaterialLoader } from '@forgeax/engine-assets-runtime';
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_PATH = resolve(APP_ROOT, 'assets', 'pulse-material.pack.json');
@@ -52,7 +53,7 @@ async function assertRuntimeReadiness(fixture) {
   const root = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd02');
   const derived = await loadPublication('01935b00-7d8c-7c4e-9f12-345678abcd03');
   assert(root.status === 'Ready' && derived.status === 'Ready', 'runtime cooked records are not ready');
-  assert(root.artifactDigest === derived.artifactDigest, 'root and derived cooked program sets differ');
+  assert(root.record.artifactDigest === derived.record.artifactDigest, 'root and derived cooked program sets differ');
   assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'specialization inputs differ');
   assert(root.record.receipt.identity.layoutIdentity === derived.record.receipt.identity.layoutIdentity, 'material layouts differ');
   assert(root.record.receipt.identity.programIdentity === derived.record.receipt.identity.programIdentity, 'material programs differ');
@@ -66,7 +67,7 @@ async function assertRuntimeReadiness(fixture) {
 const fixture = readFixture();
 const parity = await assertRuntimeReadiness(fixture);
 Object.assign(globalThis, globals);
-const gpu = create([]);
+let gpu = create([]);
 const adapter = await gpu.requestAdapter();
 assert(adapter !== null, 'Dawn did not provide a WebGPU adapter');
 const device = await adapter.requestDevice();
@@ -112,17 +113,23 @@ assert(
 );
 readback.destroy();
 texture.destroy();
-device.destroy();
+// Join the public destruction notification before releasing the native instance.
+const destroyed = device.lost;
+await teardownDawnInstance([device], async () => {
+  const lost = await destroyed;
+  assert(lost.reason === 'destroyed', `unexpected Dawn device loss: ${lost.reason}: ${lost.message}`);
+  gpu = undefined;
+});
 console.log(
   JSON.stringify({
     status: 'pass',
     frames: FRAME_COUNT,
     backend: 'dawn-webgpu',
     pixel,
-    rootArtifactDigest: parity.root.artifactDigest,
-    derivedArtifactDigest: parity.derived.artifactDigest,
+    rootArtifactDigest: parity.root.record.artifactDigest,
+    derivedArtifactDigest: parity.derived.record.artifactDigest,
     materialIdentity: {
-      materialGuid: parity.root.materialGuid,
+      materialGuid: parity.root.record.materialGuid,
       layoutIdentity: parity.root.record.receipt.identity.layoutIdentity,
       programIdentity: parity.root.record.receipt.identity.programIdentity,
       pipelineIdentity: parity.root.record.receipt.identity.pipelineIdentity,

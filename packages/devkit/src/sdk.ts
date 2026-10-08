@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface SdkPackage {
+  readonly role: 'runtime' | 'tool';
   readonly name: string;
   readonly version: string;
   readonly root: string;
@@ -47,7 +48,7 @@ export interface SdkSource {
   readonly format: 'git-archive-public-snapshot';
   readonly excluded: readonly ['.gitmodules', 'forgeax-engine-assets'];
   readonly gitDependencies: readonly {
-    readonly root: 'third_party/wgpu';
+    readonly root: 'third_party/wgpu' | 'tools/view';
     readonly commit: string;
   }[];
   readonly fileCount: number;
@@ -56,7 +57,8 @@ export interface SdkSource {
 }
 
 export interface SdkManifest {
-  readonly schemaVersion: '1.8.0';
+  readonly viewCommit: string;
+  readonly schemaVersion: '1.9.0';
   readonly sdkVersion: string;
   readonly engineCommit: string;
   readonly requirements: {

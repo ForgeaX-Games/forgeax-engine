@@ -54,7 +54,7 @@ const COMMON_BROWSER_WEBGPU_ARGS = Object.freeze([
   '--enable-unsafe-webgpu',
   '--ignore-gpu-blocklist',
   '--disable-gpu-driver-bug-workarounds',
-  '--disable-dawn-features=disallow_unsafe_apis',
+  '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
 ]);
 
 /**
@@ -198,13 +198,23 @@ export class VerifyFailure extends Error {
   }
 }
 
-/** @param {{ close: () => Promise<void> }} browser @param {number} [timeoutMs] */
+/** @param {import('playwright').Browser} browser @param {number} [timeoutMs] */
 export async function closeBrowserBounded(browser, timeoutMs = 30_000) {
   if (browser === undefined) return;
   let timer;
   try {
     await Promise.race([
-      Promise.resolve().then(() => browser.close()),
+      Promise.resolve().then(async () => {
+        // Release the captured GPU page before browser-level shutdown. The
+        // entire cleanup keeps the existing deadline, including page close.
+        try {
+          for (const context of browser.contexts()) {
+            for (const page of context.pages()) await page.close({ runBeforeUnload: false });
+          }
+        } finally {
+          await browser.close();
+        }
+      }),
       new Promise((_, reject) => {
         timer = globalThis.setTimeout(
           () => reject(new Error(`browser close timed out after ${timeoutMs}ms`)),
@@ -1079,6 +1089,7 @@ export async function verifyDemoCapture(opts) {
       preparationMs: captured.preparationMs,
       submittedFrames: captured.completedFrames,
       transmissionInspection: captured.transmissionInspection,
+      ...(producerReport === undefined ? {} : { producerReport }),
       backend: {
         browser: { ...browserLaunch, adapterProbe: browserWebGpuReport },
         dawn: dawnBackend,
@@ -1351,7 +1362,7 @@ export async function bootstrapDawn(label, tape, options = {}) {
   let createDawn;
   let gpuGlobals;
   try {
-    ({ create: createDawn, globals: gpuGlobals } = await import('webgpu'));
+    ({ create: createDawn, globals: gpuGlobals } = await import('@forgeax/engine-dawn-node'));
   } catch (err) {
     fail(2, `[${label}] webgpu (dawn-node) import failed: ${err?.message ?? err}`);
   }

@@ -9,7 +9,6 @@ import {
 } from '@forgeax/engine-types';
 import { deriveFbxAnimatedBounds } from './animated-bounds';
 import { fbxErr } from './errors.js';
-import { initFbxWasm, parseFbx } from './index.js';
 import { parseFbxLodGroup } from './lod/parse-lod-group.js';
 import {
   type FbxRawAnimDoc,
@@ -24,6 +23,7 @@ import { type FbxRawSkinDoc, parseSkin } from './parse-skin.js';
 import { parseTextures } from './parse-texture.js';
 import { deriveFbxShadowCapsules } from './shadow-capsules';
 import { toAssetPack } from './to-asset-pack.js';
+import { initFbxWasm, parseFbx } from './wasm.js';
 
 export interface FbxSourceKeyOutput {
   readonly kind: string;
@@ -171,6 +171,7 @@ export const fbxImporter: Importer = {
       ok: true,
       value: {
         assets: toAssetPack({
+          meshCollision: ctx.importSettings.meshCollision,
           meshes,
           scene,
           materials,

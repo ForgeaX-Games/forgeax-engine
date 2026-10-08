@@ -40,7 +40,7 @@ function asClipGuid(raw: number): string {
 
 interface Slots {
   clips: Uint32Array;
-  times: Float32Array;
+  times: Float64Array;
   weights: Float32Array;
   speeds: Float32Array;
 }

@@ -1,5 +1,7 @@
 import type { Component, World } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
+import { Terrain } from '@forgeax/engine-terrain';
+import { AmbientOcclusion } from './components/ambient-occlusion';
 import { Atmosphere } from './components/atmosphere';
 import { BarrelDistortion } from './components/barrel-distortion';
 import { Camera } from './components/camera';
@@ -10,9 +12,11 @@ import { CloudLayer } from './components/cloud-layer';
 import { DepthOfField } from './components/depth-of-field';
 import { DirectionalLight } from './components/directional-light';
 import { DynamicResolution } from './components/dynamic-resolution';
+import { Fog } from './components/fog';
 import { Instances } from './components/instances';
 import { Layer } from './components/layer';
 import { LensEffects } from './components/lens-effects';
+import { LensFlare } from './components/lens-flare';
 import { LightProbe } from './components/light-probe';
 import { Lines } from './components/lines';
 import { MeshFilter } from './components/mesh-filter';
@@ -34,15 +38,18 @@ import { SpotLight } from './components/spot-light';
 import { SpriteAnimation } from './components/sprite-animation';
 import { SpriteInstances } from './components/sprite-instances';
 import { SpriteRegionOverride } from './components/sprite-region-override';
+import { StereoCamera } from './components/stereo-camera';
 import { TileLayer } from './components/tile-layer';
 import { Tilemap } from './components/tilemap';
 import { Visibility } from './components/visibility';
 import { ProjectedDecal } from './decals/component';
 
 const RENDER_COMPONENTS: readonly Component[] = [
+  AmbientOcclusion,
   Atmosphere,
   BarrelDistortion,
   LensEffects,
+  LensFlare,
   ClippingPlanes,
   Outline,
   ProjectedDecal,
@@ -55,10 +62,12 @@ const RENDER_COMPONENTS: readonly Component[] = [
   DirectionalLight,
   DynamicResolution,
   DepthOfField,
+  Fog,
   Instances,
   Layer,
   LightProbe,
   MeshFilter,
+  Terrain,
   MeshRenderer,
   MotionBlur,
   PointLight,
@@ -75,6 +84,7 @@ const RENDER_COMPONENTS: readonly Component[] = [
   SpriteAnimation,
   SpriteInstances,
   SpriteRegionOverride,
+  StereoCamera,
   TileLayer,
   Tilemap,
   Visibility,

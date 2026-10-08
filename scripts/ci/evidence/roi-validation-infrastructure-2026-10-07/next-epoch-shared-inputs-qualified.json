@@ -1,0 +1,64 @@
+{
+  "checkedAt": "2026-10-07T10:09:41.840Z",
+  "sourceHead": "97fad6d1cbc31af5b22cba9b9d9ac8c677236d33",
+  "baseRevision": "321edc5929dee4d08996b462fd2133fc438d0bae",
+  "node": "v22.23.2",
+  "engineEntries": {
+    "pointShadows": true,
+    "hdrpSsao": true
+  },
+  "inputFingerprint": "sha256:3abbad31df596c02b914069bc84915eecbf2cacb8c6df41f3973800610ae30b1",
+  "recordedShaderBuild": {
+    "inputFingerprint": "sha256:3abbad31df596c02b914069bc84915eecbf2cacb8c6df41f3973800610ae30b1",
+    "outputFingerprint": "sha256:76a6eef5d12050a034d415d9c6f6045cbcbcb5f2a5ba3741298a2b1ab8c5dd84"
+  },
+  "currentReceipt": {
+    "inputFingerprint": "sha256:3abbad31df596c02b914069bc84915eecbf2cacb8c6df41f3973800610ae30b1",
+    "outputFingerprint": "sha256:76a6eef5d12050a034d415d9c6f6045cbcbcb5f2a5ba3741298a2b1ab8c5dd84"
+  },
+  "localStrictReuse": true,
+  "transferredStrictReuse": true,
+  "misses": [],
+  "payload": {
+    "path": "shared-build-inputs/shaders/manifest.json",
+    "bytes": 45479791,
+    "sha256": "079d0d5a31b794a9756295f34f94c0d6a292a77fe01cf15b0770ef8a2975c153",
+    "topLevelKeys": ["schemaVersion", "fragments", "sources", "entries", "materialShaders"],
+    "collectionFacts": {
+      "schemaVersion": "string",
+      "fragments": 6486,
+      "sources": 3433,
+      "entries": 67,
+      "materialShaders": 26
+    }
+  },
+  "facts": {
+    "schemaVersion": 2,
+    "producer": "repo-build-inputs",
+    "inputFingerprint": "sha256:539fdf537d5335ef575aef4e7e6f60d4fbe39d9352b83c3358147055a50379ea",
+    "engineShaderCompileCount": 1,
+    "assetCookHitCount": 0,
+    "assetCookMissCount": 0,
+    "assetCookWriteFailureCount": 0,
+    "stageDurationMs": {
+      "producer": 1095078.2
+    }
+  },
+  "limit": "Producer executions are not Naga invocation counts or matched throughput proof.",
+  "repeatProducer": {
+    "exit": 0,
+    "log": "next-epoch-shared-inputs-reuse.log",
+    "facts": {
+      "schemaVersion": 2,
+      "producer": "repo-build-inputs",
+      "inputFingerprint": "sha256:539fdf537d5335ef575aef4e7e6f60d4fbe39d9352b83c3358147055a50379ea",
+      "engineShaderCompileCount": 0,
+      "assetCookHitCount": 0,
+      "assetCookMissCount": 0,
+      "assetCookWriteFailureCount": 0,
+      "stageDurationMs": {
+        "producer": 0
+      }
+    }
+  }
+}

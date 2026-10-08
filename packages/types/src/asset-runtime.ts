@@ -23,6 +23,8 @@ export type BuiltinAssetKindToken<K extends BuiltinAssetKind> = AssetKind<
 
 /** Only verified, device-neutral input is visible to a decoder. */
 export interface AssetArtifactReader {
+  /** Admit a validated descriptor without reading its streaming body. */
+  locate?(descriptor: ArtifactDescriptor): string | undefined;
   read(descriptor: ArtifactDescriptor): Promise<Result<Uint8Array, AssetLoadError>>;
 }
 

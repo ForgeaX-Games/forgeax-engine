@@ -1,6 +1,7 @@
 import { Update } from '@forgeax/engine-ecs';
 import {
   createInputSnapshot,
+  GAMEPAD_FEEDBACK_KEY,
   INPUT_BACKEND_KEY,
   INPUT_SNAPSHOT_RESOURCE_KEY,
   InputFrameStartScan,
@@ -19,6 +20,7 @@ export function inputPlugin(): Plugin {
       if (input === undefined) throw new Error('Cordis activated input without its provider');
       ctx.effect(() => {
         world.insertResource(INPUT_BACKEND_KEY, input);
+        if (input.feedback) world.insertResource(GAMEPAD_FEEDBACK_KEY, input.feedback);
         // Make the documented empty signal available during the pre-first-frame
         // window.  Inspection and gameplay plugins may be queried immediately
         // after activation; they should not race the first Update scan just to
@@ -26,6 +28,7 @@ export function inputPlugin(): Plugin {
         world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, createInputSnapshot());
         return () => {
           world.removeResource(INPUT_BACKEND_KEY);
+          world.removeResource(GAMEPAD_FEEDBACK_KEY);
           world.removeResource(INPUT_SNAPSHOT_RESOURCE_KEY);
         };
       }, 'input/resource');

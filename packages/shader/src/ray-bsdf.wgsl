@@ -8,10 +8,14 @@ fn rayBasis(n: vec3f) -> mat3x3f {
   let tangent = normalize(cross(helper, n));
   return mat3x3f(tangent, cross(n, tangent), n);
 }
+// status.y == RAY_BSDF_LAMBERT marks a surface whose albedo already carries its
+// full response: a pure Lambert lobe with no specular term.
+const RAY_BSDF_LAMBERT: u32 = 1u;
 fn rayBsdfValue(surface: RayMaterialSurface, outgoing: vec3f, incoming: vec3f) -> vec3f {
   let n = surface.normalRoughness.xyz;
   let nv = dot(n, outgoing); let nl = dot(n, incoming);
   if (nv <= 0.0 || nl <= 0.0 || dot(surface.geometricNormal.xyz,outgoing)<=0.0 || dot(surface.geometricNormal.xyz,incoming)<=0.0) { return vec3f(0); }
+  if (surface.status.y == RAY_BSDF_LAMBERT) { return surface.albedoOpacity.rgb / 3.14159265359; }
   let h = normalize(outgoing + incoming);
   return standardOpaqueBrdf(surface.albedoOpacity.rgb, surface.emissionMetallic.w,
     surface.normalRoughness.w * surface.normalRoughness.w, surface.f0Occlusion.xyz,
@@ -23,6 +27,7 @@ fn rayBsdfPdf(surface: RayMaterialSurface, outgoing: vec3f, incoming: vec3f) -> 
   let n = surface.normalRoughness.xyz;
   let nl = dot(n,incoming);
   if (dot(n,outgoing) <= 0.0 || nl <= 0.0 || dot(surface.geometricNormal.xyz,outgoing)<=0.0 || dot(surface.geometricNormal.xyz,incoming)<=0.0) { return 0.0; }
+  if (surface.status.y == RAY_BSDF_LAMBERT) { return nl / 3.14159265359; }
   let h = normalize(outgoing+incoming);
   let nh = max(dot(n,h),0.0); let vh = abs(dot(outgoing,h));
   let alpha = surface.normalRoughness.w * surface.normalRoughness.w;
@@ -32,7 +37,7 @@ fn sampleRayBsdf(surface: RayMaterialSurface, outgoing: vec3f, random: vec3f) ->
   let n = surface.normalRoughness.xyz; let basis = rayBasis(n);
   let phi = 6.28318530718 * random.z;
   var incoming = vec3f(0);
-  if (random.x < 0.5) {
+  if (random.x < 0.5 || surface.status.y == RAY_BSDF_LAMBERT) {
     let r = sqrt(random.y);
     incoming = basis * vec3f(r*cos(phi),r*sin(phi),sqrt(1.0-random.y));
   } else {

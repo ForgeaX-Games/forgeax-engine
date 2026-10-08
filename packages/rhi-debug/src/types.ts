@@ -2,7 +2,7 @@
 //
 // Shape:
 // - RhiCallEvent: closed union (~40 kind incl. initialData + frameMark), each kind name 1:1 with RHI method name.
-//   Query-set lifecycle and occlusion resolve calls are ordinary events;
+//   Query-set lifecycle, occlusion resolve and BLAS/TLAS calls are ordinary events;
 //   timestamp writes and render-bundle execution remain deferred.
 //   Includes: core RHI + copyExternalImageToTexture + clearBuffer (per IS-11).
 // - Tape: header with formatVersion, rhiCapsRecorded, events array, blobPool map.
@@ -22,6 +22,9 @@
  */
 export type HandleId = string;
 
+/** Closed set of canvas presentation color spaces a tape can record. */
+export type RecordedCanvasColorSpace = 'srgb' | 'display-p3';
+
 /**
  * Subset of RhiCaps recorded alongside each tape for cross-device replay
  * capability matching. Only the caps that affect rendering output are
@@ -33,6 +36,12 @@ export type HandleId = string;
  */
 export interface RhiCapsRecorded {
   readonly canvasFormat: GPUTextureFormat;
+  /**
+   * Presentation color space of the configured canvas, as reported by the
+   * context after configure (absent report or no configure: `'srgb'`). The
+   * surface bytes are encoded for this space; replay writes offscreen bytes.
+   */
+  readonly canvasColorSpace: RecordedCanvasColorSpace;
   readonly rgba16floatRenderable: boolean;
   readonly float32Filterable: boolean;
   readonly textureCompressionBc: boolean;
@@ -110,6 +119,77 @@ export interface RhiCallEventDestroyQuerySet {
   readonly handleId: HandleId;
 }
 
+/** Geometry data of one BLAS build, with buffers named by tape handle. */
+export interface RecordedBlasGeometry {
+  readonly vertexBufferHandleId: HandleId;
+  readonly firstVertex?: number | undefined;
+  readonly vertexStride: number;
+  readonly index?:
+    | { readonly bufferHandleId: HandleId; readonly firstIndex?: number | undefined }
+    | undefined;
+}
+
+export interface RecordedBlasBuild {
+  readonly blasHandleId: HandleId;
+  readonly geometries: readonly RecordedBlasGeometry[];
+}
+
+/** One TLAS instance; `transform` is the 3x4 row-major object-to-world matrix. */
+export interface RecordedTlasInstance {
+  readonly blasHandleId: HandleId;
+  readonly transform: readonly number[];
+  readonly customIndex: number;
+  readonly mask: number;
+}
+
+export interface RecordedTlasBuild {
+  readonly tlasHandleId: HandleId;
+  readonly instances: readonly RecordedTlasInstance[];
+}
+
+export interface RhiCallEventCreateBlas {
+  readonly kind: 'createBlas';
+  readonly handleId: HandleId;
+  readonly desc: {
+    readonly label?: string | undefined;
+    readonly geometries: readonly {
+      readonly vertexFormat: 'float32x3';
+      readonly vertexCount: number;
+      readonly index?: { readonly format: GPUIndexFormat; readonly count: number } | undefined;
+    }[];
+    readonly preference?: 'fast-trace' | 'fast-build' | undefined;
+    readonly updateMode?: 'rebuild' | 'refit' | undefined;
+  };
+  /**
+   * Bootstrap records only: the last build observed before capture. Replay
+   * rebuilds it from the geometry buffers' capture-start contents.
+   */
+  readonly build?: Pick<RecordedBlasBuild, 'geometries'> | undefined;
+}
+
+export interface RhiCallEventCreateTlas {
+  readonly kind: 'createTlas';
+  readonly handleId: HandleId;
+  readonly desc: {
+    readonly label?: string | undefined;
+    readonly maxInstances: number;
+    readonly preference?: 'fast-trace' | 'fast-build' | undefined;
+    readonly updateMode?: 'rebuild' | 'refit' | undefined;
+  };
+  /** Bootstrap records only: the last instance list built before capture. */
+  readonly build?: Pick<RecordedTlasBuild, 'instances'> | undefined;
+}
+
+export interface RhiCallEventDestroyBlas {
+  readonly kind: 'destroyBlas';
+  readonly handleId: HandleId;
+}
+
+export interface RhiCallEventDestroyTlas {
+  readonly kind: 'destroyTlas';
+  readonly handleId: HandleId;
+}
+
 export interface RhiCallEventCreateTextureView {
   readonly kind: 'createTextureView';
   readonly sourceHandleId: HandleId;
@@ -151,14 +231,19 @@ export interface RhiCallEventCreateBindGroupLayout {
 /**
  * Resource kind discriminator stored alongside each createBindGroup
  * entry. Mirrors the closed RHI BindResource union (`sampler` /
- * `buffer` / `textureView` / `externalTexture`) so the inspector can
+ * `buffer` / `textureView` / `externalTexture` / `accelerationStructure`) so the inspector can
  * report the binding's true type without re-reading the BindGroupLayout
  * (I-8 fix, round 1 implement-review). Texture-view entries cover
  * cubemaps, 2D, 3D, and array textures — InspectBindingEntry.kind
  * narrows further into 'texture' (cubemap or otherwise) on the inspect
  * report side.
  */
-export type RhiBindResourceKind = 'sampler' | 'buffer' | 'textureView' | 'externalTexture';
+export type RhiBindResourceKind =
+  | 'sampler'
+  | 'buffer'
+  | 'textureView'
+  | 'externalTexture'
+  | 'accelerationStructure';
 
 export interface RhiCallEventCreateBindGroup {
   readonly kind: 'createBindGroup';
@@ -188,6 +273,7 @@ export interface RhiCallEventCreateRenderPipeline {
   readonly kind: 'createRenderPipeline';
   readonly handleId: HandleId;
   readonly desc: {
+    readonly label?: string;
     /** Serialized stage omits opaque shader module; the handle id is authoritative. */
     readonly vertex?: {
       readonly entryPoint?: string | undefined;
@@ -215,6 +301,7 @@ export interface RhiCallEventCreateComputePipeline {
   readonly kind: 'createComputePipeline';
   readonly handleId: HandleId;
   readonly desc: {
+    readonly label?: string;
     readonly compute: GPUProgrammableStage;
   };
   readonly layoutHandleId: HandleId;
@@ -290,6 +377,7 @@ export interface RhiCallEventBeginRenderPass {
   readonly cmdHandleId: HandleId;
   readonly passHandleId: HandleId;
   readonly desc: {
+    readonly label?: string | undefined;
     /** Attachment handles are replaced by the parallel HandleId arrays on replay. */
     readonly colorAttachments: Iterable<
       | {
@@ -394,6 +482,13 @@ export interface RhiCallEventResolveQuerySet {
   readonly queryCount: number;
   readonly destinationHandleId: HandleId;
   readonly destinationOffset: number;
+}
+
+export interface RhiCallEventBuildAccelerationStructures {
+  readonly kind: 'buildAccelerationStructures';
+  readonly cmdHandleId: HandleId;
+  readonly blas: readonly RecordedBlasBuild[];
+  readonly tlas: readonly RecordedTlasBuild[];
 }
 
 export interface RhiCallEventPushDebugGroup {
@@ -607,8 +702,8 @@ export interface RhiCallEventInitialData {
  *
  * v1 covers: core RHI methods + copyExternalImageToTexture + clearBuffer (IS-11).
  * Timestamp writes and render-bundle execution remain deferred; query-set
- * lifecycle, resolve, and occlusion-query events are represented as ordinary
- * events.
+ * lifecycle, resolve, occlusion-query and BLAS/TLAS lifecycle and build events
+ * are represented as ordinary events.
  *
  * Kinds are named 1:1 with RHI method names per plan-strategy §8 naming convention.
  * The frameMark kind is the only non-method event — it marks frame boundaries.
@@ -621,6 +716,10 @@ export type RhiCallEvent =
   | RhiCallEventDestroyTexture
   | RhiCallEventCreateQuerySet
   | RhiCallEventDestroyQuerySet
+  | RhiCallEventCreateBlas
+  | RhiCallEventCreateTlas
+  | RhiCallEventDestroyBlas
+  | RhiCallEventDestroyTlas
   | RhiCallEventCreateTextureView
   | RhiCallEventCreateSampler
   | RhiCallEventCreateBindGroupLayout
@@ -643,6 +742,7 @@ export type RhiCallEvent =
   | RhiCallEventCopyTextureToTexture
   | RhiCallEventClearBuffer
   | RhiCallEventResolveQuerySet
+  | RhiCallEventBuildAccelerationStructures
   | RhiCallEventPushDebugGroup
   | RhiCallEventPopDebugGroup
   | RhiCallEventInsertDebugMarker
@@ -707,7 +807,7 @@ export interface InspectBindingEntry {
   readonly groupIndex: number;
   readonly entryIndex: number;
   readonly handleId: HandleId;
-  readonly kind: 'buffer' | 'texture' | 'sampler' | 'textureView';
+  readonly kind: 'buffer' | 'texture' | 'sampler' | 'textureView' | 'accelerationStructure';
 }
 
 /**

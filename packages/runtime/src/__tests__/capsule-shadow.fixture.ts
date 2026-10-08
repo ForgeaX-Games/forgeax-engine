@@ -62,6 +62,61 @@ function skinned(material: MaterialAsset, caster: boolean): MaterialAsset {
 }
 
 /**
+ * A 1.6 m single-joint skinned box standing at `origin`: the `forgeax::pbr-skin`
+ * twin of `body`, with and without its ShadowCaster pass, and one shadow capsule.
+ */
+export function spawnSkinnedCharacter(
+  world: World,
+  body: MaterialAsset,
+  origin: readonly [number, number, number],
+) {
+  const box = createBoxGeometry(0.4, 1.6, 0.4).unwrap();
+  const position = box.attributes.position;
+  if (!(position instanceof Float32Array)) throw new Error('box position data is unavailable');
+  const count = position.length / 3;
+  const attributes = {
+    ...box.attributes,
+    skinIndex: new Uint16Array(count * 4),
+    skinWeight: Float32Array.from({ length: count * 4 }, (_, index) => (index % 4 === 0 ? 1 : 0)),
+  };
+  const mesh = world.allocSharedRef('MeshAsset', {
+    ...box,
+    attributes,
+    vertices: packInterleavedVertexAttributes(attributes, count).unwrap().vertices,
+  });
+  const casterMaterial = world.allocSharedRef('MaterialAsset', skinned(body, true));
+  const hiddenMaterial = world.allocSharedRef('MaterialAsset', skinned(body, false));
+  const inverseBindMatrices = new Float32Array(16);
+  for (const lane of [0, 5, 10, 15]) inverseBindMatrices[lane] = 1;
+  const skeleton = world.allocSharedRef('SkeletonAsset', {
+    kind: 'skeleton',
+    jointCount: 1,
+    inverseBindMatrices,
+    bounds: new Float32Array([-0.3, -0.9, -0.3, 0.3, 0.9, 0.3]),
+    shadowCapsules: {
+      joints: new Uint16Array([0]),
+      shapes: new Float32Array([0, -0.58, 0, 0, 0.58, 0, 0.22]),
+    },
+  });
+  const joint = world
+    .spawn({
+      component: Transform,
+      data: { pos: [origin[0], origin[1] + 0.8, origin[2]] },
+    })
+    .unwrap();
+  const character = world
+    .spawn(
+      { component: Transform, data: { pos: [...origin] } },
+      { component: MeshFilter, data: { assetHandle: mesh } },
+      { component: MeshRenderer, data: { materials: [casterMaterial] } },
+      { component: Skin, data: { skeleton, joints: new Uint32Array([joint]) } },
+    )
+    .unwrap();
+
+  return { character, joint, casterMaterial, hiddenMaterial };
+}
+
+/**
  * A 1.6 m skinned box "character" stands on a ground slab under a sun from
  * -x/-z, so its ground shadow falls toward +x/+z (screen right and down).
  * One capsule on its single joint approximates the body.
@@ -84,44 +139,12 @@ function buildCapsuleScene(world: World) {
     )
     .unwrap();
 
-  const box = createBoxGeometry(0.4, 1.6, 0.4).unwrap();
-  const position = box.attributes.position;
-  if (!(position instanceof Float32Array)) throw new Error('box position data is unavailable');
-  const count = position.length / 3;
-  const attributes = {
-    ...box.attributes,
-    skinIndex: new Uint16Array(count * 4),
-    skinWeight: Float32Array.from({ length: count * 4 }, (_, index) => (index % 4 === 0 ? 1 : 0)),
-  };
-  const mesh = world.allocSharedRef('MeshAsset', {
-    ...box,
-    attributes,
-    vertices: packInterleavedVertexAttributes(attributes, count).unwrap().vertices,
-  });
   const body = Materials.standard({ baseColor: [0.2, 0.4, 0.8, 1], metallic: 0, roughness: 0.6 });
-  const casterMaterial = world.allocSharedRef('MaterialAsset', skinned(body, true));
-  const hiddenMaterial = world.allocSharedRef('MaterialAsset', skinned(body, false));
-  const inverseBindMatrices = new Float32Array(16);
-  for (const lane of [0, 5, 10, 15]) inverseBindMatrices[lane] = 1;
-  const skeleton = world.allocSharedRef('SkeletonAsset', {
-    kind: 'skeleton',
-    jointCount: 1,
-    inverseBindMatrices,
-    bounds: new Float32Array([-0.3, -0.9, -0.3, 0.3, 0.9, 0.3]),
-    shadowCapsules: {
-      joints: new Uint16Array([0]),
-      shapes: new Float32Array([0, -0.58, 0, 0, 0.58, 0, 0.22]),
-    },
-  });
-  const joint = world.spawn({ component: Transform, data: { pos: [0, 0.8, 0] } }).unwrap();
-  const character = world
-    .spawn(
-      { component: Transform, data: {} },
-      { component: MeshFilter, data: { assetHandle: mesh } },
-      { component: MeshRenderer, data: { materials: [casterMaterial] } },
-      { component: Skin, data: { skeleton, joints: new Uint32Array([joint]) } },
-    )
-    .unwrap();
+  const { character, casterMaterial, hiddenMaterial } = spawnSkinnedCharacter(
+    world,
+    body,
+    [0, 0, 0],
+  );
 
   const pitch = (-45 * Math.PI) / 180;
   world

@@ -8,6 +8,7 @@ import {
   deriveVertexLayoutProjectionFromMask,
   packInterleavedVertexAttributes,
   SKIN_VERTEX_ATTRIBUTE_MAP,
+  unpackInterleavedVertexAttributes,
 } from '@forgeax/engine-geometry';
 import type { VertexAttributeMap } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -33,6 +34,28 @@ function makeCompleteAttributeMap(): VertexAttributeMap {
 }
 
 describe('vertex attribute layout owner', () => {
+  it('unpacks mixed-width attributes from an offset view into independent storage', () => {
+    const attributes: VertexAttributeMap = {
+      position: new Float32Array([1, 2, 3, -1, -2, -3]),
+      skinIndex: new Uint16Array([65535, 256, 1, 0, 0, 1, 256, 65535]),
+      skinWeight: new Float32Array([0.5, 0.25, 0.125, 0.125, 1, 0, 0, 0]),
+      uv3: new Float32Array([0.25, 0.75, 0.5, 1]),
+      color: new Float32Array([0, 0.5, 1, 1, 1, 0.5, 0, 1]),
+    };
+    const packed = packInterleavedVertexAttributes(attributes, 2).unwrap();
+    const storage = new Uint8Array(packed.vertices.byteLength + 8);
+    storage.fill(255);
+    storage.set(new Uint8Array(packed.vertices.buffer), 4);
+    const vertices = new Float32Array(storage.buffer, 4, packed.vertices.length);
+    const restored = unpackInterleavedVertexAttributes(vertices, packed.projection);
+    expect(restored).toEqual(attributes);
+    storage.fill(0);
+    expect(restored).toEqual(attributes);
+    expect(
+      unpackInterleavedVertexAttributes(new Float32Array(1), packed.projection),
+    ).toBeUndefined();
+  });
+
   it('shares immutable layouts by attribute presence while observing mutable map edits', () => {
     const map = { position: makeBuffer(), normal: makeBuffer() };
     const first = deriveVertexLayoutProjection(map);

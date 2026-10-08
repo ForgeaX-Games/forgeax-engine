@@ -61,8 +61,6 @@ export function diffTopology(
   const duplicateKeys = new Set<string>();
   const previousByKey = bySourceKey(previous, 'previous', ambiguous, duplicateKeys);
   const nextByKey = bySourceKey(next, 'next', ambiguous, duplicateKeys);
-  const matchedPrevious = new Set<ExistingOutput>();
-  const matchedNext = new Set<ProposedOutput>();
 
   for (const [key, oldOutput] of previousByKey) {
     if (duplicateKeys.has(key)) continue;
@@ -71,8 +69,6 @@ export function diffTopology(
       removed.push(oldOutput);
       continue;
     }
-    matchedPrevious.add(oldOutput);
-    matchedNext.add(newOutput);
     if (oldOutput.kind === newOutput.kind) {
       preserved.push({ guid: oldOutput.guid, oldKey: key, newKey: key });
     } else {
@@ -110,12 +106,8 @@ export function diffTopology(
     if (key !== undefined && duplicateKeys.has(key)) added.push(output);
   }
 
-  const unkeyedPrevious = previous.filter(
-    (output) => sourceKey(output) === undefined && !matchedPrevious.has(output),
-  );
-  const unkeyedNext = next.filter(
-    (output) => sourceKey(output) === undefined && !matchedNext.has(output),
-  );
+  const unkeyedPrevious = previous.filter((output) => sourceKey(output) === undefined);
+  const unkeyedNext = next.filter((output) => sourceKey(output) === undefined);
 
   if (unkeyedPrevious.length === 1 && unkeyedNext.length === 1) {
     const oldOutput = unkeyedPrevious[0];

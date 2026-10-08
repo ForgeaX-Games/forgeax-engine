@@ -9,13 +9,14 @@ import {
 } from '@forgeax/engine/physics';
 import {
   ANTIALIAS_FXAA,
-  Atmosphere,
   Camera,
   DirectionalLight,
   MeshFilter,
   MeshRenderer,
   perspective,
   PointLight,
+  SKYBOX_MODE_CUBEMAP,
+  SkyboxBackground,
   Skylight,
   TONEMAP_ACES_FILMIC,
 } from '@forgeax/engine/render';
@@ -218,13 +219,20 @@ function showcaseScene(): SceneAsset {
       keyed('skylight', {
         components: {
           Name: { value: 'Skylight' },
-          Skylight: { color: [1, 1, 1], intensity: 0.82 },
+          Skylight: {
+            equirect: guidText(assetGuid(PACKAGE_IDS.environment, 'environment/daylight')),
+            color: [1, 1, 1],
+            intensity: 0.82,
+          },
         },
       }),
-      keyed('atmosphere', {
+      keyed('sky-background', {
         components: {
-          Name: { value: 'Atmosphere' },
-          Atmosphere: { turbidity: 2, rayleigh: 1, mieCoefficient: 0.005 },
+          Name: { value: 'Sky Background' },
+          SkyboxBackground: {
+            equirect: guidText(assetGuid(PACKAGE_IDS.environment, 'environment/daylight')),
+            mode: SKYBOX_MODE_CUBEMAP,
+          },
         },
       }),
       keyed('camera', {
@@ -291,7 +299,6 @@ export default definePack({
   packageId: PACKAGE_IDS.scene,
   name: 'Game 3D / Scene',
   sceneComponents: [
-    Atmosphere,
     Camera,
     CharacterController,
     ChildOf,
@@ -303,6 +310,7 @@ export default definePack({
     PointLight,
     RigidBody,
     Skin,
+    SkyboxBackground,
     Skylight,
     Transform,
   ],

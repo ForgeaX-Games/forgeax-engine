@@ -68,6 +68,12 @@ export const STANDARD_MATERIAL_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'diffuseTransmissionColor', type: 'vec3', colorSpace: 'linear', default: [1, 1, 1] },
   { name: 'diffuseTransmissionTexture', type: 'texture2d' },
   { name: 'diffuseTransmissionColorTexture', type: 'texture2d' },
+  // 0 = UV mapping, 1 = world-space triplanar, 2 = object-space triplanar.
+  { name: 'triplanarSpace', type: 'f32', default: 0 },
+  { name: 'triplanarScale', type: 'f32', default: 1 },
+  { name: 'triplanarSharpness', type: 'f32', default: 1 },
+  // 0 = tangent-space normal map, 1 = object-space normal map.
+  { name: 'normalMapSpace', type: 'f32', default: 0 },
 ] as const;
 
 /**

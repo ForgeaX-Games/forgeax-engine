@@ -19,7 +19,9 @@
 // protocol. The browser-mode coverage of this file is the M2b layer
 // (plan-strategy section 5.4 reason for the 70% floor).
 
+import { attachBrowserGamepadFeedback } from './browser-gamepad-feedback';
 import type { ControllerDb, MappingTokens } from './controller-db';
+import { ButtonLatch, KeyLatch } from './digital-input';
 import { diffGamepadFrame, type RawGamepadStub } from './gamepad-frame';
 import {
   createRecognizerState,
@@ -173,15 +175,12 @@ export function attachBrowserInputBackend(
   const doc = options.document ?? globalThis.document;
   const win = options.window ?? globalThis.window;
 
-  const heldKeys = new Set<string>();
-  const upEdges = new Set<string>();
-  const heldCodes = new Set<string>();
-  const upCodeEdges = new Set<string>();
-  const pressedKeys = new Set<string>();
-  const pressedCodes = new Set<string>();
-  const buttons: [boolean, boolean, boolean] = [false, false, false];
-  const pressedButtons: [boolean, boolean, boolean] = [false, false, false];
-  const releasedButtons: [boolean, boolean, boolean] = [false, false, false];
+  const keys = new KeyLatch();
+  const codes = new KeyLatch();
+  const mouseButtons = new ButtonLatch();
+  const { held: heldKeys, pressed: pressedKeys, released: upEdges } = keys;
+  const { held: heldCodes, pressed: pressedCodes, released: upCodeEdges } = codes;
+  const { held: buttons, pressed: pressedButtons, released: releasedButtons } = mouseButtons;
   let mvx = 0;
   let mvy = 0;
   let wheelAccum = 0;
@@ -234,6 +233,7 @@ export function attachBrowserInputBackend(
     options.navigator ?? (globalThis as { navigator?: { getGamepads?(): unknown } }).navigator;
   const gamepadAvailable = typeof nav?.getGamepads === 'function';
   const pointerAvailable = typeof globalThis.PointerEvent !== 'undefined';
+  const haptics = attachBrowserGamepadFeedback(doc, win);
   const caps: Capabilities = { gamepad: gamepadAvailable, pointer: pointerAvailable };
 
   // D-1: prevGamepadFrame is the only cross-frame state holder for gamepad diff.
@@ -367,12 +367,8 @@ export function attachBrowserInputBackend(
       clear();
       return;
     }
-    if (!heldKeys.has(ev.key)) pressedKeys.add(ev.key);
-    heldKeys.add(ev.key);
-    if (ev.code) {
-      if (!heldCodes.has(ev.code)) pressedCodes.add(ev.code);
-      heldCodes.add(ev.code);
-    }
+    keys.press(ev.key);
+    if (ev.code) codes.press(ev.code);
     // w8 (D-1): ESC releases provider lock (W3C path handles ESC via browser
     // pointerlockchange). Only acts when providerLocked is true.
     if (ev.key === 'Escape' && providerLocked) {
@@ -382,15 +378,18 @@ export function attachBrowserInputBackend(
   function onKeyUp(ev: KeyboardEvent): void {
     if (!inputAllowed) return;
     if (isUiEvent(ev)) return;
-    heldKeys.delete(ev.key);
     if (isFocused()) {
-      upEdges.add(ev.key);
-    }
-    if (ev.code) {
-      heldCodes.delete(ev.code);
-      if (isFocused()) upCodeEdges.add(ev.code);
+      keys.release(ev.key);
+      if (ev.code) codes.release(ev.code);
+    } else {
+      heldKeys.delete(ev.key);
+      if (ev.code) heldCodes.delete(ev.code);
     }
   }
+  function updateMouseButton(button: 0 | 1 | 2, held: boolean): void {
+    mouseButtons.set(button, held);
+  }
+
   function onPointerDown(ev: PointerEvent): void {
     if (!inputAllowed) return;
     if (isUiEvent(ev)) {
@@ -400,8 +399,7 @@ export function attachBrowserInputBackend(
     // Only mouse-type pointers affect the mouse button cluster (D-3).
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
-        if (!buttons[ev.button]) pressedButtons[ev.button] = true;
-        buttons[ev.button] = true;
+        updateMouseButton(ev.button, true);
       }
     }
     // D-5: setPointerCapture for coherent pointer event dispatching — but NOT
@@ -476,8 +474,7 @@ export function attachBrowserInputBackend(
     if (isUiEvent(ev)) return;
     if (ev.pointerType === 'mouse') {
       if (ev.button === 0 || ev.button === 1 || ev.button === 2) {
-        if (buttons[ev.button]) releasedButtons[ev.button] = true;
-        buttons[ev.button] = false;
+        updateMouseButton(ev.button, false);
       }
     }
     const entry = pointerMap.get(ev.pointerId);
@@ -502,6 +499,11 @@ export function attachBrowserInputBackend(
     if (isUiEvent(ev)) return;
     // D-3: movementDelta from pointermove (PointerEvent extends MouseEvent).
     if (ev.pointerType === 'mouse') {
+      // Intermediate chord presses/releases are pointermove events. DOM masks
+      // order right before middle; the normalized tuple orders middle first.
+      updateMouseButton(0, (ev.buttons & 1) !== 0);
+      updateMouseButton(1, (ev.buttons & 4) !== 0);
+      updateMouseButton(2, (ev.buttons & 2) !== 0);
       mvx += ev.movementX;
       mvy += ev.movementY;
     }
@@ -572,21 +574,9 @@ export function attachBrowserInputBackend(
     // A host control boundary calls clear() separately on the same blur event so
     // no state crosses a lease; the source itself still emits cancellation to its
     // sole consumer as it did before ownership routing existed.
-    upEdges.clear();
-    upCodeEdges.clear();
-    pressedKeys.clear();
-    pressedCodes.clear();
-    pressedButtons[0] = false;
-    pressedButtons[1] = false;
-    pressedButtons[2] = false;
-    releasedButtons[0] = false;
-    releasedButtons[1] = false;
-    releasedButtons[2] = false;
-    heldKeys.clear();
-    heldCodes.clear();
-    buttons[0] = false;
-    buttons[1] = false;
-    buttons[2] = false;
+    keys.clear();
+    codes.clear();
+    mouseButtons.clear();
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -654,6 +644,11 @@ export function attachBrowserInputBackend(
   function onPointerLockChange(): void {
     const wasLocked = w3cLocked;
     w3cLocked = doc.pointerLockElement === canvas;
+    // A delayed scan must not publish pre-lock movement as locked look input.
+    if (!wasLocked && w3cLocked && !providerLocked) {
+      mvx = 0;
+      mvy = 0;
+    }
     if (wasLocked && !w3cLocked && !providerLocked) onBlur();
   }
   safeAdd(doc, 'pointerlockchange', onPointerLockChange as EventListener);
@@ -688,6 +683,10 @@ export function attachBrowserInputBackend(
     if (options.pointerLockAllowed && !options.pointerLockAllowed()) return;
     // D-2 / D-7: lockProvider path takes priority over W3C.
     if (options.lockProvider) {
+      if (!providerLocked && !w3cLocked) {
+        mvx = 0;
+        mvy = 0;
+      }
       providerLocked = true; // D-7 optimistic placement
       try {
         const result = options.lockProvider.requestLock();
@@ -743,7 +742,15 @@ export function attachBrowserInputBackend(
         // M3 D-2 / C-5: only a real non-standard gamepad triggers the DB
         // load. Standard pads never pull in the 554KB DB.
         if (hasNonStandard) kickOffDbLoad();
-        gamepads = diffGamepadFrame(prevGamepadFrame, valid, remapLookup);
+        haptics.observe(valid);
+        gamepads = diffGamepadFrame(prevGamepadFrame, valid, remapLookup).map((slot) => {
+          const target = haptics.target(slot.index);
+          return {
+            ...slot,
+            ...(target ? { feedbackTarget: target } : {}),
+            dualRumble: haptics.supported(slot.index),
+          };
+        });
         if (gamepadBaselinePending) {
           gamepads = gamepads.map((slot) => ({
             ...slot,
@@ -757,6 +764,7 @@ export function attachBrowserInputBackend(
         for (const slot of gamepads) nextFrame.set(slot.index, slot);
         prevGamepadFrame = nextFrame;
       } catch {
+        haptics.release();
         // getGamepads() threw — treat as if no gamepad API.
         // AC-05: API unstable environment does not crash.
       }
@@ -840,6 +848,7 @@ export function attachBrowserInputBackend(
       focused: isFocused(),
       capabilities: caps,
       pointerLocked: w3cLocked || providerLocked,
+      ...haptics.sampleResults(),
       ...(gamepads ? { gamepads } : {}),
       ...(pointers ? { pointers } : {}),
       ...(pointerEvents ? { pointerEvents } : {}),
@@ -849,16 +858,9 @@ export function attachBrowserInputBackend(
       ...(focusResetPending ? { focusReset: true } : {}),
     };
     // Reset per-frame accumulators (movement delta + key edges + wheel notches + phase queue).
-    upEdges.clear();
-    upCodeEdges.clear();
-    pressedKeys.clear();
-    pressedCodes.clear();
-    pressedButtons[0] = false;
-    pressedButtons[1] = false;
-    pressedButtons[2] = false;
-    releasedButtons[0] = false;
-    releasedButtons[1] = false;
-    releasedButtons[2] = false;
+    keys.clearFrame();
+    codes.clearFrame();
+    mouseButtons.clearFrame();
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -889,26 +891,15 @@ export function attachBrowserInputBackend(
   }
 
   function clear(): void {
-    heldKeys.clear();
-    upEdges.clear();
-    pressedKeys.clear();
-    heldCodes.clear();
-    upCodeEdges.clear();
-    pressedCodes.clear();
+    haptics.release();
+    keys.clear();
+    codes.clear();
+    mouseButtons.clear();
     pointerMap.clear();
     phaseQueue.length = 0;
     prevGamepadFrame.clear();
     vjBindState.clear();
     recognizerState = createRecognizerState();
-    buttons[0] = false;
-    buttons[1] = false;
-    buttons[2] = false;
-    pressedButtons[0] = false;
-    pressedButtons[1] = false;
-    pressedButtons[2] = false;
-    releasedButtons[0] = false;
-    releasedButtons[1] = false;
-    releasedButtons[2] = false;
     mvx = 0;
     mvy = 0;
     wheelAccum = 0;
@@ -924,6 +915,7 @@ export function attachBrowserInputBackend(
   function detach(): void {
     if (detached) return;
     detached = true;
+    haptics.detach();
     safeRemove(win, 'keydown', onKeyDown as EventListener);
     safeRemove(win, 'keyup', onKeyUp as EventListener);
     safeRemove(win, 'blur', onBlur as EventListener);
@@ -944,6 +936,8 @@ export function attachBrowserInputBackend(
   }
 
   const backend: InputBackend = {
+    feedback: haptics.feedback,
+    dispatchFeedback: haptics.dispatch,
     sample,
     clear,
     detach,

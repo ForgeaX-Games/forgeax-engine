@@ -41,8 +41,8 @@ it('applies pre-play bus control and latest pending volume through native decodi
     consumer.consume({ kind: 'set-volume', entityId: 1, volume: 0.5 });
     consumer.consume({ kind: 'set-volume', entityId: 1, volume: 0.25 });
     await expect.poll(() => consumer.state().activeSourceCount).toBe(1);
-    expect(gains.mock.results[1]?.value.gain.value).toBe(0);
-    expect(gains.mock.results[3]?.value.gain.value).toBe(0.25);
+    expect(gains.mock.results[8]?.value.gain.value).toBe(0);
+    expect(gains.mock.results[15]?.value.gain.value).toBe(0.25);
     consumer.consume({ kind: 'stop', entityId: 1 });
     expect(consumer.state().activeSourceCount).toBe(0);
   } finally {

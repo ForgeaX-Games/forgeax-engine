@@ -2,7 +2,12 @@ import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer as createTcpServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRhiDebugError } from '@forgeax/engine-rhi-debug';
+import type { BrowserCaptureError } from '@forgeax/engine-rhi-debug/browser';
+import { err, ok } from '@forgeax/engine-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
+import { serializeBridgeResult } from '../../../app/src/internal/browser-remote-bridge';
 import type { BrowserCarrierAdapter } from '../tools/display-carrier.js';
 
 const snapshotFixture = vi.hoisted(() => ({ create: vi.fn() }));
@@ -58,7 +63,7 @@ const fixtures = vi.hoisted(() => {
   };
   const page = {
     waitForFunction: vi.fn(async () => undefined),
-    evaluate: vi.fn(async () => undefined),
+    evaluate: vi.fn(async (): Promise<unknown> => undefined),
     bringToFront: vi.fn(async () => undefined),
   };
   const frame = {
@@ -172,6 +177,168 @@ beforeEach(() => {
 });
 
 describe('live DevKit borrowed carrier boundary', () => {
+  it.each([
+    false,
+    true,
+  ])('preserves recorder failures across the capture bridge (Worker clone: %s)', async (workerClone) => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-live-capture-error-'));
+    const port = await freePort();
+    await mkdir(join(root, '.forgeax'), { recursive: true });
+    const daemon = runLiveDevDaemon(root, port, join(root, '.forgeax', 'session.json'), {
+      carrier: {} as BrowserCarrierAdapter,
+    });
+    let bridge: WebSocket | undefined;
+    let failure = createRhiDebugError('capture-unavailable', {
+      stage: 'capture',
+      cause: 'Render Worker frame timed out',
+    });
+    let failCapture = true;
+    const artifact = {
+      kind: 'rhi-tape',
+      digest: 'sha256:fixture',
+      bytes: new Uint8Array([1, 2, 3]),
+    };
+    const uploadFailure: BrowserCaptureError = {
+      code: 'browser-capture-upload-failed',
+      expected: 'verified chunks committed',
+      hint: 'inspect the transport response',
+      detail: {
+        endpoint: '/__forgeax-debug/tape',
+        status: 409,
+        stage: 'chunk',
+        offset: 3,
+        serverCode: 'chunk-rejected',
+      },
+    };
+    let failUpload = true;
+    const upload = vi.fn(async (_artifact: unknown, _options: unknown) =>
+      failUpload ? err(uploadFailure) : ok({ kind: 'rhi-tape', digest: artifact.digest }),
+    );
+    const captureFrame = vi.fn(async () => (failCapture ? err(failure) : ok(artifact)));
+    fixtures.page.evaluate.mockResolvedValue('2');
+    try {
+      await vi.waitFor(() => expect(fixtures.browser.open).toHaveBeenCalledOnce());
+      bridge = new WebSocket(`ws://127.0.0.1:${port}/bridge`);
+      bridge.on('message', async (raw) => {
+        const message = JSON.parse(String(raw));
+        if (message.type !== 'status' && message.type !== 'eval') return;
+        const AsyncFunction = Object.getPrototypeOf(async () => {})
+          .constructor as FunctionConstructor;
+        const result: { ok: true; value: unknown } =
+          message.type === 'status'
+            ? { ok: true, value: { worldIdentity: 'capture-world' } }
+            : {
+                ok: true,
+                value: await new AsyncFunction('rhiCapture', message.code)({
+                  captureFrame,
+                  upload,
+                }),
+              };
+        const payload = serializeBridgeResult(workerClone ? structuredClone(result) : result);
+        bridge?.send(JSON.stringify({ type: 'result', id: message.id, payload }));
+      });
+      await new Promise<void>((resolve, reject) => {
+        bridge?.once('open', resolve);
+        bridge?.once('error', reject);
+      });
+      await vi.waitFor(async () => {
+        expect(await request(port, '/status', 'GET')).toMatchObject({
+          ok: true,
+          value: { phase: 'ready', bridgeConnected: true },
+        });
+      });
+      expect(await request(port, '/rhi/capture', 'POST')).toEqual({ ok: false, error: failure });
+      expect(captureFrame).toHaveBeenCalledExactlyOnceWith({ snapshotTimeoutMs: 120_000 });
+      // A second failed request must be admitted after the first, with the
+      // original producer detail and unchanged diagnostic budget.
+      failure = createRhiDebugError('capture-unavailable', {
+        stage: 'capture',
+        cause: 'replacement worker unavailable',
+      });
+      expect(await request(port, '/rhi/capture', 'POST')).toEqual({ ok: false, error: failure });
+      expect(captureFrame).toHaveBeenCalledTimes(2);
+      expect(upload).not.toHaveBeenCalled();
+      failCapture = false;
+      expect(await request(port, '/rhi/capture', 'POST')).toEqual({
+        ok: false,
+        error: uploadFailure,
+      });
+      expect(upload.mock.calls[0]?.[0]).toBe(artifact);
+      expect(upload.mock.calls[0]?.[1]).toMatchObject({
+        runId: expect.stringMatching(/^live-rhi-/),
+      });
+      failUpload = false;
+      expect(await request(port, '/rhi/capture', 'POST')).toMatchObject({
+        ok: true,
+        value: {
+          kind: 'rhi-tape',
+          digest: artifact.digest,
+          source: 'live',
+          runId: expect.stringMatching(/^live-rhi-/),
+        },
+      });
+      expect(captureFrame).toHaveBeenCalledTimes(4);
+      expect(upload).toHaveBeenCalledTimes(2);
+    } finally {
+      fixtures.page.evaluate.mockResolvedValue(undefined);
+      bridge?.close();
+      await request(port, '/stop', 'POST');
+      await daemon;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards fresh Host execution reports through the public status route', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-live-execution-status-'));
+    const port = await freePort();
+    await mkdir(join(root, '.forgeax'), { recursive: true });
+    const daemon = runLiveDevDaemon(root, port, join(root, '.forgeax', 'session.json'), {
+      carrier: {} as BrowserCarrierAdapter,
+    });
+    let bridge: WebSocket | undefined;
+    let execution = {
+      frame: { submitted: 4, completed: 2, inFlight: 2 },
+      render: { state: 'alive', completedFrame: 2 },
+    };
+    try {
+      await vi.waitFor(() => expect(fixtures.browser.open).toHaveBeenCalledOnce());
+      bridge = new WebSocket(`ws://127.0.0.1:${port}/bridge`);
+      bridge.on('message', (raw) => {
+        const message = JSON.parse(String(raw));
+        if (message.type === 'status')
+          bridge?.send(
+            JSON.stringify({
+              type: 'result',
+              id: message.id,
+              payload: { ok: true, value: { worldIdentity: 'test-world', execution } },
+            }),
+          );
+      });
+      await new Promise<void>((resolve, reject) => {
+        bridge?.once('open', resolve);
+        bridge?.once('error', reject);
+      });
+      await vi.waitFor(async () => {
+        expect(await request(port, '/status', 'GET')).toMatchObject({
+          ok: true,
+          value: { execution },
+        });
+      });
+      execution = { ...execution, render: { state: 'failed', completedFrame: 2 } };
+      await vi.waitFor(async () => {
+        expect(await request(port, '/status', 'GET')).toMatchObject({
+          ok: true,
+          value: { execution },
+        });
+      });
+    } finally {
+      bridge?.close();
+      await request(port, '/stop', 'POST');
+      await daemon;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('composes the existing live owner in process and waits for host cancellation cleanup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-live-in-process-'));
     const lifetime = new AbortController();

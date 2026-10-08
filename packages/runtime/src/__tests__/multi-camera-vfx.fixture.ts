@@ -37,6 +37,7 @@ export async function verifyMultiCameraVfx(options: {
   readonly canvas: Parameters<typeof constructRuntimeRendererHost>[0];
   readonly shaderManifestUrl: string;
   readonly publication: boolean;
+  readonly warmupFrames?: number;
   readonly cook: CookMeshLightingFixture;
   readonly save: (name: string, bytes: Uint8Array) => void | Promise<void>;
 }) {
@@ -250,7 +251,7 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
     }
   };
   try {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < (options.warmupFrames ?? 60); i++) {
       const before = acknowledgements;
       await draw();
       // First-use material preparation can defer simulation; once admitted,
@@ -295,7 +296,7 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
     await draw(false);
     expect(runtime.snapshot()).toHaveLength(0);
     if (publisher !== undefined) expect(acknowledgements - beforeFailure).toBe(1);
-    renderValue(required(renderer.requestObservation).call(renderer, ['final-srgb']));
+    renderValue(required(renderer.requestObservation).call(renderer, ['final-display']));
     const pending = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const beforeCapture = acknowledgements;
@@ -342,8 +343,8 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
     expect(composites).toHaveLength(2);
     const observation = required(
       required(
-        renderValue(await renderer.observe(receipt, { include: ['final-srgb'] })).observations,
-      ).find((row) => row.domain === 'final-srgb'),
+        renderValue(await renderer.observe(receipt, { include: ['final-display'] })).observations,
+      ).find((row) => row.domain === 'final-display'),
     );
     const width = 128,
       height = 64;
@@ -385,11 +386,16 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
       for (let index = 0; index < live.length; index++)
         delta = Math.max(delta, Math.abs(required(live[index]) - required(pixels[index])));
       expect(delta).toBeLessThanOrEqual(1);
+      const format = required(required(rendered.attachment).format);
+      const redChannel = format.startsWith('bgra') ? 2 : 0;
+      const blueChannel = 2 - redChannel;
       for (const x of [32, 96]) {
         const offset = (32 * width + x) * 4;
-        expect(required(pixels[offset])).toBeGreaterThan(100);
-        expect(required(pixels[offset]) - required(pixels[offset + 1])).toBeGreaterThan(80);
-        expect(required(pixels[offset + 2])).toBeLessThan(120);
+        expect(required(pixels[offset + redChannel])).toBeGreaterThan(100);
+        expect(
+          required(pixels[offset + redChannel]) - required(pixels[offset + 1]),
+        ).toBeGreaterThan(80);
+        expect(required(pixels[offset + blueChannel])).toBeLessThan(120);
       }
       await options.save('vfx-replay.rgba', pixels);
       await options.save(
@@ -404,6 +410,7 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
               simulation: simulation.workIndex,
               projections: projections.length,
               cameraBases: bases,
+              format,
               delta,
               acknowledgements,
               views: renderer.inspect().views,
@@ -433,21 +440,22 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
     for (const [index, camera] of cameras.entries())
       world.set(camera, CameraView, { updateInterval: 1, order: 1 - index }).unwrap();
     for (let i = 0; i < 3; i++) await draw();
-    renderValue(required(renderer.requestObservation).call(renderer, ['final-srgb']));
+    renderValue(required(renderer.requestObservation).call(renderer, ['final-display']));
     const withoutOccluder = await draw();
     const changed = required(
       required(
-        renderValue(await renderer.observe(withoutOccluder, { include: ['final-srgb'] }))
+        renderValue(await renderer.observe(withoutOccluder, { include: ['final-display'] }))
           .observations,
-      ).find((row) => row.domain === 'final-srgb'),
+      ).find((row) => row.domain === 'final-display'),
     );
     await options.save('vfx-depth-falsifier.rgba', changed.bytes);
+    const changedRedChannel = changed.metadata.format.startsWith('bgra') ? 2 : 0;
     for (const x of [32, 96]) {
       const offset = 32 * changed.metadata.bytesPerRow + x * 4;
       expect(required(changed.bytes[offset + 1])).toBeGreaterThan(100);
-      expect(required(changed.bytes[offset + 1]) - required(changed.bytes[offset])).toBeGreaterThan(
-        80,
-      );
+      expect(
+        required(changed.bytes[offset + 1]) - required(changed.bytes[offset + changedRedChannel]),
+      ).toBeGreaterThan(80);
     }
     expect(runtime.snapshot()).toHaveLength(0);
     expect(errors).toEqual([]);
@@ -485,20 +493,22 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) { (*p
       })
       .unwrap();
     for (let i = 0; i < 8; i++) await draw();
-    renderValue(required(renderer.requestObservation).call(renderer, ['final-srgb']));
+    renderValue(required(renderer.requestObservation).call(renderer, ['final-display']));
     const recovered = await draw();
     expect(recovered.deviceGeneration).toBeGreaterThan(receipt.deviceGeneration);
     const recoveredPixels = required(
       required(
-        renderValue(await renderer.observe(recovered, { include: ['final-srgb'] })).observations,
-      ).find((row) => row.domain === 'final-srgb'),
+        renderValue(await renderer.observe(recovered, { include: ['final-display'] })).observations,
+      ).find((row) => row.domain === 'final-display'),
     );
     await options.save('vfx-recovered.rgba', recoveredPixels.bytes);
+    const recoveredRedChannel = recoveredPixels.metadata.format.startsWith('bgra') ? 2 : 0;
     for (const x of [32, 96]) {
       const offset = 32 * recoveredPixels.metadata.bytesPerRow + x * 4;
-      expect(required(recoveredPixels.bytes[offset])).toBeGreaterThan(100);
+      expect(required(recoveredPixels.bytes[offset + recoveredRedChannel])).toBeGreaterThan(100);
       expect(
-        required(recoveredPixels.bytes[offset]) - required(recoveredPixels.bytes[offset + 1]),
+        required(recoveredPixels.bytes[offset + recoveredRedChannel]) -
+          required(recoveredPixels.bytes[offset + 1]),
       ).toBeGreaterThan(80);
     }
     expect(runtime.snapshot()).toHaveLength(0);

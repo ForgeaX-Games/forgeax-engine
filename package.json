@@ -21,7 +21,9 @@
     "apps/learn-render/*/*",
     "apps/learn-render/*/*/*",
     "templates/empty",
-    "templates/game-3d"
+    "templates/game-3d",
+    "tools/view",
+    "tools/view/packages/*"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -48,10 +50,10 @@
     "test": "vitest run --project='@forgeax/*' --project=hello-triangle --project=unit",
     "test:unit": "node scripts/ci/run-vitest-unit.mjs",
     "test:m6:extended-lighting-zero-feature": "pnpm --filter @forgeax/engine-render exec vitest run src/__tests__/extended-lighting-zero-feature.integration.test.ts --maxWorkers=1",
-    "test:browser": "FORGEAX_BROWSER_ENTITY_VISIBILITY=1 vitest run --config config/vitest.browser.config.ts --project=browser apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts && FORGEAX_BROWSER_ENTITY_VISIBILITY=0 node scripts/ci/run-split-vitest-browser.mjs --group-size=8 --max-workers=1 && pnpm --filter @forgeax/engine-devkit test:runtime-browser",
+    "test:browser": "FORGEAX_BROWSER_ENTITY_VISIBILITY=1 node scripts/ci/local-gpu-lease.mjs --timeout-ms 300000 -- node node_modules/vitest/vitest.mjs run --config config/vitest.browser.config.ts --project=browser apps/hello/entity-visibility/src/__tests__/visibility.browser.test.ts && FORGEAX_BROWSER_ENTITY_VISIBILITY=0 node scripts/ci/run-split-vitest-browser.mjs --group-size=8 --max-workers=1 && node scripts/ci/local-gpu-lease.mjs --timeout-ms 2700000 -- pnpm --filter @forgeax/engine-devkit test:runtime-browser && node scripts/ci/local-gpu-lease.mjs --timeout-ms 2700000 -- pnpm --filter @forgeax/mesh-io-parity verify",
     "test:browser:watch": "vitest --project=browser",
     "test:browser:wgpu-wasm": "vitest run --project=browser packages/engine/__tests__/renderer-wgpu-wasm.browser.test.ts",
-    "test:dawn": "FORGEAX_PACKAGE_BUILD_CONCURRENCY=2 pnpm build:engine && node scripts/build-shared-inputs.mjs --root . && FORGEAX_SHARED_APP_INPUTS_MANIFEST=shared-build-inputs/manifest.json NODE_OPTIONS=--max-old-space-size=4096 node scripts/ci/run-dawn-gate.mjs",
+    "test:dawn": "FORGEAX_PACKAGE_BUILD_CONCURRENCY=${FORGEAX_PACKAGE_BUILD_CONCURRENCY:-2} pnpm build:engine && node scripts/build-shared-inputs.mjs --root . && FORGEAX_SHARED_APP_INPUTS_MANIFEST=shared-build-inputs/manifest.json NODE_OPTIONS=--max-old-space-size=4096 node scripts/ci/run-dawn-gate.mjs",
     "test:browser-no-webgpu": "vitest run --project=browser-no-webgpu",
     "test:webkit:learn-render": "node scripts/dev-verify/verify-webkit-learn-render.mjs --tier=core",
     "test:perf": "vitest run --project=ecs-perf --project=render-perf",
@@ -125,7 +127,9 @@
     "sync": "node scripts/sync.mjs",
     "sync:check": "node scripts/check-workspaces-equivalence.mjs",
     "harness:sync": "node scripts/sync-harness.mjs",
-    "postinstall": "node scripts/sync-harness.mjs"
+    "postinstall": "node scripts/sync-harness.mjs",
+    "build:tools": "node tools/view-plugins/integration/build.mjs",
+    "test:view": "node scripts/ci/run-view-integration.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.14",
@@ -170,7 +174,7 @@
     "vite": "8.0.16",
     "vitest": "4.1.11",
     "wait-on": "^7.2.0",
-    "webgpu": "^0.4.0",
+    "@forgeax/engine-dawn-node": "workspace:*",
     "ws": "^8.20.0"
   },
   "simple-git-hooks": {

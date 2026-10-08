@@ -84,11 +84,11 @@ describe('hdrp-ssao.wgsl structural compile test (M2 / w7)', () => {
     );
   });
 
-  it('(d) fs_ssao_calc outputs @location(0) f32 (R8 scalar)', () => {
-    // fs_ssao_calc fragment signature: @location(0) f32
+  it('(d) fs_ssao_calc packs visibility with the encoded center normal', () => {
     const codeOnly = stripComments(ssaoSource);
-    const blockMatch = /fn\s+fs_ssao_calc\b[\s\S]*?->\s*@location\(0\)\s+f32/.exec(codeOnly);
-    expect(blockMatch).toBeTruthy();
+    expect(codeOnly).toMatch(/fn\s+fs_ssao_calc\s*\([^)]*\)\s*->\s*@location\(0\)\s+vec4<f32>/);
+    expect(codeOnly).toMatch(/encodeSsaoNormal\s*\(\s*ssaoNormal\s*\(/);
+    expect(codeOnly).toMatch(/fn\s+fs_ssao_blur\s*\([^)]*\)\s*->\s*@location\(0\)\s+f32/);
   });
 
   it('(e1) declares SSAO uniform struct with view + projection + inverseProjection (3 mat4<f32>)', () => {
@@ -165,8 +165,10 @@ describe('hdrp-ssao.wgsl ssao-blur input fix (M8 / w36 + w37)', () => {
     if (!blurMatch) return;
     const body = blurMatch[0];
     expect(body).toMatch(/textureSampleLevel\s*\(\s*ssaoRaw\b/);
-    // Normal discontinuities must reject taps from another surface.
-    expect(body).toMatch(/\bssaoNormal\b/);
+    // Normal discontinuities reject taps from another surface; tap normals come
+    // from the packed raw target, never a per-tap full-res G-buffer decode.
+    expect(body).toMatch(/decodeSsaoNormal\s*\(\s*raw\.gb\s*\)/);
+    expect(body).not.toMatch(/\bssaoNormal\s*\(/);
   });
 
   it('(i4) fs_ssao_blur reads current depth without repeating edges', () => {

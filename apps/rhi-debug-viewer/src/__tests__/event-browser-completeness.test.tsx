@@ -55,6 +55,7 @@ function model(): ViewerModel {
         commandIndices: [0, 1],
         colorAttachmentViewHandleIds: [],
         colorAttachmentResolveViewHandleIds: [],
+        colorAttachmentDepthSlices: [],
         depthStencilViewHandleId: null,
       },
     ],

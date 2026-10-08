@@ -53,7 +53,7 @@ async function deferred(reason) {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (importErr) {
   await deferred(
     `dawn-node import failed: ${importErr instanceof Error ? importErr.message : String(importErr)}`,

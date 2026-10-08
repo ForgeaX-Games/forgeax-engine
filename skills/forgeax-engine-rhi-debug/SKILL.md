@@ -26,7 +26,23 @@ or the SDK's `source/engine/packages/rhi-debug/README.md`.
    digest, and reproduction inputs unchanged as failure evidence.
 3. Derive `FrameModel`, choose the relevant `workIndex`, and inspect pipeline,
    bindings, resource descriptors/data, and supported render-target readback.
+   Producer labels survive on resources (`resources[].descriptor.desc.label`) and on
+   pipelines (`works[].pipeline.descriptor.desc.label`); find a producer's draws by label.
    For ray/compute records, use the producer layout with `rhi.inspect`'s `buffer` input or `inspectBufferRecords`; follow the [bounded buffer contract](../../packages/rhi-debug/README.md#structured-compute-and-ray-query-buffers).
+   `rhi.read` `records` select rows inside the binding's bound window; read the source buffer, not a mappable staging copy (`readback-unsupported`).
+   A ray-query tape replays only with `FORGEAX_WEBGPU_NODE=wgpu-native` (contributor checkout, native addon built); Dawn returns `replay-backend-unavailable`.
+   For GI data (probe/card atlases, SDF slices, HDR storage buffers), read many
+   bindings and works in one replay with `forgeax debug rhi read` or
+   `session.readAtWorks` + `bindingReadRequest`, then decode with
+   `readbackImage`/`extractTile`/`imageStats` (NaN count included) and write a
+   PNG per tile; see [batch reads and images](../../packages/rhi-debug/README.md#images-atlases-and-hdr-texels).
+   For a compute dispatch or a depth-only/shadow pass, use the `outputs`
+   inspect field (or `workOutputs(work)`): it reads every `color<N>`, `depth`
+   and writable `@group(G)@binding(B)` the work produced. Read one with
+   `{"output":"depth","workIndex":N,"image":{"depth":{"near":0.1,"far":100,"reverseZ":true},"range":"auto","png":"shadow.png"}}`;
+   `depthImage` linearizes depth and a layer view reads its own array layer.
+   For a slow frame, `forgeax debug rhi timing` (or `session.timePasses()`)
+   ranks every pass by replay-device GPU time; see [per-pass timing](../../packages/rhi-debug/README.md#per-pass-gpu-timing).
    Trace the first incorrect producer or consumer through resource lineage.
    If the expected draw/dispatch is absent, follow extraction, culling, or asset
    readiness upstream; an absent work item is evidence too.
@@ -70,6 +86,8 @@ Use the returned path and select `summary.works[].workIndex`:
 ```bash
 pnpm exec forgeax debug rhi summary --artifact <path> --json
 pnpm exec forgeax debug rhi inspect --artifact <path> --work-index <workIndex> --json
+pnpm exec forgeax debug rhi read --artifact <path> --reads '[{"binding":{"group":0,"binding":2},"workIndex":<workIndex>,"image":{"format":"rgba16float","width":256,"height":256,"tile":{"tileWidth":8,"tileHeight":8,"index":0,"border":1},"png":"probe0.png"}}]' --json
+pnpm exec forgeax debug rhi timing --artifact <path> --json
 ```
 
 Summary, inspection, and the read-only Viewer consume the same `ArtifactRef`;
@@ -94,6 +112,19 @@ For resource release checks, use `FrameModel.resourceLifecycle` and
 Locate bound consumers through each work's bindings and attachments. Descriptor
 bytes and recorded destruction do not prove driver allocation or retirement timing.
 
+## Large captures
+
+A GI frame can produce close to a gigabyte of tape. Upload it with
+`app.rhiCapture.upload(artifact, { runId })` (or `uploadTape` from
+`@forgeax/engine-rhi-debug/browser`): it streams digest-checked 16 MiB chunks,
+resumes by `runId` after a failure, and the server publishes only a verified
+whole file. Avoid touching `artifact.bytes` in the page, which materializes one
+contiguous copy. To shrink a capture, pass
+`captureFrame({ seed: { maxResourceBytes } })`; oversized resources become
+`unseededResources[]` with `omitted: true` and replay starts them at zero, so
+recapture without the bound if the evidence depends on one. See
+[streaming large captures](../../packages/rhi-debug/README.md#streaming-large-captures).
+
 ## Mental model
 
 | Concept | Use |
@@ -110,7 +141,7 @@ selection key, resource registry, or host-side replay model.
 ## Shortest workflow
 
 1. Attach the recorder to the real RHI backend at the Runtime to App seam.
-2. Capture one frame and retain its `{ kind, digest, bytes }` result.
+2. Capture one frame and retain its artifact (`kind`, `byteLength`, `chunks`, lazy `digest`/`bytes`).
 3. Decode the bytes with the strict v7 decoder.
 4. Build `FrameModel` and select a `works[].workIndex`.
 5. Open a replay session with a factory that creates a fresh backend.
@@ -135,6 +166,7 @@ Each `works[].bindings` row carries its static `bufferOffset` and the
 `setBindGroup` `dynamicOffset` in effect for that draw (`null` when static). The
 effective offset of a buffer binding is `(bufferOffset ?? 0) + (dynamicOffset ?? 0)`;
 use it to prove which uniform slot a draw read, such as a per-composition View copy.
+`bindingReadRequest(work, group, binding)` applies that rule and returns a read request.
 
 Multisampled passes: read the 1x targets named by
 `works[i].attachments.colorResolveViewHandleIds` (attachment order, `null` when
@@ -153,6 +185,13 @@ after the composite, separates an accumulation fault from a composite fault.
 - Use the same `workIndex` for EventBrowser, PipelineState, TextureViewer,
   ResourceInspector, and DevKit inspect.
 - Let `ResourceTable` validate generations and own disposal.
+- BLAS/TLAS are ordinary bootstrap resources (`acceleration-structure`) rebuilt
+  from their last pre-capture build; in-frame builds are command events. For a
+  ray-query work, read the binding's `accelerationStructure` (`status`,
+  `instanceCount`, `blasHandleIds`) before suspecting the shader: `unbuilt` or a
+  wrong instance count is a producer bug in the build, not in traversal. Open the
+  replay device with `replayDeviceRequest(tape, ...)`: it requires the Ray Query
+  feature for AS tapes (native wgpu via `@forgeax/engine-rhi-wgpu-native`).
 - Use the declared readback format matrix; return structured unsupported or
   failed results instead of guessing a conversion.
 
@@ -168,9 +207,10 @@ message text to decide control flow.
 | `capture-snapshot-failed` / `capture-timeout` | Preserve the original cause and `detail.progress`; distinguish queue drain from the named resource readback before choosing a repair owner. |
 | `tape-invalid` | Preserve the original bytes and capture again if the source is stale. |
 | `tape-version-unsupported` | Use a producer that emits v7; older formats are not compatibility inputs. |
-| `replay-capability-mismatch` | Create a fresh backend with the recorded capabilities or record again. |
+| `replay-capability-mismatch` | Create a fresh backend with the recorded capabilities or record again; a tape with BLAS/TLAS needs a replay device whose `caps.rayQuery.supported` is true. |
 | `replay-position-invalid` | Select a `workIndex` from the current `FrameModel`. |
-| `readback-unsupported` | Keep structural evidence and report the missing backend format capability. |
+| `readback-unsupported` | Keep structural evidence and report the missing backend format capability; try the `outputs` field before concluding a work has nothing readable. |
+| `browser-capture-upload-failed` | Read `detail.stage`/`offset`/`serverCode`; rerun the upload with the same `runId` to send only the missing chunks. |
 | `readback-failed` | Preserve the detail stage and dispose the replay session. |
 
 ## Viewer evidence

@@ -215,11 +215,8 @@ describe('ScriptablePack and Pack authoring', () => {
     if (direct.ok && direct.value.format === 'direct') {
       const projected = projectDirectPackJson(direct.value);
       expect(projected).toMatchObject({
-        ok: true,
-        value: {
-          packageId: '01900000-0000-7000-8000-000000000010',
-          assets: [{ sourceKey: 'scene/main', guid: expect.any(String) }],
-        },
+        packageId: '01900000-0000-7000-8000-000000000010',
+        assets: [{ sourceKey: 'scene/main', guid: expect.any(String) }],
       });
     }
     expect(

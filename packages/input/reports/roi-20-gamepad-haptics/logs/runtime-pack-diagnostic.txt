@@ -1,0 +1,4 @@
+{"sameToken":true,"entities":1,"activeAfterDispose":0}
+real 12.63
+user 2.03
+sys 0.24

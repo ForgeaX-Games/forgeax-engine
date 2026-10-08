@@ -178,28 +178,36 @@ export function buildGlb(json: Record<string, unknown>, bin: Uint8Array, version
 export function skinnedGltf(
   interpolation: 'LINEAR' | 'STEP' | 'CUBICSPLINE' = 'LINEAR',
 ): Record<string, unknown> {
-  const binary = new Uint8Array(72);
+  const cubic = interpolation === 'CUBICSPLINE';
+  const binary = new Uint8Array(cubic ? 116 : 72);
   new Float32Array(binary.buffer, 0, 3).set([1, 0, 0]);
   new Uint16Array(binary.buffer, 12, 4).set([0, 0, 0, 0]);
   new Float32Array(binary.buffer, 20, 4).set([1, 0, 0, 0]);
   new Float32Array(binary.buffer, 36, 2).set([0, 1]);
-  new Float32Array(binary.buffer, 44, 6).set([0, 0, 0, 4, 2, 0]);
+  new Float32Array(binary.buffer, 44, cubic ? 18 : 6).set(
+    cubic ? [0, 0, 0, 0, 0, 0, 4, 2, 0, 4, 2, 0, 4, 2, 0, 0, 0, 0] : [0, 0, 0, 4, 2, 0],
+  );
   return {
     asset: { version: '2.0' },
-    buffers: [{ byteLength: 72, uri: `data:application/octet-stream;base64,${base64(binary)}` }],
+    buffers: [
+      {
+        byteLength: binary.byteLength,
+        uri: `data:application/octet-stream;base64,${base64(binary)}`,
+      },
+    ],
     bufferViews: [
       [0, 12],
       [12, 8],
       [20, 16],
       [36, 8],
-      [44, 24],
+      [44, cubic ? 72 : 24],
     ].map(([byteOffset, byteLength]) => ({ buffer: 0, byteOffset, byteLength })),
     accessors: [
       { bufferView: 0, componentType: 5126, count: 1, type: 'VEC3' },
       { bufferView: 1, componentType: 5123, count: 1, type: 'VEC4' },
       { bufferView: 2, componentType: 5126, count: 1, type: 'VEC4' },
       { bufferView: 3, componentType: 5126, count: 2, type: 'SCALAR' },
-      { bufferView: 4, componentType: 5126, count: 2, type: 'VEC3' },
+      { bufferView: 4, componentType: 5126, count: cubic ? 6 : 2, type: 'VEC3' },
     ],
     meshes: [{ primitives: [{ mode: 0, attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 } }] }],
     nodes: [

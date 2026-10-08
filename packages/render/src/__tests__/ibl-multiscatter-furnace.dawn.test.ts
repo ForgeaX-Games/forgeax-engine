@@ -24,7 +24,10 @@ it('conserves rough-metal specular energy in a white furnace', async () => {
     /* @vite-ignore */ new URL('../../../shader-compiler/dist/index.mjs', import.meta.url).href
   );
   const shared = readFileSync(resolve('packages/shader/src/ibl-shared.wgsl'), 'utf8');
-  const imports = { 'forgeax_pbr::ibl_shared': shared };
+  const imports = {
+    'forgeax_pbr::ibl_shared': shared,
+    'forgeax_pbr::brdf': readFileSync(resolve('packages/shader/src/brdf.wgsl'), 'utf8'),
+  };
   const bake = await compiler.compileShader(
     readFileSync(resolve('packages/shader/src/ibl-brdf-lut.wgsl'), 'utf8'),
     { id: 'forgeax::ibl-furnace-lut-test', imports },

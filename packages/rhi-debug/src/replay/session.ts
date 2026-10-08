@@ -1,47 +1,54 @@
-import type {
-  MappedBuffer,
-  RhiCommandEncoder,
-  RhiComputePassEncoder,
-  RhiDevice,
-  RhiRenderPassEncoder,
-} from '@forgeax/engine-rhi';
+import type { MappedBuffer, RhiDevice } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
 import { buildFrameModel, type WorkBinding, type WorkPipeline } from '../frame-model';
-import { buildTapeIndex, type TapeIndex, type TapeWorkEntry } from '../protocol/tape-index';
+import { buildTapeIndex } from '../protocol/tape-index';
 import type { BootstrapResource, RhiCallEvent, Tape } from '../protocol/types';
 import type { CreateShaderModuleFn } from '../recorder';
 import { computeTextureLayout, projectTextureExtent } from '../texel-layout';
-import { requiredReplayDescriptorFeatures } from './device-request';
-import { eventFailure, executeEvent, type ReplayExecutionContext } from './execute';
+import { type BatchReadRequest, type BatchReadResults, readAtWorks } from './batch';
+import { requiredReplayDescriptorFeatures, usesAccelerationStructures } from './device-request';
 import {
-  type BufferReadbackRange,
+  encodeAccelerationStructureBuild,
+  eventFailure,
+  executeEvent,
+  type ReplayExecutionContext,
+} from './execute';
+import { tapeBlob } from './execute-support';
+import { type WorkOutput, workOutputs } from './outputs';
+import { replayThroughWork } from './prefix';
+import {
+  type ReadbackSubresource,
   type ReplayReadbackResult,
   readReplayResource,
 } from './readback';
 import { ResourceTable } from './resources';
+import { retainedReplayHandles } from './retention';
 import { seedDepthInitialData } from './seed-depth';
+import { type FrameTiming, timeReplayPasses } from './timing';
 
 export interface ReplayBackend {
   readonly device: RhiDevice;
   readonly createShaderModule: CreateShaderModuleFn;
 }
 
-export interface TextureSubresource {
-  readonly mipLevel: number;
-  readonly arrayLayer: number;
-  readonly aspect?: 'all' | 'depth-only' | 'stencil-only';
+/**
+ * `pixels` reads the work's first color output, else its depth attachment,
+ * else its first writable storage texture. `outputs` reads every output.
+ */
+export type InspectField = 'bindings' | 'pipeline' | 'pixels' | 'outputs';
+
+/** One `workOutputs` entry read from the post-work state; failures stay per slot. */
+export interface WorkOutputRead extends Omit<WorkOutput, 'request'> {
+  readonly result: Result<ReplayReadbackResult, RhiDebugError>;
 }
-
-export type ReadbackSubresource = TextureSubresource | BufferReadbackRange;
-
-export type InspectField = 'bindings' | 'pipeline' | 'pixels';
 
 export interface WorkInspection {
   readonly workIndex: number;
   readonly eventIndex: number;
   readonly passIndex: number;
   readonly attachment: ReplayReadbackResult | undefined;
+  readonly outputs?: readonly WorkOutputRead[];
   readonly pipeline?: WorkPipeline;
   readonly bindings?: readonly WorkBinding[];
   readonly vertexBuffers?: readonly {
@@ -84,6 +91,23 @@ export interface ReplaySession {
     subresource?: ReadbackSubresource,
     signal?: AbortSignal,
   ): Promise<Result<ReplayReadbackResult, RhiDebugError>>;
+  /**
+   * Read several resources at several works in one call. Reads at the same
+   * work share one replay; ascending works share one forward replay split at
+   * each requested work. A request without `workIndex` reads bootstrap state.
+   * Per-request failures stay in their slot; the outer Result fails only when
+   * the replay itself cannot advance.
+   */
+  readAtWorks(
+    requests: readonly BatchReadRequest[],
+    signal?: AbortSignal,
+  ): Promise<Result<BatchReadResults, RhiDebugError>>;
+  /**
+   * Replay the whole frame once with replay-owned timestamps around every pass.
+   * Needs a replay device with `timestamp-query`; times rank passes on the
+   * replay device and do not restate the capture device's frame time.
+   */
+  timePasses(signal?: AbortSignal): Promise<Result<FrameTiming, RhiDebugError>>;
   dispose(): Promise<Result<void, RhiDebugError>>;
 }
 
@@ -104,6 +128,7 @@ export async function openReplay(
 
   const index = buildTapeIndex(tape);
   const model = buildFrameModel(tape);
+  const retained = retainedReplayHandles(tape);
   const table = new ResourceTable(backend.device, 0);
   let disposed = false;
   let prepared = false;
@@ -117,7 +142,7 @@ export async function openReplay(
   };
 
   const reset = async (): Promise<Result<void, RhiDebugError>> => {
-    const cleared = table.reset();
+    const cleared = table.reset(retained);
     if (!cleared.ok) return cleared;
     prepared = false;
     return ok(undefined);
@@ -128,6 +153,7 @@ export async function openReplay(
     for (let index = 0; index < tape.bootstrap.length; index++) {
       const resource = tape.bootstrap[index];
       if (resource === undefined) continue;
+      if (retained.has(resource.handleId) && table.get(resource.handleId) !== undefined) continue;
       const created = await executeBootstrapResource(context, resource, index);
       if (!created.ok) return created;
       const seeded = await seedBootstrapResource(context, resource, index);
@@ -135,6 +161,16 @@ export async function openReplay(
     }
     prepared = true;
     return ok(undefined);
+  };
+
+  const host = {
+    context,
+    index,
+    retained,
+    reset: async (): Promise<Result<void, RhiDebugError>> => {
+      const cleared = await reset();
+      return cleared.ok ? prepare() : cleared;
+    },
   };
 
   const session: ReplaySession = {
@@ -152,10 +188,11 @@ export async function openReplay(
       if (!cleared.ok) return cleared;
       const bootstrapped = await prepare();
       if (!bootstrapped.ok) return bootstrapped;
-      const replayed = await replayThroughWork(context, index, work, signal);
+      const replayed = await replayThroughWork(context, index, work, retained, signal);
       if (!replayed.ok) return replayed;
+      const outputs = workOutputs(modelWork);
       const attachment = fields?.includes('pixels')
-        ? await readWorkAttachment(context, index, work)
+        ? await readWorkAttachment(context, outputs)
         : undefined;
       if (attachment !== undefined && !attachment.ok) return attachment;
       const selectedAttachment =
@@ -174,8 +211,16 @@ export async function openReplay(
         passIndex: work.passIndex,
         attachment: selectedAttachment,
       };
+      const outputReads: WorkOutputRead[] = [];
+      if (fields?.includes('outputs'))
+        for (const { request, ...output } of outputs)
+          outputReads.push({
+            ...output,
+            result: withWork(await readOutput(context, request), work.workIndex),
+          });
       return ok({
         ...baseInspection,
+        ...(fields?.includes('outputs') ? { outputs: outputReads } : {}),
         ...(fields?.includes('pipeline') ? { pipeline: modelWork.pipeline } : {}),
         ...(fields?.includes('bindings')
           ? {
@@ -237,7 +282,7 @@ export async function openReplay(
       if (!cleared.ok) return cleared;
       const bootstrapped = await prepare();
       if (!bootstrapped.ok) return bootstrapped;
-      const replayed = await replayThroughWork(context, index, work, signal);
+      const replayed = await replayThroughWork(context, index, work, retained, signal);
       if (!replayed.ok) return replayed;
       const read = await readReplayResource(
         backend.device,
@@ -255,6 +300,14 @@ export async function openReplay(
         },
       });
     },
+    async readAtWorks(requests, signal) {
+      if (disposed) return positionError(-1, index.works.length);
+      return readAtWorks(host, requests, signal);
+    },
+    async timePasses(signal) {
+      if (disposed) return positionError(-1, index.works.length);
+      return timeReplayPasses(host, signal);
+    },
     async dispose() {
       if (disposed) return ok(undefined);
       const result = table.dispose();
@@ -268,6 +321,13 @@ export async function openReplay(
 }
 
 function checkCapabilities(tape: Tape, device: RhiDevice): RhiDebugError | undefined {
+  const rayQuery = device.caps.rayQuery;
+  if (!rayQuery.supported && usesAccelerationStructures(tape)) {
+    return createRhiDebugError('replay-capability-mismatch', {
+      stage: 'replay',
+      cause: `tape builds acceleration structures; replay device caps.rayQuery is unsupported (${rayQuery.reason})`,
+    });
+  }
   const missingFeatures = [...requiredReplayDescriptorFeatures(tape)].filter(
     (feature) => !device.features.has(feature),
   );
@@ -387,7 +447,7 @@ async function executeBootstrapResource(
   resource: BootstrapResource,
   bootstrapIndex: number,
 ): Promise<Result<void, RhiDebugError>> {
-  const event: RhiCallEvent = JSON.parse(JSON.stringify(resource.create));
+  const event = resource.create as unknown as RhiCallEvent;
   // Captured GPU-written buffers need not allow COPY_DST. Restore their
   // initial bytes through creation mapping, which is legal for every usage
   // (including MAP_WRITE, where adding COPY_DST would itself be invalid).
@@ -404,9 +464,20 @@ async function seedBootstrapResource(
   resource: BootstrapResource,
   bootstrapIndex: number,
 ): Promise<Result<void, RhiDebugError>> {
+  const create = resource.create as unknown as RhiCallEvent;
+  if (
+    (create.kind === 'createBlas' || create.kind === 'createTlas') &&
+    create.build !== undefined &&
+    create.build !== null
+  ) {
+    const rebuilt = rebuildBootstrapAccelerationStructure(context, create, bootstrapIndex);
+    if (!rebuilt.ok) return rebuilt;
+    await context.queue.onSubmittedWorkDone();
+    return rebuilt;
+  }
   if (resource.initialData.length === 0) return ok(undefined);
   const entry = context.table.get(resource.handleId);
-  const event: RhiCallEvent = JSON.parse(JSON.stringify(resource.create));
+  const event = resource.create as unknown as RhiCallEvent;
   if (entry?.resource.kind === 'texture' && event.kind === 'createTexture') {
     return seedTextureInitialData(context, entry.resource.value, event, resource, bootstrapIndex);
   }
@@ -442,7 +513,7 @@ async function seedBootstrapResource(
     if (!range.ok) return eventFailure(-bootstrapIndex - 1, event, 'write', range.error);
     const target = new Uint8Array(range.value);
     for (const slice of resource.initialData) {
-      const blob = context.tape.blobs.find((candidate) => candidate.hash === slice.hash);
+      const blob = tapeBlob(context.tape, slice.hash);
       if (blob === undefined) {
         return eventFailure(-bootstrapIndex - 1, event, 'lookup', `blob ${slice.hash} is missing`);
       }
@@ -464,6 +535,43 @@ async function seedBootstrapResource(
     mapped.unmap();
   }
   return ok(undefined);
+}
+
+/**
+ * Restore an acceleration structure's capture-start build. Topological
+ * bootstrap order has already created and seeded its geometry buffers and BLAS.
+ */
+function rebuildBootstrapAccelerationStructure(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'createBlas' | 'createTlas' }>,
+  bootstrapIndex: number,
+): Result<void, RhiDebugError> {
+  const eventIndex = -bootstrapIndex - 1;
+  const encoder = context.device.createCommandEncoder({ label: 'rhi-debug:bootstrap-as-build' });
+  if (!encoder.ok) return eventFailure(eventIndex, event, 'encode', encoder.error);
+  const encoded =
+    event.kind === 'createBlas'
+      ? encodeAccelerationStructureBuild(
+          context,
+          encoder.value,
+          event.build === undefined ? [] : [{ blasHandleId: event.handleId, ...event.build }],
+          [],
+          event,
+          eventIndex,
+        )
+      : encodeAccelerationStructureBuild(
+          context,
+          encoder.value,
+          [],
+          event.build === undefined ? [] : [{ tlasHandleId: event.handleId, ...event.build }],
+          event,
+          eventIndex,
+        );
+  if (!encoded.ok) return encoded;
+  const finished = encoder.value.finish();
+  if (!finished.ok) return eventFailure(eventIndex, event, 'finish', finished.error);
+  const submitted = context.queue.submit([finished.value]);
+  return submitted.ok ? ok(undefined) : eventFailure(eventIndex, event, 'submit', submitted.error);
 }
 
 async function seedTextureInitialData(
@@ -490,7 +598,7 @@ async function seedTextureInitialData(
     );
   }
   for (const slice of resource.initialData) {
-    const blob = context.tape.blobs.find((candidate) => candidate.hash === slice.hash);
+    const blob = tapeBlob(context.tape, slice.hash);
     if (blob === undefined) {
       return eventFailure(-bootstrapIndex - 1, event, 'lookup', `blob ${slice.hash} is missing`);
     }
@@ -554,306 +662,6 @@ async function seedTextureInitialData(
   return ok(undefined);
 }
 
-async function replayThroughWork(
-  context: ReplayExecutionContext,
-  index: TapeIndex,
-  work: TapeWorkEntry,
-  signal?: AbortSignal,
-): Promise<Result<void, RhiDebugError>> {
-  for (let eventIndex = 0; eventIndex <= work.eventIndex; eventIndex++) {
-    const event = context.tape.events[eventIndex];
-    if (event === undefined) break;
-    if (signal?.aborted) {
-      return eventFailure(eventIndex, event, 'lookup', 'inspectWork was aborted');
-    }
-    const result = await executeEvent(context, event, eventIndex);
-    if (!result.ok) return result;
-  }
-  return finalizeWorkPass(context, index, work);
-}
-
-async function finalizeWorkPass(
-  context: ReplayExecutionContext,
-  index: TapeIndex,
-  work: TapeWorkEntry,
-): Promise<Result<void, RhiDebugError>> {
-  const pass = index.passes.find((candidate) => candidate.passIndex === work.passIndex);
-  if (pass === undefined) return ok(undefined);
-  const begin = context.tape.events[pass.beginEventIndex];
-  if (begin?.kind !== 'beginRenderPass' && begin?.kind !== 'beginComputePass') return ok(undefined);
-  const entry = context.table.get(begin.passHandleId);
-  if (
-    entry?.resource.kind !== 'encoder' ||
-    (entry.resource.role !== 'render-pass' && entry.resource.role !== 'compute-pass')
-  ) {
-    return eventFailure(
-      pass.beginEventIndex,
-      begin,
-      'lookup',
-      `pass ${begin.passHandleId} is not open`,
-    );
-  }
-  const closed = closeReplayPass(context, entry, begin, pass, work.eventIndex);
-  if (!closed.ok) return closed;
-  const finishEventIndex = findNextEvent(
-    context.tape.events,
-    pass.beginEventIndex,
-    'finish',
-    begin.cmdHandleId,
-  );
-  const encoder = context.table.get(begin.cmdHandleId);
-  if (encoder?.resource.kind !== 'encoder' || encoder.resource.role !== 'command') {
-    return eventFailure(
-      finishEventIndex ?? work.eventIndex,
-      begin,
-      'lookup',
-      `encoder ${begin.cmdHandleId} is not available`,
-    );
-  }
-  const closure = await replayCommandClosure(
-    context,
-    begin.cmdHandleId,
-    (pass.endEventIndex ?? work.eventIndex) + 1,
-    finishEventIndex ?? context.tape.events.length,
-  );
-  if (!closure.ok) return closure;
-  const groupsClosed = closeReplayDebugGroups(
-    context,
-    begin.cmdHandleId,
-    work.eventIndex,
-    encoder.resource.value as RhiCommandEncoder,
-  );
-  if (!groupsClosed.ok) return groupsClosed;
-  const finished = (encoder.resource.value as RhiCommandEncoder).finish();
-  const finishEvent = context.tape.events[finishEventIndex ?? work.eventIndex] ?? begin;
-  if (!finished.ok)
-    return eventFailure(finishEventIndex ?? work.eventIndex, finishEvent, 'finish', finished.error);
-  context.table.set(begin.cmdHandleId, {
-    kind: 'encoder',
-    role: 'command-buffer',
-    value: finished.value,
-  });
-  const submitEventIndex = findNextEvent(
-    context.tape.events,
-    finishEventIndex ?? pass.beginEventIndex,
-    'submit',
-    begin.cmdHandleId,
-  );
-  // Queue uploads are ordered against submission, not command recording.
-  // Include later uploads to retained resources before this submission while
-  // leaving later GPU work and resources outside the selected prefix alone.
-  for (
-    let eventIndex = work.eventIndex + 1;
-    eventIndex < (submitEventIndex ?? work.eventIndex + 1);
-    eventIndex++
-  ) {
-    const event = context.tape.events[eventIndex];
-    if (event?.kind !== 'writeBuffer' && event?.kind !== 'writeTexture') continue;
-    const resourceId =
-      event.kind === 'writeBuffer' ? event.handleId : event.destination.textureHandleId;
-    if (context.table.get(resourceId) === undefined) continue;
-    const uploaded = await executeEvent(context, event, eventIndex);
-    if (!uploaded.ok) return uploaded;
-  }
-  const submitted = context.queue.submit([finished.value]);
-  const submitEvent = context.tape.events[submitEventIndex ?? work.eventIndex] ?? begin;
-  if (!submitted.ok)
-    return eventFailure(
-      submitEventIndex ?? work.eventIndex,
-      submitEvent,
-      'submit',
-      submitted.error,
-    );
-  await context.queue.onSubmittedWorkDone();
-  return ok(undefined);
-}
-
-function closeReplayPass(
-  context: ReplayExecutionContext,
-  entry: NonNullable<ReturnType<ReplayExecutionContext['table']['get']>>,
-  begin: Extract<RhiCallEvent, { kind: 'beginRenderPass' | 'beginComputePass' }>,
-  pass: TapeIndex['passes'][number],
-  selectedEventIndex: number,
-): Result<void, RhiDebugError> {
-  const activeQuery = activeOcclusionQuery(
-    context.tape.events,
-    begin.kind === 'beginRenderPass' ? begin.passHandleId : undefined,
-    pass.beginEventIndex,
-    selectedEventIndex,
-  );
-  if (!activeQuery.ok) return activeQuery;
-  try {
-    if (activeQuery.value !== undefined) {
-      if (entry.resource.role !== 'render-pass') {
-        return eventFailure(
-          activeQuery.value.eventIndex,
-          activeQuery.value.event,
-          'lookup',
-          'an active occlusion query belongs to a non-render pass',
-        );
-      }
-      const endedQuery = (entry.resource.value as RhiRenderPassEncoder).endOcclusionQuery();
-      if (!endedQuery.ok) {
-        return eventFailure(
-          activeQuery.value.eventIndex,
-          activeQuery.value.event,
-          'encode',
-          endedQuery.error,
-        );
-      }
-    }
-    if (entry.resource.role === 'render-pass') {
-      const groupsClosed = closeReplayDebugGroups(
-        context,
-        begin.passHandleId,
-        selectedEventIndex,
-        entry.resource.value as RhiRenderPassEncoder,
-      );
-      if (!groupsClosed.ok) return groupsClosed;
-    }
-    (entry.resource.value as RhiRenderPassEncoder | RhiComputePassEncoder).end();
-  } catch (cause) {
-    return eventFailure(pass.endEventIndex ?? selectedEventIndex, begin, 'encode', cause);
-  }
-  context.table.delete(begin.passHandleId);
-  return ok(undefined);
-}
-
-// Inspection stops at the selected work, before the recorded scope exits.
-// Derive only the still-open scopes from that prefix; never execute later work.
-function closeReplayDebugGroups(
-  context: ReplayExecutionContext,
-  handleId: string,
-  throughEventIndex: number,
-  encoder: RhiCommandEncoder | RhiRenderPassEncoder,
-): Result<void, RhiDebugError> {
-  const open: { event: RhiCallEvent; eventIndex: number }[] = [];
-  for (let eventIndex = 0; eventIndex <= throughEventIndex; eventIndex++) {
-    const event = context.tape.events[eventIndex];
-    if (event === undefined) continue;
-    if (
-      (event.kind === 'pushDebugGroup' && event.cmdHandleId === handleId) ||
-      (event.kind === 'passPushDebugGroup' && event.passHandleId === handleId)
-    ) {
-      open.push({ event, eventIndex });
-    } else if (
-      (event.kind === 'popDebugGroup' && event.cmdHandleId === handleId) ||
-      (event.kind === 'passPopDebugGroup' && event.passHandleId === handleId)
-    ) {
-      open.pop();
-    }
-  }
-  for (let index = open.length - 1; index >= 0; index--) {
-    const scope = open[index];
-    if (scope === undefined) continue;
-    try {
-      encoder.popDebugGroup();
-    } catch (cause) {
-      return eventFailure(scope.eventIndex, scope.event, 'encode', cause);
-    }
-  }
-  return ok(undefined);
-}
-
-async function replayCommandClosure(
-  context: ReplayExecutionContext,
-  cmdHandleId: string,
-  start: number,
-  end: number,
-): Promise<Result<void, RhiDebugError>> {
-  for (let eventIndex = start; eventIndex < end; eventIndex++) {
-    const event = context.tape.events[eventIndex];
-    if (event === undefined || !isCommandClosureEvent(event)) continue;
-    if (event.cmdHandleId !== cmdHandleId) continue;
-    const result = await executeEvent(context, event, eventIndex);
-    if (!result.ok) return result;
-  }
-  return ok(undefined);
-}
-
-type ActiveOcclusionQuery = Extract<RhiCallEvent, { kind: 'beginOcclusionQuery' }>;
-
-function activeOcclusionQuery(
-  events: readonly RhiCallEvent[],
-  passHandleId: string | undefined,
-  beginEventIndex: number,
-  selectedEventIndex: number,
-): Result<
-  { readonly eventIndex: number; readonly event: ActiveOcclusionQuery } | undefined,
-  RhiDebugError
-> {
-  if (passHandleId === undefined) return ok(undefined);
-  let active: { readonly eventIndex: number; readonly event: ActiveOcclusionQuery } | undefined;
-  for (let eventIndex = beginEventIndex + 1; eventIndex <= selectedEventIndex; eventIndex++) {
-    const event = events[eventIndex];
-    if (event === undefined || !('passHandleId' in event) || event.passHandleId !== passHandleId)
-      continue;
-    if (event.kind === 'beginOcclusionQuery') {
-      if (active !== undefined) {
-        return eventFailure(
-          eventIndex,
-          event,
-          'encode',
-          'an occlusion query is already active for this render pass',
-        );
-      }
-      active = { eventIndex, event };
-    } else if (event.kind === 'endOcclusionQuery') {
-      if (active === undefined) {
-        return eventFailure(
-          eventIndex,
-          event,
-          'encode',
-          'an occlusion query ended without a matching begin',
-        );
-      }
-      active = undefined;
-    }
-  }
-  return ok(active);
-}
-
-function isCommandClosureEvent(event: RhiCallEvent): event is Extract<
-  RhiCallEvent,
-  {
-    kind:
-      | 'resolveQuerySet'
-      | 'copyBufferToBuffer'
-      | 'copyBufferToTexture'
-      | 'copyTextureToBuffer'
-      | 'copyTextureToTexture'
-      | 'clearBuffer';
-  }
-> {
-  switch (event.kind) {
-    case 'resolveQuerySet':
-    case 'copyBufferToBuffer':
-    case 'copyBufferToTexture':
-    case 'copyTextureToBuffer':
-    case 'copyTextureToTexture':
-    case 'clearBuffer':
-      return true;
-    default:
-      return false;
-  }
-}
-
-function findNextEvent(
-  events: readonly RhiCallEvent[],
-  start: number,
-  kind: 'finish' | 'submit',
-  commandId: string,
-): number | undefined {
-  for (let index = start + 1; index < events.length; index++) {
-    const event = events[index];
-    if (event?.kind === 'finish' && kind === 'finish' && event.cmdHandleId === commandId)
-      return index;
-    if (event?.kind === 'submit' && kind === 'submit' && event.cmdHandleIds.includes(commandId))
-      return index;
-  }
-  return undefined;
-}
-
 function positionError(requested: number, available: number): Result<never, RhiDebugError> {
   return err(
     createRhiDebugError('replay-position-invalid', {
@@ -865,42 +673,53 @@ function positionError(requested: number, available: number): Result<never, RhiD
 
 async function readWorkAttachment(
   context: ReplayExecutionContext,
-  index: TapeIndex,
-  work: TapeWorkEntry,
+  outputs: readonly WorkOutput[],
 ): Promise<Result<ReplayReadbackResult, RhiDebugError>> {
-  const pass = index.passes.find((candidate) => candidate.passIndex === work.passIndex);
-  const begin = pass === undefined ? undefined : context.tape.events[pass.beginEventIndex];
-  if (begin?.kind !== 'beginRenderPass') {
+  const selected =
+    outputs.find((output) => output.role === 'color') ??
+    outputs.find((output) => output.role === 'depth') ??
+    outputs.find((output) => output.role === 'storage-texture');
+  if (selected === undefined) {
     return err(
       createRhiDebugError('readback-unsupported', {
         stage: 'readback',
-        reason: 'work has no color attachment',
+        reason: 'work has no color, depth or storage texture output',
       }),
     );
   }
-  const attachmentIndex = begin.colorAttachmentViewHandleIds.findIndex(
-    (candidate) => candidate !== undefined,
-  );
-  // finalizeWorkPass has ended the pass and resolved the selected work.
-  // Keep the resolve target paired with its color slot, including sparse MRTs.
-  const viewId =
-    begin.colorAttachmentResolveTargetHandleIds?.[attachmentIndex] ??
-    begin.colorAttachmentViewHandleIds[attachmentIndex];
-  if (viewId === undefined) {
-    return err(
-      createRhiDebugError('readback-unsupported', {
-        stage: 'readback',
-        reason: 'render pass has no readable color attachment view',
-      }),
-    );
-  }
+  return readOutput(context, selected.request);
+}
+
+function readOutput(
+  context: ReplayExecutionContext,
+  request: WorkOutput['request'],
+): Promise<Result<ReplayReadbackResult, RhiDebugError>> {
   return readReplayResource(
     context.device,
     context.table,
-    viewId,
-    undefined,
+    request.resourceId,
+    request.subresource,
     context.createShaderModule,
   );
 }
 
-export type { BufferReadbackRange, ReplayReadbackResult } from './readback';
+function withWork(
+  read: Result<ReplayReadbackResult, RhiDebugError>,
+  workIndex: number,
+): Result<ReplayReadbackResult, RhiDebugError> {
+  if (!read.ok) return read;
+  return ok({
+    ...read.value,
+    provenance: { ...read.value.provenance, selectedWorkIndex: workIndex },
+  });
+}
+
+export { type BatchReadRequest, type BatchReadResults, bindingReadRequest } from './batch';
+export { type WorkOutput, workOutputs } from './outputs';
+export type {
+  BufferReadbackRange,
+  ReadbackSubresource,
+  ReplayReadbackResult,
+  TextureSubresource,
+} from './readback';
+export type { FrameTiming, PassTiming } from './timing';

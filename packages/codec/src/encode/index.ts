@@ -7,12 +7,10 @@
 
 export {
   _setZstdEncoderImporter,
-  _zstdEncodeInitCount,
   compressZstd,
 } from '../encode-impl.js';
 export type { BasisEncodeMode, BasisEncodeOptions } from './basis-encode.js';
 export {
-  _basisEncoderInitCount,
   _setBasisEncoderImporter,
   basisEncode,
   initBasisEncoder,

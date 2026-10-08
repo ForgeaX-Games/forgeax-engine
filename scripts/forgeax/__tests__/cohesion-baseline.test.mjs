@@ -55,8 +55,8 @@ test('M0 owner barrels preserve the touched public symbols', () => {
     ['packages/types/src/index.ts', ['AssetRef', 'AssetEnvelope']],
     ['packages/devkit/src/index.ts', ['readProjectFacts', 'createInitPlan']],
     ['packages/pack/src/index.ts', ['validateProducerContract', 'validateProducerOutputs']],
-    ['packages/pack/src/inventory/index.ts', ['scanInventory']],
-    ['packages/scene/src/instances/scene-instances.ts', ['SceneInstanceStatePayload']],
+    ['packages/pack/src/scanner.ts', ['scanInventory']],
+    ['packages/scene/src/instances/scene-instances.ts', ['SceneInstanceState']],
   ];
   for (const [path, symbols] of sources) {
     const source = readFileSync(resolve(root, path), 'utf8');

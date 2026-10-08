@@ -27,7 +27,6 @@
 
 import { type Mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
-import type { RectAreaWorldFrame } from './render-system-extract';
 
 // ── types ──────────────────────────────────────────────────────────────────
 
@@ -173,36 +172,6 @@ export function deriveCullingRadius(range: number, intensity: number, threshold 
   }
   const derived = Math.sqrt(intensity / threshold);
   return Math.min(derived, 1000);
-}
-
-/** Conservative bounding-sphere radius for a finite Rect and its light range. */
-export function rectAreaClusterRadius(frame: RectAreaWorldFrame, range: number): number {
-  return Math.max(0, range) + Math.hypot(frame.halfWidth, frame.halfHeight);
-}
-
-/** Test the finite Rect's closest-point distance against a strict range window. */
-export function rectAreaIsInRange(
-  frame: RectAreaWorldFrame,
-  point: ArrayLike<number>,
-  range: number,
-): boolean {
-  const toPoint = vec3.create(
-    (point[0] ?? 0) - (frame.center[0] ?? 0),
-    (point[1] ?? 0) - (frame.center[1] ?? 0),
-    (point[2] ?? 0) - (frame.center[2] ?? 0),
-  );
-  const localX = Math.min(
-    frame.halfWidth,
-    Math.max(-frame.halfWidth, vec3.dot(toPoint, frame.axisX)),
-  );
-  const localY = Math.min(
-    frame.halfHeight,
-    Math.max(-frame.halfHeight, vec3.dot(toPoint, frame.axisY)),
-  );
-  const dx = (toPoint[0] ?? 0) - (frame.axisX[0] ?? 0) * localX - (frame.axisY[0] ?? 0) * localY;
-  const dy = (toPoint[1] ?? 0) - (frame.axisX[1] ?? 0) * localX - (frame.axisY[1] ?? 0) * localY;
-  const dz = (toPoint[2] ?? 0) - (frame.axisX[2] ?? 0) * localX - (frame.axisY[2] ?? 0) * localY;
-  return dx * dx + dy * dy + dz * dz < range * range;
 }
 
 // ── view_z_to_z_slice ──────────────────────────────────────────────────────

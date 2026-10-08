@@ -10,7 +10,13 @@ it('retains bounded object candidates and independently validates shared Card sa
     await mkdir(dir, { recursive: true });
     for (const r of results) {
       await writeFile(`${dir}/global-cards-${r.mode}.rhitape`, r.tape);
-      for (const key of ['candidates', 'samples', 'hits'] as const)
+      for (const key of [
+        'candidates',
+        'samples',
+        'hits',
+        'borrowedCandidates',
+        'borrowedSamples',
+      ] as const)
         await writeFile(`${dir}/global-cards-${r.mode}-${key}.bin`, r[key]);
     }
   }

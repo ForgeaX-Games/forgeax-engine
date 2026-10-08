@@ -26,6 +26,7 @@
 import { mat4 } from '@forgeax/engine-math';
 import {
   type BindGroup,
+  type BindGroupEntry,
   type BindGroupLayout,
   type Buffer,
   err,
@@ -355,6 +356,47 @@ export const PREFILTER_SIZE = 128;
 export const PREFILTER_MIP_LEVELS = 5;
 export const BRDF_LUT_SIZE = 256;
 
+/** Face (mat4x4f) and prefilter (vec4f) uniforms each own one dynamic-offset-aligned slot. */
+export const IBL_UNIFORM_SLOT_STRIDE = 256;
+const FACE_UNIFORM_BYTES = 64;
+const PREFILTER_UNIFORM_BYTES = 16;
+
+export function prefilterSubpassIndex(mip: number, face: number): number {
+  return mip * 6 + face;
+}
+
+export function iblFaceUniformEntry(buffer: Buffer, face: number): BindGroupEntry {
+  return {
+    binding: 0,
+    resource: {
+      kind: 'buffer',
+      value: { buffer, offset: face * IBL_UNIFORM_SLOT_STRIDE, size: FACE_UNIFORM_BYTES },
+    },
+  };
+}
+
+export function iblPrefilterGroup0Entries(
+  faceUniforms: Buffer,
+  prefilterUniforms: Buffer,
+  mip: number,
+  face: number,
+): BindGroupEntry[] {
+  return [
+    iblFaceUniformEntry(faceUniforms, face),
+    {
+      binding: 1,
+      resource: {
+        kind: 'buffer',
+        value: {
+          buffer: prefilterUniforms,
+          offset: prefilterSubpassIndex(mip, face) * IBL_UNIFORM_SLOT_STRIDE,
+          size: PREFILTER_UNIFORM_BYTES,
+        },
+      },
+    },
+  ];
+}
+
 /**
  * Create 4 independent GPURenderPipelines + their shared / per-pass bind
  * group layouts. Pipeline slots are stored on the per-device cache and
@@ -623,8 +665,8 @@ export interface IblPrecomputeError {
 /**
  * Execute the 4 IBL precompute passes (equirect-to-cube / irradiance /
  * prefilter / brdf-lut) as ordered, stage-bounded submissions. Outputs stay
- * candidate-local until every queue completion fence and generation check
- * pass.
+ * candidate-local until the final queue completion fence and generation check
+ * pass. Each existing bounded stage retains its submission on the ordered queue.
  *
  * Counter invariant (AC-20, plan D-7 / N-3): the
  * `irradiance/prefilter/brdfLut BakeCount` counters are incremented
@@ -640,6 +682,7 @@ export async function runIblPrecompute(
   opts: RunIblPrecomputeOptions,
 ): Promise<Result<{ submitted: boolean }, IblPrecomputeError>> {
   const { device, scope } = opts;
+  if (!scope.isAlive()) return err(badAlloc('device-scope-generation'));
   const cache = getOrCreateIblCache(scope);
   const outputFormat = cache.outputFormat ?? 'rgba16float';
   const generation = scope.generation;
@@ -801,14 +844,22 @@ export async function runIblPrecompute(
   let encoder: RhiCommandEncoder = encoderResult.value;
 
   const submitStage = async (stage: string, createNextEncoder: boolean) => {
+    if (!scope.isAlive() || scope.generation !== generation) {
+      return err(badAlloc(`${stage}-device-scope-generation`));
+    }
     const finishRes = encoder.finish();
     if (!finishRes.ok) return err(badAlloc(`${stage}-finish`, finishRes.error));
     const submitRes = device.queue.submit([finishRes.value]);
     if (!submitRes.ok) return err(badAlloc(`${stage}-submit`, submitRes.error));
-    try {
-      await device.queue.onSubmittedWorkDone();
-    } catch {
-      return err(badAlloc(`${stage}-fence`));
+    // Immutable face/mip uniform slots and same-queue order preserve every
+    // dependency. Fence only the final submission before promoting outputs;
+    // avoid a CPU/GPU roundtrip for every face-sized submission.
+    if (!createNextEncoder) {
+      try {
+        await device.queue.onSubmittedWorkDone();
+      } catch {
+        return err(badAlloc(`${stage}-fence`));
+      }
     }
     if (!scope.isAlive() || scope.generation !== generation) {
       return err(badAlloc(`${stage}-device-scope-generation`));
@@ -898,23 +949,10 @@ export async function runIblPrecompute(
         },
       ],
     });
-    // Face uniform: dynamic offset = face * 256.
     const faceBgResult = device.createBindGroup({
       label: `ibl-face-bg-${face}`,
       layout: faceUniformsBgl,
-      entries: [
-        {
-          binding: 0,
-          resource: {
-            kind: 'buffer',
-            value: {
-              buffer: opts.faceUniformsBuffer,
-              offset: face * 256,
-              size: 64,
-            },
-          },
-        },
-      ],
+      entries: [iblFaceUniformEntry(opts.faceUniformsBuffer, face)],
     });
     if (!faceBgResult.ok) return fail('face-bg', faceBgResult.error);
     pass.setPipeline(equirectPipeline);
@@ -946,19 +984,7 @@ export async function runIblPrecompute(
     const faceBgResult = device.createBindGroup({
       label: `ibl-irr-face-bg-${face}`,
       layout: faceUniformsBgl,
-      entries: [
-        {
-          binding: 0,
-          resource: {
-            kind: 'buffer',
-            value: {
-              buffer: opts.faceUniformsBuffer,
-              offset: face * 256,
-              size: 64,
-            },
-          },
-        },
-      ],
+      entries: [iblFaceUniformEntry(opts.faceUniformsBuffer, face)],
     });
     if (!faceBgResult.ok) return fail('irr-face-bg', faceBgResult.error);
     pass.setPipeline(irradiancePipeline);
@@ -977,7 +1003,7 @@ export async function runIblPrecompute(
     const mipFaceViews = prefMipViews[mip];
     if (mipFaceViews === undefined) return fail('prefilter-mip-views');
     for (let face = 0; face < 6; face++) {
-      const subIdx = mip * 6 + face;
+      const subIdx = prefilterSubpassIndex(mip, face);
       const mipFaceView = mipFaceViews[face];
       if (mipFaceView === undefined) return fail('prefilter-face-view');
       const pass: RhiRenderPassEncoder = encoder.beginRenderPass({
@@ -994,30 +1020,12 @@ export async function runIblPrecompute(
       const bgResult = device.createBindGroup({
         label: `ibl-pref-bg-${subIdx}`,
         layout: prefilterGroup0Bgl,
-        entries: [
-          {
-            binding: 0,
-            resource: {
-              kind: 'buffer',
-              value: {
-                buffer: opts.faceUniformsBuffer,
-                offset: face * 256,
-                size: 64,
-              },
-            },
-          },
-          {
-            binding: 1,
-            resource: {
-              kind: 'buffer',
-              value: {
-                buffer: opts.prefilterUniformsBuffer,
-                offset: subIdx * 256,
-                size: 16,
-              },
-            },
-          },
-        ],
+        entries: iblPrefilterGroup0Entries(
+          opts.faceUniformsBuffer,
+          opts.prefilterUniformsBuffer,
+          mip,
+          face,
+        ),
       });
       if (!bgResult.ok) return fail('pref-bg', bgResult.error);
       pass.setPipeline(prefilterPipeline);

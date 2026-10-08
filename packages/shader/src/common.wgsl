@@ -86,15 +86,24 @@ fn ditherUnorm8(value : vec3<f32>, pixelPosition : vec2<f32>) -> vec3<f32> {
 // aligned with Bevy's bevy_view::common and matches charter proposition 5
 // (consistent abstraction - one View struct everywhere).
 
-// View UBO: 1168-byte payload, 1280-byte dynamic slot (256-byte alignment).
+// View UBO: 1296-byte payload, 1296-byte dynamic slot (256-byte alignment).
 // view-ubo.ts owns matching host writes. Existing fields retain their offsets:
 // [0..528) camera and directional-shadow facts; [528..784) spot matrices;
 // [784..1024) temporal and cloud-shadow facts; [1024..1120) clipping planes;
 // [1120..1136) clipping control (count, intersection, clipShadows, reserved);
 // [1136..1168) analytic fog (color+density, heightFalloff/maxOpacity/translucent slot).
+struct AtmosphereMedium {
+  originRadius: vec4<f32>, // world ground origin in km, ground radius
+  rayleigh: vec4<f32>, // scattering RGB, density scale height
+  mie: vec4<f32>, // scattering, absorption, scale height, anisotropy
+  absorption: vec4<f32>, // absorption RGB, peak height
+  ground: vec4<f32>, // albedo RGB, absorption layer half width
+  geometry: vec4<f32>, // atmosphere height, MS scale, AP start, AP distance scale
+};
 struct View {
   worldViewProj   : mat4x4<f32>,
   lightDir        : vec3<f32>,
+  lightingChannels : u32,
   lightColor      : vec3<f32>,
   cameraPos       : vec3<f32>,
   lightViewProj_A : mat4x4<f32>,
@@ -127,20 +136,24 @@ struct View {
   // Renderer-owned texel-snapped cloud shadow projection. The map itself is
   // group(0) bindings 16/17; these lanes carry its world-space basis and
   // bounded range/validity so every receiver can sample by world position.
-  cloudShadowOrigin : vec4<f32>,
-  cloudShadowRight : vec4<f32>,
+  cloudShadowOrigin : vec4<f32>, // xyz projection origin, w cloud base height
+  cloudShadowRight : vec4<f32>, // xyz projection right, w cloud thickness
   cloudShadowUp : vec4<f32>,
   cloudShadowProjection : vec4<f32>,
   clippingPlanes : array<vec4<f32>, 6>,
   clippingControl : vec4<f32>,
   // Analytic height fog shared by the opaque fog pass and translucent writers.
-  // fogHeightOpacity = (heightFalloff, maxOpacity, translucent-writer slot flag, reserved).
+  // fogHeightOpacity = (heightFalloff, maxOpacity, translucent-writer slot flag, frame time).
+  // The renderer frame clock is exposed through SurfaceInput.frameTime.
   fogColorDensity : vec4<f32>,
   fogHeightOpacity : vec4<f32>,
+  atmosphere : AtmosphereMedium,
+  // reference sample count (zero = LUT), sun radius, AP range km, enabled.
+  atmosphereControl : vec4<f32>,
 };
 
 // Mesh contains only independent transform and temporal facts. Direct draws
-// bind aligned 256-byte slots; GPU scene arrays pack the 144-byte storage row.
+// bind aligned 256-byte slots; GPU scene arrays pack the 160-byte storage row.
 struct Mesh {
   worldFromLocal : mat4x4<f32>,
 #if STORAGE_BUFFER_AVAILABLE == true
@@ -149,12 +162,9 @@ struct Mesh {
   // meshReceivesShadows), z = signed LOD coverage, w = GPU skin material row.
   // This vec4 is the sole host/shader metadata ABI.
   temporal : vec4<f32>,
-#ifdef VISIBLE_SURFACE_AVAILABLE
-  // One-based frame row base and direct instance count. Scene-index draws
-  // carry the already-resolved row in x; direct draws add instance_index.
-  visibleSurface : vec4<u32>,
 #endif
-#endif
+  // x/y: visible-surface row/count; z: lossless surface direct-light mask.
+  surface : vec4<u32>,
 };
 
 // GPU Scene rows read directly by scene-index vertex entries. Render derives
@@ -170,7 +180,8 @@ struct GpuScenePrimitive {
   instanceStart: u32,
   instanceCount: u32,
   assetHandle: u32,
-  localBoundsMin: vec4<f32>,
+  localBoundsMin: vec3<f32>,
+  lightingChannels: u32,
   localBoundsMax: vec4<f32>,
 };
 
@@ -223,9 +234,9 @@ struct ProbeBlendRecord {
 
 // feat-20260519-light-casters-point-spot-pbr M4 / w21 (D-S1 + D-S2 +
 // AC-04 b/c + AC-05 binding declaration). Punctual-light std430 storage
-// types use the shared five-row host ABI in `light-buffer-layout.ts`:
+// types use the shared six-row host ABI in `light-buffer-layout.ts`:
 //
-//   Point/Spot/Rect direct slot (80 B / 20 u32-or-float lanes):
+//   Point/Spot/Rect direct slot (96 B / 24 u32-or-float lanes):
 //     [ 0..2 ] position vec3<f32>
 //     [   3 ] invRangeSquared f32 (Bevy color_inverse_square_range.w; 0
 //             collapses range falloff to a pure 1/d^2 inverse-square law)
@@ -255,7 +266,7 @@ struct ProbeBlendRecord {
 // prev.size, this.alignof) - for f32 alignof=4 the round-up is a
 // no-op, so position[3] / color[3] / direction[3] sit at byte
 // offsets 12 / 28 / 44 with zero internal padding). Point, Spot, and Rect all
-// use the unified 80 B host packer; this shared slot is the sole local-light
+// use the unified 96 B host packer; this shared slot is the sole local-light
 // carrier.
 //
 struct DirectLightSlot {
@@ -264,6 +275,7 @@ struct DirectLightSlot {
   direction           : vec4<f32>, // row2: primary axis + second angular fact
   auxiliary           : vec4<f32>, // row3: auxiliary Rect axis
   metadata : vec4<u32>,
+  channels : vec4<u32>,
 };
 
 @group(0) @binding(0) var<uniform> view : View;
@@ -434,7 +446,7 @@ struct ShadowCasterCascade {
 // PER_INSTANCE_REGION axis is declared in sprite.wgsl ONLY (D-4 keeps
 // pbr / unlit at their existing 2-variant count). When the sprite
 // pipeline composes this module with `PER_INSTANCE_REGION = true`, the
-// InstanceData struct grows from 64 B (mat4) to 80 B (mat4 + vec4) so
+// InstanceData struct grows from 64 B (mat4) to 96 B (mat4 + vec4) so
 // the record stage can interleave per-instance UV regions into the same
 // single GPU buffer that already carries the per-instance mat4 (single
 // binding slot, BGL zero-modification per D-R-4). The conditional sits
@@ -443,7 +455,7 @@ struct ShadowCasterCascade {
 // + every non-sprite material).
 //
 // Uniform-fallback safety (R-6): worst case is
-//   80 B × MAX_UNIFORM_INSTANCES (128) = 10240 B
+//   96 B × MAX_UNIFORM_INSTANCES (128) = 10240 B
 // which is below the WebGL2 UBO floor of 16384 B; the 128 cap survives
 // the stride bump.
 struct InstanceData {
@@ -485,6 +497,7 @@ struct SceneIndexDraw {
   // Retained ProbeBlendRecord identity: (primitive + 1, generation).
   probe : vec2<u32>,
   receivesShadows : bool,
+  lightingChannels : u32,
 };
 
 // Instanced rows compose the primitive root with the instance-local
@@ -503,6 +516,7 @@ fn sceneIndexDraw(instanceRow : u32) -> SceneIndexDraw {
     select(1.0, 0.0, (primitive.flags & GPU_SCENE_PRIMITIVE_MOTION_INVALID) != 0u),
   );
   draw.probe = vec2<u32>(instance.primitiveIndex + 1u, primitive.generation);
+  draw.lightingChannels = primitive.lightingChannels;
   draw.receivesShadows = (primitive.flags & GPU_SCENE_PRIMITIVE_NO_SHADOW_RECEIVE) == 0u;
   return draw;
 }
@@ -561,4 +575,17 @@ fn applyLodCoverage(position : vec2<f32>, fade : f32) {
   let noise = fract(52.9829189 * fract(dot(floor(position), vec2<f32>(0.06711056, 0.00583715))));
   if (fade > 0.0 && noise < fade) { discard; }
   if (fade < 0.0 && noise >= -fade) { discard; }
+}
+
+#ifdef ATMOSPHERE_AVAILABLE
+@group(0) @binding(18) var atmosphereTransmittance: texture_2d<f32>;
+@group(0) @binding(19) var atmosphereMultiple: texture_2d<f32>;
+@group(0) @binding(20) var atmosphereAerialLuminance: texture_3d<f32>;
+@group(0) @binding(21) var atmosphereAerialTransmittance: texture_3d<f32>;
+@group(0) @binding(23) var atmosphereDistantSkyLight: texture_2d<f32>;
+#endif
+
+// Surface direct-light matching is independent of camera visibility and casting.
+fn lightingChannelsMatch(light : u32, receiver : u32) -> bool {
+  return (light & receiver) != 0u;
 }

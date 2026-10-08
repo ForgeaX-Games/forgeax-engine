@@ -195,7 +195,7 @@ console.log(`[parity] Leg A PASS - real codec chain reproduces the checkerboard 
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.log(`[parity] Leg B SKIP - dawn.node absent (GPU block-upload liveness deferred to CI): ${err.message}`);
   console.log('[parity] PASS (Leg A green; Leg B deferred to a GPU host / CI)');

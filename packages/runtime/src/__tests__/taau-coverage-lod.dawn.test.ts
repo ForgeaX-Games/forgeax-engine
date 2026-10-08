@@ -122,10 +122,13 @@ it('draws TAAU output coverage for GPU-claimed LOD meshes through indirect rows'
     const pending = await frame(true);
     if (!pending) throw new Error('Missing TAAU coverage capture');
     const tape = decodeTape((await pending).unwrap().bytes).unwrap();
-    const coverage = buildFrameModel(tape).works.filter(
+    const model = buildFrameModel(tape);
+    const coverage = model.works.filter(
       (work) =>
         work.pipeline.shaders.some((shader) => shader.entryPoint === 'fs_temporal') &&
-        JSON.stringify(work.pipeline.descriptor ?? null).includes('"r8unorm"'),
+        JSON.stringify(tape.events[model.passes[work.passIndex]?.beginEventIndex ?? -1]).includes(
+          'standard-scene-coverage',
+        ),
     );
     // The direct recorder would issue drawIndexed here; the claimed LOD
     // submesh must reuse the culled GPU-driven indirect rows instead: one
@@ -146,22 +149,26 @@ it('draws TAAU output coverage for GPU-claimed LOD meshes through indirect rows'
     try {
       const attachment = (await replay.inspectWork(work.workIndex, ['pixels'])).unwrap().attachment;
       if (!attachment) throw new Error('Missing TAAU coverage readback');
-      expect(attachment.format).toBe('r8unorm');
+      expect(attachment.format).toBe('rgba16float');
       const row = attachment.bytes.length / LOD_SIZE;
-      const at = (x: number, y: number) => attachment.bytes[y * row + x];
+      const at = (x: number, y: number) =>
+        new DataView(attachment.bytes.buffer, attachment.bytes.byteOffset).getUint16(
+          y * row + x * 8 + 4,
+          true,
+        );
       // Output-resolution coverage: the plane spans [-1, 1] of a [-2, 2] view.
       for (const [x, y] of [
         [64, 64],
         [40, 40],
         [88, 88],
       ] as const)
-        expect(at(x, y), `covered ${x},${y}`).toBe(255);
+        expect(at(x, y), `covered ${x},${y}`).toBeLessThan(0x8000);
       for (const [x, y] of [
         [4, 4],
         [123, 64],
         [64, 123],
       ] as const)
-        expect(at(x, y), `uncovered ${x},${y}`).toBe(0);
+        expect(at(x, y), `uncovered ${x},${y}`).toBe(0xbc00);
     } finally {
       (await replay.dispose()).unwrap();
     }

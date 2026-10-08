@@ -1,0 +1,6 @@
+Run: https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37312383890
+Head: 3144e11ba41374497f4ef7ae189d0c9f48a40b8b
+Both local Host and actual Engine Worker passed initial ordered feedback and >=60 completed frames, then failed new load-frame collection.
+AssertionError: expected 0 to be greater than or equal to 10
+Cause: { kind: load-frame, ...load } was overwritten by load.kind=load. Emit { ...load, kind: load-frame } so the observation discriminator survives.
+No timeout or sample budget changed.

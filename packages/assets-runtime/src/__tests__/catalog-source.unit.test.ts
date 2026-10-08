@@ -1,6 +1,6 @@
 import type { CatalogEntry } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
-import { createCatalogSource } from '../catalog-source';
+import { type CatalogListener, createCatalogSource } from '../catalog-source';
 import { parseCatalog } from '../registry/catalog';
 
 const entry: CatalogEntry = {
@@ -117,10 +117,13 @@ describe('CatalogSource', () => {
   it('forwards an optional catalog subscription', () => {
     const listener = vi.fn();
     const unsubscribe = vi.fn();
-    const subscribe = vi.fn(() => unsubscribe);
+    const subscribe = vi.fn((_forward: CatalogListener) => unsubscribe);
     const source = createCatalogSource({ subscribe });
 
     expect(source.subscribe(listener)).toBe(unsubscribe);
-    expect(subscribe).toHaveBeenCalledWith(listener);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    const delta = { added: [], changed: [], removed: [] };
+    subscribe.mock.calls[0]?.[0](delta);
+    expect(listener).toHaveBeenCalledWith(delta);
   });
 });

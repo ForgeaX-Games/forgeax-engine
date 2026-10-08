@@ -43,6 +43,7 @@ export { createCliRhiDebugOperationContext } from './rhi-debug/cli-context.js';
 export type {
   ArtifactRef,
   CapturedRhiTape,
+  ReplayBackendLease,
   RhiCaptureFrameValue,
   RhiDebugOperationContext,
   RhiDebugOperationDescriptor,

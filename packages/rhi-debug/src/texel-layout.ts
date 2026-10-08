@@ -16,6 +16,12 @@
 // full snapshot + faithful seed round-trips each color format with a known texel
 // block footprint, including block-compressed formats.
 
+import {
+  isCompressedFormat,
+  type TextureFormatBlock,
+  textureFormatBlock,
+} from '@forgeax/engine-types';
+
 /**
  * Bytes per texel for uncompressed color formats and depth32float. Block-compressed formats use
  * {@link textureBlockLayout} because their bytes are addressed by blocks.
@@ -68,83 +74,17 @@ const TEXEL_BYTES: Partial<Record<GPUTextureFormat, number>> = {
   // packed
   rgb10a2unorm: 4,
   rg11b10ufloat: 4,
-};
-
-export interface TextureBlockLayout {
-  readonly blockWidth: number;
-  readonly blockHeight: number;
-  readonly bytesPerBlock: number;
-}
-
-const COMPRESSED_BLOCKS: Partial<Record<GPUTextureFormat, TextureBlockLayout>> = {
-  // BCn: all formats use 4x4 blocks; BC1/BC4 are 8 bytes, the rest 16.
-  'bc1-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'bc1-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'bc2-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc2-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc3-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc3-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc4-r-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'bc4-r-snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'bc5-rg-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc5-rg-snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc6h-rgb-ufloat': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc6h-rgb-float': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc7-rgba-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'bc7-rgba-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  // ETC2/EAC: all formats use 4x4 blocks; one or two 64-bit blocks.
-  'etc2-rgb8unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'etc2-rgb8unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'etc2-rgb8a1unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'etc2-rgb8a1unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'etc2-rgba8unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'etc2-rgba8unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'eac-r11unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'eac-r11snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 8 },
-  'eac-rg11unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'eac-rg11snorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  // ASTC uses 16-byte blocks with a format-specific footprint.
-  'astc-4x4-unorm': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'astc-4x4-unorm-srgb': { blockWidth: 4, blockHeight: 4, bytesPerBlock: 16 },
-  'astc-5x4-unorm': { blockWidth: 5, blockHeight: 4, bytesPerBlock: 16 },
-  'astc-5x4-unorm-srgb': { blockWidth: 5, blockHeight: 4, bytesPerBlock: 16 },
-  'astc-5x5-unorm': { blockWidth: 5, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-5x5-unorm-srgb': { blockWidth: 5, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-6x5-unorm': { blockWidth: 6, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-6x5-unorm-srgb': { blockWidth: 6, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-6x6-unorm': { blockWidth: 6, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-6x6-unorm-srgb': { blockWidth: 6, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-8x5-unorm': { blockWidth: 8, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-8x5-unorm-srgb': { blockWidth: 8, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-8x6-unorm': { blockWidth: 8, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-8x6-unorm-srgb': { blockWidth: 8, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-8x8-unorm': { blockWidth: 8, blockHeight: 8, bytesPerBlock: 16 },
-  'astc-8x8-unorm-srgb': { blockWidth: 8, blockHeight: 8, bytesPerBlock: 16 },
-  'astc-10x5-unorm': { blockWidth: 10, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-10x5-unorm-srgb': { blockWidth: 10, blockHeight: 5, bytesPerBlock: 16 },
-  'astc-10x6-unorm': { blockWidth: 10, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-10x6-unorm-srgb': { blockWidth: 10, blockHeight: 6, bytesPerBlock: 16 },
-  'astc-10x8-unorm': { blockWidth: 10, blockHeight: 8, bytesPerBlock: 16 },
-  'astc-10x8-unorm-srgb': { blockWidth: 10, blockHeight: 8, bytesPerBlock: 16 },
-  'astc-10x10-unorm': { blockWidth: 10, blockHeight: 10, bytesPerBlock: 16 },
-  'astc-10x10-unorm-srgb': { blockWidth: 10, blockHeight: 10, bytesPerBlock: 16 },
-  'astc-12x10-unorm': { blockWidth: 12, blockHeight: 10, bytesPerBlock: 16 },
-  'astc-12x10-unorm-srgb': { blockWidth: 12, blockHeight: 10, bytesPerBlock: 16 },
-  'astc-12x12-unorm': { blockWidth: 12, blockHeight: 12, bytesPerBlock: 16 },
-  'astc-12x12-unorm-srgb': { blockWidth: 12, blockHeight: 12, bytesPerBlock: 16 },
+  rgb9e5ufloat: 4,
 };
 
 /** Return the WebGPU texel-block footprint for each supported color format. */
 export function textureBlockLayout(
   format: GPUTextureFormat | undefined,
-): TextureBlockLayout | undefined {
+): TextureFormatBlock | undefined {
   if (format === undefined) return undefined;
-  return (
-    COMPRESSED_BLOCKS[format] ??
-    (TEXEL_BYTES[format] === undefined
-      ? undefined
-      : { blockWidth: 1, blockHeight: 1, bytesPerBlock: TEXEL_BYTES[format] })
-  );
+  if (isCompressedFormat(format)) return textureFormatBlock(format);
+  const bytesPerBlock = TEXEL_BYTES[format];
+  return bytesPerBlock === undefined ? undefined : { blockWidth: 1, blockHeight: 1, bytesPerBlock };
 }
 
 // ============================================================================
@@ -169,7 +109,7 @@ export interface FormatInfo {
   /** Channels stored blue-first in memory (swizzle B<->R when decoding). */
   readonly bgra?: boolean;
   /** Bit-packed layout (channels share one 32-bit word) needing special unpack. */
-  readonly packed?: 'rgb10a2unorm' | 'rg11b10ufloat';
+  readonly packed?: 'rgb10a2unorm' | 'rg11b10ufloat' | 'rgb9e5ufloat';
 }
 
 // Keyed to the same uncompressed color formats as TEXEL_BYTES. Depth/stencil and
@@ -214,6 +154,7 @@ const FORMAT_INFO: Partial<Record<GPUTextureFormat, FormatInfo>> = {
   // packed (channels share one 32-bit word; decoded by bit-field)
   rgb10a2unorm: { channels: 4, channelType: 'unorm', packed: 'rgb10a2unorm' },
   rg11b10ufloat: { channels: 3, channelType: 'ufloat', packed: 'rg11b10ufloat' },
+  rgb9e5ufloat: { channels: 3, channelType: 'ufloat', packed: 'rgb9e5ufloat' },
 };
 
 /**

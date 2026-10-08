@@ -50,6 +50,20 @@ maps until its outer generation commits. Failed, aborted, or discarded
 candidates therefore leave the accepted Catalog, Pack body, artifact bytes,
 and imported GUID set available for the next same-source retry.
 
+The Node-only `http-artifact` entry prepares gzip level-1 HTTP representations
+serially before dev readiness and generation commit. Representations are weakly
+owned by the accepted raw byte bodies; they do not replace Pack artifacts or
+their decoded-byte integrity. HTTP responses only select prepared bodies, honor
+`Accept-Encoding` quality values, merge `Vary`, and retain identity for HEAD and
+byte-range requests. Unprepared, unprofitable, or failed encodings serve the
+original bytes when identity is acceptable; otherwise the response is 406 with
+an empty body. Existing HTTP encodings must also be acceptable to the client.
+Encoding failures emit a warning instead of retrying per request.
+
+> [!IMPORTANT]
+> HTTP compression is a lossless delivery representation. It does not establish
+> frame-time, scene-readiness, or visual-quality acceptance.
+
 After a process restart, dev transport may rebuild its in-memory Pack and
 artifact maps from the matching `current` DDC entry when the complete closure
 is present. This is a read-through cache warm-up only: an incomplete or
@@ -77,11 +91,17 @@ The ordered durable matrix is `mesh`, `material`, `scene`, `texture`,
 
 ### ScriptablePack publication
 
+A `terrain` ScriptablePack output supplies a validated `TerrainSource`. The terrain producer derives subsection meshes, height/control mips and Standard material arrays as one GUID-linked closure; the existing Pack cook, Catalog and runtime loader own publication. See [the terrain contract](../terrain/README.md) for bounds and layer semantics.
+
 Development publication acquires a fresh source lease only when the worklist
 builds that source or instance. One recyclable worker serves the serial
 worklist; each retry reloads the module, and the whole pool closes on either
 publication success or failure. Inventory keeps metadata, not pending worker
 leases. Module/build timeouts and accepted-publication recovery remain unchanged.
+
+Standalone production follows the same execution-time lease ownership and
+passes its inventory source snapshot to the producer. See [Pack worker
+ownership](../pack/README.md) for the captured-source and cleanup contract.
 
 Custom Material outputs use the host's registered `material` NativeCooker in
 both dev and build. Its transitive WGSL paths participate in the same watcher
@@ -375,3 +395,17 @@ so expensive filesystem walks do not continuously occupy the dev server. The
 `drain()` requests a fresh snapshot even when an earlier crawl is in flight,
 so writes preceding the call are observed without waiting for the next probe
 deadline. Shutdown cancels the timer and awaits in-flight work.
+
+### Cold import publication
+
+Development imports request the terminal product without a preliminary Pack.
+The shared transport finalizer projects that product once for publication;
+source sampling and GUID closure are unchanged. Cook finalization and recovery
+fences retain their existing owners.
+
+A development generation queues validated ImportPublication inputs while source owners finish their Cook work. The outer commit acquires and commits each DDC lease immediately; a slow synchronous shader Cook for another source therefore cannot expire an earlier source's lease. Candidate Catalog and artifact maps remain private until the complete generation succeeds. Failed commits restore the already committed DDC candidates through their existing CAS fences and discard the remaining queued inputs.
+
+The `navigation-mesh` Scriptable Pack kind carries portable baked navigation
+polygons. Its explicit build-time producer is `@forgeax/engine/import/navigation-bake`;
+ordinary Cook/Catalog delivery preserves the GUID and producer freshness digest.
+Player loading carries no Recast compiler dependency.

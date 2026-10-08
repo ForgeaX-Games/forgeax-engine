@@ -28,6 +28,7 @@ export async function prepare() {
       'forgeax_ray::traversal',
       'forgeax_pbr::ray_bsdf',
       'forgeax_pbr::brdf',
+      'forgeax_pbr::ibl_shared',
       'forgeax_pbr::lighting_attenuation',
       'forgeax_view::common',
       'forgeax_view::tonemap',
@@ -88,7 +89,7 @@ export async function prepare() {
       tangents: Array.from(box.attributes.tangent),
       uvSets: [Array.from(box.attributes.uv)],
     },
-    field: { ...field, values: Array.from(field.values) },
+    field: { ...field, bricks: Array.from(field.bricks), values: Array.from(field.values) },
   };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

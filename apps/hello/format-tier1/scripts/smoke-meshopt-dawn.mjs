@@ -129,7 +129,7 @@ const malformed = damaged.ok
       ),
     };
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 const gpu = create([]);
 const adapter = await gpu.requestAdapter();

@@ -32,6 +32,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
   BindGroupLayoutDescriptor,
+  BindGroupLayoutEntry,
   BufferDescriptor,
   CommandEncoderDescriptor,
   PipelineLayout,
@@ -129,8 +130,10 @@ describe('MVP-1.1 - 5 descriptors mirror @webgpu/types', () => {
   it('BindGroupLayoutDescriptor field set === Pick<GPUBindGroupLayoutDescriptor, ...>', () => {
     type BglKeys = 'label' | 'entries';
     expectTypeOf<keyof BindGroupLayoutDescriptor>().toEqualTypeOf<BglKeys>();
+    // Entries are the spec entry plus the capability-gated acceleration-structure member.
+    expectTypeOf<GPUBindGroupLayoutEntry>().toMatchTypeOf<BindGroupLayoutEntry>();
     expectTypeOf<ValueOf<BindGroupLayoutDescriptor, 'entries'>>().toEqualTypeOf<
-      ValueOf<GPUBindGroupLayoutDescriptor, 'entries'>
+      Iterable<BindGroupLayoutEntry>
     >();
   });
 

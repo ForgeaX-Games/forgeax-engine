@@ -1,6 +1,7 @@
 // Shared dawn-node driver for the foliage smoke and the on/off perf probe:
 // real createApp + rAF path on a mock canvas, one readback at the end.
 import { resolve } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const width = 320;
@@ -15,7 +16,7 @@ export const height = 180;
  *   gridMaterial?: 'diffuse-transmission' | 'standard', frames: number, timeFrames?: boolean }} options
  */
 export async function runFoliage({ appRoot, scene = 'foliage', mode, furnaceMode, grid = 0, gridMaterial, frames, timeFrames = false }) {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
   const gpu = create([]);
@@ -75,7 +76,10 @@ export async function runFoliage({ appRoot, scene = 'foliage', mode, furnaceMode
   const { createDevImportTransport } = await import('@forgeax/engine-runtime');
   const { buildFoliageWorld } = await import(resolve(appRoot, 'src', 'foliage.ts'));
   const { buildWhiteFurnaceWorld } = await import(resolve(appRoot, 'src', 'white-furnace.ts'));
-  const created = await createApp(mockCanvas, {}, { shaderManifestUrl: manifestUrl, importTransport: createDevImportTransport() });
+  const captureDirectory = process.env.FORGEAX_FOLIAGE_CAPTURE_DIR;
+  const recorder = captureDirectory === undefined ? undefined :
+    (await import('@forgeax/engine-rhi-debug')).attachRecorder(await import('@forgeax/engine-rhi-webgpu')).unwrap();
+  const created = await createApp(mockCanvas, recorder === undefined ? {} : { rhi: recorder.backend.rhi }, { shaderManifestUrl: manifestUrl, importTransport: createDevImportTransport() });
   gpu.requestAdapter = originalRequestAdapter;
   if (!created.ok) throw new Error(`createApp failed: ${created.error.code}`);
   const app = created.value;
@@ -89,6 +93,8 @@ export async function runFoliage({ appRoot, scene = 'foliage', mode, furnaceMode
 
   const frameMs = [];
   const start = performance.now();
+  const firstFrameCapture = recorder?.captureFrame();
+  if (recorder !== undefined) (await recorder.frameBoundary()).unwrap();
   let completed = 0;
   for (let i = 0; i < frames; i += 1) {
     const callback = rafQueue.shift();
@@ -96,6 +102,33 @@ export async function runFoliage({ appRoot, scene = 'foliage', mode, furnaceMode
     const before = performance.now();
     callback(start + i * 16.67);
     completed += 1;
+    if (i === 0 && recorder !== undefined && firstFrameCapture !== undefined) {
+      await sharedDevice.queue.onSubmittedWorkDone();
+      (await recorder.frameBoundary()).unwrap();
+      await mkdir(captureDirectory, { recursive: true });
+      const captured = (await firstFrameCapture).unwrap();
+      await writeFile(resolve(captureDirectory, `${scene}-first-frame.rhitape`), captured.bytes);
+      const { decodeTape, buildFrameModel } = await import('@forgeax/engine-rhi-debug');
+      const tape = decodeTape(captured.bytes).unwrap();
+      const model = buildFrameModel(tape);
+      const creates = new Map([...tape.bootstrap.map((row) => row.create), ...tape.events]
+        .filter((row) => row?.handleId !== undefined).map((row) => [row.handleId, row]));
+      // Check the actual first shadow draw, including layouts created inside
+      // the frame. A later stable capture can omit the failed cache fill.
+      for (const work of model.works) {
+        const pass = model.passes[work.passIndex];
+        if (!tape.events[pass?.beginEventIndex]?.desc?.label?.startsWith('shadow')) continue;
+        const pipeline = creates.get(work.pipeline.pipelineHandleId);
+        const layout = creates.get(pipeline?.layoutHandleId);
+        const group = creates.get(work.bindings.find((binding) => binding.groupIndex === 1)?.bindGroupId);
+        if (layout === undefined || group === undefined) continue;
+        const expected = creates.get(layout.bglHandleIds[1]);
+        const actual = creates.get(group.layoutHandleId);
+        if (JSON.stringify(expected?.desc.entries) !== JSON.stringify(actual?.desc.entries))
+          throw new Error(`First-frame shadow work ${work.workIndex}: material layout ${group.layoutHandleId} differs from pipeline layout ${layout.bglHandleIds[1]}`);
+      }
+      await writeFile(resolve(captureDirectory, `${scene}-first-frame-model.json`), JSON.stringify(model, null, 2));
+    }
     if (timeFrames) {
       // Wait for the GPU per frame so the sample covers shading, not only submission.
       await sharedDevice.queue.onSubmittedWorkDone();

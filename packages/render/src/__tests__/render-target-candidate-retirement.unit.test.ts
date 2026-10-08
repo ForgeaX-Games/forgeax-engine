@@ -50,7 +50,7 @@ describe('RenderTarget candidate retirement', () => {
     f.finish();
     await f.fence;
     for (const old of [f.previous, second]) {
-      for (const texture of [old.texture, ...old.depthTextures])
+      for (const texture of [old.texture, old.depthTexture])
         expect(f.destroyed.mock.calls.filter(([value]) => value === texture)).toHaveLength(1);
     }
     f.host.dispose();
@@ -77,7 +77,7 @@ describe('RenderTarget candidate retirement', () => {
     expect(f.host.getPhysicalTarget(f.target)).not.toBe(f.previous);
     f.finish();
     await f.fence;
-    for (const texture of [f.previous.texture, ...f.previous.depthTextures])
+    for (const texture of [f.previous.texture, f.previous.depthTexture])
       expect(f.destroyed.mock.calls.filter(([value]) => value === texture)).toHaveLength(1);
     f.host.dispose();
   });

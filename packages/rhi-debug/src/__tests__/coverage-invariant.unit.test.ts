@@ -1,7 +1,7 @@
 // AC-06: DEFERRED_COMMANDS set assertion.
 //
 // Verifies the deferred-commands constant contains exactly the 1 deferred
-// commands (writeTimestamp) — no more, no less. Any drift in
+// command (writeTimestamp) — no more, no less. Any drift in
 // the constant (missing member, extra member) will fail this test,
 // catching both accidental removal and accidental addition of commands
 // that should either be fully captured or documented as explicitly
@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFERRED_COMMANDS } from '../types';
 
 describe('DEFERRED_COMMANDS (AC-06)', () => {
-  it('contains exactly the 1 deferred commands', () => {
+  it('contains exactly the 1 deferred command', () => {
     expect(DEFERRED_COMMANDS.size).toBe(1);
 
     const expected = new Set(['writeTimestamp']);

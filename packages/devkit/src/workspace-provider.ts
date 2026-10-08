@@ -38,7 +38,7 @@ export interface DevKitWorkspaceProviderOptions {
   /** Bound the browser-page readiness handshake and every command result. */
   readonly readyTimeoutMs?: number;
   /** Notify the workspace owner when browser readiness or loss changes a target. */
-  readonly onTargetChanged?: () => void;
+  readonly onTargetChanged?: () => void | Promise<void>;
   /**
    * Test/host injection points. Production defaults use the real Vite server
    * and backend Host; the provider never launches a browser of its own. The
@@ -105,6 +105,7 @@ interface WorkspacePageLostResult {
 type WorkspaceResult = WorkspaceReadyResult | WorkspaceOperationResult | WorkspacePageLostResult;
 
 interface PendingResult {
+  readonly cancel: () => void;
   readonly targetId: string;
   readonly previewOwner?: string;
   readonly resolve: (value: unknown) => void;
@@ -243,18 +244,16 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return result;
 }
 
-function wireError(
-  error: WorkspaceOperationResult['error'],
-  operation: string,
-): DevKitWorkspaceError {
+function wireError(error: unknown, operation: string): DevKitWorkspaceError {
+  const failure = isRecord(error) ? error : undefined;
   return new DevKitWorkspaceError(
-    typeof error?.code === 'string' ? error.code : 'engine-workspace-browser-failure',
-    typeof error?.expected === 'string'
-      ? error.expected
+    typeof failure?.code === 'string' ? failure.code : 'engine-workspace-browser-failure',
+    typeof failure?.expected === 'string'
+      ? failure.expected
       : `the browser workspace operation ${operation} to complete`,
-    typeof error?.hint === 'string' ? error.hint : 'Inspect the browser page failure details.',
-    error?.detail !== null && typeof error?.detail === 'object'
-      ? (error.detail as Readonly<Record<string, unknown>>)
+    typeof failure?.hint === 'string' ? failure.hint : 'Inspect the browser page failure details.',
+    failure?.detail !== null && typeof failure?.detail === 'object'
+      ? (failure.detail as Readonly<Record<string, unknown>>)
       : {},
   );
 }
@@ -358,11 +357,71 @@ function localServerUrl(server: ViteDevServer): string {
 }
 
 /**
- * Pack startup is asynchronous: a first catalog request can legitimately
- * return 503 while the producer scans and publishes generation 1. A
- * workspace page cannot recover from that one-shot bootstrap failure, so the
- * provider waits for the existing scoped catalog route before handing its URL
- * to a browser. This is a bounded readiness wait, not a second watcher.
+ * Pack startup is asynchronous. The workspace page cannot recover from a
+ * one-shot catalog miss, so the URL is published only after generation 1 is
+ * accepted. Production servers expose that as the in-process Pack plugin
+ * `ready()` promise. The HTTP poll remains for hosts that do not.
+ */
+function packPluginReady(server: ViteDevServer): (() => Promise<void>) | undefined {
+  const plugin = server.config?.plugins?.find((entry) => entry.name === 'forgeax:pack') as
+    | { readonly ready?: () => Promise<void> }
+    | undefined;
+  return typeof plugin?.ready === 'function' ? plugin.ready.bind(plugin) : undefined;
+}
+
+async function awaitCatalogReady(
+  server: ViteDevServer,
+  serverUrl: string,
+  scopeId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const ready = packPluginReady(server);
+  if (ready === undefined) {
+    await waitForRuntimeCatalog(serverUrl, scopeId, timeoutMs, signal);
+    return;
+  }
+  throwIfAborted(signal);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new DevKitWorkspaceError(
+          'engine-workspace-catalog-not-ready',
+          'the project Pack catalog to become ready before the workspace page loads',
+          'Wait for the project producer to finish, repair its diagnostics if it failed, and reopen the workspace.',
+          {
+            timeoutMs,
+            catalogUrl: new URL(
+              `/__pack/scopes/${encodeURIComponent(scopeId)}/1/catalog.json`,
+              serverUrl,
+            ).href,
+          },
+        ),
+      );
+    }, timeoutMs);
+  });
+  const abort = new Promise<never>((_resolve, reject) => {
+    if (signal === undefined) return;
+    if (signal.aborted) {
+      reject(abortReason(signal));
+      return;
+    }
+    onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    await Promise.race([ready(), timeout, abort]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (signal !== undefined && onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
+ * HTTP stand-in for {@link awaitCatalogReady} when a server has no Pack plugin
+ * handle. A 503 means generation 1 is still scanning; any other status is terminal.
  */
 export async function waitForRuntimeCatalog(
   serverUrl: string,
@@ -525,6 +584,7 @@ export function createDevKitWorkspaceProvider(
 
   type BrowserSession = EngineWorkspaceProjectSession & {
     readonly phase: EngineWorkspacePlay['phase'];
+    readonly browserGeneration: number;
     borrowTarget(): EngineWorkspacePreview;
     ready(signal?: AbortSignal): Promise<void>;
   };
@@ -550,14 +610,16 @@ export function createDevKitWorkspaceProvider(
     const sessionId = `workspace-${randomUUID()}`;
     const targetId = `target-${randomUUID()}`;
     const timing = (stage: string): void => {
-      if (process.env.FORGEAX_WORKSPACE_TIMING !== '1') return;
+      const game = parent !== undefined;
+      if (!game && process.env.FORGEAX_WORKSPACE_TIMING !== '1') return;
       const now = performance.now();
       console.error(
-        '[forgeax.workspace.timing]',
+        game ? '[forgeax.play]' : '[forgeax.workspace.timing]',
         JSON.stringify({
           root: facts.value.root,
           sessionId,
           targetId,
+          execution: game ? 'game' : 'preview',
           stage,
           totalMs: Math.round(now - startupAt),
           stageMs: Math.round(now - lastStageAt),
@@ -594,18 +656,32 @@ export function createDevKitWorkspaceProvider(
     let ready: WorkspaceReadyResult | undefined;
     let readyFailure: unknown;
     let pageLost = false;
+    let browserDetached = false;
+    let browserGeneration = 0;
+    let browserRetirement = Promise.resolve();
     let resultRegistration: (() => void) | undefined;
+    let removePresentation: (() => void) | undefined;
     let acceptedCaller: HostCallerIdentity | undefined;
     const expectedCallerSource = workspaceCallerSource(sessionId, targetId);
     const removeClientConnect = backend.transport.onClientConnect((caller) => {
       if (caller.kind === 'frontend' && caller.sourceId === expectedCallerSource) {
+        if (acceptedCaller && acceptedCaller.connectionId !== caller.connectionId) {
+          const previous = acceptedCaller;
+          acceptedCaller = undefined;
+          void settleResult({
+            kind: 'lost',
+            id: `replaced:${previous.connectionId}`,
+            sessionId,
+            targetId,
+          });
+        }
         acceptedCaller = caller;
       }
     });
     const removeClientDisconnect = backend.transport.onClientDisconnect((caller) => {
       if (acceptedCaller?.connectionId === caller.connectionId) {
         acceptedCaller = undefined;
-        settleResult({
+        void settleResult({
           kind: 'lost',
           id: `disconnect:${caller.connectionId}`,
           sessionId,
@@ -656,7 +732,24 @@ export function createDevKitWorkspaceProvider(
       throw inactiveError();
     };
 
-    const settleResult = (payload: WorkspaceResult): void => {
+    const notifyTargetChanged = async (): Promise<void> => {
+      try {
+        await options.onTargetChanged?.();
+      } catch (error) {
+        // A failed notification must not replace an existing cleanup failure
+        // or recurse when publishing that failure also rejects.
+        if (pageLost || sessionClosed) return;
+        await settleResult({
+          kind: 'failed',
+          id: 'browser-retirement',
+          sessionId,
+          targetId,
+          error: wireError(error, 'browser retirement'),
+        });
+      }
+    };
+
+    const settleResult = async (payload: WorkspaceResult): Promise<void> => {
       if (
         payload.sessionId !== sessionId ||
         (payload.kind !== 'result' &&
@@ -675,32 +768,75 @@ export function createDevKitWorkspaceProvider(
           waiter.signal?.removeEventListener('abort', waiter.onAbort);
           waiter.reject(preview.failure);
         }
-        options.onTargetChanged?.();
+        await notifyTargetChanged();
         return;
       }
-      if (payload.kind === 'lost' || payload.kind === 'failed') {
-        if (payload.targetId !== targetId || (pageLost && payload.kind !== 'lost')) return;
+      if (payload.kind === 'lost') {
+        if (payload.targetId !== targetId || (pageLost && acceptedCaller !== undefined)) return;
+        const cleanup = (readyFailure as { detail?: { cleanup?: string } } | undefined)?.detail
+          ?.cleanup;
+        if (cleanup === 'failed' || cleanup === 'timeout') return;
+        // A close already owns this session. Keep the terminal lost-target
+        // record so a later reopen can prove the old page will not answer.
+        if (sessionClosed || readyFailure !== undefined) {
+          pageLost = true;
+          browserDetached = false;
+          timing('browser-lost');
+          readyFailure = new DevKitWorkspaceError(
+            'engine-workspace-page-lost',
+            'the Engine workspace browser page to remain connected',
+            'The headed page was destroyed or navigated away; reopen the project instead of replaying commands.',
+            { sessionId, targetId },
+          );
+          for (const [id, waiter] of pending) {
+            pending.delete(id);
+            clearTimeout(waiter.timer);
+            waiter.signal?.removeEventListener('abort', waiter.onAbort);
+            waiter.reject(readyFailure);
+          }
+          await notifyTargetChanged();
+          return;
+        }
+        // A refresh destroys the browser realm, not the Vite server or the
+        // accepted catalog. Fail commands already sent to the old page, and
+        // let the replacement page's ready resume new ones.
+        browserDetached = true;
+        ready = undefined;
+        timing('browser-detached');
+        const detached = new DevKitWorkspaceError(
+          'engine-workspace-browser-detached',
+          'the replacement Engine workspace page to become ready',
+          'The headed page is reloading. Wait for it instead of replaying commands or reopening the project.',
+          { sessionId, targetId },
+        );
+        for (const [id, waiter] of pending) {
+          if (waiter.operation === 'workspace readiness') continue;
+          pending.delete(id);
+          clearTimeout(waiter.timer);
+          waiter.signal?.removeEventListener('abort', waiter.onAbort);
+          waiter.reject(detached);
+        }
+        browserRetirement = Promise.all([browserRetirement, notifyTargetChanged()]).then(
+          () => undefined,
+        );
+        return;
+      }
+      if (payload.kind === 'failed') {
+        if (payload.targetId !== targetId || pageLost) return;
         const cleanup = (readyFailure as { detail?: { cleanup?: string } } | undefined)?.detail
           ?.cleanup;
         if (cleanup === 'failed' || cleanup === 'timeout') return;
         pageLost = true;
-        timing(payload.kind === 'lost' ? 'browser-lost' : 'browser-failed');
-        readyFailure =
-          payload.kind === 'failed'
-            ? wireError(payload.error, 'target execution')
-            : new DevKitWorkspaceError(
-                'engine-workspace-page-lost',
-                'the Engine workspace browser page to remain connected',
-                'The headed page was destroyed or navigated away; reopen the project instead of replaying commands.',
-                { sessionId, targetId },
-              );
+        browserDetached = false;
+        timing('browser-failed');
+        readyFailure = wireError(payload.error, 'target execution');
         for (const [id, waiter] of pending) {
           pending.delete(id);
           clearTimeout(waiter.timer);
           waiter.signal?.removeEventListener('abort', waiter.onAbort);
           waiter.reject(readyFailure);
         }
-        options.onTargetChanged?.();
+        await notifyTargetChanged();
         return;
       }
       if (
@@ -709,11 +845,27 @@ export function createDevKitWorkspaceProvider(
       )
         return;
       if (payload.kind === 'ready') {
-        if (payload.targetId !== targetId) return;
+        if (payload.targetId !== targetId || pageLost || (ready !== undefined && !browserDetached))
+          return;
+        const caller = acceptedCaller;
+        let retirement: Promise<void>;
+        do {
+          retirement = browserRetirement;
+          await retirement;
+        } while (retirement !== browserRetirement);
+        if (
+          sessionClosed ||
+          pageLost ||
+          caller !== acceptedCaller ||
+          (ready !== undefined && !browserDetached)
+        )
+          return;
         try {
           const project = assertProject(payload.project, facts.value);
           const target = assertTarget(payload.target, dimensions);
           ready = { ...payload, project, target };
+          browserDetached = false;
+          browserGeneration += 1;
           timing('browser-ready');
           currentTarget = {
             ...target,
@@ -736,7 +888,7 @@ export function createDevKitWorkspaceProvider(
           if (readyFailure !== undefined) waiter.reject(readyFailure);
           else waiter.resolve(ready);
         }
-        options.onTargetChanged?.();
+        await notifyTargetChanged();
         return;
       }
       if (payload.kind !== 'result') return;
@@ -758,22 +910,57 @@ export function createDevKitWorkspaceProvider(
       }
     };
 
+    // A headed target samples one presentation lease. Replacing that provider
+    // retires its frontend identity; independent game sessions have no such lease.
+    if (!parent && binding.frontendAssembly !== undefined) {
+      removePresentation = backend.context.on(
+        'internal/service',
+        (name) => {
+          if (
+            name !== 'devkitWorkspaceFrontend' ||
+            sessionClosed ||
+            pageLost ||
+            options.hostBinding?.frontendAssembly === binding.frontendAssembly
+          )
+            return;
+          settleResult({
+            kind: 'failed',
+            id: `presentation:${targetId}`,
+            sessionId,
+            targetId,
+            error: {
+              code: 'engine-workspace-page-lost',
+              expected: 'the sampled frontend presentation lease to remain active',
+              hint: 'The presentation provider changed. Reopen this exact lost target without replaying writes.',
+              detail: { sessionId, targetId, stage: 'presentation' },
+            },
+          });
+        },
+        { global: true },
+      );
+    }
+
     resultRegistration = backend.transport.register(
       engineWorkspaceResultService(targetId),
-      ({ payload, caller }) => {
+      async ({ payload, caller }) => {
         assertWorkspaceCaller(caller, sessionId, targetId, acceptedCaller);
         if (payload !== null && typeof payload === 'object')
-          settleResult(payload as WorkspaceResult);
+          await settleResult(payload as WorkspaceResult);
         return { accepted: true };
       },
     );
 
-    const cancel = (id: string): void => {
-      backend.transport.publish(ENGINE_WORKSPACE_COMMAND_TOPIC, {
-        kind: 'cancel',
-        id,
-        sessionId,
-      } satisfies WorkspaceCommand);
+    const cancel = (id: string, connectionId?: string): void => {
+      if (!connectionId) return;
+      backend.transport.publish(
+        ENGINE_WORKSPACE_COMMAND_TOPIC,
+        {
+          kind: 'cancel',
+          id,
+          sessionId,
+        } satisfies WorkspaceCommand,
+        { connectionId },
+      );
     };
 
     const waitFor = <T>(
@@ -785,18 +972,19 @@ export function createDevKitWorkspaceProvider(
       previewOwner?: string,
     ): Promise<T> => {
       throwIfAborted(signal);
+      const connectionId = acceptedCaller?.connectionId;
       return new Promise<T>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout>;
         const onAbort = (): void => {
           pending.delete(id);
           clearTimeout(timer);
-          cancel(id);
+          cancel(id, connectionId);
           reject(abortReason(signal));
         };
         timer = setTimeout(() => {
           pending.delete(id);
           signal?.removeEventListener('abort', onAbort);
-          cancel(id);
+          cancel(id, connectionId);
           reject(
             new DevKitWorkspaceError(
               'engine-workspace-result-timeout',
@@ -807,6 +995,7 @@ export function createDevKitWorkspaceProvider(
           );
         }, timeoutMs);
         pending.set(id, {
+          cancel: () => cancel(id, connectionId),
           targetId: operationTargetId,
           ...(previewOwner === undefined ? {} : { previewOwner }),
           resolve: resolve as (value: unknown) => void,
@@ -825,12 +1014,25 @@ export function createDevKitWorkspaceProvider(
       throwIfAborted(signal);
       if (pageLost) throw readyFailure;
       if (readyFailure !== undefined) throw readyFailure;
-      if (ready !== undefined) return ready;
+      if (ready !== undefined && !browserDetached) return ready;
       return waitFor<WorkspaceReadyResult>(
         `workspace-ready-${randomUUID()}`,
         'workspace readiness',
         signal,
         readyTimeoutMs,
+      );
+    };
+
+    const assertCurrentBrowser = (handshake: WorkspaceReadyResult, operation?: string): void => {
+      // Session disposal still sends closePreview to its original browser.
+      if (operation !== 'closePreview') assertSessionActive();
+      if (pageLost || readyFailure !== undefined) throw readyFailure;
+      if (ready === handshake && !browserDetached && acceptedCaller) return;
+      throw new DevKitWorkspaceError(
+        'engine-workspace-browser-detached',
+        'the browser that admitted this operation to remain current',
+        'Retry explicitly after the replacement Editor becomes ready.',
+        { sessionId, targetId },
       );
     };
 
@@ -850,6 +1052,10 @@ export function createDevKitWorkspaceProvider(
         );
       }
       throwIfAborted(signal);
+      if (operation !== 'closeWorkspace')
+        assertCurrentBrowser(handshake as WorkspaceReadyResult, operation);
+      const connectionId = acceptedCaller?.connectionId;
+      if (!connectionId) throw inactiveError();
       const destination = commandPayload as { targetId?: string; previewOwner?: string };
       if (
         operation !== 'closePreview' &&
@@ -872,13 +1078,17 @@ export function createDevKitWorkspaceProvider(
         destination.previewOwner,
       );
       try {
-        backend.transport.publish(ENGINE_WORKSPACE_COMMAND_TOPIC, {
-          kind: 'command',
-          id,
-          sessionId,
-          operation,
-          input: commandPayload,
-        } satisfies WorkspaceCommand);
+        backend.transport.publish(
+          ENGINE_WORKSPACE_COMMAND_TOPIC,
+          {
+            kind: 'command',
+            id,
+            sessionId,
+            operation,
+            input: commandPayload,
+          } satisfies WorkspaceCommand,
+          { connectionId },
+        );
       } catch (cause) {
         const waiter = pending.get(id);
         if (waiter !== undefined) {
@@ -924,6 +1134,8 @@ export function createDevKitWorkspaceProvider(
         });
       }
       sessionClosed = true;
+      removePresentation?.();
+      removePresentation = undefined;
       removeClientConnect();
       sessionClosePromise = (async () => {
         await play?.close?.();
@@ -934,7 +1146,7 @@ export function createDevKitWorkspaceProvider(
           pending.delete(id);
           clearTimeout(waiter.timer);
           waiter.signal?.removeEventListener('abort', waiter.onAbort);
-          cancel(id);
+          waiter.cancel();
           waiter.reject(
             new DevKitWorkspaceError(
               'engine-workspace-session-closed',
@@ -1017,9 +1229,9 @@ export function createDevKitWorkspaceProvider(
       const serverUrl = localServerUrl(server);
       // Unit providers may intentionally supply a transport-only fake
       // server. A real Vite server exposes httpServer; only that production
-      // path needs the scoped catalog readiness probe.
+      // path waits for the accepted catalog before publishing the page URL.
       if (server.httpServer !== undefined) {
-        await waitForRuntimeCatalog(serverUrl, facts.value.id, readyTimeoutMs, input.signal);
+        await awaitCatalogReady(server, serverUrl, facts.value.id, readyTimeoutMs, input.signal);
       }
       timing('catalog-ready');
       const workspaceUrl = new URL(serverUrl);
@@ -1050,6 +1262,7 @@ export function createDevKitWorkspaceProvider(
         assetBinding?: EngineWorkspacePreview['assetBinding'];
       }): EngineWorkspacePreview => {
         const previewOwner = value.previewOwner;
+        const ownerBrowserGeneration = Math.max(1, browserGeneration);
         const previewInput = (input: EngineWorkspaceCameraInput) => ({
           ...commandInput(input),
           previewOwner,
@@ -1082,11 +1295,14 @@ export function createDevKitWorkspaceProvider(
             pending.delete(id);
             clearTimeout(waiter.timer);
             waiter.signal?.removeEventListener('abort', waiter.onAbort);
-            cancel(id);
+            waiter.cancel();
             waiter.reject(closed);
           }
           previewClosePromise = (
-            ready && !pageLost
+            ready &&
+            !pageLost &&
+            !browserDetached &&
+            ownerBrowserGeneration === Math.max(1, browserGeneration)
               ? command('closePreview', { targetId: previewTargetId, previewOwner }, undefined)
               : Promise.resolve()
           ).then(() => undefined);
@@ -1095,7 +1311,11 @@ export function createDevKitWorkspaceProvider(
         const assertPreviewOpen = (): void => {
           assertSessionOpen();
           if (preview.failure) throw preview.failure;
-          if (previewClosed) {
+          if (
+            previewClosed ||
+            browserDetached ||
+            ownerBrowserGeneration !== Math.max(1, browserGeneration)
+          ) {
             throw new DevKitWorkspaceError(
               'engine-workspace-preview-closed',
               'the Engine workspace preview to remain open',
@@ -1181,7 +1401,13 @@ export function createDevKitWorkspaceProvider(
             // A browser disconnect can arrive while the owning workspace is
             // already closing. Revocation only releases live camera input;
             // closing the preview/session has already released its target.
-            if (sessionClosed || previewClosed || previews.get(previewTargetId) !== preview)
+            if (
+              sessionClosed ||
+              previewClosed ||
+              browserDetached ||
+              ownerBrowserGeneration !== Math.max(1, browserGeneration) ||
+              previews.get(previewTargetId) !== preview
+            )
               return Promise.resolve();
             assertPreviewOpen();
             return command('camera.revoke', previewInput(input));
@@ -1223,16 +1449,41 @@ export function createDevKitWorkspaceProvider(
           return readyFailure;
         },
         get phase() {
-          return pageLost || readyFailure ? 'failed' : ready ? 'running' : 'starting';
+          if (pageLost || readyFailure) return 'failed';
+          if (browserDetached || ready === undefined) return 'starting';
+          return 'running';
+        },
+        get browserGeneration() {
+          return browserGeneration;
         },
         borrowTarget: () => proxyTarget({ previewOwner: sessionId, target: currentTarget }),
         ready: async (signal) => {
+          if (parent) timing('game-ready-wait');
           await waitReady(signal);
+          if (parent) timing('game-ready');
         },
         ...(!parent
           ? {
               async startPlay({ signal }: { signal?: AbortSignal }) {
                 assertSessionOpen();
+                const playStarted = performance.now();
+                const playLog = (stage: string): void => {
+                  console.error(
+                    '[forgeax.play]',
+                    JSON.stringify({
+                      root: facts.value.root,
+                      sessionId,
+                      targetId,
+                      execution: 'editor',
+                      stage,
+                      totalMs: Math.round(performance.now() - playStarted),
+                    }),
+                  );
+                };
+                playLog('editor-ready-wait');
+                const editorBrowser = await waitReady(signal);
+                playLog('editor-ready');
+                assertCurrentBrowser(editorBrowser);
                 if (play)
                   throw new DevKitWorkspaceError(
                     'engine-workspace-target-busy',
@@ -1242,12 +1493,15 @@ export function createDevKitWorkspaceProvider(
                 let game: BrowserSession | undefined;
                 try {
                   throwIfAborted(signal);
+                  playLog('game-session-open');
                   game = await openSession(
                     { root: facts.value.root, ...(signal ? { signal } : {}) },
                     backend,
                   );
+                  playLog('game-session-opened');
                   throwIfAborted(signal);
                   assertSessionOpen();
+                  assertCurrentBrowser(editorBrowser);
                   const target = game.borrowTarget();
                   const owned = game;
                   let closing: Promise<void> | undefined;
@@ -1262,8 +1516,9 @@ export function createDevKitWorkspaceProvider(
                     ready: owned.ready,
                     close() {
                       if (closing) return closing;
-                      if (play === next) play = undefined;
-                      closing = Promise.resolve(owned.close?.());
+                      closing = Promise.resolve(owned.close?.()).then(() => {
+                        if (play === next) play = undefined;
+                      });
                       return closing;
                     },
                   };
@@ -1325,6 +1580,8 @@ export function createDevKitWorkspaceProvider(
         },
         openPreview: async ({ asset, width: previewWidth, height: previewHeight, signal }) => {
           assertSessionOpen();
+          const editorBrowser = await waitReady(signal);
+          assertCurrentBrowser(editorBrowser);
           // Scene editing owns the project surface. Type previews always get
           // their own surface, including the first asset opened in a project.
           const previewTargetId =
@@ -1334,6 +1591,7 @@ export function createDevKitWorkspaceProvider(
             { targetId, previewTargetId, asset, width: previewWidth, height: previewHeight },
             signal,
           );
+          assertCurrentBrowser(editorBrowser);
           if (
             !value ||
             typeof value !== 'object' ||
@@ -1393,14 +1651,10 @@ export function createDevKitWorkspaceProvider(
         if (!isRecord(inspection) || !isRecord(inspection.asset)) return inspection;
         const asset = inspection.asset;
         const sourcePath = typeof asset.path === 'string' ? asset.path : undefined;
-        if (!sourcePath?.endsWith('.pack.json')) return inspection;
-        if (typeof asset.sourceKey !== 'string')
-          throw new DevKitWorkspaceError(
-            'asset-inspect-source-key-missing',
-            'the Catalog row for a direct Pack asset to carry its sourceKey',
-            'Rebuild the Catalog from the authored Pack and retry inspection.',
-            { guid: input.guid, sourcePath },
-          );
+        // Internal delivery containers share the suffix but have no authored
+        // output locator. Only the producer's sourceKey admits source enrichment.
+        if (!sourcePath?.endsWith('.pack.json') || typeof asset.sourceKey !== 'string')
+          return inspection;
         const authored = await inspectAuthoredPack(
           input.project.root,
           sourcePath,

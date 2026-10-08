@@ -191,6 +191,8 @@ function exhaustiveResource(kind: GraphResourceKind): string {
       return kind;
     case 'buffer':
       return kind;
+    case 'acceleration-structure':
+      return kind;
   }
   return assertNever(kind);
 }

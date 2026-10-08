@@ -21,14 +21,17 @@ function sameVector(left: MaterialGenerationVector, right: MaterialGenerationVec
   return [...names].every((name) => left.dependencies[name] === right.dependencies[name]);
 }
 
+interface MaterialGenerationState {
+  readonly resolved: Map<string, Promise<unknown>>;
+  dependencies: readonly string[];
+  specializationKey?: string;
+  error?: MaterialStaleGenerationError;
+}
+
 export class MaterialGenerationCache {
-  readonly #resolved = new Map<string, Promise<unknown>>();
-  readonly #resolvedByMaterial = new Map<string, Set<string>>();
-  readonly #resolvedKeys = new Map<string, string>();
+  readonly #materials = new Map<string, MaterialGenerationState>();
   readonly #artifacts = new Map<string, MaterialCachedArtifact>();
   readonly #generations = new Map<string, number>();
-  readonly #errors = new Map<string, MaterialStaleGenerationError>();
-  readonly #materialDependencies = new Map<string, readonly string[]>();
   readonly #dependents = new Map<string, Set<string>>();
 
   resolve<T>(
@@ -38,13 +41,10 @@ export class MaterialGenerationCache {
     publicationGeneration = 0,
   ): Promise<T> {
     const cacheKey = `${materialGuid}:${specializationKey}:${publicationGeneration}`;
-    const previous = this.#resolved.get(cacheKey);
+    const previous = this.#materials.get(materialGuid)?.resolved.get(cacheKey);
     if (previous !== undefined) return previous as Promise<T>;
     const promise = load();
-    this.#resolved.set(cacheKey, promise);
-    const resolvedKeys = this.#resolvedByMaterial.get(materialGuid) ?? new Set<string>();
-    resolvedKeys.add(cacheKey);
-    this.#resolvedByMaterial.set(materialGuid, resolvedKeys);
+    this.material(materialGuid).resolved.set(cacheKey, promise);
     void promise.then(
       (value) => {
         if (isStaleGenerationResult(value)) this.removeResolved(materialGuid, cacheKey, promise);
@@ -55,11 +55,11 @@ export class MaterialGenerationCache {
   }
 
   linkResolved(materialGuid: string, specializationKey: string): void {
-    this.#resolvedKeys.set(materialGuid, specializationKey);
+    this.material(materialGuid).specializationKey = specializationKey;
   }
 
   getResolvedKey(materialGuid: string): string | undefined {
-    return this.#resolvedKeys.get(materialGuid);
+    return this.#materials.get(materialGuid)?.specializationKey;
   }
 
   storeArtifact(key: string, artifact: MaterialCachedArtifact): void {
@@ -74,16 +74,13 @@ export class MaterialGenerationCache {
     const generation = (this.#generations.get(dependency) ?? 0) + 1;
     this.#generations.set(dependency, generation);
     for (const materialGuid of this.#dependents.get(dependency) ?? []) {
-      for (const cacheKey of this.#resolvedByMaterial.get(materialGuid) ?? []) {
-        this.#resolved.delete(cacheKey);
-      }
-      this.#resolvedByMaterial.delete(materialGuid);
+      this.#materials.get(materialGuid)?.resolved.clear();
     }
     return generation;
   }
 
   generationError(materialGuid: string): MaterialStaleGenerationError | undefined {
-    return this.#errors.get(materialGuid);
+    return this.#materials.get(materialGuid)?.error;
   }
 
   async loadWithGeneration<T>(
@@ -101,12 +98,12 @@ export class MaterialGenerationCache {
       const observed = snapshotVector(loaded.generation);
       const current = this.vector(dependencySet);
       if (sameVector(observed, current)) {
-        this.#errors.delete(materialGuid);
+        delete this.material(materialGuid).error;
         return ok(loaded.value);
       }
       if (attempt === 1) {
         const error = staleGenerationError(materialGuid, dependencySet, observed, current);
-        this.#errors.set(materialGuid, error);
+        this.material(materialGuid).error = error;
         return err(error);
       }
     }
@@ -115,11 +112,13 @@ export class MaterialGenerationCache {
   }
 
   private trackDependencies(materialGuid: string, dependencies: readonly string[]): void {
-    const previous = this.#materialDependencies.get(materialGuid);
-    if (previous !== undefined) {
-      for (const dependency of previous) this.#dependents.get(dependency)?.delete(materialGuid);
+    const state = this.material(materialGuid);
+    for (const dependency of state.dependencies) {
+      const dependents = this.#dependents.get(dependency);
+      dependents?.delete(materialGuid);
+      if (dependents?.size === 0) this.#dependents.delete(dependency);
     }
-    this.#materialDependencies.set(materialGuid, dependencies);
+    state.dependencies = dependencies;
     for (const dependency of dependencies) {
       const dependents = this.#dependents.get(dependency) ?? new Set<string>();
       dependents.add(materialGuid);
@@ -128,12 +127,25 @@ export class MaterialGenerationCache {
   }
 
   private removeResolved(materialGuid: string, cacheKey: string, promise: Promise<unknown>): void {
-    if (this.#resolved.get(cacheKey) !== promise) return;
-    this.#resolved.delete(cacheKey);
-    const resolvedKeys = this.#resolvedByMaterial.get(materialGuid);
-    if (resolvedKeys === undefined) return;
-    resolvedKeys.delete(cacheKey);
-    if (resolvedKeys.size === 0) this.#resolvedByMaterial.delete(materialGuid);
+    const state = this.#materials.get(materialGuid);
+    if (state?.resolved.get(cacheKey) !== promise) return;
+    state.resolved.delete(cacheKey);
+    if (
+      state.resolved.size === 0 &&
+      state.dependencies.length === 0 &&
+      state.specializationKey === undefined &&
+      state.error === undefined
+    )
+      this.#materials.delete(materialGuid);
+  }
+
+  private material(materialGuid: string): MaterialGenerationState {
+    let state = this.#materials.get(materialGuid);
+    if (state === undefined) {
+      state = { resolved: new Map(), dependencies: [] };
+      this.#materials.set(materialGuid, state);
+    }
+    return state;
   }
 
   private vector(dependencies: readonly string[]): MaterialGenerationVector {

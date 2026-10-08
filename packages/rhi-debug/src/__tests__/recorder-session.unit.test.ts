@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildFrameModel } from '../frame-model';
 import { decodeTape } from '../protocol/codec';
 import { attachRecorder, type RecordableBackend } from '../recorder/session';
+import { openReplay } from '../replay/session';
 
 function backend(): RecordableBackend {
   const rhi = {
@@ -17,6 +18,62 @@ function backend(): RecordableBackend {
 }
 
 describe('RecorderSession contract', () => {
+  it('snapshots raster labels through capture, inspection and fresh-device replay', async () => {
+    const attachment = attachRecorder({ rhi: nullRhi, createShaderModule }).unwrap();
+    const device = (
+      await (await attachment.backend.rhi.requestAdapter()).unwrap().requestDevice()
+    ).unwrap();
+    const pending = attachment.captureFrame();
+    (await attachment.frameBoundary()).unwrap();
+    const expected = [undefined, '', 'surface.capture', 'surface.capture'];
+    for (const label of expected) {
+      const encoder = device.createCommandEncoder().unwrap();
+      const descriptor = { ...(label === undefined ? {} : { label }), colorAttachments: [] };
+      const pass = encoder.beginRenderPass(descriptor);
+      descriptor.label = 'changed-after-begin';
+      pass.draw(0);
+      pass.end();
+      device.queue.submit([encoder.finish().unwrap()]).unwrap();
+    }
+    (await attachment.frameBoundary()).unwrap();
+    const tape = decodeTape((await pending).unwrap().bytes).unwrap();
+    (await attachment.dispose()).unwrap();
+    const descriptors = tape.events
+      .filter((event) => event.kind === 'beginRenderPass')
+      .map((event) => event.desc);
+    expect(descriptors).toEqual(
+      expected.map((label) => ({
+        ...(label === undefined ? {} : { label }),
+        colorAttachments: [],
+      })),
+    );
+    expect(
+      buildFrameModel(tape)
+        .commands.filter((command) => command.kind === 'beginRenderPass')
+        .map((command) => command.params),
+    ).toEqual(descriptors.map((desc) => expect.objectContaining({ desc })));
+
+    const fresh = (await (await nullRhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const observed: (string | undefined)[] = [];
+    const create = fresh.createCommandEncoder.bind(fresh);
+    vi.spyOn(fresh, 'createCommandEncoder').mockImplementation((descriptor) => {
+      const encoder = create(descriptor).unwrap();
+      const begin = encoder.beginRenderPass.bind(encoder);
+      vi.spyOn(encoder, 'beginRenderPass').mockImplementation((passDescriptor) => {
+        observed.push(passDescriptor.label);
+        return begin(passDescriptor);
+      });
+      return ok(encoder);
+    });
+    const replay = (await openReplay(tape, { device: fresh, createShaderModule })).unwrap();
+    try {
+      (await replay.inspectWork(expected.length - 1)).unwrap();
+      expect(observed).toEqual(expected);
+    } finally {
+      (await replay.dispose()).unwrap();
+    }
+  });
+
   it('retains producer resource labels through the encoded tape and inspection model', async () => {
     const attachment = attachRecorder({ rhi: nullRhi, createShaderModule }).unwrap();
     const device = (
@@ -64,6 +121,130 @@ describe('RecorderSession contract', () => {
     const result = await capture;
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.bytes.byteLength).toBeGreaterThan(0);
+  });
+
+  it('records four consecutive submitted frames and settles only at the fourth boundary', async () => {
+    const attachment = attachRecorder({ rhi: nullRhi, createShaderModule }).unwrap();
+    const device = (
+      await (await attachment.backend.rhi.requestAdapter()).unwrap().requestDevice()
+    ).unwrap();
+    let settled = false;
+    const capture = attachment.captureFrames?.(4);
+    expect(capture).toBeDefined();
+    if (capture === undefined) throw new Error('captureFrames capability is required');
+    void capture.then(() => {
+      settled = true;
+    });
+    (await attachment.frameBoundary()).unwrap();
+    for (let frame = 0; frame < 4; frame += 1) {
+      const encoder = device.createCommandEncoder({ label: `frame-${frame}` }).unwrap();
+      const pass = encoder.beginRenderPass({ colorAttachments: [] });
+      pass.draw(frame + 1);
+      pass.end();
+      device.queue.submit([encoder.finish().unwrap()]).unwrap();
+      (await attachment.frameBoundary()).unwrap();
+      expect(settled).toBe(frame === 3);
+    }
+    const tape = decodeTape((await capture).unwrap().bytes).unwrap();
+    expect(tape.events.filter((event) => event.kind === 'frameMark')).toEqual(
+      [0, 1, 2, 3].map((frameIdx) => ({ kind: 'frameMark', frameIdx })),
+    );
+    expect(tape.events.filter((event) => event.kind === 'submit')).toHaveLength(4);
+    (await attachment.dispose()).unwrap();
+  });
+
+  it('retains resources first created after the first frame in a four-frame tape', async () => {
+    const attachment = attachRecorder({ rhi: nullRhi, createShaderModule }).unwrap();
+    const device = (
+      await (await attachment.backend.rhi.requestAdapter()).unwrap().requestDevice()
+    ).unwrap();
+    const capture = attachment.captureFrames?.(4, { seed: { maxResourceBytes: 0 } });
+    if (capture === undefined) throw new Error('captureFrames capability is required');
+    (await attachment.frameBoundary()).unwrap();
+    for (let frame = 0; frame < 4; frame += 1) {
+      const texture = device
+        .createTexture({
+          label: `late-color-${frame}`,
+          size: [4, 4],
+          format: 'rgba8unorm',
+          usage: 0x10,
+        })
+        .unwrap();
+      const view = device.createTextureView(texture, {}).unwrap();
+      const encoder = device.createCommandEncoder().unwrap();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view,
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          },
+        ],
+      });
+      pass.draw(0);
+      pass.end();
+      device.queue.submit([encoder.finish().unwrap()]).unwrap();
+      device.destroyTexture(texture).unwrap();
+      (await attachment.frameBoundary()).unwrap();
+    }
+    const tape = decodeTape((await capture).unwrap().bytes).unwrap();
+    expect(tape.events.filter((event) => event.kind === 'createTexture')).toHaveLength(3);
+    expect(tape.events.filter((event) => event.kind === 'frameMark')).toHaveLength(4);
+    const fresh = (await (await nullRhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const replay = (await openReplay(tape, { device: fresh, createShaderModule })).unwrap();
+    try {
+      expect((await replay.inspectWork(3)).ok).toBe(true);
+    } finally {
+      (await replay.dispose()).unwrap();
+      (await attachment.dispose()).unwrap();
+    }
+  });
+
+  it('rejects invalid frame windows without taking the single-frame capture slot', async () => {
+    const attachment = attachRecorder(backend()).unwrap();
+    for (const frames of [0, -1, 1.5, 9, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(await attachment.captureFrames?.(frames)).toMatchObject({
+        ok: false,
+        error: { code: 'capture-unavailable' },
+      });
+    }
+    const capture = attachment.captureFrame();
+    expect(await attachment.captureFrames?.(4)).toMatchObject({
+      ok: false,
+      error: { code: 'capture-busy' },
+    });
+    (await attachment.frameBoundary()).unwrap();
+    (await attachment.frameBoundary()).unwrap();
+    const tape = decodeTape((await capture).unwrap().bytes).unwrap();
+    expect(tape.events.filter((event) => event.kind === 'frameMark')).toEqual([
+      { kind: 'frameMark', frameIdx: 0 },
+    ]);
+    (await attachment.dispose()).unwrap();
+  });
+
+  it.each([
+    'abort',
+    'device loss',
+  ] as const)('re-arms after %s interrupts a multi-frame window', async (reason) => {
+    const attachment = attachRecorder({ rhi: nullRhi, createShaderModule }).unwrap();
+    (await (await attachment.backend.rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const controller = new AbortController();
+    const first = attachment.captureFrames?.(4, { signal: controller.signal });
+    (await attachment.frameBoundary()).unwrap();
+    (await attachment.frameBoundary()).unwrap();
+    if (reason === 'abort') controller.abort();
+    else attachment.deviceLost();
+    expect(await first).toMatchObject({ ok: false, error: { code: 'capture-unavailable' } });
+    if (reason === 'device loss')
+      (await (await attachment.backend.rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const retry = attachment.captureFrames?.(8);
+    if (retry === undefined) throw new Error('captureFrames capability is required');
+    (await attachment.frameBoundary()).unwrap();
+    for (let frame = 0; frame < 8; frame += 1) (await attachment.frameBoundary()).unwrap();
+    const tape = decodeTape((await retry).unwrap().bytes).unwrap();
+    expect(tape.events.filter((event) => event.kind === 'frameMark')).toHaveLength(8);
+    (await attachment.dispose()).unwrap();
   });
 
   it('does not retain frame work before capture is armed', () => {

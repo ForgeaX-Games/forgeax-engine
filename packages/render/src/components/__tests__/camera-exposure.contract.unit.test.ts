@@ -1,7 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import { extractCameraSnapshots } from '../../extract/camera';
+import { extractCameraSnapshots } from '../../render-system-extract';
 import {
   CAMERA_EXPOSURE_MODE_AUTO,
   CAMERA_EXPOSURE_MODE_MANUAL,

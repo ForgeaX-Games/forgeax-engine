@@ -33,7 +33,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "peerDependencies": {
     "ws": "^8.20.0"

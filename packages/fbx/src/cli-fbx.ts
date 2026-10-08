@@ -3,13 +3,13 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initFbxWasm, parseFbx } from './index.js';
 import {
   createFbxMeta,
   type FbxMetaPreviousDocument,
   type FbxMetaSourceDocument,
   isFbxMetaDocument,
 } from './meta.js';
+import { initFbxWasm, parseFbx } from './wasm.js';
 
 interface FbxCliContext {
   readonly stdoutWrite: (line: string) => void;

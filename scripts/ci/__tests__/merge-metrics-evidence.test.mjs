@@ -48,7 +48,6 @@ test('joins both producers only when identity and required paths match', () => {
   writeFixture(root, 'report/pixel-parity.json');
   writeFixture(root, 'report/pixel-parity-standard-lanes.json');
   writeFixture(root, 'report/color-lighting-parity/status-index.json');
-  writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
   writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
@@ -83,7 +82,6 @@ test('rejects an identity mismatch before copying evidence', () => {
   writeFixture(root, 'report/pixel-parity.json');
   writeFixture(root, 'report/pixel-parity-standard-lanes.json');
   writeFixture(root, 'report/color-lighting-parity/status-index.json');
-  writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
   writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
@@ -111,7 +109,6 @@ test('accepts earlier producer attempts during a failed-job retry', () => {
   writeFixture(root, 'report/pixel-parity.json');
   writeFixture(root, 'report/pixel-parity-standard-lanes.json');
   writeFixture(root, 'report/color-lighting-parity/status-index.json');
-  writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
   writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');
@@ -157,7 +154,6 @@ test('rejects a future producer attempt even when earlier attempts are allowed',
   writeFixture(root, 'report/pixel-parity.json');
   writeFixture(root, 'report/pixel-parity-standard-lanes.json');
   writeFixture(root, 'report/color-lighting-parity/status-index.json');
-  writeFixture(root, 'packages/runtime/bench-result.json');
   writeFixture(root, 'report/hello-triangle/fps.json');
   writeFixture(root, 'apps/dual-impl-spike/report/texture-4x4.json');
   writeFixture(root, 'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json');

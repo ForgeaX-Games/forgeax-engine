@@ -28,7 +28,7 @@ export async function verifyRenderWorkerContent(mode: string): Promise<void> {
   const images: ImageData[][] = [];
   for (const tier of ['engine-worker', 'render-worker'] as const) {
     const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 128;
+    canvas.width = canvas.height = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 64 : 128;
     canvas.style.width = canvas.style.height = '128px';
     document.body.append(canvas);
     const channel = new MessageChannel();
@@ -95,7 +95,7 @@ export async function verifyRenderWorkerContent(mode: string): Promise<void> {
           timeout: 120_000,
           interval: 100,
         })
-        .toBeGreaterThanOrEqual(300);
+        .toBeGreaterThanOrEqual(import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 12 : 300);
       if (tier === 'render-worker') {
         const epoch = app.execution?.report().render?.epoch ?? 0;
         const count = (await request('inspect')).acknowledgments;

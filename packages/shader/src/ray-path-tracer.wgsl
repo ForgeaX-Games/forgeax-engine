@@ -1,9 +1,10 @@
 #define_import_path forgeax_ray::path_tracer
 #import forgeax_material::ray_abi::{RayMaterialInput, RayMaterialSurface}
-#import forgeax_pbr::ray_bsdf::{rayBasis, rayBsdfValue, rayBsdfPdf, sampleRayBsdf, rayPowerHeuristic}
+#import forgeax_pbr::ray_bsdf::{RAY_BSDF_LAMBERT, rayBasis, rayBsdfValue, rayBsdfPdf, sampleRayBsdf, rayPowerHeuristic}
+#import forgeax_pbr::ibl_shared::{standardDiffuseWeight}
 #import forgeax_pbr::lighting_attenuation::{evalDistanceAttenuation, evalSpotAttenuation}
 
-#import forgeax_ray::traversal::{Triangle, Node, Ray, Hit, TraceResult, triangles, nodes, traceReference, traceReferenceAfter}
+#import forgeax_ray::traversal::{Triangle, Node, Ray, Hit, TraceResult, triangles, nodes, traceAny, traceOccluder, traceReference, traceReferenceAfter}
 
 struct AttributeVertex { objectPosition: vec4f, color: vec4f, uvA: vec4f, uvB: vec4f, uvC: vec4f, uvD: vec4f, normal: vec4f, tangent: vec4f }
 struct Attributes { a: AttributeVertex, b: AttributeVertex, c: AttributeVertex }
@@ -18,13 +19,34 @@ struct TraceSettings { origin: vec4f, forward: vec4f, right: vec4f, up: vec4f, e
 @group(0) @binding(6) var<storage, read_write> accumulation: array<Accumulation>;
 @group(0) @binding(7) var<uniform> lights: array<TraceLight, 32>;
 @group(0) @binding(8) var<uniform> settings: TraceSettings;
-// One reusable wavefront query per pixel. Original shading state survives shadow queries.
-// state: pending/accepted-or-blocked/clear/invalid, last triangle, light index, reserved.
+// Masked coverage runs as bounded candidate rounds. Each round a ray gathers its
+// ordered alpha candidates into a shared pool in the tail of inputs/surfaces (from
+// `poolBase`), the masked Surface programs run once per pooled candidate through a
+// GPU-sized dispatch, and the ray resolves its candidates in (t, triangle) order.
+// A ray the full pool deferred continues from its cursor in the next round.
 struct CoverageQuery {
-  input: RayMaterialInput, surface: RayMaterialSurface,
-  origin: vec4f, direction: vec4f, contribution: vec4f, state: vec4u,
+  origin: vec4f, direction: vec4f, contribution: vec4f,
+  // status (pending/accepted-or-blocked/clear/invalid), cursor triangle, light index,
+  // candidates consumed.
+  state: vec4u,
+  // first pooled candidate, pooled count | terminal << 8, deferred queue (even, odd round).
+  gather: vec4u,
 }
-@group(0) @binding(9) var<storage, read_write> coverage: array<CoverageQuery>;
+struct Coverage {
+  pool: atomic<u32>, queued: array<atomic<u32>, 2>,
+  // Queries left pending with candidate budget to spare: the rounds ran out.
+  overflow: atomic<u32>,
+  round: u32, capacity: u32, poolBase: u32, padding: u32,
+  queries: array<CoverageQuery>,
+}
+@group(0) @binding(9) var<storage, read_write> coverage: Coverage;
+// Indirect workgroup counts: [0..3) pooled candidates, [3..6) deferred rays.
+@group(1) @binding(0) var<storage, read_write> dispatchArgs: array<u32>;
+const COVERAGE_CANDIDATES = 64u; const COVERAGE_ROUNDS = 3u;
+const NONE = 0xffffffffu;
+const TERMINAL_NONE = 0u;
+const TERMINAL_MISS = 1u;
+const TERMINAL_HIT = 2u;
 
 fn random(state: ptr<function,u32>) -> f32 {
   *state = *state * 747796405u + 2891336453u;
@@ -35,7 +57,20 @@ fn epsilon(position: vec3f) -> f32 { return max(1e-4, max(max(abs(position.x),ab
 fn visible(position: vec3f, normal: vec3f, direction: vec3f, distance: f32) -> bool {
   let offset = epsilon(position);
   let ray = Ray(position + normal*offset, 0.0, direction, max(0.0,distance-offset*2.0), vec4u(255u,0u,0u,0u));
-  return traceReference(ray).hit.ids.x == 0xffffffffu;
+  return traceAny(ray).hit.ids.x == 0xffffffffu;
+}
+// settings.up.w == 1: the first surface responds only as the raster diffuse-GI
+// receiver (the composite's weight, albedo and material occlusion), so an
+// indirect estimate is directly comparable to the diffuse lane.
+fn pathSurface(surface: RayMaterialSurface, input: RayMaterialInput, bounce: u32) -> RayMaterialSurface {
+  if (settings.up.w == 0.0 || bounce != 0u || surface.status.x != 1u) { return surface; }
+  var receiver = surface;
+  let n = surface.normalRoughness.xyz;
+  let weight = standardDiffuseWeight(max(dot(n, input.outgoing.xyz), 0.0),
+    surface.f0Occlusion.xyz, surface.normalRoughness.w, surface.emissionMetallic.w);
+  receiver.albedoOpacity = vec4f(weight * surface.albedoOpacity.rgb * surface.f0Occlusion.w, surface.albedoOpacity.a);
+  receiver.status.y = RAY_BSDF_LAMBERT;
+  return receiver;
 }
 fn uvDensity(a: vec2f, b: vec2f, c: vec2f, e: vec3f, f: vec3f) -> f32 {
   let ee = dot(e,e); let ef = dot(e,f); let ff = dot(f,f);
@@ -83,40 +118,34 @@ fn materialInput(traced: TraceResult, ray: Ray, coneWidth: f32, coneSpread: f32,
 }
 @compute @workgroup_size(64) fn trace(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&paths)) { return; }
-  if (settings.forward.w != 0.0 && coverage[id.x].state.x != 0u) { return; }
-  inputs[id.x].identity = vec4u(0xffffffffu,0u,0u,0u);
+  inputs[id.x].identity = vec4u(NONE,0u,0u,0u);
   surfaces[id.x].status = vec4u(0u);
   var path = paths[id.x];
   if (path.state.x == 0u) { return; }
   let ray = Ray(path.origin.xyz,0.0,path.direction.xyz,settings.environment.w,vec4u(255u,0u,0u,0u));
-  var afterT=0.0; var afterTriangle=0xffffffffu;
-  if (settings.forward.w != 0.0) { afterT=coverage[id.x].contribution.w; afterTriangle=coverage[id.x].state.y; }
-  let traced=traceReferenceAfter(ray,afterT,afterTriangle);
-  let hit = traced.hit;
-  if (hit.ids.x == 0xffffffffu) {
-    if (path.state.y == 0u) { accumulation[id.x].identity=vec4u(0xffffffffu); }
-    var mis = 1.0;
-    if (path.state.y > 0u) { mis = rayPowerHeuristic(path.throughput.w, 1.0/6.28318530718); }
-    path.radiance += vec4f(path.throughput.xyz*settings.environment.xyz*mis,0);
-    path.state.x = 0u; paths[id.x] = path;
-    if (settings.forward.w != 0.0) { coverage[id.x].state.x = 1u; }
-    return;
-  }
+  let traced=traceReference(ray);
+  if (traced.hit.ids.x == NONE) { missPath(id.x); return; }
   inputs[id.x] = materialInput(traced, ray, path.origin.w, path.direction.w, path.state.y);
-  if (path.state.y == 0u) { accumulation[id.x].identity = hit.ids; }
-  // Opaque coverage is known without running its Surface program in every candidate round.
-  if (settings.forward.w != 0.0 && triangles[traced.triangleIndex].maskData.z == 0u) { coverage[id.x].state.x=1u; }
+  if (path.state.y == 0u) { accumulation[id.x].identity = traced.hit.ids; }
+}
+fn missPath(index: u32) {
+  var path = paths[index];
+  if (path.state.y == 0u) { accumulation[index].identity=vec4u(NONE); }
+  var mis = 1.0;
+  if (path.state.y > 0u) { mis = rayPowerHeuristic(path.throughput.w, 1.0/6.28318530718); }
+  path.radiance += vec4f(path.throughput.xyz*settings.environment.xyz*mis,0);
+  path.state.x = 0u; paths[index] = path;
 }
 @compute @workgroup_size(64) fn shade(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&paths)) { return; }
   var path = paths[id.x];
   if (path.state.x == 0u) { return; }
-  let input = inputs[id.x]; let surface = surfaces[id.x];
+  let input = inputs[id.x]; let surface = pathSurface(surfaces[id.x], input, path.state.y);
   if (surface.status.x != 1u) { path.state.x=0u; path.radiance.w=1.0; paths[id.x]=path; return; }
   let n = surface.normalRoughness.xyz; let outgoing = input.outgoing.xyz; let position = input.positionWS.xyz;
   let ng = surface.geometricNormal.xyz;
   if (path.state.y == 0u) {
-    accumulation[id.x].albedo = surface.albedoOpacity;
+    accumulation[id.x].albedo = surfaces[id.x].albedoOpacity;
     accumulation[id.x].normalDepth = vec4f(n,input.positionWS.w);
   }
   // Emissive surfaces are BSDF-sampled only in this baseline, so no competing
@@ -172,35 +201,181 @@ fn materialInput(traced: TraceResult, ray: Ray, coneWidth: f32, coneSpread: f32,
   accumulation[id.x]=a;
 }
 
-@compute @workgroup_size(64) fn beginCoverage(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= arrayLength(&paths)) { return; }
-  coverage[id.x].state=vec4u(select(1u,0u,paths[id.x].state.x!=0u),0xffffffffu,0u,0u);
-  coverage[id.x].contribution=vec4f(0);
-}
-@compute @workgroup_size(64) fn acceptCoverage(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= arrayLength(&paths) || coverage[id.x].state.x != 0u) { return; }
-  let input=inputs[id.x]; let surface=surfaces[id.x];
-  if (surface.status.x == 3u) {
-    coverage[id.x].contribution.w=input.positionWS.w;
-    coverage[id.x].state.y=input.identity.w;
-  } else {
-    coverage[id.x].state.x=1u;
-    if (surface.status.x != 1u) { paths[id.x].radiance.w=1.0; paths[id.x].state.x=0u; }
+// Rays the current round gathers: every pixel first, then the rays the full pool deferred.
+fn gatherRay(index: u32) -> u32 {
+  if (coverage.round == 0u) {
+    if (index >= arrayLength(&paths)) { return NONE; }
+    return index;
   }
+  let list = (coverage.round + 1u) % 2u;
+  if (index >= atomicLoad(&coverage.queued[list])) { return NONE; }
+  return select(coverage.queries[index].gather.z, coverage.queries[index].gather.w, list == 1u);
+}
+// Appends one alpha candidate to the ray's ordered chain; false when the pool is full.
+fn poolCandidate(input: RayMaterialInput, tail: ptr<function,u32>, head: ptr<function,u32>) -> bool {
+  let slot = atomicAdd(&coverage.pool, 1u);
+  if (slot >= coverage.capacity) { return false; }
+  let entry = coverage.poolBase + slot;
+  var linked = input; linked.identity.z = NONE;
+  inputs[entry] = linked;
+  if (*tail == NONE) { *head = entry; } else { inputs[*tail].identity.z = entry; }
+  *tail = entry;
+  return true;
+}
+// Cumulative candidate budget through this round: it doubles per round and only a
+// ray whose earlier window was entirely rejected looks deeper, which bounds the pool
+// spent on candidates behind the one a Surface program accepts.
+fn roundWindow() -> u32 { return COVERAGE_CANDIDATES >> (COVERAGE_ROUNDS - 1u - coverage.round); }
+fn deferRay(ray: u32) {
+  let list = coverage.round % 2u;
+  let k = atomicAdd(&coverage.queued[list], 1u);
+  if (list == 0u) { coverage.queries[k].gather.z = ray; } else { coverage.queries[k].gather.w = ray; }
+}
+@compute @workgroup_size(64) fn beginCoverage(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x == 0u) { resetRounds(); }
+  if (id.x >= arrayLength(&paths)) { return; }
+  coverage.queries[id.x].state=vec4u(select(1u,0u,paths[id.x].state.x!=0u),NONE,0u,0u);
+  coverage.queries[id.x].contribution=vec4f(0);
+}
+fn resetRounds() {
+  coverage.round=0u; atomicStore(&coverage.pool,0u);
+  atomicStore(&coverage.queued[0],0u); atomicStore(&coverage.queued[1],0u);
+}
+// Speculatively walks the ordered candidates from the committed cursor until an
+// opaque hit, a miss, the candidate budget or a full pool ends the round.
+@compute @workgroup_size(64) fn gather(@builtin(global_invocation_id) id: vec3u) {
+  let index = gatherRay(id.x);
+  if (index == NONE) { return; }
+  let q = coverage.queries[index];
+  if (q.state.x != 0u) { return; }
+  inputs[index].identity = vec4u(NONE,0u,0u,0u);
+  surfaces[index].status = vec4u(0u);
+  let path = paths[index];
+  let ray = Ray(path.origin.xyz,0.0,path.direction.xyz,settings.environment.w,vec4u(255u,0u,0u,0u));
+  var afterT = q.contribution.w; var afterTriangle = q.state.y;
+  var head = NONE; var tail = NONE; var pooled = 0u; var terminal = TERMINAL_NONE;
+  let window = roundWindow();
+  while (q.state.w + pooled < window) {
+    let traced = traceReferenceAfter(ray,afterT,afterTriangle);
+    if (traced.hit.ids.x == NONE) { terminal = TERMINAL_MISS; break; }
+    let input = materialInput(traced, ray, path.origin.w, path.direction.w, path.state.y);
+    if (triangles[traced.triangleIndex].maskData.z == 0u) { inputs[index] = input; terminal = TERMINAL_HIT; break; }
+    if (!poolCandidate(input, &tail, &head)) { break; }
+    pooled++; afterT = traced.hit.metrics.x; afterTriangle = traced.triangleIndex;
+  }
+  coverage.queries[index].gather.x = head;
+  coverage.queries[index].gather.y = pooled | (terminal << 8u);
+}
+// Visibility is order-independent: any opaque blocker ends the query; only
+// coverage candidates need their Surface program, nearest first.
+@compute @workgroup_size(64) fn gatherShadow(@builtin(global_invocation_id) id: vec3u) {
+  let index = gatherRay(id.x);
+  if (index == NONE) { return; }
+  let q = coverage.queries[index];
+  if (q.state.x != 0u) { return; }
+  let ray = Ray(q.origin.xyz,0.0,q.direction.xyz,q.direction.w,vec4u(255u,0u,0u,0u));
+  var afterT = q.contribution.w; var afterTriangle = q.state.y;
+  var head = NONE; var tail = NONE; var pooled = 0u; var terminal = TERMINAL_NONE;
+  let window = roundWindow();
+  while (q.state.w + pooled < window) {
+    let traced = traceOccluder(ray,afterT,afterTriangle);
+    if (traced.hit.ids.x == NONE) { terminal = TERMINAL_MISS; break; }
+    if (triangles[traced.triangleIndex].maskData.z == 0u) { terminal = TERMINAL_HIT; break; }
+    if (!poolCandidate(materialInput(traced,ray,q.origin.w,0.0,paths[index].state.y), &tail, &head)) { break; }
+    pooled++; afterT = traced.hit.metrics.x; afterTriangle = traced.triangleIndex;
+  }
+  coverage.queries[index].gather.x = head;
+  coverage.queries[index].gather.y = pooled | (terminal << 8u);
+}
+// Resolves pooled candidates in (t, triangle) order. Returns the first candidate
+// whose Surface program did not reject coverage, or NONE once the chain is rejected.
+fn resolveChain(index: u32, primary: bool) -> u32 {
+  var q = coverage.queries[index];
+  var entry = q.gather.x;
+  for (var i = 0u; i < (q.gather.y & 0xffu); i++) {
+    if (surfaces[entry].status.x != 3u) { return entry; }
+    let input = inputs[entry];
+    q.contribution.w = input.positionWS.w; q.state.y = input.identity.w; q.state.w++;
+    if (primary && paths[index].state.y == 0u) { accumulation[index].identity = triangles[input.identity.w].ids; }
+    entry = input.identity.z;
+  }
+  coverage.queries[index].contribution.w = q.contribution.w;
+  coverage.queries[index].state = q.state;
+  return NONE;
+}
+// The ray is still pending: continue next round, or remain pending once its budget is spent.
+fn continueRay(index: u32) {
+  if (coverage.queries[index].state.w < COVERAGE_CANDIDATES) { deferRay(index); }
+}
+@compute @workgroup_size(64) fn resolve(@builtin(global_invocation_id) id: vec3u) {
+  let index = gatherRay(id.x);
+  if (index == NONE || coverage.queries[index].state.x != 0u) { return; }
+  let accepted = resolveChain(index, true);
+  if (accepted != NONE) {
+    var input = inputs[accepted]; input.identity.z = paths[index].state.y;
+    let surface = surfaces[accepted];
+    inputs[index] = input; surfaces[index] = surface;
+    if (paths[index].state.y == 0u) { accumulation[index].identity = triangles[input.identity.w].ids; }
+    coverage.queries[index].state.x = 1u;
+    if (surface.status.x != 1u) { paths[index].radiance.w=1.0; paths[index].state.x=0u; }
+    return;
+  }
+  switch (coverage.queries[index].gather.y >> 8u) {
+    case TERMINAL_MISS: { missPath(index); coverage.queries[index].state.x = 1u; }
+    case TERMINAL_HIT: {
+      if (paths[index].state.y == 0u) { accumulation[index].identity = triangles[inputs[index].identity.w].ids; }
+      coverage.queries[index].state.x = 1u;
+    }
+    default: { continueRay(index); }
+  }
+}
+@compute @workgroup_size(64) fn resolveShadow(@builtin(global_invocation_id) id: vec3u) {
+  let index = gatherRay(id.x);
+  if (index == NONE || coverage.queries[index].state.x != 0u) { return; }
+  let accepted = resolveChain(index, false);
+  if (accepted != NONE) {
+    coverage.queries[index].state.x = select(3u,1u,surfaces[accepted].status.x==1u);
+    return;
+  }
+  switch (coverage.queries[index].gather.y >> 8u) {
+    case TERMINAL_MISS: { coverage.queries[index].state.x = 2u; }
+    case TERMINAL_HIT: { coverage.queries[index].state.x = 1u; }
+    default: { continueRay(index); }
+  }
+}
+// Single-thread indirect producers: the pooled candidates of this round, then the
+// deferred rays of the next one.
+@compute @workgroup_size(1) fn armMaterials() {
+  let pooled = min(atomicLoad(&coverage.pool), coverage.capacity);
+  dispatchArgs[0] = (pooled + 63u) / 64u; dispatchArgs[1] = 1u; dispatchArgs[2] = 1u;
+}
+@compute @workgroup_size(1) fn armRound() {
+  let list = coverage.round % 2u;
+  dispatchArgs[3] = (atomicLoad(&coverage.queued[list]) + 63u) / 64u; dispatchArgs[4] = 1u; dispatchArgs[5] = 1u;
+  atomicStore(&coverage.pool, 0u);
+  atomicStore(&coverage.queued[1u - list], 0u);
+  coverage.round++;
+}
+// Exhaustion is an invalid sample, never an unoccluded approximation. A ray that
+// still had budget ran out of rounds instead: counted, and equally invalid.
+fn sealQuery(index: u32) {
+  let q = coverage.queries[index];
+  if (q.state.x != 0u && q.state.x != 3u) { return; }
+  if (q.state.x == 0u && q.state.w < COVERAGE_CANDIDATES) { atomicAdd(&coverage.overflow, 1u); }
+  paths[index].radiance.w=1.0; paths[index].state.x=0u;
 }
 @compute @workgroup_size(64) fn sealCoverage(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&paths)) { return; }
-  // Exhaustion is an invalid sample, never an unoccluded approximation.
-  if (coverage[id.x].state.x == 0u) { paths[id.x].radiance.w=1.0; paths[id.x].state.x=0u; }
-  coverage[id.x].input=inputs[id.x]; coverage[id.x].surface=surfaces[id.x];
+  sealQuery(id.x);
 }
+// The shading point stays in inputs/surfaces[ray]: shadow candidates live in the pool.
 @compute @workgroup_size(64) fn beginShadow(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x == 0u) { resetRounds(); }
   if (id.x >= arrayLength(&paths)) { return; }
-  var q=coverage[id.x];
-  q.state.x=1u; q.state.y=0xffffffffu; q.contribution=vec4f(0);
-  inputs[id.x].identity.y=0u;
-  if (paths[id.x].state.x == 0u) { coverage[id.x]=q; return; }
-  let surface=q.surface; let input=q.input; let position=input.positionWS.xyz;
+  var q=coverage.queries[id.x];
+  q.state=vec4u(1u,NONE,q.state.z,0u); q.contribution=vec4f(0);
+  if (paths[id.x].state.x == 0u) { coverage.queries[id.x]=q; return; }
+  let input=inputs[id.x]; let surface=pathSurface(surfaces[id.x],input,paths[id.x].state.y); let position=input.positionWS.xyz;
   let n=surface.normalRoughness.xyz; let ng=surface.geometricNormal.xyz; let outgoing=input.outgoing.xyz;
   var incoming=vec3f(0); var distance=settings.environment.w; var incident=vec3f(0);
   if (q.state.z < u32(settings.right.w)) {
@@ -230,33 +405,12 @@ fn materialInput(traced: TraceResult, ray: Ray, coneWidth: f32, coneSpread: f32,
     q.direction=vec4f(incoming,max(0.0,distance-offset*2.0));
     q.contribution=vec4f(contribution,0);
   }
-  coverage[id.x]=q;
-}
-@compute @workgroup_size(64) fn traceShadow(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= arrayLength(&paths)) { return; }
-  inputs[id.x].identity.y=0u; surfaces[id.x].status.x=0u;
-  var q=coverage[id.x];
-  if (q.state.x != 0u) { return; }
-  let ray=Ray(q.origin.xyz,0.0,q.direction.xyz,q.direction.w,vec4u(255u,0u,0u,0u));
-  let traced=traceReferenceAfter(ray,q.contribution.w,q.state.y);
-  if (traced.hit.ids.x == 0xffffffffu) { coverage[id.x].state.x=2u; return; }
-  // The producer marks only materials requiring coverage evaluation.
-  if (triangles[traced.triangleIndex].maskData.z == 0u) { coverage[id.x].state.x=1u; return; }
-  inputs[id.x]=materialInput(traced,ray,q.origin.w,0.0,paths[id.x].state.y);
-}
-@compute @workgroup_size(64) fn acceptShadow(@builtin(global_invocation_id) id: vec3u) {
-  if (id.x >= arrayLength(&paths) || coverage[id.x].state.x != 0u) { return; }
-  let input=inputs[id.x]; let surface=surfaces[id.x];
-  if (surface.status.x == 3u) {
-    coverage[id.x].contribution.w=input.positionWS.w;
-    coverage[id.x].state.y=input.identity.w;
-  } else { coverage[id.x].state.x=select(3u,1u,surface.status.x==1u); }
+  coverage.queries[id.x]=q;
 }
 @compute @workgroup_size(64) fn endShadow(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= arrayLength(&paths)) { return; }
-  let q=coverage[id.x];
+  let q=coverage.queries[id.x];
   if (q.state.x == 2u) { paths[id.x].radiance+=vec4f(paths[id.x].throughput.xyz*q.contribution.xyz,0); }
-  if (q.state.x == 0u || q.state.x == 3u) { paths[id.x].radiance.w=1.0; paths[id.x].state.x=0u; }
-  inputs[id.x]=q.input; surfaces[id.x]=q.surface;
-  coverage[id.x].state.z++;
+  sealQuery(id.x);
+  coverage.queries[id.x].state.z++;
 }

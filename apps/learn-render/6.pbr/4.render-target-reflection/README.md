@@ -62,7 +62,7 @@ world.spawn({
   data: { target: targetHandle, near: 0.1, far: 20, updateIntent: 0, requestVersion: 0, faceBudget: 6 },
 });
 // Bind `material` to the display mesh; it samples the promoted cube source.
-const ticketResult = renderer.requestTargetReadback(target, { mipLevel: 0, face: 0 });
+const ticketResult = renderer.requestTargetReadback(target, { mipLevel: 0, layer: 0 });
 if (!ticketResult.ok) throw ticketResult.error;
 const ticket = ticketResult.value;
 const receiptResult = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });

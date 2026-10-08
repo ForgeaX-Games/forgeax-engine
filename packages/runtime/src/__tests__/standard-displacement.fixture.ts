@@ -122,6 +122,7 @@ export async function verifyStandardDisplacement(
   renderer: Renderer,
   recorder: import('@forgeax/engine-rhi-debug').RecorderAttachment,
   save: Save,
+  frameCount = 60,
 ) {
   const world = new World();
   const errors: unknown[] = [];
@@ -310,6 +311,7 @@ export async function verifyStandardDisplacement(
             materials: [world.allocSharedRef('MaterialAsset', material)],
           })
           .unwrap();
+        let completedFrames = 0;
         const draw = async () => {
           world.update(1 / 60).unwrap();
           propagateTransforms(world).unwrap();
@@ -322,9 +324,10 @@ export async function verifyStandardDisplacement(
             }),
           );
           renderValue(await r.completed);
+          completedFrames++;
           return r;
         };
-        for (let i = 0; i < 59; i++) await draw();
+        for (let i = 1; i < frameCount; i++) await draw();
         renderValue(required(renderer.requestObservation?.(['linear-hdr'])));
         const capture = ['flat', 'dense', 'dense-gpu', 'oracle'].includes(entry.name)
           ? recorder.captureFrame()
@@ -342,7 +345,7 @@ export async function verifyStandardDisplacement(
         const facts: Record<string, unknown> = {
           renderPath,
           case: entry.name,
-          completedFrames: 60,
+          completedFrames,
         };
         if (capture) {
           const encoded = (await capture).unwrap();
@@ -366,7 +369,8 @@ export async function verifyStandardDisplacement(
           const lighting = model.works.find((w) =>
             w.pipeline.shaders.some((s) =>
               renderPath === 'forward'
-                ? s.entryPoint === 'fs_main' && s.source?.includes('displaceVertex')
+                ? (s.entryPoint === 'fs_main' || s.entryPoint === 'fs_opaque') &&
+                  s.source?.includes('displaceVertex')
                 : s.entryPoint?.startsWith('fs_standard_deferred'),
             ),
           );
@@ -384,7 +388,9 @@ export async function verifyStandardDisplacement(
             // The last forward object is the receiver: inspect after every color draw.
             const colorWorks = model.works.filter((w) =>
               w.pipeline.shaders.some(
-                (s) => s.entryPoint === 'fs_main' && s.source?.includes('displaceVertex'),
+                (s) =>
+                  (s.entryPoint === 'fs_main' || s.entryPoint === 'fs_opaque') &&
+                  s.source?.includes('displaceVertex'),
               ),
             );
             const work = renderPath === 'forward' ? required(colorWorks.at(-1)) : lighting;
@@ -434,7 +440,9 @@ export async function verifyStandardDisplacement(
                   (w) =>
                     w.pipeline.shaders.some(
                       (shader) =>
-                        shader.entryPoint === 'fs_main' || shader.entryPoint === 'fs_gbuffer',
+                        shader.entryPoint === 'fs_main' ||
+                        shader.entryPoint === 'fs_opaque' ||
+                        shader.entryPoint === 'fs_gbuffer',
                     ) &&
                     w.bindings.some(
                       (binding) =>

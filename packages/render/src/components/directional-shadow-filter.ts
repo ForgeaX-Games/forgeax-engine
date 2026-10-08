@@ -55,3 +55,16 @@ export function directionalShadowQualityFromF32(
       return undefined;
   }
 }
+
+/**
+ * Largest texel radius a receiver lookup can sample around its projected
+ * position: the PCF half-kernel, or the PCSS blocker search and penumbra bound.
+ */
+export function directionalShadowFilterRadiusTexels(quality: DirectionalShadowQuality): number {
+  switch (quality.kind) {
+    case 'pcf':
+      return (quality.kernel - 1) / 2;
+    case 'pcss':
+      return Math.max(quality.preset === 'medium' ? 2 : 3, quality.maxPenumbraTexels);
+  }
+}

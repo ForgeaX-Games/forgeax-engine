@@ -125,7 +125,9 @@ Resource preview operations are Engine-owned host-realm plugins. Discover the ex
 `forgeax help asset preview --json`; `forgeax asset preview --kind material --guid <guid> --json`
 selects the existing material preview operation. Material, mesh, texture and VFX subjects are
 supported; scene assets are not currently preview subjects. Mesh framing derives from the asset
-AABB; texture preview uses an aspect-preserving unlit presentation.
+AABB; texture preview uses an aspect-preserving unlit presentation. A Standard material result also
+carries `sampledTextureBudget` (`limit`, `required`, `transmission`, `conflicts`) at the portable
+16-texture limit; `transmission: "exceeded"` means refraction drops on 16-texture devices.
 `forgeax dev start` runs the source-development asset path. `forgeax project preview` verifies and
 serves built `dist/`; it does not start a source-development server.
 
@@ -536,7 +538,8 @@ forgeax dev eval queries the current instance; domain plugins own import, Cook, 
 Start with [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md) to capture the real failing frame.
 forgeax dev start --rhi-capture true enables the recorder; after reproduction, forgeax debug rhi capture
 invokes the live host and persists the tape without automatically starting App. Offline forgeax debug rhi summary and
-forgeax debug rhi inspect consume the same path/digest and select work by workIndex.
+forgeax debug rhi inspect consume the same path/digest and select work by workIndex; forgeax debug rhi read
+batches up to 64 buffer/texture/binding reads (records, images, atlas-tile PNGs) in one replay; forgeax debug rhi timing reports replay GPU time per pass.
 Discover argument/output contracts through forgeax help debug rhi --tree --json.
 
 ## State and asset commands

@@ -104,7 +104,11 @@ function record(guid, authored, resolvedValues, parent) {
         digest: artifactDigest,
         bytes: artifactBytes,
       },
-      selections: [{ pass: 'Forward', context: PROGRAM_CONTEXT }],
+      // This custom program declares no atmosphere-dependent code; both device
+      // capabilities consume these identical producer-compiled bytes.
+      selections: ['storage-buffer', 'storage-buffer-atmosphere'].map(capability => ({
+        pass: 'Forward', context: { ...PROGRAM_CONTEXT, capability },
+      })),
     },
   ];
   const programSetDigest = createMaterialProgramSetDigest(programs, passes);

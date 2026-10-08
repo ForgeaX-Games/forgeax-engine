@@ -2,70 +2,18 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
+import { cloudAtmosphereEntries } from './cloud-atmosphere-entries';
 
 const DEFINE_IMPORT_PATH_RE = /^\s*#define_import_path\s+([A-Za-z0-9_.:-]+)/m;
 
 export interface EngineShaderFile {
   readonly id: string;
+  readonly defines?: Readonly<Record<string, boolean>>;
   readonly source: string;
   readonly reservedIdentifier?: string | undefined;
 }
 
-export interface EngineShaderEntries {
-  readonly defaultStandardPbr: EngineShaderFile;
-  readonly defaultStandardPbrSkin: EngineShaderFile;
-  readonly singleLayerMedium: EngineShaderFile;
-  readonly unlit: EngineShaderFile;
-  readonly pointsLines: EngineShaderFile;
-  readonly tonemap: EngineShaderFile;
-  readonly analyticFog: EngineShaderFile;
-  /** Renderer-owned seeded 3D cloud density and optical helpers. */
-  readonly cloudLayer: EngineShaderFile;
-  readonly taaResolve: EngineShaderFile;
-  readonly motionBlur: EngineShaderFile;
-  readonly depthOfField: EngineShaderFile;
-  readonly depthOfFieldMsaa: EngineShaderFile;
-  readonly shadowCaster: EngineShaderFile;
-  readonly sprite: EngineShaderFile;
-  readonly spriteLit: EngineShaderFile;
-  readonly msdfText: EngineShaderFile;
-  readonly iblEquirectToCube: EngineShaderFile;
-  readonly iblIrradiance: EngineShaderFile;
-  readonly iblPrefilter: EngineShaderFile;
-  readonly iblBrdfLut: EngineShaderFile;
-  readonly probeBackground: EngineShaderFile;
-  readonly fxaa: EngineShaderFile;
-  readonly bloomDownsample: EngineShaderFile;
-  readonly bloomUpsample: EngineShaderFile;
-  readonly bloomComposite: EngineShaderFile;
-  /** Renderer-owned volumetric-fog utility entry points. */
-  readonly volumeInject: EngineShaderFile;
-  readonly volumeTemporal: EngineShaderFile;
-  readonly volumeIntegrate: EngineShaderFile;
-  readonly volumeComposite: EngineShaderFile;
-  readonly skybox: EngineShaderFile;
-  /** Renderer-owned analytic-atmosphere cube producer and background consumer. */
-  readonly atmosphereCube: EngineShaderFile;
-  readonly atmosphereBackground: EngineShaderFile;
-  readonly atmosphereIbl: EngineShaderFile;
-  readonly hdrpSsao: EngineShaderFile;
-  /** Renderer-owned shared closest-depth pyramid producer. */
-  readonly depthPyramidSeed: EngineShaderFile;
-  readonly depthPyramidReduce: EngineShaderFile;
-  /** Renderer-owned spatial SSR utility entry points. */
-  readonly ssrTrace: EngineShaderFile;
-  readonly ssrTemporal: EngineShaderFile;
-  readonly ssrCompose: EngineShaderFile;
-  readonly rayQuery: EngineShaderFile;
-  readonly rayPathTracer: EngineShaderFile;
-  readonly rayRasterSource: EngineShaderFile;
-  readonly rayDiffuseComposite: EngineShaderFile;
-  readonly rayDiffuseReconstruct: EngineShaderFile;
-  readonly standardDeferred: EngineShaderFile;
-  readonly decalProject: EngineShaderFile;
-  readonly decalApply: EngineShaderFile;
-  readonly imports: Record<string, string>;
-}
+export type EngineShaderEntries = Awaited<ReturnType<typeof loadEngineShaderEntries>>;
 
 export function extractDefineImportPath(source: string): string | undefined {
   return DEFINE_IMPORT_PATH_RE.exec(source)?.[1];
@@ -81,320 +29,189 @@ export function projectSurfaceSlotSource(source: string): string {
   );
 }
 
-function readEntry(
-  srcDir: string,
-  fileName: string,
-  reservedIdentifier?: string,
-): Promise<EngineShaderFile> {
-  const id = resolve(srcDir, fileName);
-  return readFile(id, 'utf8').then((source) => ({
-    id,
-    source,
-    ...(reservedIdentifier === undefined ? {} : { reservedIdentifier }),
-  }));
+async function resolveEntries<T extends Record<string, unknown>>(
+  entries: T,
+): Promise<{ [K in keyof T]: Awaited<T[K]> }> {
+  const resolved = await Promise.all(
+    Object.entries(entries).map(async ([key, value]) => [key, await value]),
+  );
+  // Object.entries retains every own key; each value is resolved without changing its shape.
+  return Object.fromEntries(resolved) as { [K in keyof T]: Awaited<T[K]> };
 }
 
 /** Load canonical Engine shader entries and their import closure. */
-export async function loadEngineShaderEntries(): Promise<EngineShaderEntries> {
+export async function loadEngineShaderEntries() {
   const require = createRequire(import.meta.url);
   const packageJsonPath = require.resolve('@forgeax/engine-shader/package.json');
   const srcDir = resolve(dirname(packageJsonPath), 'src');
-  const entries = await Promise.all([
-    readEntry(srcDir, 'default-standard-pbr.wgsl', 'forgeax::default-standard-pbr'),
-    readEntry(srcDir, 'default-standard-pbr-skin.wgsl', 'forgeax::pbr-skin'),
-    readEntry(srcDir, 'single-layer-medium.wgsl', 'forgeax::single-layer-medium'),
-    readEntry(srcDir, 'unlit.wgsl', 'forgeax::default-unlit'),
-    readEntry(srcDir, 'points-lines.wgsl', 'forgeax::points-lines'),
-    readEntry(srcDir, 'tonemap.wgsl'),
-    readEntry(srcDir, 'analytic-fog.wgsl', 'forgeax::analytic-fog'),
-    readEntry(srcDir, 'cloud.wgsl'),
-    readEntry(srcDir, 'taa-resolve.wgsl'),
-    readEntry(srcDir, 'motion-blur.wgsl'),
-    readEntry(srcDir, 'depth-of-field.wgsl'),
-    readEntry(srcDir, 'depth-of-field-msaa.wgsl'),
-    readEntry(srcDir, 'shadow_caster.wgsl', 'forgeax::default-shadow-caster'),
-    readEntry(srcDir, 'sprite.wgsl', 'forgeax::sprite'),
-    readEntry(srcDir, 'sprite-lit.wgsl', 'forgeax::sprite-lit'),
-    readEntry(srcDir, 'msdf-text.wgsl', 'forgeax::msdf-text'),
-    readEntry(srcDir, 'ibl-equirect-to-cube.wgsl'),
-    readEntry(srcDir, 'ibl-irradiance.wgsl'),
-    readEntry(srcDir, 'ibl-prefilter.wgsl'),
-    readEntry(srcDir, 'ibl-brdf-lut.wgsl'),
-    readEntry(srcDir, 'ibl-probe-background.wgsl'),
-    readEntry(srcDir, 'fxaa.wgsl'),
-    readEntry(srcDir, 'bloom-downsample.wgsl'),
-    readEntry(srcDir, 'bloom-upsample.wgsl'),
-    readEntry(srcDir, 'bloom-composite.wgsl'),
-    readEntry(srcDir, 'volume/volume-inject.wgsl'),
-    readEntry(srcDir, 'volume/volume-temporal.wgsl'),
-    readEntry(srcDir, 'volume/volume-integrate.wgsl'),
-    readEntry(srcDir, 'volume/volume-composite.wgsl'),
-    readEntry(srcDir, 'skybox.wgsl'),
-    readEntry(srcDir, 'atmosphere-cubemap.wgsl'),
-    readEntry(srcDir, 'atmosphere-background.wgsl'),
-    readEntry(srcDir, 'atmosphere-ibl.wgsl'),
-    readEntry(srcDir, 'hdrp-ssao.wgsl'),
-    readEntry(srcDir, 'depth-pyramid-seed.wgsl'),
-    readEntry(srcDir, 'depth-pyramid-reduce.wgsl'),
-    readEntry(srcDir, 'ssr-trace.wgsl'),
-    readEntry(srcDir, 'ssr-temporal.wgsl'),
-    readEntry(srcDir, 'ssr-compose.wgsl'),
-    readEntry(srcDir, 'ray-query.wgsl'),
-    readEntry(srcDir, 'ray-path-tracer.wgsl'),
-    readEntry(srcDir, 'ray-raster-source.wgsl'),
-    readEntry(srcDir, 'ray-diffuse-composite.wgsl'),
-    readEntry(srcDir, 'ray-diffuse-reconstruct.wgsl'),
-    readEntry(
-      srcDir,
+  const sourceReads = new Map<string, Promise<string>>();
+  const readSource = (fileName: string): Promise<string> => {
+    let source = sourceReads.get(fileName);
+    if (source === undefined) {
+      source = readFile(resolve(srcDir, fileName), 'utf8');
+      sourceReads.set(fileName, source);
+    }
+    return source;
+  };
+  const readEntry = (
+    fileName: string,
+    reservedIdentifier?: string,
+    defines?: Readonly<Record<string, boolean>>,
+  ): Promise<EngineShaderFile> =>
+    readSource(fileName).then((source) => ({
+      id: resolve(srcDir, fileName),
+      source,
+      ...(defines === undefined ? {} : { defines }),
+      ...(reservedIdentifier === undefined ? {} : { reservedIdentifier }),
+    }));
+  const entries = {
+    defaultStandardPbr: readEntry('default-standard-pbr.wgsl', 'forgeax::default-standard-pbr'),
+    defaultStandardPbrSkin: readEntry('default-standard-pbr-skin.wgsl', 'forgeax::pbr-skin'),
+    singleLayerMedium: readEntry('single-layer-medium.wgsl', 'forgeax::single-layer-medium'),
+    unlit: readEntry('unlit.wgsl', 'forgeax::default-unlit'),
+    pointsLines: readEntry('points-lines.wgsl', 'forgeax::points-lines'),
+    tonemap: readEntry('tonemap.wgsl'),
+    analyticFog: readEntry('analytic-fog.wgsl', 'forgeax::analytic-fog'),
+    cloudLayer: readEntry('cloud.wgsl'),
+    taaResolve: readEntry('taa-resolve.wgsl'),
+    motionBlur: readEntry('motion-blur.wgsl'),
+    depthOfField: readEntry('depth-of-field.wgsl'),
+    depthOfFieldMsaa: readEntry('depth-of-field-msaa.wgsl'),
+    shadowCaster: readEntry('shadow_caster.wgsl', 'forgeax::default-shadow-caster'),
+    sprite: readEntry('sprite.wgsl', 'forgeax::sprite'),
+    spriteLit: readEntry('sprite-lit.wgsl', 'forgeax::sprite-lit'),
+    msdfText: readEntry('msdf-text.wgsl', 'forgeax::msdf-text'),
+    iblEquirectToCube: readEntry('ibl-equirect-to-cube.wgsl'),
+    iblIrradiance: readEntry('ibl-irradiance.wgsl'),
+    iblPrefilter: readEntry('ibl-prefilter.wgsl'),
+    iblBrdfLut: readEntry('ibl-brdf-lut.wgsl'),
+    probeBackground: readEntry('ibl-probe-background.wgsl'),
+    fxaa: readEntry('fxaa.wgsl'),
+    bloomDownsample: readEntry('bloom-downsample.wgsl'),
+    bloomUpsample: readEntry('bloom-upsample.wgsl'),
+    bloomComposite: readEntry('bloom-composite.wgsl'),
+    volumeInject: readEntry('volume/volume-inject.wgsl'),
+    volumeTemporal: readEntry('volume/volume-temporal.wgsl'),
+    volumeIntegrate: readEntry('volume/volume-integrate.wgsl'),
+    volumeComposite: readEntry('volume/volume-composite.wgsl'),
+    skybox: readEntry('skybox.wgsl'),
+    atmosphereCube: readEntry('atmosphere-cubemap.wgsl'),
+    atmosphereBackground: readEntry('atmosphere-background.wgsl', undefined, {
+      ATMOSPHERE_UTILITY_SHADOWS: true,
+    }),
+    atmosphereIbl: readEntry('atmosphere-ibl.wgsl'),
+    atmosphereLuts: readEntry('atmosphere-luts.wgsl', undefined, {
+      ATMOSPHERE_UTILITY_SHADOWS: true,
+    }),
+    atmosphereCompose: readEntry('atmosphere-compose.wgsl', undefined, {
+      ATMOSPHERE_UTILITY_SHADOWS: true,
+    }),
+    hdrpSsao: readEntry('hdrp-ssao.wgsl'),
+    depthPyramidSeed: readEntry('depth-pyramid-seed.wgsl'),
+    depthPyramidReduce: readEntry('depth-pyramid-reduce.wgsl'),
+    ssrTrace: readEntry('ssr-trace.wgsl'),
+    ssrTemporal: readEntry('ssr-temporal.wgsl'),
+    ssrCompose: readEntry('ssr-compose.wgsl'),
+    rayQuery: readEntry('ray-query.wgsl'),
+    rayPathTracer: readEntry('ray-path-tracer.wgsl'),
+    rayRasterSource: readEntry('ray-raster-source.wgsl'),
+    rayProbePlacement: readEntry('ray-probe-placement.wgsl'),
+    rayDiffuseComposite: readEntry('ray-diffuse-composite.wgsl'),
+    rayDiffuseReconstruct: readEntry('ray-diffuse-reconstruct.wgsl'),
+    rayIrradianceField: readEntry('ray-irradiance-field.wgsl', undefined, {
+      IRRADIANCE_FIELD_VISIBILITY: true,
+    }),
+    rayBakedField: readEntry('ray-irradiance-field.wgsl', undefined, {
+      IRRADIANCE_FIELD_VISIBILITY: false,
+    }).then((file) => ({ ...file, id: `${file.id}?baked` })),
+    rayScreenProbe: readEntry('ray-screen-probe.wgsl', undefined, {
+      IRRADIANCE_FIELD_VISIBILITY: true,
+    }),
+    rayReflectionComposite: readEntry('ray-reflection-composite.wgsl'),
+    standardDeferred: readEntry(
       'standard-deferred-lighting.wgsl',
       'forgeax::engine-standard-deferred-lighting',
     ),
-    readEntry(srcDir, 'decal-project.wgsl', 'forgeax::engine-decal-project'),
-    readEntry(srcDir, 'decal-apply.wgsl', 'forgeax::engine-decal-apply'),
-    readFile(resolve(srcDir, 'common.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'output-encoding.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'brdf.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'pbr-temporal.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'scene-temporal.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'fog.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'standard-cluster.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-shared.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-equirect-to-cube.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-irradiance.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-prefilter.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-brdf-lut.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'ibl-sampling.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'tbn.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-directional.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-punctual.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-spot-modifiers.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-rect-area.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-probe.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-attenuation.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'lighting-spot-projector.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'fxaa.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'bloom-downsample.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'bloom-upsample.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'bloom-composite.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'skybox.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'atmosphere-daylight.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'hdrp-ssao.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'shadow-pcf.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'material/physical/clearcoat.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'material/physical/anisotropy.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'material/physical/sheen.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'material/physical/iridescence.wgsl'), 'utf8'),
+    decalProject: readEntry('decal-project.wgsl', 'forgeax::engine-decal-project'),
+    decalApply: readEntry('decal-apply.wgsl', 'forgeax::engine-decal-apply'),
+  };
+  const imports = {
+    'forgeax_material::terrain_vertex': readSource('terrain-vertex.wgsl'),
+    'forgeax_material::terrain_surface': readSource('terrain-surface.wgsl'),
+    'forgeax_ray::irradiance_field_sample': readSource('ray-irradiance-field-sample.wgsl'),
+    'forgeax_ray::traversal': readSource('ray-traversal.wgsl'),
+    'forgeax_material::ray_abi': readSource('ray-material-abi.wgsl'),
+    'forgeax_pbr::ray_bsdf': readSource('ray-bsdf.wgsl'),
+    'forgeax_material::displacement': readSource('standard-displacement.wgsl'),
+    'forgeax_material::standard_surface': readSource('standard-surface.wgsl'),
+    'forgeax_clipping::planes': readSource('clipping.wgsl'),
+    'forgeax_shadow::surface': readSource('shadow-surface.wgsl'),
+    'forgeax_view::common': readSource('common.wgsl'),
+    'forgeax_view::output_encoding': readSource('output-encoding.wgsl'),
+    'forgeax_pbr::brdf': readSource('brdf.wgsl'),
+    'forgeax_pbr::specular_aa': readSource('specular-aa.wgsl'),
+    'forgeax_pbr::temporal': readSource('pbr-temporal.wgsl'),
+    forgeax_scene_temporal: readSource('scene-temporal.wgsl'),
+    'forgeax_view::fog': readSource('fog.wgsl'),
+    'forgeax_cloud::layer': entries.cloudLayer.then((file) => file.source),
+    'forgeax_standard::cluster': readSource('standard-cluster.wgsl'),
+    'forgeax_pbr::ibl_shared': readSource('ibl-shared.wgsl'),
+    'forgeax_pbr::ibl_equirect_to_cube': readSource('ibl-equirect-to-cube.wgsl'),
+    'forgeax_pbr::ibl_irradiance': readSource('ibl-irradiance.wgsl'),
+    'forgeax_pbr::ibl_prefilter': readSource('ibl-prefilter.wgsl'),
+    'forgeax_pbr::ibl_brdf_lut': readSource('ibl-brdf-lut.wgsl'),
+    'forgeax_pbr::ibl_sampling': readSource('ibl-sampling.wgsl'),
+    'forgeax_pbr::tbn': readSource('tbn.wgsl'),
+    'forgeax_pbr::lighting_directional': readSource('lighting-directional.wgsl'),
+    'forgeax_pbr::lighting_punctual': readSource('lighting-punctual.wgsl'),
+    'forgeax_pbr::lighting_spot_modifiers': readSource('lighting-spot-modifiers.wgsl'),
+    'forgeax_pbr::lighting_rect_area': readSource('lighting-rect-area.wgsl'),
+    'forgeax_pbr::lighting_probe': readSource('lighting-probe.wgsl'),
+    'forgeax_pbr::lighting_attenuation': readSource('lighting-attenuation.wgsl'),
+    'forgeax_pbr::lighting_spot_projector': readSource('lighting-spot-projector.wgsl'),
+    'forgeax_view::fxaa': readSource('fxaa.wgsl'),
+    'forgeax_view::bloom_downsample': readSource('bloom-downsample.wgsl'),
+    'forgeax_view::bloom_upsample': readSource('bloom-upsample.wgsl'),
+    'forgeax_view::bloom_composite': readSource('bloom-composite.wgsl'),
+    'forgeax_view::skybox': readSource('skybox.wgsl'),
+    'forgeax_view::atmosphere': readSource('view-atmosphere.wgsl'),
+    'forgeax_atmosphere::visibility': readSource('atmosphere-visibility.wgsl'),
+    'forgeax_atmosphere::sampling': readSource('atmosphere-sampling.wgsl'),
+    'forgeax_atmosphere::optics': readSource('atmosphere-optics.wgsl'),
+    'forgeax_atmosphere::coordinates': readSource('atmosphere-coordinates.wgsl'),
+    'forgeax_hdrp::ssao': readSource('hdrp-ssao.wgsl'),
+    'forgeax_pbr::standard_lighting': readSource('standard-lighting.wgsl'),
+    'forgeax_pbr::gbuffer': readSource('standard-gbuffer.wgsl'),
+    'forgeax_pbr::gbuffer_output': readSource('standard-gbuffer-output.wgsl'),
+    'forgeax_depth_pyramid::sample': readSource('depth-pyramid-sample.wgsl'),
+    'forgeax_pbr::shadow_pcf': readSource('shadow-pcf.wgsl'),
+    'forgeax_pbr::clearcoat': readSource('material/physical/clearcoat.wgsl'),
+    'forgeax_pbr::anisotropy': readSource('material/physical/anisotropy.wgsl'),
+    'forgeax_pbr::sheen': readSource('material/physical/sheen.wgsl'),
+    'forgeax_pbr::iridescence': readSource('material/physical/iridescence.wgsl'),
+    'forgeax_material::alpha_hash': readSource('alpha-hash.wgsl'),
+    'forgeax_material::oit': readSource('oit.wgsl'),
+    'forgeax_material::surface_v1': readSource('surface_v1.wgsl'),
+    'forgeax_material::single_layer_medium_surface_v1': readSource(
+      'single-layer-medium-surface_v1.wgsl',
+    ),
+    'forgeax_material::default_single_layer_medium_surface': readSource(
+      'default_single_layer_medium_surface.wgsl',
+    ),
+    'forgeax_material::default_standard_surface': readSource('default_standard_surface.wgsl'),
+    'forgeax_material::surface_sampling': readSource('surface-sampling.wgsl'),
+    [SURFACE_SLOT_MODULE]: readSource('default_standard_surface.wgsl').then(
+      projectSurfaceSlotSource,
+    ),
+  };
+  const [resolvedEntries, resolvedImports] = await Promise.all([
+    resolveEntries(entries),
+    resolveEntries(imports),
   ]);
-  const [
-    surfaceV1,
-    defaultStandardSurface,
-    surfaceSampling,
-    singleLayerMediumSurface,
-    defaultSingleLayerMediumSurface,
-  ] = await Promise.all([
-    readFile(resolve(srcDir, 'surface_v1.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'default_standard_surface.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'surface-sampling.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'single-layer-medium-surface_v1.wgsl'), 'utf8'),
-    readFile(resolve(srcDir, 'default_single_layer_medium_surface.wgsl'), 'utf8'),
-  ]);
-  const [
-    defaultStandardPbr,
-    defaultStandardPbrSkin,
-    singleLayerMedium,
-    unlit,
-    pointsLines,
-    tonemap,
-    analyticFog,
-    cloudLayer,
-    taaResolve,
-    motionBlur,
-    depthOfField,
-    depthOfFieldMsaa,
-    shadowCaster,
-    sprite,
-    spriteLit,
-    msdfText,
-    iblEquirectToCube,
-    iblIrradiance,
-    iblPrefilter,
-    iblBrdfLut,
-    probeBackground,
-    fxaa,
-    bloomDownsample,
-    bloomUpsample,
-    bloomComposite,
-    volumeInject,
-    volumeTemporal,
-    volumeIntegrate,
-    volumeComposite,
-    skybox,
-    atmosphereCube,
-    atmosphereBackground,
-    atmosphereIbl,
-    hdrpSsao,
-    depthPyramidSeed,
-    depthPyramidReduce,
-    ssrTrace,
-    ssrTemporal,
-    ssrCompose,
-    rayQuery,
-    rayPathTracer,
-    rayRasterSource,
-    rayDiffuseComposite,
-    rayDiffuseReconstruct,
-    standardDeferred,
-    decalProject,
-    decalApply,
-    common,
-    outputEncoding,
-    brdf,
-    temporal,
-    sceneTemporal,
-    fog,
-    standardCluster,
-    iblShared,
-    iblEquirectToCubeImport,
-    iblIrradianceImport,
-    iblPrefilterImport,
-    iblBrdfLutImport,
-    iblSampling,
-    tbn,
-    lightingDirectional,
-    lightingPunctual,
-    lightingSpotModifiers,
-    lightingRectArea,
-    lightingProbe,
-    lightingAttenuation,
-    lightingSpotProjector,
-    fxaaImport,
-    bloomDownsampleImport,
-    bloomUpsampleImport,
-    bloomCompositeImport,
-    skyboxImport,
-    atmosphereDaylight,
-    hdrpSsaoImport,
-    shadowPcf,
-    clearcoat,
-    anisotropy,
-    sheen,
-    iridescence,
-  ] = entries;
   return {
-    defaultStandardPbr,
-    defaultStandardPbrSkin,
-    singleLayerMedium,
-    unlit,
-    pointsLines,
-    tonemap,
-    analyticFog,
-    cloudLayer,
-    taaResolve,
-    motionBlur,
-    depthOfField,
-    depthOfFieldMsaa,
-    shadowCaster,
-    sprite,
-    spriteLit,
-    msdfText,
-    iblEquirectToCube,
-    iblIrradiance,
-    iblPrefilter,
-    iblBrdfLut,
-    probeBackground,
-    fxaa,
-    bloomDownsample,
-    bloomUpsample,
-    bloomComposite,
-    volumeInject,
-    volumeTemporal,
-    volumeIntegrate,
-    volumeComposite,
-    skybox,
-    atmosphereCube,
-    atmosphereBackground,
-    atmosphereIbl,
-    hdrpSsao,
-    depthPyramidSeed,
-    depthPyramidReduce,
-    ssrTrace,
-    ssrTemporal,
-    ssrCompose,
-    rayQuery,
-    rayPathTracer,
-    rayRasterSource,
-    rayDiffuseComposite,
-    rayDiffuseReconstruct,
-    standardDeferred,
-    decalProject,
-    decalApply,
-    imports: {
-      'forgeax_ray::traversal': await readFile(resolve(srcDir, 'ray-traversal.wgsl'), 'utf8'),
-      'forgeax_material::ray_abi': await readFile(resolve(srcDir, 'ray-material-abi.wgsl'), 'utf8'),
-      'forgeax_pbr::ray_bsdf': await readFile(resolve(srcDir, 'ray-bsdf.wgsl'), 'utf8'),
-      'forgeax_material::displacement': await readFile(
-        resolve(srcDir, 'standard-displacement.wgsl'),
-        'utf8',
-      ),
-      'forgeax_material::standard_surface': await readFile(
-        resolve(srcDir, 'standard-surface.wgsl'),
-        'utf8',
-      ),
-      'forgeax_clipping::planes': await readFile(resolve(srcDir, 'clipping.wgsl'), 'utf8'),
-      'forgeax_shadow::surface': await readFile(resolve(srcDir, 'shadow-surface.wgsl'), 'utf8'),
-      'forgeax_view::common': common,
-      'forgeax_view::output_encoding': outputEncoding,
-      'forgeax_pbr::brdf': brdf,
-      'forgeax_pbr::specular_aa': await readFile(resolve(srcDir, 'specular-aa.wgsl'), 'utf8'),
-      'forgeax_pbr::temporal': temporal,
-      forgeax_scene_temporal: sceneTemporal,
-      'forgeax_view::fog': fog,
-      'forgeax_cloud::layer': cloudLayer.source,
-      'forgeax_standard::cluster': standardCluster,
-      'forgeax_pbr::ibl_shared': iblShared,
-      'forgeax_pbr::ibl_equirect_to_cube': iblEquirectToCubeImport,
-      'forgeax_pbr::ibl_irradiance': iblIrradianceImport,
-      'forgeax_pbr::ibl_prefilter': iblPrefilterImport,
-      'forgeax_pbr::ibl_brdf_lut': iblBrdfLutImport,
-      'forgeax_pbr::ibl_sampling': iblSampling,
-      'forgeax_pbr::tbn': tbn,
-      'forgeax_pbr::lighting_directional': lightingDirectional,
-      'forgeax_pbr::lighting_punctual': lightingPunctual,
-      'forgeax_pbr::lighting_spot_modifiers': lightingSpotModifiers,
-      'forgeax_pbr::lighting_rect_area': lightingRectArea,
-      'forgeax_pbr::lighting_probe': lightingProbe,
-      'forgeax_pbr::lighting_attenuation': lightingAttenuation,
-      'forgeax_pbr::lighting_spot_projector': lightingSpotProjector,
-      'forgeax_view::fxaa': fxaaImport,
-      'forgeax_view::bloom_downsample': bloomDownsampleImport,
-      'forgeax_view::bloom_upsample': bloomUpsampleImport,
-      'forgeax_view::bloom_composite': bloomCompositeImport,
-      'forgeax_view::skybox': skyboxImport,
-      'forgeax_environment::daylight': atmosphereDaylight,
-      'forgeax_hdrp::ssao': hdrpSsaoImport,
-      'forgeax_pbr::standard_lighting': await readFile(
-        resolve(srcDir, 'standard-lighting.wgsl'),
-        'utf8',
-      ),
-      'forgeax_pbr::gbuffer': await readFile(resolve(srcDir, 'standard-gbuffer.wgsl'), 'utf8'),
-      'forgeax_pbr::gbuffer_output': await readFile(
-        resolve(srcDir, 'standard-gbuffer-output.wgsl'),
-        'utf8',
-      ),
-      'forgeax_pbr::shadow_pcf': shadowPcf,
-      'forgeax_pbr::clearcoat': clearcoat,
-      'forgeax_pbr::anisotropy': anisotropy,
-      'forgeax_pbr::sheen': sheen,
-      'forgeax_pbr::iridescence': iridescence,
-      'forgeax_material::alpha_hash': await readFile(resolve(srcDir, 'alpha-hash.wgsl'), 'utf8'),
-      'forgeax_material::oit': await readFile(resolve(srcDir, 'oit.wgsl'), 'utf8'),
-      'forgeax_material::surface_v1': surfaceV1,
-      'forgeax_material::single_layer_medium_surface_v1': singleLayerMediumSurface,
-      'forgeax_material::default_single_layer_medium_surface': defaultSingleLayerMediumSurface,
-      'forgeax_material::default_standard_surface': defaultStandardSurface,
-      'forgeax_material::surface_sampling': surfaceSampling,
-      [SURFACE_SLOT_MODULE]: projectSurfaceSlotSource(defaultStandardSurface),
-    },
+    cloudAtmosphere: cloudAtmosphereEntries(),
+    ...resolvedEntries,
+    imports: resolvedImports,
   };
 }
 

@@ -35,7 +35,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 let create, globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
   console.error(`  rerun: ${RERUN_CMD}`);
@@ -606,7 +606,6 @@ const m41Snapshot = (mainMenuExit, tutorialEnter, repairEntity, callbackRuns) =>
   };
 };
 const m41InvalidDetail = {
-  code: 'invalid-variant',
   name: 'LevelId',
   got: m41InvalidVariant,
   valid: ['main-menu', 'tutorial', 'street-a'],

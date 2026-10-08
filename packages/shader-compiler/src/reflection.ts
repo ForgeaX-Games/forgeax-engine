@@ -397,8 +397,11 @@ function numericWgslType(type: string): string {
 }
 
 function sameMember(expected: ExpectedMaterialMember, actual: ShaderReflectionMember): boolean {
+  // Member spelling is not part of the buffer ABI. Naga renames legal author
+  // identifiers (rainShelter0 -> rainShelter0_, with collision suffixes).
+  // Declaration order and the complete physical layout remain authoritative;
+  // retain both names only as diagnostics instead of duplicating Naga's namer.
   return (
-    expected.name === actual.name &&
     expected.type === actual.type &&
     expected.offset === actual.offset &&
     expected.reflectedSize === actual.size &&
@@ -419,7 +422,7 @@ function resourceKindMatches(
   if (expected.sampler !== undefined) {
     return actual.addressSpace === 'handle' && actual.resourceKind === 'sampler';
   }
-  if (expected.texture !== undefined) {
+  if (expected.texture !== undefined || expected.externalTexture !== undefined) {
     return actual.addressSpace === 'handle' && actual.resourceKind === 'texture';
   }
   return (

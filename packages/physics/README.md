@@ -65,6 +65,8 @@ own their pose after creation and write it back through the physics step.
 |:--|:--|:--|
 | `cuboid` | `halfExtents × abs(worldScale)` componentwise | `halfExtents.xy × abs(worldScale.xy)` |
 | `sphere` | `radius × max(abs(worldScale))` | `radius × max(abs(worldScale.xy))` |
+| `cylinder` / `cone` | Y half-height × `abs(scaleY)`; radius × `max(abs(scaleX), abs(scaleZ))` | Unsupported; rejected before native allocation |
+| `convexHull` / `trimesh` | Cooked positions × `abs(worldScale)` componentwise | Unsupported; rejected before native allocation |
 | `capsule` | Y-axis half-height × `abs(scaleY)`; radius × `max(abs(scaleX), abs(scaleZ))` | Y-axis half-height × `abs(scaleY)`; radius × `abs(scaleX)` |
 
 Negative scale is treated as its absolute magnitude; it does not mirror a
@@ -92,11 +94,17 @@ Narrowing helper: `rigidBodyTypeFromF32(n: number): RigidBodyType` returns `'sta
 ColliderShapeValue.cuboid  // 0
 ColliderShapeValue.sphere  // 1
 ColliderShapeValue.capsule // 2
+ColliderShapeValue.cylinder // 3
+ColliderShapeValue.cone // 4
+ColliderShapeValue.convexHull // 5
+ColliderShapeValue.trimesh // 6
 ```
 
-Narrowing helper: `colliderShapeFromF32(n: number): ColliderShape` returns `'cuboid' | 'sphere' | 'capsule'`.
+Narrowing helper: `colliderShapeFromF32(n: number): ColliderShape` returns the union derived from `ColliderShapeValue`.
 
 Backend implementations use the narrowing helpers in `switch` statements for exhaustive matching (no default arm).
+
+Backends read a Collider row as `ColliderData` (derived from the schema; `halfExtents` is a zero-copy World view) and retain it only through `snapshotCollider(data): ColliderSnapshot`, which copies `halfExtents` into an owned tuple.
 
 ## Component Schemas
 
@@ -115,16 +123,76 @@ Backend implementations use the narrowing helpers in `switch` statements for exh
 
 | Field | Type | Default | Description |
 |:--|:--|:--|:--|
-| `shape` | `enum` | `0` (cuboid) | `cuboid` / `sphere` / `capsule` |
+| `shape` | `enum` | `0` (cuboid) | See `ColliderShapeValue`; the 2D backend supports the original three primitives |
+| `mesh` | `shared<MeshAsset>` | `0` (unbound) | Ordinary cooked MeshAsset for convexHull/trimesh |
 | `halfExtents` | `array<f32, 3>` | `[0.5, 0.5, 0.5]` | Cuboid half-width/height/depth |
-| `radius` | `f32` | `0.5` | Sphere radius or capsule radius |
-| `halfHeight` | `f32` | `0.5` | Capsule half-height (along Y) |
+| `radius` | `f32` | `0.5` | Sphere, capsule, cylinder, or cone radius |
+| `halfHeight` | `f32` | `0.5` | Capsule, cylinder, or cone half-height (along Y) |
 | `friction` | `f32` | `0.5` | Coulomb friction coefficient |
 | `restitution` | `f32` | `0` | Bounciness (0 = inelastic, 1 = perfectly elastic) |
 | `density` | `f32` | `1` | Mass per volume (affects dynamic body total mass) |
 | `isSensor` | `bool` | `false` | Sensor-only collider (no contact response) |
 | `collisionGroups` | `u32` | `0x0001ffff` | Rapier collision groups bitmask |
 | `solverGroups` | `u32` | `0xffffffff` | Rapier solver groups bitmask |
+
+### Source mesh collision
+
+`Collider.mesh` uses the existing World shared-reference route. Load a cooked
+MeshAsset from Catalog (same mesh GUID), allocate it through
+`world.sharedRefs.alloc('MeshAsset', mesh)`, and supply that ref with
+`ColliderShapeValue.convexHull` or `ColliderShapeValue.trimesh`. The entity
+retains its ordinary shared lease; release the author allocation when ownership
+has transferred. No separate collision asset registry is required.
+
+| Shape | Body policy | Geometry |
+|:--|:--|:--|
+| `convexHull` | Static, kinematic, dynamic | Native Rapier hull of cooked mesh positions; concavities become solid |
+| `trimesh` | Static or kinematic | Cooked triangle coverage preserves cavities; dynamic use is rejected |
+
+Produce the attachment with `buildMeshCollision` from Geometry or opt into
+`importSettings.meshCollision: true` in glTF/FBX import. See
+[Import collision cooking](../import/README.md#mesh-collision-cooking).
+Skinned/morphed sources, automatic convex decomposition, and dynamic concave
+bodies are outside this contract. All relevant dimensions and resolved scales
+must be finite and positive in magnitude.
+
+Admission validates the attachment against its source once per immutable mesh.
+Stable ticks and pose-only motion reuse native shapes; a changed mesh reference
+or scale rebuilds the shape. Authored replacement stages its new native collider
+before retiring the old one, preserving the body, velocities and joints on
+failure. Runtime mesh vertex edits invalidate cooked collision; publish a newly
+cooked source rather than silently retaining the old shape. Fresh PhysicsWorld
+recovery re-admits the same source and scale.
+
+Mesh shape scale comparisons allow four relative Float32 epsilons of matrix
+decomposition noise. They compare against the committed shape, so parent rotation
+does not recook unchanged geometry and cumulative authored scale edits still resize it.
+
+#### Reproduce the collider behavior
+
+After building the package graph, run the [native effect probe](../physics-rapier3d/bench/mesh-collision-effect.mjs):
+
+```sh
+node packages/physics-rapier3d/bench/mesh-collision-effect.mjs > collision-effect.json
+```
+
+The probe admits ordinary managed components into real Rapier and records every
+position from 240 scheduled World ticks. It exits nonzero on a violated invariant.
+
+| Scenario | Required result |
+|:--|:--|
+| Radius-0.2 ball falls into a U-shaped triangle mesh | Ball center near -0.55m; contact with the bottom at -0.75m |
+| Same source admitted as a convex hull | Ball center near 1.45m; filled cavity surface at 1.25m |
+| Cylinder and cone, 625 downward rays each | Round footprint and analytical surface height; square-corner rays miss |
+| Replace a dynamic hull's mesh | Same native body, exact linear/angular velocity preservation; one rebuild |
+| 120 unchanged synchronizations | Zero native hull rebuilds |
+| Attempt dynamic triangle-mesh replacement | Structured rejection; previous collider retained |
+
+JSON trajectories and ray hits are native physics evidence. Rendering screenshots
+and frame-rate qualification belong to their separate consumers. The existing
+[performance probe](../physics-rapier3d/bench/mesh-collision.mjs) reports full World
+tick distributions as well as native admissions; do not infer a 60-FPS budget from
+zero shape rebuilds alone.
 
 ### CollidingEntities
 
@@ -415,3 +483,24 @@ preserve body identity, linear/angular velocity and attached joints. Shape
 changes replace only the authored collider. Body-type changes still apply the
 native static/kinematic/dynamic semantics; explicit velocity and teleport APIs
 retain their own meaning.
+
+## Terrain heightfield admission (3D)
+
+`HeightfieldShapeInput` participates in the existing derived-shape candidate transaction, retirement and recovery snapshot. `Terrain + RigidBody(static)` derives this shape after body reconciliation and before the fixed step. It admits finite translation, identity rotation and unit scale. Author samples are X-fast; the pure terrain adapter transposes them into the backend's column-major rectangular matrix. Mesh, gameplay query and Rapier use the same 10→01 cell diagonal.
+
+A root-handle replacement derives a new candidate; unchanged roots skip native shape work. Removal or Disabled clears the old derived set using the backend's existing committed entity collection. Ordinary worlds without Terrain perform no new full-World scan. A positive `getDerivedPublication(entity).fixedStep` proves physical adoption; it says nothing about rendering readiness. See [Terrain](../terrain/README.md).
+
+## Navigation character composition
+
+`physicsPlugin` installs Scene before binding physics systems, so moveAndSlide
+always has the real Transform/CharacterController writeback context in a fresh
+World. World-space KCC displacement is converted through the current parent's
+GlobalTransform inverse before writing local Transform.
+
+[NavigationCharacter](../navigation/README.md#static-navigation-assets-and-physical-characters)
+owns path and local avoidance intent. It runs after physicsSyncBackend and before
+physicsStepSimulation; PhysicsWorld remains the sole collision and position owner.
+
+KCC translation refreshes only the moved body's attached collider world positions;
+parent-local offsets remain unchanged. Repeated KCC calls retain collision queries
+and actual pose without repeatedly propagating the accumulating whole-body roster.

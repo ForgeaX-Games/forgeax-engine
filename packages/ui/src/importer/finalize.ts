@@ -1,4 +1,4 @@
-import type { ImportedArtifactBody, ImportProduct } from '@forgeax/engine-types';
+import type { ImportProduct } from '@forgeax/engine-types';
 import type { UiAsset } from '../asset.js';
 
 export type UiArtifactPayload = UiAsset;
@@ -51,6 +51,7 @@ export function uiArtifactMimeType(path: string): string | undefined {
   if (lower.endsWith('.webp')) return 'image/webp';
   if (lower.endsWith('.svg')) return 'image/svg+xml';
   if (lower.endsWith('.woff2')) return 'font/woff2';
+  if (lower.endsWith('.woff')) return 'font/woff';
   return undefined;
 }
 
@@ -63,18 +64,6 @@ export function rewriteUiSourceTokens(
   return unresolved?.[0] === undefined
     ? { ok: true, value: rewritten }
     : { ok: false, token: unresolved[0] };
-}
-
-function rewrite(
-  value: string,
-  artifacts: ReadonlyMap<string, ImportedArtifactBody>,
-  url: UiArtifactFinalizeOptions['artifactUrl'],
-): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly token: string } {
-  const urls = new Map<string, string>();
-  for (const [path, artifact] of artifacts) {
-    urls.set(path, url({ path, mimeType: artifact.mediaType, bytes: artifact.bytes }));
-  }
-  return rewriteUiSourceTokens(value, urls);
 }
 
 export function finalizeUiArtifact(
@@ -94,39 +83,32 @@ export function finalizeUiArtifact(
     };
   }
   const payload = asset.payload;
-  const artifacts = new Map(Object.entries(asset.artifacts));
-  const html = rewrite(payload.html, artifacts, options.artifactUrl);
-  const css = rewrite(payload.css, artifacts, options.artifactUrl);
-  if (!html.ok) {
-    return {
-      ok: false,
-      error: {
-        code: 'ui-artifact-token-unresolved',
-        expected: 'every ui-token reference to resolve to an imported artifact',
-        hint: 'Add the referenced companion artifact to the ImportProduct before transport.',
-        detail: { token: html.token, guid: asset.guid },
-      },
-    };
-  }
-  if (!css.ok) {
-    return {
-      ok: false,
-      error: {
-        code: 'ui-artifact-token-unresolved',
-        expected: 'every ui-token reference to resolve to an imported artifact',
-        hint: 'Add the referenced companion artifact to the ImportProduct before transport.',
-        detail: { token: css.token, guid: asset.guid },
-      },
-    };
+  const urls = new Map(
+    Object.entries(asset.artifacts).map(([path, artifact]) => [
+      path,
+      options.artifactUrl({ path, mimeType: artifact.mediaType, bytes: artifact.bytes }),
+    ]),
+  );
+  const finalized = { ...payload };
+  for (const field of ['html', 'css'] as const) {
+    const rewritten = rewriteUiSourceTokens(finalized[field], urls);
+    if (!rewritten.ok) {
+      return {
+        ok: false,
+        error: {
+          code: 'ui-artifact-token-unresolved',
+          expected: 'every ui-token reference to resolve to an imported artifact',
+          hint: 'Add the referenced companion artifact to the ImportProduct before transport.',
+          detail: { token: rewritten.token, guid: asset.guid },
+        },
+      };
+    }
+    finalized[field] = rewritten.value;
   }
   return {
     ok: true,
     value: {
-      asset: {
-        ...payload,
-        html: html.value,
-        css: css.value,
-      },
+      asset: finalized,
       artifacts: Object.entries(asset.artifacts).map(([path, artifact]) => ({
         path,
         mimeType: artifact.mediaType,

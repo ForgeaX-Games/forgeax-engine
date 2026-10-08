@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { ExecutionReport } from '@forgeax/engine-app';
@@ -7,6 +7,7 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { chromium, type Page } from 'playwright';
 import { build, createServer, preview, type ViteDevServer } from 'vite';
 import { expect, it } from 'vitest';
+import { runtimeBrowserLaunchOptions } from './browser-launch.js';
 import { executionWorkerEntries } from '../src/build/execution-workers.js';
 import { prepareRuntimePackProgram } from '../src/build/pack-program.js';
 import { runtimePacksSource } from '../src/build/runtime-packs-source.js';
@@ -103,14 +104,15 @@ const pixels = (page: Page, png: Buffer) =>
   );
 
 // Explicit graphics gate: run under an owned display (for example xvfb-run -a).
-// SwiftShader proves browser WebGPU semantics, never hardware performance.
+// Mac uses native Metal; other hosts use SwiftShader for WebGPU correctness.
+// This gate does not measure hardware performance.
 it.each([
   ['build', 'js'],
   ['build', 'ts'],
   ['dev', 'js'],
   ['dev', 'ts'],
 ] as const)('%s %s generates assets and a native plugin after Engine Worker startup and renders 60 completed frames', async (mode, language) => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-runtime-worker-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-runtime-worker-')));
   const repository = resolve(import.meta.dirname, '../../..');
   const evidence =
     process.env.FORGEAX_RUNTIME_PACK_EVIDENCE ??
@@ -155,6 +157,7 @@ it.each([
       logLevel: 'error' as const,
       plugins: [
         executionWorkerEntries([
+          '@forgeax/engine/assets-runtime',
           '@forgeax/engine/geometry',
           '@forgeax/engine/pack/source',
           '@forgeax/engine/render',
@@ -204,25 +207,14 @@ it.each([
         process.env[key] === undefined ? [] : [[key, process.env[key]]],
       ),
     );
-    const launch = () =>
-      chromium.launch({
-        ...(process.env.FORGEAX_BROWSER_EXECUTABLE
-          ? { executablePath: process.env.FORGEAX_BROWSER_EXECUTABLE }
-          : { channel: 'chrome-beta' }),
-        headless: false,
+    const launch = () => {
+      const options = runtimeBrowserLaunchOptions();
+      return chromium.launch({
+        ...options,
         env: browserEnv,
-        args: [
-          '--no-sandbox',
-          '--enable-unsafe-webgpu',
-          '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-          '--use-angle=swiftshader',
-          '--use-vulkan=swiftshader',
-          '--enable-unsafe-swiftshader',
-          '--disable-vulkan-surface',
-          '--ignore-gpu-blocklist',
-          '--disable-gpu-watchdog',
-        ],
+        args: [...options.args, '--disable-gpu-watchdog'],
       });
+    };
     browser = await launch();
     const page = await browser.newPage({ viewport: { width: 384, height: 384 } });
     const workers = new Set();

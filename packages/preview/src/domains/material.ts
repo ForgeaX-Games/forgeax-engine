@@ -1,8 +1,11 @@
-import type { ArtifactRef } from '@forgeax/engine-tool-runtime';
 import { evaluateMaterialOracle, type MaterialOracleInput } from '../evidence/oracle.js';
-import type { PreviewAssetRegistry, PreviewRenderRuntime } from '../host/preview-host.js';
 import { canonicalPresentation, createCanonicalPreviewRecipe } from '../kit/canonical.js';
-import { assetLoadFailure, type ResourcePreviewArgs, subjectFailure } from './subject.js';
+import {
+  loadResourceSubject,
+  type ResourcePreviewArgs,
+  type ResourcePreviewInput,
+  subjectFailure,
+} from './subject.js';
 
 export interface MaterialSubjectInspection {
   readonly subjectDigest: string;
@@ -10,6 +13,39 @@ export interface MaterialSubjectInspection {
   readonly pass: string;
   readonly bindingsDigest: string;
   readonly closureDigest: string;
+}
+
+/** Portable sampled-texture budget the material owner reported for the Standard program. */
+export interface MaterialSampledTextureBudgetFacts {
+  readonly limit: number;
+  readonly required: number;
+  readonly transmission: 'none' | 'dedicated' | 'shared' | 'exceeded';
+  readonly conflicts: readonly string[];
+}
+
+const TRANSMISSION_BUDGET_KINDS = new Set(['none', 'dedicated', 'shared', 'exceeded']);
+
+export function materialSampledTextureBudgetFacts(
+  ownerFacts: Readonly<Record<string, unknown>> | undefined,
+): MaterialSampledTextureBudgetFacts | undefined {
+  const limit = ownerFacts?.sampledTextureLimit;
+  const required = ownerFacts?.sampledTextureRequired;
+  const transmission = ownerFacts?.sampledTextureTransmission;
+  const conflicts = ownerFacts?.sampledTextureConflicts;
+  if (
+    typeof limit !== 'number' ||
+    typeof required !== 'number' ||
+    typeof transmission !== 'string' ||
+    !TRANSMISSION_BUDGET_KINDS.has(transmission) ||
+    typeof conflicts !== 'string'
+  )
+    return undefined;
+  return {
+    limit,
+    required,
+    transmission: transmission as MaterialSampledTextureBudgetFacts['transmission'],
+    conflicts: conflicts.length === 0 ? [] : conflicts.split(','),
+  };
 }
 
 type InspectionResult =
@@ -110,40 +146,20 @@ export function inspectMaterialSubject(input: {
 
 export async function executeMaterialPreview(
   args: ResourcePreviewArgs,
-  input: {
-    readonly assets?: PreviewAssetRegistry;
-    readonly renderer?: PreviewRenderRuntime;
-    readonly rendererReady: boolean;
-    readonly worldReady: boolean;
-    readonly runId: string;
-    readonly artifacts?: readonly ArtifactRef[];
-  },
+  input: ResourcePreviewInput,
 ) {
-  if (input.assets === undefined)
-    return subjectFailure(
-      'resource-preview-subject-invalid',
-      'resource preview host to expose the existing AssetRegistry',
-      { phase: 'asset-registry', runId: input.runId },
-    );
-  const loaded = await input.assets.loadByGuid<Record<string, unknown>>(args.guid);
-  if (!loaded.ok)
-    return assetLoadFailure(
-      'AssetRegistry.loadByGuid to resolve the requested material',
-      input.runId,
-      loaded.error,
-    );
-  const inspected = inspectMaterialSubject({
-    guid: args.guid,
-    asset: loaded.value,
-    ...(loaded.digest === undefined ? {} : { digest: loaded.digest }),
-    ...(loaded.ownerFacts === undefined ? {} : { ownerFacts: loaded.ownerFacts }),
-  });
+  const loaded = await loadResourceSubject(args.guid, input, 'material');
+  if (!loaded.ok) return loaded;
+  const inspected = inspectMaterialSubject(loaded.value);
   if (!inspected.ok) return inspected;
+  const owner = loaded.value.asset.ownerFacts;
+  const sampledTextureBudget = materialSampledTextureBudgetFacts(
+    isRecord(owner) ? owner : loaded.value.ownerFacts,
+  );
   const renderer = input.renderer;
   if (
-    !input.rendererReady ||
-    !input.worldReady ||
-    renderer === undefined ||
+    renderer?.rendererReady !== true ||
+    renderer.worldReady !== true ||
     renderer.drawCalls <= 0 ||
     renderer.nonBlackPixels <= 0 ||
     renderer.observation === undefined
@@ -159,7 +175,7 @@ export async function executeMaterialPreview(
     pass: digest(renderer.observation.pass) ?? '',
     bindingsDigest: digest(renderer.observation.bindingsDigest) ?? '',
     closureDigest: digest(renderer.observation.closureDigest) ?? '',
-    rendererHealthy: input.rendererReady && input.worldReady,
+    rendererHealthy: renderer.rendererReady && renderer.worldReady,
     drawCalls: renderer.drawCalls,
     nonBlackPixels: renderer.nonBlackPixels,
   };
@@ -182,6 +198,7 @@ export async function executeMaterialPreview(
       presentation: canonicalPresentation('material'),
       recipe: createCanonicalPreviewRecipe('material'),
       oracle,
+      ...(sampledTextureBudget === undefined ? {} : { sampledTextureBudget }),
       artifacts: input.artifacts ?? [],
     },
     artifacts: input.artifacts ?? [],

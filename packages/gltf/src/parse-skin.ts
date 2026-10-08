@@ -12,7 +12,11 @@
 //   - charter P3 (fail-fast on invalid data)
 
 import { parseConservativeAnimatedBounds, type ShadowCapsuleSet } from '@forgeax/engine-types';
-import { decodeF32Accessor } from './accessor/decode-accessor.js';
+import {
+  type AccessorJson,
+  type BufferViewJson,
+  decodeF32Accessor,
+} from './accessor/decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
@@ -56,21 +60,6 @@ interface NodeJson {
   readonly mesh?: number;
   readonly children?: readonly number[];
   readonly skin?: number;
-}
-
-interface AccessorJson {
-  readonly bufferView?: number;
-  readonly componentType: number;
-  readonly type: string;
-  readonly count: number;
-  readonly byteOffset?: number;
-}
-
-interface BufferViewJson {
-  readonly buffer: number;
-  readonly byteOffset?: number;
-  readonly byteLength: number;
-  readonly byteStride?: number;
 }
 
 const SKIN_ACCESSOR_TYPES = ['MAT4'] as const;

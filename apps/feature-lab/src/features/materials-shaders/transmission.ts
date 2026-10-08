@@ -10,7 +10,7 @@ export default defineFeature({
   summary:
     'Standard transmission / ior / thickness / attenuation sample the renderer-owned TransmissionBackdrop, refracting what is behind the object; the app never copies the backdrop.',
   expect:
-    'ON: the glass sphere shows a refracted, inverted view of the checker wall behind it. OFF: transmission 0, the sphere is an opaque pale-blue ball.',
+    'ON: the glass sphere shows a refracted, magnified view of the checker wall behind it (the dark ellipse at its base is the floor shadow directly beneath). OFF: transmission 0, the sphere is an opaque pale-blue ball.',
   setup({ app, world }) {
     const errors: string[] = [];
     app.onError((error) => {

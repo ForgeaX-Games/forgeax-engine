@@ -9,20 +9,7 @@
 
 #import forgeax_pbr::ibl_shared::{PI, hammersley, importanceSampleGGX}
 
-struct AtmosphereIblParams {
-  sunDirection: vec3<f32>,
-  sunIlluminance: f32,
-  sunColor: vec3<f32>,
-  _sunColorPad: f32,
-  turbidity: f32,
-  rayleigh: f32,
-  mieCoefficient: f32,
-  mieDirectionalG: f32,
-  sunAngularRadius: f32,
-  sunDiscEnabled: f32,
-  prefilterRoughness: f32,
-  producerKind: f32,
-};
+struct AtmosphereIblParams { prefilterRoughness: f32, };
 
 struct AtmosphereIblVsIn {
   // xy is clip-space; z is the one-based cube-face tag supplied by the

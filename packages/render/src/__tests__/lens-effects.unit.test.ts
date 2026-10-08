@@ -2,13 +2,13 @@ import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { Camera, LensEffects, resolveLensEffects } from '../components';
-import { extractCameraSnapshots } from '../extract/camera';
 import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
 import { createLensEffectsRenderFeature, packLensEffectsParams } from '../features/lens-effects';
 import {
   createStandardOutputPlan,
   validateStandardOutputPlan,
 } from '../pipeline/standard-output/graph';
+import { extractCameraSnapshots } from '../render-system-extract';
 import { setActiveCamera } from '../systems/active-camera';
 
 function fixture() {

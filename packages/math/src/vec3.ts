@@ -253,7 +253,8 @@ export function smoothDamp(
 /**
  * out = Catmull-Rom spline point on the segment between `p1` and `p2`, with `p0` / `p3` the
  * neighbor control points setting the endpoint tangents (tension 0.5 — the Bevy
- * `CubicCardinalSpline::new_catmull_rom` / three.js `CatmullRomCurve3` default). Interpolates
+ * `CubicCardinalSpline::new_catmull_rom` / Three.js explicit `catmullrom` mode).
+ * This is uniform; Three.js defaults to centripetal. Interpolates
  * the control points: `t=0` → `p1`, `t=1` → `p2`. Unlike `lerp` (a straight segment), this is
  * the smooth cubic through the points — use it for camera paths, animation ease paths, or
  * procedural curve geometry. To sample a whole polyline, loop the segments with a sliding

@@ -149,7 +149,7 @@ export function prepareGpuDrivenDraw(
   | { readonly ok: true; readonly value: PreparedGpuDrivenDraw }
   | { readonly ok: false; readonly error: GpuDrivenPreparationError } {
   const receipt = input.artifact.receipt;
-  if (receipt === undefined) {
+  if (receipt === undefined || receipt.sceneIndexEntry === undefined) {
     return failure('missing-material-receipt', {
       reason: 'material-receipt-missing',
       owner: 'material',

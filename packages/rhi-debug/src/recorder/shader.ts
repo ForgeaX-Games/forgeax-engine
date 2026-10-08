@@ -2,7 +2,12 @@
 
 import type { Result, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import type { HandleId } from '../types';
-import type { CreateShaderModuleFn, CreateShaderModuleImmediateFn, DebugRhiInstance } from './core';
+import {
+  type CreateShaderModuleFn,
+  type CreateShaderModuleImmediateFn,
+  type DebugRhiInstance,
+  recorderDeviceIdentity,
+} from './core';
 
 function recordShaderModule(
   debugInst: DebugRhiInstance,
@@ -36,7 +41,7 @@ export function wrapCreateShaderModule(
     // fn returns shader-compile-failed ("unregistered RhiDevice"). Unwrap the
     // proxy to the registered device via the _realDevice escape hatch that
     // proxyDevice exposes for exactly this purpose.
-    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const realDevice = recorderDeviceIdentity(device) ?? device;
     const result = await originalFn(realDevice, desc);
     return recordShaderModule(debugInst, result, desc);
   };
@@ -48,7 +53,7 @@ export function wrapCreateShaderModuleImmediate(
   debugInst: DebugRhiInstance,
 ): CreateShaderModuleImmediateFn {
   return (device, desc) => {
-    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const realDevice = recorderDeviceIdentity(device) ?? device;
     return recordShaderModule(debugInst, originalFn(realDevice, desc), desc);
   };
 }

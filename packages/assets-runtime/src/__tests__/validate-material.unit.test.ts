@@ -16,9 +16,7 @@ import type { AssetRegistry } from '../asset-registry';
 import {
   detectTileNeedsRepeatSampler,
   materialShaderTextureFieldNames,
-  validateMaterialCookIdentity,
   validateMaterialPasses,
-  validateMaterialTransmissionContract,
   validateParamType,
   validateSpriteSlices,
 } from '../registry/validate-material';
@@ -61,81 +59,38 @@ function mat(over: Record<string, unknown>): MaterialAsset {
   return { kind: 'material', ...over } as unknown as MaterialAsset;
 }
 
-describe('validateMaterialCookIdentity', () => {
-  const record = {
-    guid: 'mat-child',
-    receipt: {
-      identity: { layoutIdentity: 'sha256:root-layout' },
-      derivedInterface: { layoutIdentity: 'sha256:root-layout' },
-    },
-  } as never;
-
-  it('accepts an effective root identity and rejects a stale one', () => {
-    expect(
-      validateMaterialCookIdentity(record, {
-        guid: 'mat-parent',
-        layoutIdentity: 'sha256:root-layout',
-      }),
-    ).toBeNull();
-    expect(
-      validateMaterialCookIdentity(record, {
-        guid: 'mat-parent',
-        layoutIdentity: 'sha256:changed-layout',
-      }),
-    ).toMatchObject({
-      code: 'material-derived-interface-mismatch',
-      detail: { stage: 'extract', action: 'recook' },
-    });
-  });
-
-  it('rejects a stale Standard layer-plan identity at the root admission boundary', () => {
-    expect(
-      validateMaterialCookIdentity(
-        {
-          guid: 'mat-child',
-          receipt: {
-            identity: { layoutIdentity: 'sha256:root-layout' },
-            derivedInterface: {
-              layoutIdentity: 'sha256:root-layout',
-              layerPlanIdentity: 'standard-layer-plan-v1:base-only:forward,deferred,shadow',
-            },
-          },
-        } as never,
-        {
-          guid: 'mat-parent',
-          layoutIdentity: 'sha256:root-layout',
-          layerPlanIdentity: 'stale-layer-plan',
-        },
-      ),
-    ).toMatchObject({
-      code: 'material-derived-interface-mismatch',
-      detail: { stage: 'extract', action: 'recook' },
-    });
-  });
-});
-
 describe('validateMaterialPasses', () => {
+  it('uses the first asset declaration when parameter names repeat', () => {
+    const asset = mat({
+      passes: [{ name: 'forward', program: { module: 'game::surface' } }],
+      parameters: [
+        { name: 'roughness', type: 'f32' },
+        { name: 'roughness', type: 'vec4' },
+      ],
+      values: { roughness: 0.5 },
+    });
+    expect(validateMaterialPasses(asset)).toBeNull();
+    expect(validateMaterialPasses({ ...asset, values: {} })?.detail).toMatchObject({
+      missingParams: ['roughness'],
+    });
+  });
   it('returns null when passes is undefined (inherits from parent)', () => {
-    expect(validateMaterialPasses(makeRegistry({}), mat({}))).toBeNull();
+    expect(validateMaterialPasses(mat({}))).toBeNull();
   });
 
   it('errors when passes is an explicit empty array', () => {
-    const e = validateMaterialPasses(makeRegistry({}), mat({ passes: [] }));
+    const e = validateMaterialPasses(mat({ passes: [] }));
     expect(e?.code).toBe('asset-invalid-value');
     expect((e?.detail as { passCount: number }).passCount).toBe(0);
   });
 
   it('errors when a pass has no program module', () => {
-    const e = validateMaterialPasses(
-      makeRegistry({}),
-      mat({ passes: [{ name: 'main', program: { module: '' } }] }),
-    );
+    const e = validateMaterialPasses(mat({ passes: [{ name: 'main', program: { module: '' } }] }));
     expect(e?.code).toBe('asset-invalid-value');
   });
 
   it('errors when a required (no-default) param is missing from values', () => {
     const e = validateMaterialPasses(
-      makeRegistry({}),
       mat({
         passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
         parameters: [{ name: 'roughness', type: 'f32' }],
@@ -148,7 +103,6 @@ describe('validateMaterialPasses', () => {
   it('accepts when a required param is supplied with the right type', () => {
     expect(
       validateMaterialPasses(
-        makeRegistry({}),
         mat({
           passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
           parameters: [{ name: 'roughness', type: 'f32' }],
@@ -160,7 +114,6 @@ describe('validateMaterialPasses', () => {
 
   it('errors on a supplied param with a mismatched type', () => {
     const e = validateMaterialPasses(
-      makeRegistry({}),
       mat({
         passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
         parameters: [{ name: 'roughness', type: 'f32' }],
@@ -173,7 +126,6 @@ describe('validateMaterialPasses', () => {
   it('skips params that carry a default', () => {
     expect(
       validateMaterialPasses(
-        makeRegistry({}),
         mat({
           passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
           parameters: [{ name: 'roughness', type: 'f32', default: 0.5 }],
@@ -187,15 +139,12 @@ describe('validateMaterialPasses', () => {
       passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
       parameters: [{ name: 'alphaCutoff', type: 'f32', optional: true }],
     };
-    expect(validateMaterialPasses(makeRegistry({}), mat(material))).toBeNull();
-    expect(
-      validateMaterialPasses(makeRegistry({}), mat({ ...material, values: { alphaCutoff: null } })),
-    ).toBeNull();
+    expect(validateMaterialPasses(mat(material))).toBeNull();
+    expect(validateMaterialPasses(mat({ ...material, values: { alphaCutoff: null } }))).toBeNull();
   });
 
   it('still validates a supplied optional param', () => {
     const e = validateMaterialPasses(
-      makeRegistry({}),
       mat({
         passes: [{ name: 'm', program: { module: 'forgeax_material::standard' } }],
         parameters: [{ name: 'alphaCutoff', type: 'f32', optional: true }],
@@ -206,146 +155,87 @@ describe('validateMaterialPasses', () => {
   });
 });
 
-describe('validateMaterialTransmissionContract', () => {
-  it.each([
-    ['transmission range', { transmission: 1.1 }],
-    ['ior range', { ior: 0 }],
-    ['thickness range', { thickness: -0.1 }],
-    ['attenuation distance', { attenuationDistance: Number.POSITIVE_INFINITY }],
-  ])('returns a structured error for %s', (_name, value) => {
-    const error = validateMaterialTransmissionContract(mat({ values: value }));
-    expect(error?.code).toBe('material-transmission-contract-invalid');
-    expect(error?.detail).toMatchObject({ reason: expect.any(String) });
-  });
-
-  it('rejects BLEND and depth writes when transmission is active', () => {
-    expect(
-      validateMaterialTransmissionContract(
-        mat({
-          values: { transmission: 0.5 },
-          passes: [
-            {
-              name: 'forward',
-              program: { module: 'forgeax_material::standard' },
-              renderState: { blend: {} },
-            },
-          ],
-        }),
-      )?.detail,
-    ).toMatchObject({ reason: 'blend' });
-    expect(
-      validateMaterialTransmissionContract(
-        mat({
-          values: { transmission: 0.5 },
-          passes: [
-            {
-              name: 'forward',
-              program: { module: 'forgeax_material::standard' },
-              renderState: { depthWriteEnabled: true },
-            },
-          ],
-        }),
-      )?.detail,
-    ).toMatchObject({ reason: 'depth-write' });
-  });
-});
-
 describe('validateParamType', () => {
-  const reg = makeRegistry({});
   it('numeric scalars', () => {
-    expect(validateParamType(reg, 'x', 'f32', 1)).toBe(true);
-    expect(validateParamType(reg, 'x', 'u32', 'no')).toBe(false);
+    expect(validateParamType('f32', 1)).toBe(true);
+    expect(validateParamType('u32', 'no')).toBe(false);
   });
   it('vector arities', () => {
-    expect(validateParamType(reg, 'x', 'vec2', [1, 2])).toBe(true);
-    expect(validateParamType(reg, 'x', 'vec3', [1, 2])).toBe(false);
-    expect(validateParamType(reg, 'x', 'vec4', [1, 2, 3, 4])).toBe(true);
+    expect(validateParamType('vec2', [1, 2])).toBe(true);
+    expect(validateParamType('vec3', [1, 2])).toBe(false);
+    expect(validateParamType('vec4', [1, 2, 3, 4])).toBe(true);
   });
   it('color accepts length 3 or 4', () => {
-    expect(validateParamType(reg, 'x', 'color', [1, 2, 3])).toBe(true);
-    expect(validateParamType(reg, 'x', 'color', [1, 2, 3, 4])).toBe(true);
-    expect(validateParamType(reg, 'x', 'color', [1, 2])).toBe(false);
+    expect(validateParamType('color', [1, 2, 3])).toBe(true);
+    expect(validateParamType('color', [1, 2, 3, 4])).toBe(true);
+    expect(validateParamType('color', [1, 2])).toBe(false);
   });
   it('texture values accept compact GUIDs and structured records', () => {
-    expect(validateParamType(reg, 'x', 'texture', 'guid')).toBe(true);
-    expect(validateParamType(reg, 'x', 'texture', { texture: 'guid' })).toBe(true);
-    expect(validateParamType(reg, 'x', 'texture', 123)).toBe(false);
+    expect(validateParamType('texture', 'guid')).toBe(true);
+    expect(validateParamType('texture', { texture: 'guid' })).toBe(true);
+    expect(validateParamType('texture', 123)).toBe(false);
   });
   it('unknown type -> false', () => {
-    expect(validateParamType(reg, 'x', 'mat4', {})).toBe(false);
+    expect(validateParamType('mat4', {})).toBe(false);
   });
 });
 
 describe('validateSpriteSlices', () => {
-  const reg = makeRegistry({});
   const spritePass = { name: 'main', program: { module: 'forgeax_material::sprite' } };
 
   it('returns null for non-sprite shaders', () => {
     expect(
       validateSpriteSlices(
-        reg,
         mat({ passes: [{ name: 'm', program: { module: 'forgeax::standard' } }] }),
       ),
     ).toBeNull();
   });
 
   it('returns null when slices is absent', () => {
-    expect(validateSpriteSlices(reg, mat({ passes: [spritePass], values: {} }))).toBeNull();
+    expect(validateSpriteSlices(mat({ passes: [spritePass], values: {} }))).toBeNull();
   });
 
   it('accepts a well-formed slices tuple', () => {
     expect(
-      validateSpriteSlices(
-        reg,
-        mat({ passes: [spritePass], values: { slices: [0.1, 0.1, 0.1, 0.1] } }),
-      ),
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [0.1, 0.1, 0.1, 0.1] } })),
     ).toBeNull();
   });
 
   it('rejects a non-array / wrong-length / non-number slices', () => {
+    expect(validateSpriteSlices(mat({ passes: [spritePass], values: { slices: 'x' } }))?.code).toBe(
+      'asset-invalid-value',
+    );
     expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: 'x' } }))?.code,
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [0, 0, 0] } }))?.code,
     ).toBe('asset-invalid-value');
     expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [0, 0, 0] } }))?.code,
-    ).toBe('asset-invalid-value');
-    expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [0, 0, 0, 'x'] } }))
-        ?.code,
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [0, 0, 0, 'x'] } }))?.code,
     ).toBe('asset-invalid-value');
   });
 
   it('rejects NaN, Infinity, and negative components', () => {
     expect(
       validateSpriteSlices(
-        reg,
         mat({ passes: [spritePass], values: { slices: [Number.NaN, 0, 0, 0] } }),
       ),
     ).not.toBeNull();
     expect(
       validateSpriteSlices(
-        reg,
         mat({ passes: [spritePass], values: { slices: [Number.POSITIVE_INFINITY, 0, 0, 0] } }),
       ),
     ).not.toBeNull();
     expect(
-      validateSpriteSlices(reg, mat({ passes: [spritePass], values: { slices: [-0.1, 0, 0, 0] } })),
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [-0.1, 0, 0, 0] } })),
     ).not.toBeNull();
   });
 
   it('rejects X-axis / Y-axis overlap against region', () => {
     // default region z/w = 1; left+right = 1.2 >= 1
     expect(
-      validateSpriteSlices(
-        reg,
-        mat({ passes: [spritePass], values: { slices: [0.6, 0, 0.6, 0] } }),
-      ),
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [0.6, 0, 0.6, 0] } })),
     ).not.toBeNull();
     expect(
-      validateSpriteSlices(
-        reg,
-        mat({ passes: [spritePass], values: { slices: [0, 0.6, 0, 0.6] } }),
-      ),
+      validateSpriteSlices(mat({ passes: [spritePass], values: { slices: [0, 0.6, 0, 0.6] } })),
     ).not.toBeNull();
   });
 });

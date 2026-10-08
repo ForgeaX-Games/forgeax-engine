@@ -623,9 +623,9 @@ function spawnValidatedPointShadow(
         expect(i32[17]).toBe(-1);
       });
 
-      it('AC-05: DIRECT_LIGHT_SLOT_LAYOUT keeps the five-row ABI', () => {
-        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(80);
-        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(80);
+      it('AC-05: DIRECT_LIGHT_SLOT_LAYOUT keeps shadow offsets in the six-row ABI', () => {
+        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(96);
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(96);
         expect(DIRECT_LIGHT_SLOT_LAYOUT.shadowByteOffset).toBe(68);
       });
     });

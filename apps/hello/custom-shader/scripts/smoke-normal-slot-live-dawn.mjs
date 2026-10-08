@@ -164,7 +164,7 @@ const derivedResult = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678ab
 assert(rootResult.ok && derivedResult.ok, 'inheritance material generations are not runtime-ready');
 const root = rootResult.value;
 const derived = derivedResult.value;
-assert(root.artifactDigest === derived.artifactDigest, 'root and derived cooked program sets differ');
+assert(root.record.artifactDigest === derived.record.artifactDigest, 'root and derived cooked program sets differ');
 assert(root.record.receipt.identity.cookIdentity === derived.record.receipt.identity.cookIdentity, 'inheritance specialization inputs differ');
 assert(root.record.receipt.identity.layoutIdentity === derived.record.receipt.identity.layoutIdentity, 'inheritance material layouts differ');
 assert(root.record.receipt.identity.programIdentity === derived.record.receipt.identity.programIdentity, 'inheritance material programs differ');
@@ -173,7 +173,7 @@ assert(root.record.receipt.identity.materialPublicationIdentity !== derived.reco
 assert(JSON.stringify(derived.record.resolved.values.baseColor) === JSON.stringify([0.2, 0.55, 0.95, 1]), 'inheritance derived value override is missing');
 assert(JSON.stringify(root.record.resolved.values.baseColor) !== JSON.stringify(derived.record.resolved.values.baseColor), 'inheritance derived value override did not diverge from root');
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 const gpu = create([]);
@@ -413,7 +413,7 @@ if (m36Mode) {
   materialCache.bump(materialDependencies[1]);
   const fresh = await loadCachedMaterial('01935b00-7d8c-7c4e-9f12-345678abcd03');
   assert(fresh.ok, `Dawn fresh recook failed: ${fresh.ok ? '' : fresh.error.code}`);
-  assert(fresh.value.artifactDigest !== derived.artifactDigest, 'Dawn recook kept the stale digest');
+  assert(fresh.value.record.artifactDigest !== derived.record.artifactDigest, 'Dawn recook kept the stale digest');
   assert(materialCache.generationError('01935b00-7d8c-7c4e-9f12-345678abcd03') === undefined, 'Dawn stale diagnostic survived recook');
   const freshMaterialHandle = world.allocSharedRef(
     'MaterialAsset',
@@ -429,10 +429,10 @@ if (m36Mode) {
       code: m36Stale.error.code,
       detail: m36Stale.error.detail,
       published: false,
-      artifactDigest: derived.artifactDigest,
+      artifactDigest: derived.record.artifactDigest,
     },
     fresh: {
-      artifactDigest: fresh.value.artifactDigest,
+      artifactDigest: fresh.value.record.artifactDigest,
       inputDigest: fresh.value.record.receipt.identity.cookIdentity,
       generation: lastMaterialGeneration,
       allocationRelease: { ok: allocationRelease.ok },
@@ -535,7 +535,7 @@ const output = {
     twoSlotSwap,
     inheritanceBacked: inheritanceLive,
     sourceDerivedGuid: derived.record.guid,
-    sourceArtifactDigest: derived.artifactDigest,
+    sourceArtifactDigest: derived.record.artifactDigest,
     sourceCookInputDigest: derived.record.receipt.identity.cookIdentity,
   },
   before: { sha256: before.sha256, centerPixel: before.centerPixel },
@@ -543,8 +543,8 @@ const output = {
   after: { sha256: after.sha256, centerPixel: after.centerPixel, width: after.width, height: after.height },
   resize: { enabled: resizeRebuild, before: [WIDTH, HEIGHT], after: [after.width, after.height] },
   delta,
-  rootArtifactDigest: root.artifactDigest,
-  derivedArtifactDigest: derived.artifactDigest,
+  rootArtifactDigest: root.record.artifactDigest,
+  derivedArtifactDigest: derived.record.artifactDigest,
   rootCookInputDigest: root.record.receipt.identity.cookIdentity,
   derivedCookInputDigest: derived.record.receipt.identity.cookIdentity,
 };

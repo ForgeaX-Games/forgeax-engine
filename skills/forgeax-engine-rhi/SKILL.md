@@ -9,7 +9,19 @@ description: >-
 
 > RHI is the pure interface between engine and GPU. For unexplained rendering failures start with [`forgeax-engine-rhi-debug`](../forgeax-engine-rhi-debug/SKILL.md); material authoring uses [`forgeax-engine-material`](../forgeax-engine-material/SKILL.md), passes/post-processing use [`forgeax-engine-render-pipeline`](../forgeax-engine-render-pipeline/SKILL.md). This skill covers backends, capabilities, descriptors, and resource lifetime. `rhi-webgpu` adapts browsers; `rhi-wgpu` + `wgpu-wasm` provide the compatibility path; explicitly injected `rhi-null` supports structural tests.
 
-For opaque ray-query foundation work, use the [reference verification guide](../../scripts/raytracing/README.md) and [native owner contract](../../packages/rhi-wgpu-native/README.md#opaque-scene-reference-transport). Keep portable compute replay, native scene re-execution, and native AS command capture distinct; only the first two currently exist.
+For opaque ray-query foundation work, use the [reference verification guide](../../scripts/raytracing/README.md) and [native owner contract](../../packages/rhi-wgpu-native/README.md#opaque-scene-reference-transport). Keep portable compute replay, native scene re-execution, and RHI-level AS command capture distinct: RHI Debug records BLAS/TLAS builds on ray-query-capable RHI devices: RhiNull, and in Node the native-wgpu device of `@forgeax/engine-rhi-wgpu-native`, an opt-in napi addon ([Node binding](../../packages/rhi-wgpu-native/README.md#node-binding-napi-rs)).
+
+## Native timestamp diagnosis
+
+For stale or inverted native counters, run the native owner regression
+`packages/rhi-wgpu-native/src/__tests__/timestamps.dawn.test.ts` through the existing
+Dawn setup with `FORGEAX_WEBGPU_NODE=wgpu-native`. Preserve raw reused-query results
+for draw, clear-only, zero-draw, dispatch and empty compute, adapter identity and
+validation errors. Include zero and indirectly dispatched compute, multiple
+resolves with intervening copies, and one-row texel copies with omitted stride
+and nonzero offsets. The native-ray-query foundation group publishes its receipt.
+Fresh counters alone do not establish exclusive pass cost; qualify their boundary
+scope and observer overhead before accepting a rendering performance budget.
 
 ## Color-lighting parity handoff
 
@@ -171,48 +183,41 @@ cacheKeyOf already hashes sorted vertex-layout keys and byteLength. Added uv1..u
 
 RhiNull setVertexBuffer tracks buffer brands without real stride/attribute validation. deriveVertexBufferLayout still emits aliases; its command ledger supports structural layout assertions.
 
-## Video capability: general and high-performance paths
+## Texture interop and zero-copy video
 
-Video upload has a general copyExternalImageToTexture path and a potential GPUExternalTexture/texture_external path. The engine currently uses the general RHI queue method with matching webgpu/wgpu-native semantics. The high-performance path exposes capability probing only; importExternalTexture is not exposed.
+Three device methods, gated by capability data (never by `backendKind`):
 
-`probeVideoHighPerfUpload` in graphics-extras checks these paths during record using existing RhiCaps.backendKind. It adds no RHI API; upload consumes copyExternalImageToTexture:
+| Method | Gate | Failure data |
+|:--|:--|:--|
+| `nativeDevice()` | a native WebGPU device exists | `feature-not-enabled` on rhi-wgpu / rhi-null |
+| `importTexture(gpuTexture)` (async) | `caps.textureImport` | foreign device `rhi-not-available`; shape/usage `rhi-descriptor-invalid`; `device-lost` |
+| `importExternalTexture({ source })` | `caps.externalTexture` (importExternalTexture plus a media realm) | undecoded element / closed frame `rhi-descriptor-invalid`; absent `feature-not-enabled` |
 
-```ts
-// RhiCaps.backendKind is the capability probe anchor:
-//   'webgpu'      -> general copyExternalImageToTexture available (browser)
-//   'wgpu-native' -> general copyExternalImageToTexture available (native)
-//   'wgpu-webgl2' -> copyExternalImageToTexture MAY be absent (WebGL2 subset)
-//
-// GPUExternalTexture high-perf path requires BOTH 'webgpu' backend AND an
-// importExternalTexture RHI entry is absent; the capability is always false.
-```
+Caps: rhi-webgpu in a browser reports both `true`; Dawn node reports
+`textureImport: true, externalTexture: false`; rhi-wgpu reports both `false`;
+rhi-null admits both structurally. An imported `ExternalTexture` expires with
+the current task, so import every frame. A `{ externalTexture: {} }` layout
+entry also accepts a `textureView`, which is how the copy fallback and borrowed
+GPU textures share one layout and one `texture_external` shader. The borrowed
+texture's `destroyTexture` drops bookkeeping only; the caller keeps ownership.
 
-### Neither capability available: video-upload-unsupported
+`probeVideoHighPerfUpload` (graphics-extras) reads only `caps.externalTexture`.
+Game code should use `renderer.importTexture` (see `packages/render/README.md`
+§External textures) rather than these RHI methods directly.
 
-When neither upload path is available, such as Dawn without a host HTMLVideoElement and without the high-performance path, the real per-frame record path fires VideoUploadUnsupportedError through errorRegistry. Upload and failure use the same renderer.draw path, without a separate video system. Consume the renderer.subscribe error event:
+### Neither path available: video-upload-unsupported
 
-```ts
-renderer.subscribe((event) => {
-  if (event.kind !== 'error') return;
-  const err = event.error;
-  // err.code is a member of the closed RuntimeErrorCode union; switch exhaustively.
-  if (err.code === 'video-upload-unsupported') {
-    //   .code === 'video-upload-unsupported'
-    //   .hint  — actionable recovery (static texture / switch backend)
-    // Consume via property access, NOT string parsing (charter P3)
-  }
-});
-```
-
-`video-upload-unsupported` is an add-only minor RuntimeErrorCode member in `packages/runtime/src/errors.ts`; consume it through exhaustive switch.
+A `VideoPlayer` entity whose host provides no element fires
+VideoUploadUnsupportedError through the renderer error channel on the same
+record path. Consume it through `renderer.subscribe` and an exhaustive switch
+on `err.code === 'video-upload-unsupported'` (`packages/runtime/src/errors.ts`).
 
 ### Capability boundaries
 
 | Boundary | Meaning |
 |:--|:--|
-| Dawn cannot render video | No HTMLVideoElement/VideoFrame source exists despite copyExternalImageToTexture support; pixel acceptance requires browser e2e. |
-| High-performance path is unimplemented | Explicit GPUExternalTexture probing falls back to the general path; no new RHI method, texture_external MaterialParamType, or external-sampling WGSL. |
-| General upload matches across backends | webgpu/wgpu-native upload frames as ordinary texture_2d; shaders and material BGL remain unchanged. |
+| Dawn cannot decode video | No HTMLVideoElement/VideoFrame realm; zero-copy and video pixel acceptance require browser e2e. GPUTexture import and the `texture_external` layout do run on Dawn. |
+| RHI Debug | The recorder snapshots each imported frame into a recorded rgba8 texture view, so tapes replay without media objects. |
 | No audio track handling | RHI does not own video audio; that work is separate. |
 
 ## Resource release: destroyBuffer / destroyTexture
@@ -281,6 +286,45 @@ GpuResource uses one destruction owner without refcounts or shared ownership.
 - **Repeated resource destruction**: destroy-after-destroy is intentional. Handle it exhaustively or check the runtime wrapper's isDestroyed before calling when idempotence is needed.
 - **Destroying the whole device**: public paths avoid Chromium adapter-pool poisoning. Use resource destruction; raw device diagnostics require the internal escape hatch.
 - **Silent black output/GPU loss after wgpu-wasm Channel 3 submit**: historically submit returned void without wasm_bindgen(catch), and error-sink validation failures never reached JS. The R5 M4 repair installs device.on_uncaptured_error, stores a per-queue last error, and makes submit return Result. It reads/clears the slot after submission and forwards `[rhi-code:<code>]`; TS queue.ts maps this to existing queueSubmitFailed/webgpuRuntimeError. Submission validation now reports through onError while the instance remains usable for the next frame.
+
+## Hardware Ray Query
+
+Gate on `device.caps.rayQuery.supported` (closed union with a `reason` when false);
+never probe by try/catch. Browser WebGPU and wgpu WebGL2 report
+`backend-has-no-ray-query`; RhiNull simulates support only with
+`new RhiNullAdapter({ rayQuery: limits })`; native wgpu derives it from
+`EXPERIMENTAL_RAY_QUERY` and reports `adapter-lacks-feature` without it.
+
+```ts
+if (device.caps.rayQuery.supported) {
+  // vertexBuffer/indexBuffer need BLAS_INPUT_BUFFER_USAGE (refused as data without ray query)
+  const blas = device.createBlas({ geometries: [{ vertexFormat: 'float32x3', vertexCount, index: { format: 'uint32', count } }] });
+  const tlas = device.createTlas({ maxInstances: 1024, updateMode: 'refit' });
+  encoder.buildAccelerationStructures(
+    [{ blas, geometries: [{ vertexBuffer, vertexStride: 12, index: { buffer: indexBuffer } }] }],
+    [{ tlas, instances: [{ blas, transform: rowMajor3x4, customIndex, mask: 0xff }] }],
+  ); // rebuild the TLAS each frame to move instances
+}
+```
+
+Shaders starting with `enable wgpu_ray_query;` are a capability-gated variant and
+are refused (`feature-not-enabled`) on devices without Ray Query. Keep a compute/SDF
+traversal for every other device. Contract: `packages/rhi/README.md` §Hardware Ray Query.
+GI world traces select that pair through one WGSL seam, `worldTraversalWgsl('global-sdf' |
+'ray-query')` (`packages/render/README.md` §World traversal seam). The renderer selects the
+lane itself (`ray-query` iff supported and within limits, else `global-sdf` plus a closed
+`traversalFallback` in `inspect().diffuseGi`); there is no user knob. Browser/Dawn always
+report `backend-has-no-ray-query`. In Node, the opt-in `@forgeax/engine-rhi-wgpu-native`
+addon is a W3C-shaped `GPU` over native wgpu 30 with the Ray Query extension, consumed
+through the rhi-webgpu shim. To run any `*.dawn.test.ts` or the hello-gi scripts on it:
+
+- set `FORGEAX_WEBGPU_NODE=wgpu-native`;
+- `caps.rayQuery` is then derived from the real adapter (Lavapipe 25.2 and Metal included);
+- `FORGEAX_WGPU_NATIVE_RAY_QUERY=off` gives the Global SDF lane on the same device.
+
+The other evidence is RhiNull (structure) and the `rhi-wgpu-native` cargo tests (GPU, with
+`FORGEAX_REQUIRE_NATIVE_RAY_QUERY=1` under `pnpm ci:graphics`). A missing addon is
+`adapter-unavailable`.
 
 ## Deferred membership timing
 

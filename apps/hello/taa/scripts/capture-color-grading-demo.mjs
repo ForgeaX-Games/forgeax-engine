@@ -138,7 +138,7 @@ try {
     '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
     '--ignore-gpu-blocklist',
     '--disable-gpu-driver-bug-workarounds',
-    '--disable-dawn-features=disallow_unsafe_apis',
+    '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
     ...(useSoftware
       ? ['--enable-unsafe-swiftshader', '--use-vulkan=swiftshader', '--disable-vulkan-surface']
       : []),

@@ -19,7 +19,6 @@ import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
 import { buildBeginRenderPassDescriptor, standardTopologyBindGroupReady } from '../pipeline-spec';
 import { POINTS_LINES_MATERIAL_SHADER_ID } from '../points-lines/record';
 import type { RenderResourceScope } from '../publication/resource-scope';
-import type { ReflectionProbeSelectionResult } from '../reflection/projection';
 import type { RenderRecordPhase } from '../render-contract';
 import type {
   GpuDrivenDrawPhase,
@@ -45,15 +44,10 @@ import {
   buildMatchedRenderableIndices,
   filterDispatchBySelector,
 } from './shadow-pass';
+import { selectForwardFragmentEntry } from './standard-opaque-entry';
 
 /** Chain key standing in for the SSAO view when group(2) binds the fallback. */
 const NO_SSAO_VIEW = {};
-
-export function standardReflectionProbeIndex(
-  selection: ReflectionProbeSelectionResult,
-): number | undefined {
-  return resolveReflectionProbeBinding(selection).probeIndex;
-}
 
 function materialDiagnosticsEnabled(): boolean {
   if (typeof globalThis !== 'object' || globalThis === null || !('process' in globalThis)) {
@@ -144,8 +138,13 @@ export function isTransparentLaneMaterial(material: MaterialSnapshot): boolean {
   return matchesRecordMode(material, 'transparent');
 }
 
+type MaterialSelectionContext = Pick<
+  _InternalRenderPipelineContext,
+  'dispatch' | 'validatedOrdered'
+>;
+
 function matchedMaterialsForRecordMode(
-  c: _InternalRenderPipelineContext,
+  c: MaterialSelectionContext,
   matchedMaterials: ReadonlyMap<number, ReadonlySet<number>> | null,
   mode:
     | 'opaque'
@@ -441,11 +440,7 @@ export function recordMainPass(
   // feat-20260609 M2: filter entities by pass selector.
   let matchedIndices =
     selector !== undefined ? buildMatchedRenderableIndices(dispatch, selector) : null;
-  const selectorMatchedMaterials =
-    selector !== undefined
-      ? buildMatchedMaterialHandlesByRenderable(dispatch, selector, options?.excludeSelector)
-      : null;
-  let matchedMaterials = matchedMaterialsForRecordMode(c, selectorMatchedMaterials, recordMode);
+  let matchedMaterials = selectMainPassMaterials(c, selector, recordMode, options?.excludeSelector);
   if (options?.selection !== undefined) {
     const selection = options.selection;
     const entities = new Set(selection.entities);
@@ -495,7 +490,14 @@ export function recordMainPass(
     );
   }
 
-  if (validatedOrdered.length > 0 && !clusteredBindGroupMissing) {
+  // A selected empty CPU lane still performs the pass load/store operations,
+  // but has no material contract to assemble. GPU batches keep their own
+  // projection and cannot be inferred from the CPU selector's empty map.
+  if (
+    validatedOrdered.length > 0 &&
+    !clusteredBindGroupMissing &&
+    (matchedMaterials === null || matchedMaterials.size > 0 || options?.gpuDriven !== undefined)
+  ) {
     // feat-20260518-pbr-direct-lighting-mvp M5 / w22.10 (D-4 + D-9 +
     // AC-07 std140): per-entity material slice grew from 32 B (legacy
     // baseColor:vec4 + metallic + roughness + 8B padding) to 48 B
@@ -834,7 +836,16 @@ export function recordMainPass(
         options.gpuDriven.resources,
         gpuDrivenStandardPbrFrameResources,
         options.gpuDrivenFilter,
-        options?.fragmentEntryPoint,
+        // Indirect draws bind the base View slot (offset 0) and carry only
+        // opaque queues, so outside atmosphere captures their forward entry
+        // skips the translucent fog chain exactly like direct draws.
+        selectForwardFragmentEntry({
+          passKind,
+          fragmentEntry: options?.fragmentEntryPoint,
+          oitAccumulate: recordMode === 'oit-accumulate',
+          viewOffset: 0,
+          atmosphereCapture: c.capturedAtmosphere !== undefined,
+        }),
         options?.coverageOnly ?? false,
         options.gpuDriven.phase ?? 'all',
       );
@@ -916,6 +927,61 @@ export function recordMainPass(
     pass.end();
   }
   return gpuDrivenStandardPbrFrameResources;
+}
+
+/** One CPU material selection for graph admission and geometry recording. */
+export function selectMainPassMaterials(
+  c: MaterialSelectionContext,
+  selector: PassSelector | undefined,
+  recordMode: MainPassOptions['recordMode'],
+  excludeSelector?: PassSelector,
+): ReadonlyMap<number, ReadonlySet<number>> | null {
+  return matchedMaterialsForRecordMode(
+    c,
+    selector === undefined
+      ? null
+      : buildMatchedMaterialHandlesByRenderable(c.dispatch, selector, excludeSelector),
+    recordMode,
+  );
+}
+
+/** Qualify the same receiver selection used by the mandatory geometry pass.
+ * This is a selection-domain check, not a replacement for cooked output ABI validation. */
+export function hasSsrSceneInputs(
+  c: MaterialSelectionContext,
+  renderPath: 'forward' | 'deferred',
+): boolean {
+  if (renderPath === 'forward') {
+    return (
+      c.validatedOrdered.length > 0 &&
+      c.validatedOrdered.every(
+        (entry) => entry.source.material.materialShaderId === 'forgeax::default-standard-pbr',
+      )
+    );
+  }
+  const selected = selectMainPassMaterials(c, { LightMode: ['Deferred'] }, 'opaque');
+  if (selected === null) return false;
+  let receiverCount = 0;
+  for (const entry of c.validatedOrdered) {
+    const handles = selected.get(entry.renderableIndex);
+    if (handles === undefined) continue;
+    for (const handle of handles) {
+      const material =
+        entry.source.materials.find((candidate) => (candidate.materialHandle ?? 0) === handle) ??
+        ((entry.source.material.materialHandle ?? 0) === handle
+          ? entry.source.material
+          : undefined);
+      if (
+        material === undefined ||
+        material.deferredPass !== true ||
+        material.surfaceModel === 'single-layer-medium' ||
+        material.transparent === true
+      )
+        return false;
+      receiverCount += 1;
+    }
+  }
+  return receiverCount > 0;
 }
 
 export function encodeMainPass(

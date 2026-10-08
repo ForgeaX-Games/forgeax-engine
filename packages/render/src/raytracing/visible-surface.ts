@@ -65,12 +65,11 @@ export function projectVisibleSurfaces(
         'rebuild the scene projection from the owning renderer',
       );
     }
-    if (source.skin !== undefined || source.morph !== undefined || (source.lods?.length ?? 0) > 0) {
-      return invalid(
-        'qualified rigid base-LOD visible-surface geometry',
-        'use a qualified rigid draw until the deformation/LOD producer publishes matching raster addresses',
-      );
-    }
+    // Deformed and LOD draws publish no rows until their producers publish matching
+    // raster addresses: their pixels read as uncovered (row 0) instead of failing
+    // every frame of a scene that also holds a skinned character.
+    if (source.skin !== undefined || source.morph !== undefined || (source.lods?.length ?? 0) > 0)
+      continue;
     const instances = source.instances;
     const instanceCount = instances?.instanceCount ?? 1;
     if (!Number.isSafeInteger(instanceCount) || instanceCount < 1) {

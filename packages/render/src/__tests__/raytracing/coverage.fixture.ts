@@ -1,11 +1,17 @@
 import { vec3 } from '@forgeax/engine-math';
 import { RenderGraphBuilder, type RenderGraphFrame } from '@forgeax/engine-render-graph';
+import type { Buffer } from '@forgeax/engine-rhi';
 import { attachRecorder, buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
 import * as webgpu from '@forgeax/engine-rhi-webgpu';
 import { ok } from '@forgeax/engine-types';
 import { assert, expect } from 'vitest';
 import { buildRaySurfaceScene } from '../../raytracing/attributes';
-import { createRayPathTracer, RAY_COVERAGE_CANDIDATES } from '../../raytracing/path-tracer';
+import {
+  createRayPathTracer,
+  RAY_COVERAGE_CANDIDATES,
+  RAY_COVERAGE_ROUNDS,
+  rayCoveragePoolCapacity,
+} from '../../raytracing/path-tracer';
 import type { RayPathFixture } from './path-tracer.commands';
 import { plane, readBuffer, settings } from './path-tracer.fixture';
 
@@ -43,7 +49,7 @@ export async function verifyCoverage(
     kind: 'directional' as const,
     contactShadowLength: 0,
     direction: vec3.create(0, 0, -1),
-    color: vec3.create(1, 1, 1),
+    color: vec3.create(Math.PI, Math.PI, Math.PI),
     intensity: Math.PI,
   };
   const cases = [
@@ -60,9 +66,22 @@ export async function verifyCoverage(
       meshes: Array.from({ length: RAY_COVERAGE_CANDIDATES + 1 }, (_, id) => mesh(id, 0, 0)),
       cameraZ: 2,
     },
+    // Every pixel rejects its whole candidate budget: more than the rounds can pool.
+    {
+      name: 'overflow',
+      meshes: Array.from({ length: RAY_COVERAGE_CANDIDATES + 1 }, (_, id) => mesh(id, 0, 0)),
+      cameraZ: 2,
+    },
   ];
+  const pool = rayCoveragePoolCapacity(64);
+  // Exhaustion needs a second round; overflow outlasts every round.
+  expect(32 * RAY_COVERAGE_CANDIDATES).toBeGreaterThan(pool);
+  expect(64 * RAY_COVERAGE_CANDIDATES).toBeGreaterThan(RAY_COVERAGE_ROUNDS * pool);
   const tracers = [];
   const outputs: Uint8Array[] = [];
+  const overflow: number[] = [];
+  const overflowCount = async (coverage: Buffer) =>
+    new Uint32Array((await readBuffer(device, coverage, 16)).buffer)[3] ?? -1;
   try {
     for (const item of cases)
       tracers.push(
@@ -87,7 +106,7 @@ export async function verifyCoverage(
                             1,
                             item.name === 'cutoff-equality'
                               ? 0.5
-                              : item.name === 'secondary'
+                              : item.name === 'secondary' || item.name === 'overflow'
                                 ? 0
                                 : 1,
                           ],
@@ -148,6 +167,7 @@ export async function verifyCoverage(
           compiled.execute({ encoder }).unwrap();
           device.queue.submit([encoder.finish().unwrap()]).unwrap();
           outputs.push(await readBuffer(device, tracer.buffers.accumulation, 64 * 80));
+          overflow[index] = await overflowCount(tracer.buffers.coverage);
           currentView = device.createTextureView(texture, {}).unwrap();
           const stale = compiled.execute({ encoder: device.createCommandEncoder({}).unwrap() });
           expect(stale.ok).toBe(false);
@@ -161,6 +181,7 @@ export async function verifyCoverage(
       tracer.recordSample(encoder).unwrap();
       device.queue.submit([encoder.finish().unwrap()]).unwrap();
       outputs.push(await readBuffer(device, tracer.buffers.accumulation, 64 * 80));
+      overflow[index] = await overflowCount(tracer.buffers.coverage);
     }
     (await recorder.frameBoundary()).unwrap();
     const captured = (await pending).unwrap();
@@ -172,7 +193,7 @@ export async function verifyCoverage(
         u = new Uint32Array(output.buffer);
       for (let i = 0; i < 64; i++) {
         const hole = i % 8 < 4;
-        if (cases[c]?.name === 'exhaustion' && hole) {
+        if (cases[c]?.name === 'overflow' || (cases[c]?.name === 'exhaustion' && hole)) {
           expect(u[i * 20 + 7]).toBe(1);
           expect(u[i * 20 + 3]).toBe(0);
         } else {
@@ -184,7 +205,7 @@ export async function verifyCoverage(
             ]);
             expect(f[i * 20]).toBe(0);
           } else if (cases[c]?.name === 'shadow') {
-            // Standard retains Schlick's grazing term even with normal-incidence F0=0.
+            // F0=0 derives F90=0, so the lit hole carries only the diffuse term.
             if (hole) {
               expect(f[i * 20]).toBeGreaterThan(0.99);
               expect(f[i * 20]).toBeLessThan(1.01);
@@ -200,6 +221,9 @@ export async function verifyCoverage(
         }
       }
     }
+    // Deferred rays finish exhaustion within the rounds; only true overflow is counted.
+    expect(overflow).toEqual(cases.map((c) => (c.name === 'overflow' ? overflow.at(-1) : 0)));
+    expect(overflow.at(-1)).toBeGreaterThan(0);
     const secondary = outputs[cases.findIndex((c) => c.name === 'secondary')];
     const control = outputs[cases.findIndex((c) => c.name === 'secondary-control')];
     assert(secondary && control);

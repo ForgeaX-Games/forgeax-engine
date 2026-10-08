@@ -9,6 +9,7 @@ import type {
   Result,
 } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
+import { normaliseForPack } from './pack-value.js';
 
 export interface TerminalImportProduct<P = unknown> extends ImportProduct<P> {
   readonly refs: readonly AssetRef[];
@@ -89,7 +90,9 @@ async function productDigest(
   artifacts: Readonly<Record<string, ArtifactDescriptor>>,
 ): Promise<string> {
   const chunks: (Uint8Array | string)[] = [
-    JSON.stringify(projectImportedAssetPayload(asset)),
+    // Digest the same value representation that Pack publishes. Native byte views
+    // otherwise stringify as large indexed objects instead of JSON arrays.
+    JSON.stringify(normaliseForPack(projectImportedAssetPayload(asset))),
     JSON.stringify(asset.refs.map((ref) => ref.guid)),
     JSON.stringify(artifacts),
   ];
@@ -113,6 +116,7 @@ async function artifactDescriptors(
         mediaType: artifact.mediaType,
         byteLength: artifact.bytes.byteLength,
         integrity: { algorithm: 'sha256' as const, digest: await artifactDigest(artifact.bytes) },
+        ...(artifact.delivery === undefined ? {} : { delivery: artifact.delivery }),
         ...(artifact.assetCodec === undefined ? {} : { assetCodec: artifact.assetCodec }),
       },
     ]);
@@ -125,7 +129,11 @@ export function projectImportedAssetPayload(
 ): Record<string, unknown> {
   const payload = asset.payload as Record<string, unknown>;
   if (Object.keys(asset.artifacts).length === 0) return payload;
-  if (asset.kind === 'mesh') return { kind: 'mesh' };
+  if (asset.kind === 'mesh' && asset.artifacts.body !== undefined)
+    return {
+      kind: 'mesh',
+      ...(payload.distanceField === undefined ? {} : { distanceField: payload.distanceField }),
+    };
   if (asset.kind === 'texture' || asset.kind === 'equirect') {
     const { data: _runtimeBytes, ...metadata } = payload;
     return metadata;

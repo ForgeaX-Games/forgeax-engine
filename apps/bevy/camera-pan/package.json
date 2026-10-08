@@ -20,7 +20,9 @@
       "status": "implemented"
     },
     "rhiDebug": {
-      "riskFamilies": ["camera-transform"]
+      "riskFamilies": [
+        "camera-transform"
+      ]
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-camera-pan smoke",
     "metrics": {
@@ -59,8 +61,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

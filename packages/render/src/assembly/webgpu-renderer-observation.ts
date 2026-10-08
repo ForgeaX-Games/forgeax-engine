@@ -2,12 +2,16 @@ import type { Buffer } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { RendererContractFailureError } from '../errors/render';
 import { getTextureIdentity } from '../record/frame-snapshot';
-import type { FrameReceipt, FrameReceiptObservation, RenderResult } from '../render-contract';
-import type { TypedFrameObservationCapture } from '../typed-render-graph-primitives';
+import type {
+  FrameReceipt,
+  FrameReceiptObservation,
+  RenderPipelineObservationCapture,
+  RenderResult,
+} from '../render-contract';
 
 /** Dispose receipt-bound readback buffers while retaining failed ownership. */
 export function disposeObservationCaptureSet(
-  captures: readonly TypedFrameObservationCapture[],
+  captures: readonly RenderPipelineObservationCapture[],
   destroyed: WeakSet<Buffer>,
   failures: WeakMap<Buffer, RendererContractFailureError>,
   fire: (failure: RendererContractFailureError) => void,
@@ -49,10 +53,10 @@ export function disposeObservationCaptureSet(
 export function projectReceiptColorObservations(
   receipt: FrameReceipt,
   captures: readonly {
-    readonly capture: TypedFrameObservationCapture;
+    readonly capture: RenderPipelineObservationCapture;
     readonly bytes: Uint8Array;
   }[],
-  requestedDomains: readonly TypedFrameObservationCapture['domain'][],
+  requestedDomains: readonly RenderPipelineObservationCapture['domain'][],
   backendId: FrameReceipt['backendId'],
 ): RenderResult<
   NonNullable<FrameReceiptObservation['observations']>,
@@ -124,6 +128,8 @@ export function projectReceiptColorObservations(
           ),
         );
       read.push({ ...observation, domain, records: records.slice() });
+    } else if (domain === 'final-display') {
+      read.push({ ...observation, domain, colorSpace: capture.colorSpace ?? 'srgb' });
     } else {
       read.push({ ...observation, domain });
     }

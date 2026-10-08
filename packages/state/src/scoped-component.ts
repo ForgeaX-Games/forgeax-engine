@@ -2,7 +2,7 @@
 //
 // Per-token __scopedTo__<name> components: defineComponent with two enum fields
 // (value = u32 variant index, mode = exit/enter enum). Components are lazily
-// created on first use via getOrCreateScopedComponent.
+// created on first use via getScopedComponent.
 //
 // despawnOnExit / despawnOnEnter are free functions that add the corresponding
 // ScopedTo component to an entity. On duplicate add the ECS returns
@@ -16,14 +16,13 @@
 
 import { defineComponent, type EntityHandle, type World } from '@forgeax/engine-ecs';
 import type { StateToken, StateTokenVariant } from './define-state';
-import { getRegisteredTokens } from './define-state';
 
 const SCOPED_COMPONENTS = new Map<string, ReturnType<typeof defineComponent>>();
 
 /** Fixed label-to-value map for the ScopedTo `mode` enum field. */
 export const SCOPED_MODE_VALUE = { exit: 0, enter: 1 } as const;
 
-function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
+export function getScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
   const existing = SCOPED_COMPONENTS.get(token.name);
   if (existing) return existing;
 
@@ -42,11 +41,6 @@ function getOrCreateScopedComponent(token: StateToken): ReturnType<typeof define
   });
   SCOPED_COMPONENTS.set(token.name, comp);
   return comp;
-}
-
-/** Resolve the world-local ScopedTo token for a state. */
-export function getScopedComponent(token: StateToken): ReturnType<typeof defineComponent> {
-  return getOrCreateScopedComponent(token);
 }
 
 function resolveVariantIndex(token: StateToken, variant: string): number {
@@ -93,7 +87,7 @@ export function despawnOnExit<T extends StateToken>(
   variant: StateTokenVariant<T>,
 ): void {
   const idx = resolveVariantIndex(token, variant);
-  const scoped = getOrCreateScopedComponent(token);
+  const scoped = getScopedComponent(token);
   const result = addScopedComponent(world, entity, scoped, idx, SCOPED_MODE_VALUE.exit);
   if (!result.ok) {
     throw result.error;
@@ -117,22 +111,10 @@ export function despawnOnEnter<T extends StateToken>(
   variant: StateTokenVariant<T>,
 ): void {
   const idx = resolveVariantIndex(token, variant);
-  const scoped = getOrCreateScopedComponent(token);
+  const scoped = getScopedComponent(token);
   const result = addScopedComponent(world, entity, scoped, idx, SCOPED_MODE_VALUE.enter);
   if (!result.ok) {
     throw result.error;
-  }
-}
-
-/**
- * Pre-register scoped components for all state tokens in the global registry.
- * Called by registerStatesPlugin during boot; idempotent.
- *
- * @internal
- */
-export function registerScopedComponents(): void {
-  for (const token of getRegisteredTokens().values()) {
-    getOrCreateScopedComponent(token);
   }
 }
 
@@ -146,7 +128,7 @@ export function registerScopedComponents(): void {
  */
 export function countScopedEntitiesByVariant(world: World, token: StateToken): number[] {
   const counts = new Array<number>(token.variants.length).fill(0);
-  const scoped = getOrCreateScopedComponent(token);
+  const scoped = getScopedComponent(token);
   const query = world.query({ read: [scoped] }).unwrap();
   for (const row of query) {
     const idx = row.get(scoped).value;

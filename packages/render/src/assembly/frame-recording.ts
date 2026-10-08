@@ -1,5 +1,6 @@
 import type { RhiCommandEncoder, RhiDevice, RhiError } from '@forgeax/engine-rhi';
 import type { CubeCaptureWork } from '../capture/scheduler';
+import { RendererOperationError } from '../errors/render';
 import {
   type RenderFeatureFrameBatch,
   type RenderFeatureFrameInput,
@@ -21,6 +22,8 @@ export interface RecordedView {
   readonly device: RhiDevice;
   readonly beforeSubmit?: ((device: RhiDevice) => RhiError | undefined) | undefined;
   readonly isCurrent?: () => boolean;
+  /** Physical submission, before any publication callback or generation rejection. */
+  readonly onSubmittedWork?: (completed: Promise<void>) => void;
   readonly reportError: (error: RhiError) => void;
 }
 export interface FeatureFrameRequest {
@@ -101,6 +104,7 @@ export function submitFrameRecordings(
   let sharedGraph: ReturnType<typeof recordSharedFeatureGraph>;
   let work: RecordedView | undefined;
   const currentChecks: (() => boolean)[] = [];
+  const submittedWork: ((completed: Promise<void>) => void)[] = [];
   let result: RendererFrameStageResult<void> = { ok: false, stage: 'execute' };
   const failures: unknown[] = [];
   let completion: Promise<void> | undefined;
@@ -126,6 +130,7 @@ export function submitFrameRecordings(
       throw new Error('Renderer views must record into one encoder on one device');
     work = next.value;
     if (work.isCurrent !== undefined) currentChecks.push(work.isCurrent);
+    if (work.onSubmittedWork !== undefined) submittedWork.push(work.onSubmittedWork);
     return true;
   };
   const encodeAndSubmit = () => {
@@ -218,15 +223,23 @@ export function submitFrameRecordings(
       return false;
     }
     result = { ok: true, value: undefined };
+    if (timingOwner !== undefined || submittedWork.length > 0) {
+      completion = work.device.queue.onSubmittedWorkDone();
+      // Every allocation gets the fence even if another observer throws.
+      for (const track of submittedWork) {
+        try {
+          track(completion);
+        } catch (cause) {
+          failures.push(cause);
+        }
+      }
+      if (timingOwner !== undefined) timingOwner.gpuPassTimingSubmittedWork = completion;
+      capture?.markSubmitted(completion);
+    }
     const observationOwner = rendererInternals ?? first?.internals;
     if (observationOwner !== undefined)
       observationOwner.submittedPassNames = Object.freeze([...framePassNames]);
     batch?.frame.onSubmitted();
-    if (timingOwner !== undefined) {
-      completion = work.device.queue.onSubmittedWorkDone();
-      timingOwner.gpuPassTimingSubmittedWork = completion;
-      capture?.markSubmitted(completion);
-    }
     return true;
   };
   try {
@@ -299,6 +312,12 @@ export function submitFrameRecordings(
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, 'Renderer view finalization failed');
+  if (!result.ok && result.stage === 'submit')
+    throw new RendererOperationError('frame-submit-rejected', {
+      operation: 'draw',
+      stage: 'submit',
+      accepted: false,
+    });
   return result.ok;
 }
 

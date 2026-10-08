@@ -11,7 +11,6 @@ export type {
   ParticleRendererSourceV3,
 } from '@forgeax/engine-vfx';
 export type {
-  CookedParticleCodeEmitter,
   ParticleCodeCompileError,
   ParticleCodeCookError,
   ParticleCodeCookProduct,
@@ -20,7 +19,6 @@ export type {
   ParticleCodeNativeCookInput,
   ParticleCodeProgram,
   ParticleCodeProgramArtifact,
-  ParticleCodeProgramReflection,
   ParticleMaterialInputCatalog,
 } from './code-program.js';
 export {
@@ -36,7 +34,6 @@ export {
   PARTICLE_MANAGED_RUNTIME_V3,
 } from './code-program.js';
 export type {
-  ParticleManagedStage,
   ParticleManagedStagePlan,
   ParticleStagePlanError,
 } from './managed-program.js';

@@ -38,8 +38,6 @@ export const SSR_FORMAT_STAGES = Object.freeze([
 
 export type { SsrAdmissionIdentity } from './identity';
 
-export type SsrFormatStage = (typeof SSR_FORMAT_STAGES)[number];
-
 /**
  * The admission input is the real renderer owner receipt plus the one
  * integration identity supplied by the host. It deliberately does not
@@ -483,15 +481,6 @@ export interface SsrSpatialCamera {
   readonly screenSpaceReflection?: ScreenSpaceReflectionData;
 }
 
-export interface SsrSpatialWork {
-  readonly attachmentCount: number;
-  readonly passCount: number;
-  readonly bindingCount: number;
-  readonly resourceCount: number;
-  readonly historyCount: 0;
-  readonly temporalDemand: 0;
-}
-
 export type SsrSpatialStatus =
   | 'not-requested'
   | 'requested'
@@ -504,7 +493,7 @@ export interface SsrSpatialAdmissionBase {
   readonly lane: SsrSpatialLane;
   readonly config: ScreenSpaceReflectionData | undefined;
   readonly viewRange: number;
-  readonly work: SsrSpatialWork;
+  readonly work: SsrAdmissionWork;
 }
 
 export type SsrSpatialAdmission =
@@ -522,7 +511,7 @@ export type SsrSpatialAdmission =
       readonly failure: SsrConfigInvalidError | SsrUnavailableError;
     });
 
-const ZERO_SPATIAL_WORK: SsrSpatialWork = Object.freeze({
+const ZERO_SPATIAL_WORK: SsrAdmissionWork = Object.freeze({
   attachmentCount: 0,
   passCount: 0,
   bindingCount: 0,
@@ -531,7 +520,7 @@ const ZERO_SPATIAL_WORK: SsrSpatialWork = Object.freeze({
   temporalDemand: 0,
 });
 
-const ADMITTED_SPATIAL_WORK: SsrSpatialWork = Object.freeze({
+const ADMITTED_SPATIAL_WORK: SsrAdmissionWork = Object.freeze({
   attachmentCount: 3,
   passCount: 4,
   bindingCount: 4,

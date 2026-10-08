@@ -41,6 +41,7 @@ export function createCatalogSource(options: {
   readonly subscribe?: (listener: CatalogListener) => () => void;
 }): CatalogSource {
   const entries = options.entries;
+  let pending: ReturnType<CatalogSource['enumerate']> | undefined;
   return {
     async enumerate() {
       if (entries !== undefined) {
@@ -77,20 +78,38 @@ export function createCatalogSource(options: {
           }),
         );
       }
-      const result = await fetchCatalog(
-        options.url,
-        options.fetch ?? globalThis.fetch,
-        (packageUrl) => resolveCatalogAssetUrl({ packIndexUrl: options.url }, packageUrl),
-        options.expectedRevision,
-        options.expectedScope,
-      );
-      if (!result.ok) return result;
-      return ok(
-        [...result.value].map(([guid, entry]) => ({ guid, ...entry })) as readonly CatalogEntry[],
-      );
+      if (pending !== undefined) return pending;
+      const url = options.url;
+      const fetcher = options.fetch ?? globalThis.fetch;
+      const expectedRevision = options.expectedRevision;
+      const expectedScope = options.expectedScope;
+      const read = Promise.resolve().then(async () => {
+        const result = await fetchCatalog(
+          url,
+          fetcher,
+          (packageUrl) => resolveCatalogAssetUrl({ packIndexUrl: options.url }, packageUrl),
+          expectedRevision,
+          expectedScope,
+        );
+        if (!result.ok) return result;
+        return ok(
+          [...result.value].map(([guid, entry]) => ({ guid, ...entry })) as readonly CatalogEntry[],
+        );
+      });
+      pending = read;
+      const release = () => {
+        if (pending === read) pending = undefined;
+      };
+      void read.then(release, release);
+      return read;
     },
     subscribe(listener) {
-      return options.subscribe?.(listener) ?? (() => {});
+      return (
+        options.subscribe?.((delta) => {
+          pending = undefined;
+          listener(delta);
+        }) ?? (() => {})
+      );
     },
     ...(options.url === undefined ? {} : { url: options.url }),
     ...(options.expectedRevision === undefined

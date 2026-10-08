@@ -420,6 +420,40 @@ function pointToRayDist(
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('pickVertexOnEntity', () => {
+  it('keeps the point kernel convention when a projective bound corner has w=0', () => {
+    const scene = makeScene();
+    const camera = spawnPerspectiveCamera(scene.world, 5);
+    const position = new Float32Array([-1, 0, 0, 1, -1, 0, 1, 1, 0]);
+    const asset = scene.assets
+      .catalog<MeshAsset>(AssetGuid.format(AssetGuid.random()), {
+        kind: 'mesh',
+        vertices: position,
+        attributes: { position },
+        aabb: new Float32Array([-1, -1, 0, 1, 1, 0]),
+        submeshes: [
+          {
+            indexOffset: 0,
+            indexCount: 0,
+            vertexCount: 3,
+            topology: 'triangle-list',
+            materialSlot: 0,
+          },
+        ],
+        materialSlots: [{ slotName: 'Default' }],
+      })
+      .unwrap();
+    const mesh = scene.world.allocSharedRef('MeshAsset', asset);
+    const entity = spawnMeshEntity(scene, mesh, 0, 0, 0);
+    propagateTransforms(scene.world);
+    const projective = mat4.identity(mat4.create());
+    projective[3] = 1;
+    projective[12] = 10;
+    scene.world.set(entity, GlobalTransform, { world: projective }).unwrap();
+    const hit = pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, VP, VP, entity);
+    expect(hit?.vertexIndex).toBe(0);
+    expect(Array.from(hit?.worldPos ?? [])).toEqual([0, 0, 0]);
+  });
+
   // ── AC-01: return shape ───────────────────────────────────────────
 
   describe('AC-01: return shape', () => {
@@ -729,7 +763,7 @@ describe('pickVertexOnEntity', () => {
       }
     });
 
-    it('skinned mesh (skinIndex+skinWeight present) returns deformed=true', () => {
+    it('skin attributes without a live Skin binding yield no current vertices', () => {
       const scene = makeScene();
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const mesh = registerSkinnedTriangle(scene);
@@ -750,71 +784,18 @@ describe('pickVertexOnEntity', () => {
       const hits = pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, VP, VP, entity, {
         limit: 3,
       }) as VertexHit[];
-      expect(hits.length).toBeGreaterThan(0);
-      for (const hit of hits) {
-        expect(hit.deformed).toBe(true);
-      }
+      expect(hits).toEqual([]);
     });
 
-    it('skinned mesh worldPos is rest-pose transformed by GlobalTransform.world', () => {
+    it('an unavailable Skin never fabricates translated rest-pose vertices', () => {
       const scene = makeScene();
       const camera = spawnPerspectiveCamera(scene.world, 5);
       const mesh = registerSkinnedTriangle(scene);
-      // small offset well within view frustum
-      const entity = spawnMeshEntity(scene, mesh, 0.1, 0.2, 0);
+      const entity = spawnMeshEntity(scene, mesh, 0.5, 0, 0);
       propagateTransforms(scene.world);
-
-      const meshRes = resolveAssetHandle<MeshAsset>(
-        scene.world,
-        toShared<'MeshAsset'>(mesh as unknown as number),
-      );
-      if (!meshRes.ok) throw new Error('resolve failed');
-      const position = meshRes.value.attributes.position as Float32Array;
-      const wm = readWorldMatrix(scene.world, entity)!;
-
-      expect(wm[12]).toBeCloseTo(0.1, 4);
-      expect(wm[13]).toBeCloseTo(0.2, 4);
-
-      // project triangle centre at (0.1,0.2,0) to screen
-      const vp = computeViewProj(scene.world, camera)!;
-      const vpMat = mat4.create();
-      mat4.multiply(
-        vpMat,
-        vp.proj as unknown as mat4.Mat4Like,
-        vp.view as unknown as mat4.Mat4Like,
-      );
-      const centreScreen = projectToScreen([0.1, 0.2, 0], vpMat)!;
-      if (centreScreen.behind) throw new Error('centre behind camera');
-
-      const hits = pickVertexOnEntity(
-        scene.world,
-        camera,
-        centreScreen.px,
-        centreScreen.py,
-        VP,
-        VP,
-        entity,
-        { limit: 3 },
-      ) as VertexHit[];
-      expect(hits.length).toBeGreaterThan(0);
-
-      for (const hit of hits) {
-        expect(hit.deformed).toBe(true);
-        const vi = hit.vertexIndex;
-        const lx = position[vi * 3 + 0] as number;
-        const ly = position[vi * 3 + 1] as number;
-        const lz = position[vi * 3 + 2] as number;
-        const expected = vec3.create();
-        mat4.transformPoint(
-          expected,
-          wm as unknown as mat4.Mat4Like,
-          [lx, ly, lz] as unknown as Vec3Like,
-        );
-        // rest-pose worldPos should match the transformed local position
-        expect(hit.worldPos[0]).toBeCloseTo(expected[0] as number, 4);
-        expect(hit.worldPos[1]).toBeCloseTo(expected[1] as number, 4);
-        expect(hit.worldPos[2]).toBeCloseTo(expected[2] as number, 4);
-      }
+      expect(
+        pickVertexOnEntity(scene.world, camera, VP / 2, VP / 2, VP, VP, entity, { limit: 3 }),
+      ).toEqual([]);
     });
   });
 

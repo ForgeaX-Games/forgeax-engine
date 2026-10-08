@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "head": "06c613cee7ce12f2b0f95fb1fe214ee9adfd04fa",
+  "run": 37582350656,
+  "runConclusion": "cancelled",
+  "cancelledJob": 112667307501,
+  "cancellation": "GitHub Actions original27minute job deadline; no operator cancellation",
+  "completedOwnerCostsSeconds": {
+    "ordinary-1": 602.388,
+    "compact-1": 188.619,
+    "surface-pipelines": 342.167,
+    "material-publication": 49.418,
+    "heavy-2": 48.269,
+    "shadow-fields": 242.82299999999998,
+    "ordinary-2": 451.372,
+    "compact-2": 81.574,
+    "feature-depth": 65.219,
+    "transmission": 153.587,
+    "heavy-4": 18.451,
+    "heavy-6": 25.677,
+    "specular-aa": 64.817,
+    "gi-6": 66.93,
+    "ordinary-3": 460.004,
+    "vfx-mesh": 53.318,
+    "timing-lifecycle": 12.461,
+    "gpu-timing": 11.397,
+    "heavy-1": 9.571,
+    "heavy-3": 22.202,
+    "heavy-5": 13.411,
+    "heavy-7": 14.156,
+    "heavy-8": 25.208,
+    "heavy-9": 22.064,
+    "ordinary-4": 284.389,
+    "compact-3": 73.638,
+    "renderer": 24.496,
+    "vfx-depth": 95.11500000000001,
+    "gi-2": 161.844,
+    "gi-5": 119.849,
+    "screen-probe": 68.872,
+    "direct-light": 235.112
+  },
+  "unfinishedOwners": ["gi-1", "gi-3", "gi-4"],
+  "gi1CensoredObservationSeconds": 121.995,
+  "planningCostsSeconds": {
+    "ordinary-1": 602.388,
+    "compact-1": 188.619,
+    "surface-pipelines": 342.167,
+    "material-publication": 49.418,
+    "heavy-2": 48.269,
+    "shadow-fields": 242.82299999999998,
+    "ordinary-2": 451.372,
+    "compact-2": 81.574,
+    "feature-depth": 65.219,
+    "transmission": 153.587,
+    "heavy-4": 18.451,
+    "heavy-6": 25.677,
+    "specular-aa": 64.817,
+    "gi-6": 66.93,
+    "ordinary-3": 460.004,
+    "vfx-mesh": 53.318,
+    "timing-lifecycle": 12.461,
+    "gpu-timing": 11.397,
+    "heavy-1": 9.571,
+    "heavy-3": 22.202,
+    "heavy-5": 13.411,
+    "heavy-7": 14.156,
+    "heavy-8": 25.208,
+    "heavy-9": 22.064,
+    "ordinary-4": 284.389,
+    "compact-3": 73.638,
+    "renderer": 24.496,
+    "vfx-depth": 95.11500000000001,
+    "gi-2": 161.844,
+    "gi-5": 119.849,
+    "screen-probe": 68.872,
+    "direct-light": 235.112,
+    "gi-1": 250,
+    "gi-3": 68.506,
+    "gi-4": 118.777
+  },
+  "estimatedOwners": {
+    "gi-1": {
+      "seconds": 250,
+      "basis": "conservative planning assumption above original121.995s censored observation; not a completed receipt"
+    },
+    "gi-3": {
+      "seconds": 68.506,
+      "basis": "earlier exacte9 completed owner"
+    },
+    "gi-4": {
+      "seconds": 118.777,
+      "basis": "earlier exacte9 completed owner"
+    }
+  },
+  "completedLaneNativeSeconds": {
+    "lane2": 927.627,
+    "lane3": 643.792,
+    "lane4": 1063.315
+  },
+  "completedLane1PrefixSeconds": 1473.684,
+  "transfers": [
+    {
+      "id": "material-publication",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "id": "heavy-2",
+      "from": 1,
+      "to": 3
+    },
+    {
+      "id": "gi-1",
+      "from": 1,
+      "to": 3
+    },
+    {
+      "id": "shadow-fields",
+      "from": 1,
+      "to": 2
+    },
+    {
+      "id": "surface-pipelines",
+      "from": 1,
+      "to": 4
+    },
+    {
+      "id": "heavy-4",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "id": "specular-aa",
+      "from": 2,
+      "to": 3
+    },
+    {
+      "id": "gi-6",
+      "from": 2,
+      "to": 1
+    },
+    {
+      "id": "heavy-1",
+      "from": 3,
+      "to": 4
+    },
+    {
+      "id": "gpu-timing",
+      "from": 3,
+      "to": 1
+    },
+    {
+      "id": "heavy-7",
+      "from": 3,
+      "to": 1
+    },
+    {
+      "id": "heavy-8",
+      "from": 3,
+      "to": 1
+    },
+    {
+      "id": "vfx-mesh",
+      "from": 3,
+      "to": 1
+    },
+    {
+      "id": "gi-5",
+      "from": 4,
+      "to": 1
+    }
+  ],
+  "projectionsSeconds": {
+    "e9": [1053.955, 1097.988, 1212.1870000000001, 1253.296],
+    "complete380": [1010.71, 1178.115, 1172.908, 1174.663],
+    "final06WithUnfinishedEstimates": [1287.599, 1069.67, 893.2280000000001, 1295.204]
+  },
+  "unchanged": {
+    "jobs": 4,
+    "owners": 35,
+    "jobDeadlineMinutes": 27,
+    "nativeVarianceReserve": 0.15,
+    "jobReserveSeconds": 120,
+    "ordinaryPartitions": 4,
+    "fullRoster": true,
+    "pixelThresholdsAndFalsifiers": true
+  },
+  "acceptance": "Model only; complete next-head native Engine CI and SDK required",
+  "rawLogs": [
+    "/tmp/forgeax-ci-slim-audit/final06-dawn1-cancelled.log",
+    "/tmp/forgeax-ci-slim-audit/final06-dawn2-pass.log",
+    "/tmp/forgeax-ci-slim-audit/final06-dawn3-pass.log",
+    "/tmp/forgeax-ci-slim-audit/final06-dawn4-pass.log"
+  ],
+  "cancellationAnnotation": "The job has exceeded the maximum execution time of 27m0s",
+  "localQualification": {
+    "baselineFinal06BudgetRegression": "RED original lane1 exceeds maintained model budget",
+    "candidateFullDiscoveryAndPartitions": {
+      "passed": 21,
+      "failed": 0,
+      "durationMs": 39215.631958
+    },
+    "rawRed": "/tmp/forgeax-ci-slim-audit/final06-dawn-placement-red.log",
+    "rawGreen": "/tmp/forgeax-ci-slim-audit/final06-dawn-placement-green.log"
+  }
+}

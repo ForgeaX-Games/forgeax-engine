@@ -47,6 +47,7 @@ function platform(state: 'running' | 'suspended' = 'running') {
       start() {},
       stop() {},
       buffer: null,
+      playbackRate: { value: 1, setValueAtTime: vi.fn() },
       loop: false,
     }),
     decodeAudioData: () => pending,
@@ -84,7 +85,7 @@ test('control: volume changes reach an already created source', async () => {
     p.resolveDecode({} as AudioBuffer);
     await flush();
     consumer.consume({ kind: 'set-volume', entityId: 1, volume: 0.25 });
-    expect(p.gains[3]?.gain.value).toBe(0.25);
+    expect(p.gains[15]?.gain.value).toBe(0.25);
   } finally {
     consumer.dispose();
   }
@@ -104,7 +105,7 @@ test('R2-A1a: mute before the first clip remains applied when the context is laz
     });
     p.resolveDecode({} as AudioBuffer);
     await flush();
-    expect(p.gains[1]?.gain.value).toBe(0);
+    expect(p.gains[8]?.gain.value).toBe(0);
   } finally {
     consumer.dispose();
   }
@@ -124,7 +125,7 @@ test('R2-A1b: latest volume during decode applies to the source eventually creat
     consumer.consume({ kind: 'set-volume', entityId: 1, volume: 0.25 });
     p.resolveDecode({} as AudioBuffer);
     await flush();
-    expect(p.gains[3]?.gain.value).toBe(0.25);
+    expect(p.gains[15]?.gain.value).toBe(0.25);
   } finally {
     consumer.dispose();
   }

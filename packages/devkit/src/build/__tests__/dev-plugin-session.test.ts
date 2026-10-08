@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -26,7 +26,7 @@ it.each([
   'external',
   'raw',
 ] as const)('fences %s lazy imports and archives across Host replacement', async (kind) => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-dev-session-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-dev-session-')));
   const base = '/games/session/';
   const servers: ViteDevServer[] = [];
   let current: ViteDevServer | undefined;

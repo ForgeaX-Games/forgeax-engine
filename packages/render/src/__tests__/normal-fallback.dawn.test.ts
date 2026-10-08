@@ -4,16 +4,12 @@ import { createShaderModuleImmediate, rhi } from '@forgeax/engine-rhi-webgpu';
 import { expect, it } from 'vitest';
 import { GPU_SHADER_STAGE_COMPUTE } from '../gpu-stage';
 import {
-  GPU_TEXTURE_USAGE_COPY_DST,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from '../gpu-texture-usage';
-import {
   GPU_BUFFER_USAGE_COPY_DST,
   GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_MAP_READ,
   GPU_BUFFER_USAGE_STORAGE,
 } from '../gpu-usage';
-import { FALLBACK_BYTES_PER_ROW } from '../ibl/skylight-bind-group';
+import { texelFallbackDescriptor, writeTexelFallback } from '../ibl/skylight-bind-group';
 
 it('samples the actual renderer fallback payload as an exactly neutral tangent normal', async () => {
   const owner = readFileSync(
@@ -21,33 +17,24 @@ it('samples the actual renderer fallback payload as an exactly neutral tangent n
     'utf8',
   );
   const construction = owner.slice(
-    owner.indexOf('const fallbackNormalTextureResult ='),
+    owner.indexOf('const fallbackNormalTextureDescriptor ='),
     owner.indexOf('const fallbackNormalTextureViewResult ='),
   );
-  const format = construction.match(/format: '([^']+)'/)?.[1];
+  const format = construction.match(/'fallback-normal-1x1',\s*'([^']+)'/)?.[1];
   if (format !== 'rgba8unorm' && format !== 'rgba16float')
     throw new Error('Unexpected normal fallback format');
   const payloadSource = construction.slice(
-    construction.indexOf('const fallbackNormalPixel ='),
+    construction.indexOf('const fallbackNormalTexel ='),
     construction.indexOf('const fallbackNormalWriteResult ='),
   );
-  const bytes = new Function(
-    'FALLBACK_BYTES_PER_ROW',
-    `${payloadSource}; return fallbackNormalPixel;`,
-  )(FALLBACK_BYTES_PER_ROW) as Uint8Array;
+  const texel = new Function(`${payloadSource}; return fallbackNormalTexel;`)() as Uint16Array;
   const source = readFileSync(
     resolve(process.cwd(), 'packages/shader/src/tbn.wgsl'),
     'utf8',
   ).replace(/^#define_import_path.*$/gm, '');
   const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
-  const texture = device
-    .createTexture({
-      size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-      format,
-      textureBindingViewDimension: '2d',
-      usage: GPU_TEXTURE_USAGE_COPY_DST | GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-    })
-    .unwrap();
+  const descriptor = texelFallbackDescriptor('normal-fallback-probe', format);
+  const texture = device.createTexture(descriptor).unwrap();
   const view = device.createTextureView(texture, {}).unwrap();
   const sampler = device.createSampler({ minFilter: 'linear', magFilter: 'linear' }).unwrap();
   const output = device
@@ -57,14 +44,7 @@ it('samples the actual renderer fallback payload as an exactly neutral tangent n
     .createBuffer({ size: 16, usage: GPU_BUFFER_USAGE_MAP_READ | GPU_BUFFER_USAGE_COPY_DST })
     .unwrap();
   try {
-    device.queue
-      .writeTexture(
-        { texture, mipLevel: 0, origin: [0, 0, 0] },
-        bytes,
-        { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-        { width: 1, height: 1, depthOrArrayLayers: 1 },
-      )
-      .unwrap();
+    writeTexelFallback(device.queue, texture, descriptor, texel).unwrap();
     const module = createShaderModuleImmediate(device, {
       code: `${source}
 @group(0) @binding(0) var normalTexture: texture_2d<f32>;

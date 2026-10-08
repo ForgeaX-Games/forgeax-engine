@@ -19,17 +19,38 @@ import { VIEW_UNIFORM_BYTES } from '../record/view-ubo';
 import { temporalJitterSample } from '../temporal/temporal-view';
 import { gbufferSource, writePackedNormals } from './standard-gbuffer.fixture';
 
-it.each([
+it.for([
   'production',
+  'orthographic',
   'presentation-feedback',
   'ignored-hit-reactivity',
   'ignored-vertical-neighbor',
-] as const)('checks stable history and reactive source through real GPU feedback (%s)', async (variant) => {
+  'ignored-confidence-loss',
+  'forgotten-source-history',
+  'spurious-confidence-mask',
+  'resolved-mask-feedback',
+] as const)('checks stable history and reactive source through real GPU feedback (%s)', async (variant, {
+  annotate,
+}) => {
   const presentationFeedback = variant === 'presentation-feedback';
+  const orthographic = variant === 'orthographic';
   const compiler = await import(
     /* @vite-ignore */ new URL('../../../shader-compiler/dist/index.mjs', import.meta.url).href
   );
   let source = readFileSync(resolve('packages/shader/src/ssr-temporal.wgsl'), 'utf8');
+  if (variant === 'resolved-mask-feedback') {
+    const flag = 'let sourceReactivity = f32(packedNormalSource & 1u);';
+    expect(source).toContain(flag);
+    source = source.replace(flag, 'let sourceReactivity = finiteUnit(surface.r);');
+  }
+  if (variant === 'spurious-confidence-mask') {
+    const response = 'sourceReactivity, current.color.a <= 0.0, current.reactivity > 0.0';
+    expect(source).toContain(response);
+    source = source.replace(
+      response,
+      'max(sourceReactivity, finiteUnit(history.color.a - resolved.a)), current.color.a <= 0.0, current.reactivity > 0.0',
+    );
+  }
   if (variant === 'ignored-vertical-neighbor') {
     const start = source.indexOf('fn sampleCurrentSsr(');
     const end = source.indexOf('// Reflection-only mip reduction', start);
@@ -45,8 +66,17 @@ it.each([
         .replace('vec2<i32>(1, 1)', 'vec2<i32>(1, 0)') +
       source.slice(end);
   }
+  if (variant === 'forgotten-source-history') {
+    const firstMiss = 'current.color.a <= 0.0 && !history.missing';
+    expect(source).toContain(firstMiss);
+    source = source.replace(firstMiss, 'false');
+  }
+  if (variant === 'ignored-confidence-loss') {
+    expect(source).toContain('min(requestedWeight, historyLimit)');
+    source = source.replace('min(requestedWeight, historyLimit)', 'min(requestedWeight, 0.9)');
+  }
   if (variant === 'ignored-hit-reactivity') {
-    const merged = 'max(temporal.w, current.reactivity)';
+    const merged = 'max(temporal.w, sourceReactivity)';
     expect(source).toContain(merged);
     source = source.replace(merged, 'temporal.w');
   }
@@ -160,15 +190,25 @@ it.each([
     upload(temporal, fullWidth, fullHeight, new Float32Array(fullWidth * fullHeight * 4));
     const payload = new Float32Array(VIEW_UNIFORM_BYTES / 4);
     for (const base of [44, 212]) for (let i = 0; i < 4; i++) payload[base + i * 5] = 1;
-    payload[227] = 4; // Previous clip W is the same view distance as the planar depth.
-    payload.set([1, 10, 0, 0], 228);
+    if (orthographic) {
+      // A coherent reverse-Z orthographic pair maps view depth 4 to 2/3.
+      // Clip W stays 1; it cannot stand in for the receiver's view distance.
+      payload[54] = -9;
+      payload[58] = 10;
+      payload[222] = -1 / 9;
+      payload[226] = 10 / 9;
+      payload[227] = 1;
+    } else {
+      payload[227] = 4; // Perspective clip W is the planar view distance.
+    }
+    payload.set([1, 10, orthographic ? 1 : 0, 0], 228);
     device.queue.writeBuffer(view, 0, payload).unwrap();
     const seed = createShaderModuleImmediate(device, {
       code: `
 @vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32>{
  let p=array<vec2<f32>,3>(vec2<f32>(-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));return vec4<f32>(p[i],0.0,1.0);
 }
-@fragment fn fs()->@builtin(frag_depth) f32{return (10.0/4.0-1.0)/9.0;}`,
+@fragment fn fs()->@builtin(frag_depth) f32{return ${orthographic ? '(10.0-4.0)/9.0' : '(10.0/4.0-1.0)/9.0'};}`,
     }).unwrap();
     const seedPipeline = device
       .createRenderPipeline({
@@ -358,6 +398,18 @@ it.each([
         maxVerticalError = Math.max(maxVerticalError, Math.abs(value - target));
       }
     }
+    await annotate('SSR detail integration', {
+      contentType: 'application/json',
+      bodyEncoding: 'utf-8',
+      body: JSON.stringify({
+        variant,
+        frames: 256,
+        maxError,
+        minContrast,
+        maxVerticalError,
+        reference: 'independent eight-phase jitter integration',
+      }),
+    });
     if (presentationFeedback) {
       expect(maxError, 'the gate must detect the wrong history lattice').toBeGreaterThan(0.015);
       expect(minContrast, 'the gate must detect repeated reconstruction blur').toBeLessThan(1.4);
@@ -376,6 +428,20 @@ it.each([
     ).toBeLessThan(0.015);
     expect(minContrast, 'history must not diffuse away the reflected texture').toBeGreaterThan(1.4);
     expect(maxVerticalError, 'vertical jitter-cycle integration').toBeLessThan(0.015);
+    const stableEncoder = device.createCommandEncoder().unwrap();
+    stableEncoder.copyTextureToBuffer(
+      { texture: surfaces[0].texture },
+      { buffer: readback, bytesPerRow: 256, rowsPerImage: height },
+      { width, height, depthOrArrayLayers: 1 },
+    );
+    device.queue.submit([stableEncoder.finish().unwrap()]).unwrap();
+    const stableMapping = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
+    const stableValues = new Uint8Array(stableMapping.getMappedRange().unwrap().slice(0));
+    stableMapping.unmap();
+    expect(stableValues[2 * 256 + 8 * 4], 'steady coverage does not reject TAA history').toBe(0);
+    expect(stableValues[2 * 256 + 8 * 4 + 3], 'steady coverage keeps full SSR confidence').toBe(
+      255,
+    );
     // Same static receiver and valid history on both sides. Only the right
     // source changes: the production entry must read the trace-owned mask.
     // Wide local color bounds prevent clipping from hiding a missing binding.
@@ -439,38 +505,181 @@ it.each([
         3,
       );
     }
+    device.queue
+      .writeTexture(
+        { texture: hitReactivity.texture },
+        new Float32Array(width * height),
+        { bytesPerRow: width * 4, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+      )
+      .unwrap();
     // A moving occluder may leave no admitted radiance at all. Confidence
     // cannot gate its reactivity: static misses decay, reactive misses retire.
     upload(trace, width, height, new Float32Array(width * height * 4));
-    const missEncoder = device.createCommandEncoder().unwrap();
-    const missPass = missEncoder.beginComputePass();
-    missPass.setPipeline(pipeline);
-    missPass.setBindGroup(0, groups[1]);
-    missPass.dispatchWorkgroups(width / 8, height / 8);
-    missPass.end();
-    missEncoder.copyTextureToBuffer(
-      { texture: surfaces[0].texture },
-      { buffer: readback, bytesPerRow: 256, rowsPerImage: height },
+    const misses = [];
+    for (let missed = 1; missed <= 8; missed++) {
+      const missEncoder = device.createCommandEncoder().unwrap();
+      const missPass = missEncoder.beginComputePass();
+      missPass.setPipeline(pipeline);
+      missPass.setBindGroup(0, groups[missed % 2 === 1 ? 1 : 0]);
+      missPass.dispatchWorkgroups(width / 8, height / 8);
+      missPass.end();
+      missEncoder.copyTextureToBuffer(
+        { texture: surfaces[missed % 2 === 1 ? 0 : 1].texture },
+        { buffer: readback, bytesPerRow: 256, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+      );
+      device.queue.submit([missEncoder.finish().unwrap()]).unwrap();
+      const mapping = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
+      const values = new Uint8Array(mapping.getMappedRange().unwrap().slice(0));
+      mapping.unmap();
+      const staticConfidence = values[2 * 256 + 8 * 4 + 3];
+      misses.push({
+        frame: missed,
+        staticConfidence,
+        staticReactivity: values[2 * 256 + 8 * 4],
+        movingConfidence: values[2 * 256 + 16 * 4 + 3],
+        movingReactivity: values[2 * 256 + 16 * 4],
+      });
+      if (missed === 1) {
+        expect(staticConfidence, 'a single unsupported miss keeps history').toBeGreaterThan(0);
+        if (variant === 'spurious-confidence-mask')
+          expect(
+            values[2 * 256 + 8 * 4],
+            'negative control turns sampling loss into source motion',
+          ).toBeGreaterThan(0);
+        else
+          expect(values[2 * 256 + 8 * 4], 'a single miss does not amplify into TAA rejection').toBe(
+            0,
+          );
+        expect(
+          values[2 * 256 + 16 * 4],
+          'prior reactive source propagates after its hit disappears',
+        ).toBe(variant === 'forgotten-source-history' ? 0 : 255);
+        expect(values[2 * 256 + 16 * 4 + 3]).toBe(
+          variant === 'ignored-hit-reactivity' || variant === 'forgotten-source-history'
+            ? staticConfidence
+            : 0,
+        );
+      }
+      if (missed === 2) {
+        const loss = values[2 * 256 + 8 * 4] ?? 0;
+        if (variant === 'spurious-confidence-mask') expect(loss).toBeGreaterThan(0);
+        else
+          expect(loss, 'static unavailable radiance retires inside SSR without resetting TAA').toBe(
+            0,
+          );
+      }
+      if (missed === 8) {
+        if (variant === 'ignored-confidence-loss')
+          expect(staticConfidence, 'negative control retains the stale reflection').toBeGreaterThan(
+            100,
+          );
+        else
+          expect(
+            staticConfidence,
+            'unsupported reflection retires within eight frames',
+          ).toBeLessThanOrEqual(1);
+      }
+    }
+    await annotate('SSR miss recovery', {
+      contentType: 'application/json',
+      bodyEncoding: 'utf-8',
+      body: JSON.stringify({ variant, misses, domain: 'rgba8unorm codes' }),
+    });
+    // Full coverage can carry negligible energy. Losing it must not repeatedly
+    // reset TAA's stable age merely because its confidence was large.
+    upload(
+      trace,
+      width,
+      height,
+      new Float32Array(
+        Array.from({ length: width * height }, () => [0.001, 0.001, 0.001, 1]).flat(),
+      ),
+    );
+    device.queue.writeBuffer(params, 0, new Uint32Array([0])).unwrap();
+    const lowEnergySeedEncoder = device.createCommandEncoder().unwrap();
+    const lowEnergySeedPass = lowEnergySeedEncoder.beginComputePass();
+    lowEnergySeedPass.setPipeline(pipeline);
+    lowEnergySeedPass.setBindGroup(0, groups[0]);
+    lowEnergySeedPass.dispatchWorkgroups(width / 8, height / 8);
+    lowEnergySeedPass.end();
+    device.queue.submit([lowEnergySeedEncoder.finish().unwrap()]).unwrap();
+    // A response generated on the presentation lattice is not a fixed-grid
+    // source flag. The source flag stays zero even when the response is one.
+    device.queue
+      .writeTexture(
+        { texture: surfaces[1].texture },
+        new Uint8Array(Array.from({ length: width * height }, () => [255, 128, 128, 255]).flat()),
+        { bytesPerRow: width * 4, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+      )
+      .unwrap();
+    device.queue.writeBuffer(params, 0, new Uint32Array([1])).unwrap();
+    upload(trace, width, height, new Float32Array(width * height * 4));
+    const lowEnergy = [];
+    for (let frame = 1; frame <= 8; frame++) {
+      const encoder = device.createCommandEncoder().unwrap();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, groups[frame % 2 === 1 ? 1 : 0]);
+      pass.dispatchWorkgroups(width / 8, height / 8);
+      pass.end();
+      encoder.copyTextureToBuffer(
+        { texture: surfaces[frame % 2 === 1 ? 0 : 1].texture },
+        { buffer: readback, bytesPerRow: 256, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+      );
+      device.queue.submit([encoder.finish().unwrap()]).unwrap();
+      const mapping = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
+      const values = new Uint8Array(mapping.getMappedRange().unwrap().slice(0));
+      mapping.unmap();
+      const reactive = values[2 * 256 + 8 * 4] ?? 0;
+      lowEnergy.push({ frame, reactive });
+      if (variant === 'resolved-mask-feedback' && frame === 1) {
+        expect(reactive, 'negative control feeds a resolved response back as a source').toBe(255);
+        expect(values[2 * 256 + 8 * 4 + 3]).toBe(0);
+      } else if (variant === 'spurious-confidence-mask' && frame === 2)
+        expect(reactive, 'negative control spuriously resets static TAA').toBeGreaterThan(0);
+      else if (variant !== 'spurious-confidence-mask' && variant !== 'resolved-mask-feedback')
+        expect(reactive, 'negligible retired energy leaves TAA accumulation intact').toBe(0);
+    }
+    await annotate('SSR low-energy retirement', {
+      contentType: 'application/json',
+      bodyEncoding: 'utf-8',
+      body: JSON.stringify({ variant, radiance: 0.001, lowEnergy, domain: 'rgba8unorm codes' }),
+    });
+    // Clearing a receiver cannot preserve radiance, source reactivity or
+    // confidence from the preceding occupied depth, including orthographic.
+    const emptyEncoder = device.createCommandEncoder().unwrap();
+    const emptyDepth = emptyEncoder.beginRenderPass({
+      colorAttachments: [],
+      depthStencilAttachment: {
+        view: depth.view,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        depthClearValue: 0,
+      },
+    });
+    emptyDepth.end();
+    const emptyPass = emptyEncoder.beginComputePass();
+    emptyPass.setPipeline(pipeline);
+    emptyPass.setBindGroup(0, groups[0]);
+    emptyPass.dispatchWorkgroups(width / 8, height / 8);
+    emptyPass.end();
+    emptyEncoder.copyTextureToBuffer(
+      { texture: resolved.texture },
+      { buffer: readback, bytesPerRow: width * 8, rowsPerImage: height },
       { width, height, depthOrArrayLayers: 1 },
     );
-    device.queue.submit([missEncoder.finish().unwrap()]).unwrap();
-    const missMapping = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
-    const missValues = new Uint8Array(missMapping.getMappedRange().unwrap().slice(0));
-    missMapping.unmap();
-    expect(missValues[2 * 256 + 8 * 4 + 3], 'static miss retains bounded history').toBeGreaterThan(
-      0,
-    );
-    if (variant === 'ignored-hit-reactivity') {
-      expect(
-        missValues[2 * 256 + 16 * 4 + 3],
-        'negative control keeps stale miss history',
-      ).toBeGreaterThan(0);
-    } else {
-      expect(
-        missValues[2 * 256 + 16 * 4 + 3],
-        'reactive miss retires stale history confidence',
-      ).toBe(0);
-    }
+    device.queue.submit([emptyEncoder.finish().unwrap()]).unwrap();
+    const emptyMapping = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
+    const emptyRadiance = new Uint8Array(emptyMapping.getMappedRange().unwrap().slice(0));
+    emptyMapping.unmap();
+    expect(
+      emptyRadiance.every((byte) => byte === 0),
+      'cleared receiver has no resolved energy or confidence',
+    ).toBe(true);
   } finally {
     for (const t of [
       trace,

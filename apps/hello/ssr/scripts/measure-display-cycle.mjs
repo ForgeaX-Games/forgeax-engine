@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { readReferencePng } from '../../../shared/png-codec.mjs';
 
 // Adjacent submitted frames, not golden-image comparison. Keep local peaks:
@@ -88,12 +88,13 @@ export function measureDisplayCycle(receipts, images, regions) {
 
 if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
   assert.ok(process.argv[2], 'usage: measure-display-cycle.mjs <native frames.json>');
-  const manifest = JSON.parse(readFileSync(resolve(process.argv[2]), 'utf8'));
+  const manifestPath = resolve(process.argv[2]);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   // This decoder accepts only the native smoke producer, not Chrome's adaptive
   // PNG filtering or CSS-composited screenshots.
   assert.equal(manifest.mode, 'display-only-actual-rendered-frames');
   const measured = measureDisplayCycle(manifest.frames,
-    manifest.frames.map(f => readReferencePng(f.path)), {
+    manifest.frames.map(f => readReferencePng(resolve(dirname(manifestPath), f.path))), {
       wall: [0.1, 0.2, 0.9, 0.48], contact: [0.1, 0.47, 0.9, 0.56],
       floorSeams: [0.1, 0.55, 0.9, 0.77], upperEdge: [0.15, 0.7, 0.8, 0.81], scene: [0, 0, 1, 1],
     });

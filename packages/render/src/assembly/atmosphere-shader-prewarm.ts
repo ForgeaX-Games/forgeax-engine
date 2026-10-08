@@ -9,6 +9,8 @@ export async function prewarmAtmosphereShaders(
   seed: (label: string, module: ShaderModule) => void,
 ): Promise<AtmosphereShaderSources | undefined> {
   const stages = [
+    ['compose', 'atmosphere_compose', 'atmosphere_compose_vs'],
+    ['luts', 'atmosphere_luts', 'atmosphere_transmittance'],
     ['cube', 'atmosphere_cube', 'atmosphere_cubemap_vs'],
     ['background', 'atmosphere_background', 'atmosphere_background_vs'],
     ['ibl', 'atmosphere_ibl', 'atmosphere_ibl_vs'],

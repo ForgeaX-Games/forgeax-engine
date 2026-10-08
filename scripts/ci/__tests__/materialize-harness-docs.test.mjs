@@ -74,6 +74,29 @@ test('keeps the missing-document failure bounded', async () => {
   }
 });
 
+test('passes the exact required document list to sparse harness sync', async () => {
+  const rootDir = makeRoot();
+  try {
+    let syncEnv;
+    const result = await materializeHarnessDocs({
+      rootDir,
+      retryDelaysMs: [0],
+      env: { FORGEAX_HARNESS_SPARSE_DOCS: '1' },
+      sync: (_rootDir, env) => {
+        syncEnv = env;
+        writeRequiredDocs(rootDir);
+        return { status: 0 };
+      },
+      log: () => {},
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(JSON.parse(syncEnv.FORGEAX_HARNESS_SPARSE_DOCS_PATHS), REQUIRED_HARNESS_DOCS);
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('does not retry an explicit sync failure', async () => {
   const rootDir = makeRoot();
   try {

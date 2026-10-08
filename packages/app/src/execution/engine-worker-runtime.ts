@@ -4,6 +4,7 @@ import { createWorldContext, World } from '@forgeax/engine-ecs';
 import type { SharedKernelExecutor } from '@forgeax/engine-ecs/shared';
 import {
   type CompositeInputLease,
+  createGamepadFeedback,
   type InputBackend,
   type InputBackendSample,
   makeCompositeBackend,
@@ -26,6 +27,7 @@ import {
   constructRuntimeRendererHost,
   createPublicationAssets,
 } from '@forgeax/engine-runtime/internal/renderer-host';
+import { err } from '@forgeax/engine-types';
 import { createAnimationPayloadLookup } from '../animation-asset-lookup';
 import { type AssetRuntimeAssembly, createAssetRuntimeAssembly } from '../assets-runtime-assembly';
 import { syncCameraAspect } from '../canvas-policy';
@@ -87,6 +89,7 @@ interface WorkerRealm {
   readonly init: ExecutionInitMessage;
   assetAssembly: AssetRuntimeAssembly | undefined;
   pendingAudioIntents: AudioIntent[];
+  feedback: ReturnType<typeof createGamepadFeedback>;
   kernelPool: KernelPool | undefined;
   pluginContext: Context | undefined;
   observation: AppObservation | undefined;
@@ -101,28 +104,12 @@ interface WorkerRealm {
 let realm: WorkerRealm | undefined;
 const rebuildQueue = new SerializedRebuildQueue();
 const inspectionQueue: ExecutionInspectMessage[] = [];
-/** Requests that passed the frame-boundary admission point and may still run. */
+let realmTransitions = 0;
+let inspectionsClosed = false;
+/** Requests admitted against a stable World that may still run asynchronously. */
 const activeInspectionIds = new Set<number>();
 
-type WorkerExecuteModule = {
-  readonly executeScript: (
-    script: string,
-    context: {
-      readonly world: unknown;
-      readonly renderer: unknown;
-      readonly assets: unknown;
-      readonly rhiCapture?: unknown;
-      readonly profiler?: unknown;
-      readonly simulation: unknown;
-      readonly execution: unknown;
-      readonly importModule?: (specifier: string) => Promise<unknown>;
-    },
-  ) => Promise<
-    { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: unknown }
-  >;
-};
-
-let executeScriptPromise: Promise<WorkerExecuteModule> | undefined;
+let executeScriptPromise: Promise<typeof import('@forgeax/engine-remote/execute')> | undefined;
 
 function serializableEvalError(error: unknown): { readonly code: string; readonly hint: string } {
   if (error !== null && typeof error === 'object') {
@@ -150,37 +137,64 @@ function profilePhase<T>(session: RecorderSession | undefined, phase: string, ac
   }
 }
 
+function rejectStaleInspection(job: ExecutionInspectMessage, actualWorldIdentity: string): void {
+  scope.postMessage({
+    kind: 'inspect-result',
+    requestId: job.requestId,
+    worldIdentity: actualWorldIdentity,
+    result: {
+      ok: false,
+      error: {
+        code: 'live-world-stale',
+        hint: 'The inspection belongs to an older World; fetch status and retry.',
+        detail: { expected: job.worldIdentity, actual: actualWorldIdentity },
+      },
+    },
+  });
+}
+
+function admitInspections(): void {
+  const target = realm;
+  if (target === undefined || realmTransitions > 0 || inspectionsClosed) return;
+  // Worker messages run between synchronous World updates. A GPU completion
+  // wait does not own this World boundary or prevent an inspection response.
+  const jobs = inspectionQueue.splice(0, inspectionQueue.length);
+  for (const job of jobs) void executeInspection(job, target);
+}
+
+async function withRealmTransition(action: () => Promise<void>): Promise<void> {
+  ++realmTransitions;
+  try {
+    await action();
+  } finally {
+    --realmTransitions;
+    admitInspections();
+  }
+}
+
 async function executeInspection(job: ExecutionInspectMessage, target: WorkerRealm): Promise<void> {
   if (job.worldIdentity !== target.world.identity) {
-    scope.postMessage({
-      kind: 'inspect-result',
-      requestId: job.requestId,
-      worldIdentity: target.world.identity,
-      result: {
-        ok: false,
-        error: {
-          code: 'live-world-stale',
-          hint: 'The inspection belongs to an older World; fetch status and retry.',
-          detail: { expected: job.worldIdentity, actual: target.world.identity },
-        },
-      },
-    });
+    rejectStaleInspection(job, target.world.identity);
     return;
   }
   activeInspectionIds.add(job.requestId);
   let inputLease: CompositeInputLease | undefined;
   try {
-    // The queue is admitted only from runFrame. This is the authoritative
-    // start witness consumed by the browser relay for cancellation semantics.
+    // This is the authoritative admission witness consumed by the browser
+    // relay for queued versus already-running cancellation semantics.
     scope.postMessage({
       kind: 'inspect-started',
       requestId: job.requestId,
       worldIdentity: target.world.identity,
     });
-    executeScriptPromise ??= import('@forgeax/engine-remote/execute').then(
-      (module) => module as unknown as WorkerExecuteModule,
-    );
+    executeScriptPromise ??= import('@forgeax/engine-remote/execute');
     const module = await executeScriptPromise;
+    // Loading the evaluator yields to rebuild/dispose messages. Do not create
+    // an input lease or run code against a World retired during that await.
+    if (realm !== target || realmTransitions > 0 || inspectionsClosed) {
+      rejectStaleInspection(job, realm?.world.identity ?? '');
+      return;
+    }
     const importModule = createCanonicalEcsImportModule(target.world, async (specifier: string) => {
       // A Worker cannot resolve a bare package specifier from the browser
       // document. Vite's dev module endpoint is the same resolver used by the
@@ -205,6 +219,21 @@ async function executeInspection(job: ExecutionInspectMessage, target: WorkerRea
           world: { identity: target.world.identity },
         }),
         gpuPassTiming: () => target.renderWorker?.inspectGpuPassTiming(),
+        querySubmittedTerrainHeight: (
+          frameId: number,
+          request: import('@forgeax/engine-render').SubmittedTerrainHeightRequest,
+        ) => {
+          if (target.renderWorker === undefined)
+            return Promise.resolve(
+              err({
+                code: 'terrain-query-unavailable',
+                expected: 'an active Render Worker',
+                hint: 'use the local Renderer receipt in local render mode',
+                detail: { field: 'Worker' },
+              }),
+            );
+          return target.renderWorker.querySubmittedTerrainHeight(frameId, request);
+        },
       },
     };
     target.observation ??= createAppObservation(
@@ -263,11 +292,15 @@ function sharedKernelPlugin(target: WorkerRealm): Plugin {
     apply(ctx) {
       const executor: SharedKernelExecutor = {
         warmup(kernel) {
-          target.kernelPool ??= createKernelPool();
+          target.kernelPool ??= createKernelPool({
+            startupTimeoutMs: target.init.startupTimeoutMs,
+          });
           target.kernelPool.warmup?.(kernel);
         },
         execute(kernel, spans) {
-          target.kernelPool ??= createKernelPool();
+          target.kernelPool ??= createKernelPool({
+            startupTimeoutMs: target.init.startupTimeoutMs,
+          });
           return target.kernelPool.execute(kernel, spans);
         },
       };
@@ -331,6 +364,7 @@ async function disposeRealm(target: WorkerRealm): Promise<void> {
     target.rhiAttachment = undefined;
     target.rhiCapture = undefined;
     target.pendingAudioIntents = [];
+    target.feedback.dispose();
   }
   if (renderFailure !== undefined) throw renderFailure;
 }
@@ -363,6 +397,7 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
     init,
     assetAssembly: undefined,
     pendingAudioIntents: [],
+    feedback: createGamepadFeedback(),
     kernelPool: undefined,
     pluginContext: undefined,
     observation: undefined,
@@ -373,6 +408,8 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
     profilerCaptureId: undefined,
     profilerFrameId: 0,
   };
+  const feedback = candidate.feedback;
+  const realmInput = { ...inputBackend, feedback };
   const audioBackend = createAudioIntentBackend({
     emit: (intent) => candidate.pendingAudioIntents.push(intent),
   });
@@ -404,10 +441,12 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
           };
     const rendererOptions: import('@forgeax/engine-render').RendererOptions = {
       ...(prepared.features === undefined ? {} : { features: prepared.features }),
+      ...(prepared.ssrIdentity === undefined ? {} : { ssrIdentity: prepared.ssrIdentity }),
       ...(profiler === undefined ? {} : { profiler }),
       ...(init.diagnostics?.gpuPassTiming === undefined
         ? {}
         : { gpuPassTiming: init.diagnostics.gpuPassTiming }),
+      ...(init.outputColorSpace === undefined ? {} : { outputColorSpace: init.outputColorSpace }),
     };
     if (init.diagnostics?.rhiCapture === true && !init.workers.render.enabled) {
       const attachment = await attachWorkerRhiRecorder();
@@ -490,7 +529,7 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
               }
             : createRenderFeatureHost(host.featureHost),
         assets,
-        input: inputBackend,
+        input: realmInput,
         audio: audioBackend,
         assetAssembly: assetAssemblyResult.value,
         ...(prepared.pluginPrograms === undefined
@@ -500,18 +539,33 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
         animationPayloads: createAnimationPayloadLookup(assetAssemblyResult.value.registry),
         extensions: [
           ...(init.workers.kernels.enabled ? [sharedKernelPlugin(candidate)] : []),
-          executionBootstrapHostPlugin({
-            ...(renderTargets === undefined ? {} : { renderTargets }),
-            ...(split ? {} : { canvas: init.canvas }),
-            ...(init.bootstrapPort === undefined ? {} : { port: init.bootstrapPort }),
-            setPointerLockAllowed(allowed): void {
-              scope.postMessage({
-                kind: 'host-control',
-                command: 'set-pointer-lock-allowed',
-                allowed,
-              });
+          executionBootstrapHostPlugin(
+            {
+              ...(renderTargets === undefined ? {} : { renderTargets }),
+              ...(split ? {} : { canvas: init.canvas }),
+              ...(init.bootstrapPort === undefined ? {} : { port: init.bootstrapPort }),
+              querySubmittedTerrainHeight: (request) => {
+                if (candidate.renderWorker === undefined)
+                  return Promise.resolve(
+                    err({
+                      code: 'terrain-query-unavailable',
+                      expected: 'an active Render Worker',
+                      hint: 'wait for renderer readiness',
+                      detail: { field: 'Worker' },
+                    }),
+                  );
+                return candidate.renderWorker.queryLatestSubmittedTerrainHeight(request);
+              },
+              setPointerLockAllowed(allowed): void {
+                scope.postMessage({
+                  kind: 'host-control',
+                  command: 'set-pointer-lock-allowed',
+                  allowed,
+                });
+              },
             },
-          }),
+            candidateRenderer,
+          ),
           ...(prepared.plugins ?? []),
         ],
       }),
@@ -553,6 +607,7 @@ async function createRealm(init: ExecutionInitMessage): Promise<boolean> {
     rhiLifecycleTransferred = candidate.rhiAttachment !== undefined;
     lastFrameId = 0;
     renderSampleTimeSeconds = 0;
+    submitRejectionsWithoutFrame = 0;
     if (previousRealm !== undefined) await disposeRealm(previousRealm);
     return true;
   } catch (cause) {
@@ -585,6 +640,7 @@ async function initialize(message: ExecutionInitMessage): Promise<void> {
   }
 }
 
+let submitRejectionsWithoutFrame = 0;
 async function runFrame(message: ExecutionFrameMessage): Promise<void> {
   const activeRealm = realm;
   const activeRenderer = renderer;
@@ -619,11 +675,7 @@ async function runFrame(message: ExecutionFrameMessage): Promise<void> {
     }
     syncCameraAspect(world, canvasWidth, canvasHeight);
   }
-  const inspections = inspectionQueue.splice(0, inspectionQueue.length);
-  // Admission happens at a frame boundary, but the async script must not hold
-  // the Worker frame credit open while it awaits. The DevKit owner tracks the
-  // same promise and blocks conflicting observation writes until it completes.
-  for (const inspection of inspections) void executeInspection(inspection, activeRealm);
+  admitInspections();
   const started = performance.now();
   const profileSession = activeRealm.profiler?.activeSession();
   let profileFrame: ProfileFrameToken | undefined;
@@ -687,6 +739,7 @@ async function runFrame(message: ExecutionFrameMessage): Promise<void> {
         kernelWaitMs: kernelDispatch?.waitMs ?? 0,
         ...kernelMetrics,
         ...(audioIntents.length ? { audioIntents } : {}),
+        feedbackIntents: activeRealm.feedback.drainIntents(),
       });
       return;
     }
@@ -703,7 +756,37 @@ async function runFrame(message: ExecutionFrameMessage): Promise<void> {
         ...(profileFrame === undefined ? {} : { profileFrame }),
       }),
     );
-    if (!draw.ok) throw draw.error;
+    if (!draw.ok) {
+      if (
+        draw.error.code === 'frame-submit-rejected' &&
+        draw.error.detail.accepted === false &&
+        activeRenderer.state() === 'alive' &&
+        ++submitRejectionsWithoutFrame === 1
+      ) {
+        lastFrameId = message.frameId;
+        const audioIntents = activeRealm.pendingAudioIntents;
+        activeRealm.pendingAudioIntents = [];
+        scope.postMessage({
+          kind: 'simulation-complete',
+          worldIdentity: world.identity,
+          frameId: message.frameId,
+          engineUpdateMs: updateFinished - started,
+          kernelWaitMs: kernelDispatch?.waitMs ?? 0,
+          ...kernelMetrics,
+          ...(audioIntents.length ? { audioIntents } : {}),
+          feedbackIntents: activeRealm.feedback.drainIntents(),
+          renderRejection: {
+            code: draw.error.code,
+            expected: draw.error.expected,
+            hint: draw.error.hint,
+            detail: draw.error.detail,
+          },
+        });
+        return;
+      }
+      throw draw.error;
+    }
+    submitRejectionsWithoutFrame = 0;
     // Publish the fallback worker clock only after the renderer accepted this
     // frame. A rejected submit must leave the temporal sample pair and the
     // next implicit timestamp unchanged.
@@ -740,6 +823,7 @@ async function runFrame(message: ExecutionFrameMessage): Promise<void> {
       engineUpdateMs: updateFinished - started,
       kernelWaitMs: kernelDispatch?.waitMs ?? 0,
       ...(audioIntents.length > 0 ? { audioIntents } : {}),
+      feedbackIntents: activeRealm.feedback.drainIntents(),
       ...kernelMetrics,
     });
   } catch (cause) {
@@ -812,79 +896,85 @@ async function rebuild(message: ExecutionRebuildMessage): Promise<void> {
 
 scope.onmessage = (event): void => {
   const message = event.data;
-  if (message.kind === 'render-replace') {
-    void realm?.renderWorker
-      ?.replace(message.epoch, message.canvas)
-      .catch((cause) =>
-        postFault(
-          'runtime',
-          'render-worker-recovery-failed',
-          'replacement Renderer starts',
-          'inspect replacement failure',
-          cause,
-        ),
-      );
-  } else if (message.kind === 'init') void initialize(message);
-  else if (message.kind === 'frame') void runFrame(message);
-  else if (message.kind === 'inspect') inspectionQueue.push(message);
-  else if (message.kind === 'inspect-cancel') {
-    const index = inspectionQueue.findIndex((job) => job.requestId === message.requestId);
-    if (index >= 0) {
-      const [cancelled] = inspectionQueue.splice(index, 1);
-      if (cancelled !== undefined) {
-        scope.postMessage({
-          kind: 'inspect-canceled',
-          requestId: cancelled.requestId,
-          worldIdentity: realm?.world.identity ?? cancelled.worldIdentity,
-          admitted: false,
-        });
-      }
-    } else {
+  switch (message.kind) {
+    case 'render-replace':
+      void realm?.renderWorker
+        ?.replace(message.epoch, message.canvas)
+        .catch((cause) =>
+          postFault(
+            'runtime',
+            'render-worker-recovery-failed',
+            'replacement Renderer starts',
+            'inspect replacement failure',
+            cause,
+          ),
+        );
+      return;
+    case 'init':
+      void withRealmTransition(() => initialize(message));
+      return;
+    case 'frame':
+      void runFrame(message);
+      return;
+    case 'inspect':
+      inspectionQueue.push(message);
+      admitInspections();
+      return;
+    case 'inspect-cancel': {
       // A request absent from the queue has either started or already posted
       // its terminal result. Keep the caller attached to that execution rather
       // than falsely claiming it was cancelled before admission.
+      const index = inspectionQueue.findIndex((job) => job.requestId === message.requestId);
+      if (index >= 0) inspectionQueue.splice(index, 1);
       scope.postMessage({
         kind: 'inspect-canceled',
         requestId: message.requestId,
         worldIdentity: realm?.world.identity ?? message.worldIdentity,
-        admitted: true,
+        admitted: index < 0,
       });
+      return;
     }
-  } else if (message.kind === 'rebuild') {
-    void rebuildQueue.enqueue(() => rebuild(message));
-  } else if (message.kind === 'dispose') {
-    void (async () => {
-      const target = realm;
-      realm = undefined;
-      inspectionQueue.length = 0;
+    case 'rebuild':
+      void withRealmTransition(() => rebuildQueue.enqueue(() => rebuild(message)));
+      return;
+    case 'dispose':
+      inspectionsClosed = true;
+      void withRealmTransition(async () => {
+        const target = realm;
+        realm = undefined;
+        inspectionQueue.length = 0;
+        try {
+          if (target !== undefined) await disposeRealm(target);
+          scope.postMessage({ kind: 'disposed' });
+        } catch (cause) {
+          scope.postMessage({ kind: 'disposed', error: serializableDetail(cause) });
+        } finally {
+          target?.init.bootstrapPort?.close();
+          scope.close();
+        }
+      });
+      return;
+    case 'input-clear':
+      inputBackend.revokeInjectedLease();
+      return;
+    case 'input-lease-open':
+      inputBackend.beginInjectedLease();
+      return;
+    case 'profile-finish':
       try {
-        if (target !== undefined) await disposeRealm(target);
-        scope.postMessage({ kind: 'disposed' });
-      } catch (cause) {
-        scope.postMessage({ kind: 'disposed', error: serializableDetail(cause) });
-      } finally {
-        target?.init.bootstrapPort?.close();
-        scope.close();
+        const current = realm;
+        const active = current?.profiler?.activeSession();
+        if (
+          active !== undefined &&
+          (message.worldIdentity === undefined ||
+            current?.world.identity === message.worldIdentity) &&
+          (message.captureId === undefined || active.captureId === message.captureId)
+        ) {
+          active.finish();
+        }
+      } catch {
+        // Diagnostic cleanup is best effort and never changes the Worker state.
       }
-    })();
-  } else if (message.kind === 'input-clear') {
-    inputBackend.revokeInjectedLease();
-  } else if (message.kind === 'input-lease-open') {
-    inputBackend.beginInjectedLease();
-  } else if (message.kind === 'profile-finish') {
-    try {
-      const current = realm;
-      const active = current?.profiler?.activeSession();
-      if (
-        active !== undefined &&
-        (message.worldIdentity === undefined ||
-          current?.world.identity === message.worldIdentity) &&
-        (message.captureId === undefined || active.captureId === message.captureId)
-      ) {
-        active.finish();
-      }
-    } catch {
-      // Diagnostic cleanup is best effort and never changes the Worker state.
-    }
+      return;
   }
 };

@@ -4,6 +4,7 @@ import { createUiImporter } from '@forgeax/engine/ui/importer';
 import type { AnimationClip, SkeletonAsset } from '@forgeax/engine/types';
 import { describe, expect, it } from 'vitest';
 import characterPack from '../character.pack.ts';
+import environmentPack from '../environment.pack.ts';
 import fantasyMeshesPack from '../fantasy-meshes.pack.ts';
 import geometryPack from '../geometry.pack.ts';
 import materialsPack from '../materials.pack.ts';
@@ -11,7 +12,7 @@ import scenePack from '../scene.pack.ts';
 import gamePack from '../game.pack.ts';
 import uiPack from '../ui/ui.pack.ts';
 import { AssetGuid } from '@forgeax/engine/pack/guid';
-import { RUSTED_IRON_MATERIAL_GUID } from '../shared/asset-refs.ts';
+import { assetGuid, guidText, PACKAGE_IDS, RUSTED_IRON_MATERIAL_GUID } from '../shared/asset-refs.ts';
 import { PLAYER_RIG } from '../player/player-rig.ts';
 import {
   MAX_CAMERA_PITCH,
@@ -261,7 +262,7 @@ describe('game-3d starter', () => {
       readSource: async () => ({ ok: true as const, value: new TextEncoder().encode(html) }),
       readSibling: async (path) => ({
         ok: true as const,
-        value: new TextEncoder().encode(path === 'guide.ui.css' ? css : ''),
+        value: new TextEncoder().encode(path === 'guide.ui.css' ? css : await readFile(new URL('../guide.ui.i18n.json', import.meta.url), 'utf8')),
       }),
       decodeImage: async () => {
         throw new Error('the template UI has no image companion');
@@ -271,7 +272,7 @@ describe('game-3d starter', () => {
     });
     expect(imported.ok, JSON.stringify(imported)).toBe(true);
     if (imported.ok) {
-      expect(imported.value.sourceDependencies).toEqual(['guide.ui.html', 'guide.ui.css']);
+      expect(imported.value.sourceDependencies).toEqual(['guide.ui.html', 'guide.ui.css', 'guide.ui.i18n.json']);
       expect(imported.value.assets[0]?.payload).toMatchObject({ html, css });
     }
   });
@@ -297,17 +298,36 @@ describe('game-3d starter', () => {
     expect(integratePointerLook(0, 0, 0, 100_000).pitch).toBe(MAX_CAMERA_PITCH);
   });
 
-  it('uses one sun and atmosphere for both the background and PBR environment', async () => {
+  it('uses one authored sky for both the background and PBR environment', async () => {
     const scene = (await build(scenePack))['scene/showcase'] as {
       readonly entities: Record<string, { readonly components: Record<string, Record<string, unknown>> }>;
     };
     const components = Object.values(scene.entities).map((entity) => entity.components);
     expect(components.filter((entry) => entry.DirectionalLight)).toHaveLength(1);
-    expect(components.filter((entry) => entry.Atmosphere)).toHaveLength(1);
+    expect(components.filter((entry) => entry.Atmosphere)).toHaveLength(0);
     const skylights = components.filter((entry) => entry.Skylight);
     expect(skylights).toHaveLength(1);
-    expect(skylights[0]?.Skylight).not.toHaveProperty('equirect');
-    expect(components.some((entry) => entry.SkyboxBackground)).toBe(false);
+    const backgrounds = components.filter((entry) => entry.SkyboxBackground);
+    expect(backgrounds).toHaveLength(1);
+    expect(skylights[0]?.Skylight?.equirect).toBeDefined();
+    expect(backgrounds[0]?.SkyboxBackground?.equirect).toBe(skylights[0]?.Skylight?.equirect);
+    expect(skylights[0]?.Skylight?.equirect).toBe(
+      guidText(assetGuid(PACKAGE_IDS.environment, 'environment/daylight')),
+    );
+    const environment = (await build(environmentPack))['environment/daylight'] as {
+      readonly width: number;
+      readonly height: number;
+      readonly data: Uint8Array;
+    };
+    const pixels = new Float32Array(environment.data.buffer);
+    expect(pixels).toHaveLength(environment.width * environment.height * 4);
+    expect(pixels.every((channel) => Number.isFinite(channel) && channel > 0)).toBe(true);
+    const zenith = Math.floor(environment.width / 2) * 4;
+    expect(pixels[zenith + 2]).toBeGreaterThan(pixels[zenith] ?? 0);
+    const ground = ((environment.height - 1) * environment.width + Math.floor(environment.width / 2)) * 4;
+    expect(pixels[ground]).toBeGreaterThan(0.02);
+    expect(pixels[ground + 1]).toBeGreaterThan(0.02);
+    expect(pixels[ground + 2]).toBeGreaterThan(0.02);
   });
 
   it('builds closed flat-shaded armor with rigid skinning and a deterministic walk clip', async () => {
@@ -418,6 +438,7 @@ describe('game-3d starter', () => {
     const clip = (await build(characterPack))['animation/player-walk'] as AnimationClip;
     expect(new Set(clip.channels.map((channel) => `${channel.targetId}:${channel.property}`)).size).toBe(clip.channels.length);
     for (const channel of clip.channels) {
+      if (channel.property === 'property') throw new Error('starter walk must contain numeric TRS tracks');
       const { input, output } = channel.sampler;
       const stride = channel.property === 'rotation' ? 4 : 3;
       expect(input[0]).toBe(0);
@@ -425,14 +446,16 @@ describe('game-3d starter', () => {
       for (let key = 1; key < input.length; key += 1) expect(input[key]).toBeGreaterThan(input[key - 1]!);
       expect(Array.from(output.slice(-stride))).toEqual(Array.from(output.slice(0, stride)));
     }
-    const translation = clip.channels.find((channel) => channel.property === 'translation')!;
+    const translation = clip.channels.find((channel) => channel.property === 'translation');
+    if (translation?.property !== 'translation') throw new Error('starter walk root translation is missing');
     Array.from(translation.sampler.output.slice(0, 3)).forEach((value, axis) =>
       expect(value).toBeCloseTo(PLAYER_RIG[0]!.local[axis]!, 6));
     for (const [leftIndex, joint] of PLAYER_RIG.entries()) {
       if (!joint.name.endsWith('.L')) continue;
       const rightIndex = PLAYER_RIG.findIndex((candidate) => candidate.name === joint.name.replace('.L', '.R'));
-      const left = clip.channels.find((channel) => channel.targetId === deriveAnimationTargetId(playerTargetPath(leftIndex)))!;
-      const right = clip.channels.find((channel) => channel.targetId === deriveAnimationTargetId(playerTargetPath(rightIndex)))!;
+      const left = clip.channels.find((channel) => channel.targetId === deriveAnimationTargetId(playerTargetPath(leftIndex)));
+      const right = clip.channels.find((channel) => channel.targetId === deriveAnimationTargetId(playerTargetPath(rightIndex)));
+      if (left?.property !== 'rotation' || right?.property !== 'rotation') throw new Error('starter walk mirrored rotations are missing');
       const steps = left.sampler.input.length - 1;
       for (let key = 0; key < steps; key += 1) {
         const opposite = (key + steps / 2) % steps;

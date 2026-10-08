@@ -7,16 +7,11 @@
 
 /// <reference types="@webgpu/types" />
 
-import type {
-  Buffer,
-  MappedBuffer,
-  RhiCommandEncoder,
-  RhiDevice,
-  RhiQueue,
-} from '@forgeax/engine-rhi';
+import type { Buffer, MappedBuffer, RhiCommandEncoder, RhiDevice } from '@forgeax/engine-rhi';
 import type { Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
-import { createRhiDebugError, type RhiDebugError } from './errors';
+import { createRhiDebugError, type RhiDebugErrorFor } from './errors';
+import type { SubresourceSlice } from './texel-layout';
 import type { RhiCallEvent } from './types';
 
 // GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ = 8 | 1 = 9.
@@ -131,16 +126,9 @@ export function resolveAttachmentSize(
 /**
  * Read back raw RGBA8 pixels from a GPU texture into a host-side Uint8Array.
  *
- * Steps:
- * 1. Create a staging buffer (COPY_DST | MAP_READ) sized to aligned rows.
- * 2. Create a command encoder + copyTextureToBuffer.
- * 3. Finish + submit + await onSubmittedWorkDone.
- * 4. mapAsync(READ) + getMappedRange() → new Uint8Array(slice).
- * 5. Unmap + destroy staging buffer.
- *
- * The returned Uint8Array has length = texWidth * texHeight * 4 (tight;
- * alignment padding is stripped). The buffer alignment is WebGPU 256-byte
- * row requirement.
+ * Uses the batch readback lifecycle for one subresource. Rows are returned
+ * tightly packed; staging alignment is stripped. Compressed formats use blocks.
+ * Failures reject after batch-owned staging cleanup.
  *
  * @param device - The RHI device that owns the texture.
  * @param texture - The texture to read back (opaque branded handle at the boundary).
@@ -167,106 +155,34 @@ export async function readbackTexturePixels(
   const bytesPerBlock = opts?.bytesPerBlock ?? opts?.bytesPerTexel ?? 4;
   const blockWidth = opts?.blockWidth ?? 1;
   const blockHeight = opts?.blockHeight ?? 1;
-  const blockCountX = Math.ceil(texWidth / blockWidth);
-  const blockCountY = Math.ceil(texHeight / blockHeight);
-  const copyWidth = blockCountX * blockWidth;
-  const copyHeight = blockCountY * blockHeight;
-  const mipLevel = opts?.mipLevel ?? 0;
-  const baseArrayLayer = opts?.baseArrayLayer ?? 0;
-  const aspect = opts?.aspect;
-  const rowBytes = blockCountX * bytesPerBlock;
-  const alignedRowBytes = Math.ceil(rowBytes / 256) * 256; // WebGPU alignment
-  const bufferSize = alignedRowBytes * blockCountY;
-
-  const readbackBufferResult = device.createBuffer({
-    size: bufferSize,
-    usage: COPY_DST_MAP_READ,
-  });
-  if (!readbackBufferResult.ok) {
-    throw new Error(`createBuffer for readback failed: ${readbackBufferResult.error.code}`);
-  }
-  const readbackBuffer = readbackBufferResult.value;
-
-  const encoderResult = device.createCommandEncoder({});
-  if (!encoderResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    throw new Error(`createCommandEncoder for readback failed: ${encoderResult.error.code}`);
-  }
-  const encoder = encoderResult.value;
-
-  try {
-    encoder.copyTextureToBuffer(
-      {
-        texture,
-        mipLevel,
-        origin: { x: 0, y: 0, z: baseArrayLayer },
-        // aspect selects depth vs stencil plane on combined depth-stencil
-        // textures. stencil-only IS copyable on depth24plus-stencil8 (the
-        // depth plane is not). Omitted -> backend default ('all').
-        ...(aspect !== undefined ? { aspect } : {}),
-      } as unknown as never,
-      {
-        buffer: readbackBuffer,
-        offset: 0,
-        bytesPerRow: alignedRowBytes,
-        rowsPerImage: blockCountY,
-      } as unknown as never,
-      { width: copyWidth, height: copyHeight, depthOrArrayLayers: 1 },
-    );
-  } catch {
-    device.destroyBuffer(readbackBuffer);
-    throw new Error('copyTextureToBuffer failed');
-  }
-
-  const finishResult = encoder.finish();
-  if (!finishResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    throw new Error(`encoder.finish failed: ${finishResult.error.code}`);
-  }
-
-  const queue: RhiQueue = device.queue;
-  queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
-  await queue.onSubmittedWorkDone();
-
-  // RHI Buffer.mapAsync / MappedBuffer.getMappedRange return Result wrappers, not
-  // the raw spec void / ArrayBuffer. The previous `as unknown as { ... }` casts
-  // hid that: mapAsync was called with mode=2 (which is GPUMapMode.WRITE, not
-  // READ=0x1) and getMappedRange's Result object was fed straight into
-  // `new Uint8Array(...)`, yielding a zero-length array — every RT readback came
-  // back all-zero (transparent black), which the e2e delta check missed because
-  // baseline and replay were equally empty (empty-vs-empty trap).
-  const buffer = readbackBuffer as unknown as Buffer;
-  // GPUMapMode.READ = 0x1
-  const mapResult = await buffer.mapAsync(0x1);
-  if (!mapResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    throw new Error(`mapAsync(READ) failed: ${mapResult.error.code}`);
-  }
-  const mapped: MappedBuffer = mapResult.value;
-
-  const rangeResult = mapped.getMappedRange();
-  if (!rangeResult.ok) {
-    mapped.unmap();
-    device.destroyBuffer(readbackBuffer);
-    throw new Error(`getMappedRange failed: ${rangeResult.error.code}`);
-  }
-  const fullPixels = new Uint8Array(rangeResult.value);
-
-  // Extract tight pixels (strip alignment padding)
-  const tightPixels = new Uint8Array(blockCountX * blockCountY * bytesPerBlock);
-  for (let y = 0; y < blockCountY; y++) {
-    const srcOffset = y * alignedRowBytes;
-    const dstOffset = y * rowBytes;
-    for (let x = 0; x < rowBytes; x++) {
-      tightPixels[dstOffset + x] = fullPixels[srcOffset + x] ?? 0;
-    }
-  }
-
-  // Cleanup
-  mapped.unmap();
-  device.destroyBuffer(readbackBuffer);
-
-  return tightPixels;
+  const totalBytes =
+    Math.ceil(texWidth / blockWidth) * Math.ceil(texHeight / blockHeight) * bytesPerBlock;
+  const result = await readbackTexturePixelsBatch(device, [
+    {
+      handleId: 'texture',
+      texture,
+      bytesPerBlock,
+      blockWidth,
+      blockHeight,
+      totalBytes,
+      ...(opts?.aspect === undefined ? {} : { aspect: opts.aspect }),
+      slices: [
+        {
+          layer: opts?.baseArrayLayer ?? 0,
+          mip: opts?.mipLevel ?? 0,
+          width: texWidth,
+          height: texHeight,
+          byteOffset: 0,
+          byteLength: totalBytes,
+        },
+      ],
+    },
+  ]);
+  if (!result.ok) throw new Error(result.error.detail.cause);
+  // A successful batch returns exactly one result per request.
+  const bytes = result.value.get('texture');
+  if (bytes === undefined) throw new Error('texture readback returned no bytes');
+  return new Uint8Array(bytes);
 }
 
 // ============================================================================
@@ -276,26 +192,9 @@ export async function readbackTexturePixels(
 /**
  * Read back the raw bytes of a GPU buffer into a host-side ArrayBuffer.
  *
- * Sibling of readbackTexturePixels under the single "GPU byte readback"
- * responsibility unit (plan-strategy D-7) — snapshotResource calls this to
- * capture a buffer's initial GPU bytes at frame-header time.
- *
- * Steps:
- * 1. Create a staging buffer (COPY_DST | MAP_READ) sized to `size`.
- * 2. Create a command encoder + copyBufferToBuffer(src, 0, staging, 0, size).
- * 3. Finish + submit + await onSubmittedWorkDone.
- * 4. mapAsync(READ=0x1) + getMappedRange() -> sliced ArrayBuffer copy.
- * 5. Unmap + destroy staging buffer.
- *
- * Returns Ok(ArrayBuffer) (a detached copy independent of the mapped range)
- * or Err(readback-failed) with `.detail.phase` narrowing
- * the failure point (copy / map). The buffer is passed opaque (`unknown`)
- * because RHI handles are branded; the caller resolved it from the descriptor
- * registry. The caller (snapshotResource) holds the handleId and maps this
- * readback error to the capture-snapshot-failed boundary.
- *
- * Reuses the M0-fixed mapAsync(0x1) + Result-unwrap pattern from
- * readbackTexturePixels (never the all-zero mode=2 bug).
+ * Uses the batch readback lifecycle for one buffer and returns an independent
+ * byte copy or a structured readback-failed error. The batch owns staging,
+ * submission, mapping and cleanup, including rejected queue/map promises.
  *
  * @param device - The RHI device that owns the buffer.
  * @param buffer - The source buffer (opaque branded handle) to read back.
@@ -305,64 +204,20 @@ export async function readbackBufferBytes(
   device: RhiDevice,
   buffer: unknown,
   size: number,
-): Promise<Result<ArrayBuffer, RhiDebugError>> {
-  const fail = (phase: 'copy' | 'map', cause: string): Result<ArrayBuffer, RhiDebugError> =>
-    err(createRhiDebugError('readback-failed', { stage: 'readback', phase, cause }));
-
-  const readbackBufferResult = device.createBuffer({ size, usage: COPY_DST_MAP_READ });
-  if (!readbackBufferResult.ok) {
-    return fail('copy', `staging buffer creation failed: ${readbackBufferResult.error.code}`);
-  }
-  const readbackBuffer = readbackBufferResult.value;
-
-  const encoderResult = device.createCommandEncoder({});
-  if (!encoderResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    return fail('copy', `command encoder creation failed: ${encoderResult.error.code}`);
-  }
-  const encoder = encoderResult.value;
-
-  try {
-    encoder.copyBufferToBuffer(buffer as Buffer, 0, readbackBuffer, 0, size);
-  } catch (e) {
-    device.destroyBuffer(readbackBuffer);
-    return fail('copy', `copyBufferToBuffer failed: ${String(e)}`);
-  }
-
-  const finishResult = encoder.finish();
-  if (!finishResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    return fail('copy', `encoder.finish failed: ${finishResult.error.code}`);
-  }
-
-  const queue: RhiQueue = device.queue;
-  queue.submit([finishResult.value as unknown as never] as unknown as readonly never[]);
-  await queue.onSubmittedWorkDone();
-
-  const stagingBuffer = readbackBuffer as unknown as Buffer;
-  // GPUMapMode.READ = 0x1
-  const mapResult = await stagingBuffer.mapAsync(0x1);
-  if (!mapResult.ok) {
-    device.destroyBuffer(readbackBuffer);
-    return fail('map', `mapAsync(READ) failed: ${mapResult.error.code}`);
-  }
-  const mapped: MappedBuffer = mapResult.value;
-
-  const rangeResult = mapped.getMappedRange();
-  if (!rangeResult.ok) {
-    mapped.unmap();
-    device.destroyBuffer(readbackBuffer);
-    return fail('map', `getMappedRange failed: ${rangeResult.error.code}`);
-  }
-
-  // Copy the mapped bytes into a standalone ArrayBuffer before unmap — the
-  // mapped range is invalidated on unmap.
-  const bytes = new Uint8Array(rangeResult.value).slice();
-
-  mapped.unmap();
-  device.destroyBuffer(readbackBuffer);
-
-  return ok(bytes.buffer as ArrayBuffer);
+): Promise<Result<ArrayBuffer, RhiDebugErrorFor<'readback-failed'>>> {
+  const result = await readbackBufferBytesBatch(device, [{ handleId: 'buffer', buffer, size }]);
+  if (!result.ok) return result;
+  // A successful batch returns exactly one result per request.
+  const bytes = result.value.get('buffer');
+  if (bytes === undefined)
+    return err(
+      createRhiDebugError('readback-failed', {
+        stage: 'readback',
+        phase: 'map',
+        cause: 'buffer readback returned no bytes',
+      }),
+    );
+  return ok(bytes);
 }
 
 /** A load-time buffer that can be read back as part of one GPU submission. */
@@ -416,7 +271,7 @@ export async function readbackBufferBytesBatch(
   device: RhiDevice,
   requests: readonly BufferReadbackBatchRequest[],
   callbacks: BufferReadbackBatchCallbacks = {},
-): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugError>> {
+): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugErrorFor<'readback-failed'>>> {
   if (requests.length === 0) return ok(new Map());
   const firstRequest = requests[0];
   if (firstRequest === undefined) return ok(new Map());
@@ -557,26 +412,16 @@ export async function readbackBufferBytesBatch(
   }
 }
 
-/** One (layer, mip) copy contributing to a complete texture snapshot blob. */
-export interface TextureReadbackBatchSlice {
-  readonly layer: number;
-  readonly mip: number;
-  readonly width: number;
-  readonly height: number;
-  readonly byteOffset: number;
-  readonly byteLength: number;
-}
-
 /** A complete texture whose subresources are copied in one bounded batch. */
 export interface TextureReadbackBatchRequest {
-  readonly aspect?: 'all' | 'depth-only';
+  readonly aspect?: 'all' | 'depth-only' | 'stencil-only';
   readonly handleId: string;
   readonly texture: unknown;
   readonly bytesPerBlock: number;
   readonly blockWidth: number;
   readonly blockHeight: number;
   readonly totalBytes: number;
-  readonly slices: readonly TextureReadbackBatchSlice[];
+  readonly slices: readonly SubresourceSlice[];
 }
 
 export interface TextureReadbackBatchCallbacks {
@@ -595,7 +440,7 @@ export async function readbackTexturePixelsBatch(
   device: RhiDevice,
   requests: readonly TextureReadbackBatchRequest[],
   callbacks: TextureReadbackBatchCallbacks = {},
-): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugError>> {
+): Promise<Result<ReadonlyMap<string, ArrayBuffer>, RhiDebugErrorFor<'readback-failed'>>> {
   if (requests.length === 0) return ok(new Map());
   const firstRequest = requests[0];
   if (firstRequest === undefined) return ok(new Map());
@@ -610,7 +455,7 @@ export async function readbackTexturePixelsBatch(
     );
   const staging: Array<{
     readonly request: TextureReadbackBatchRequest;
-    readonly slice: TextureReadbackBatchSlice;
+    readonly slice: SubresourceSlice;
     readonly buffer: Buffer;
     readonly bytesPerBlock: number;
     readonly blockWidth: number;

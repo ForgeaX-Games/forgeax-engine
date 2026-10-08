@@ -60,7 +60,7 @@ function checkRevisionContinuity(
   hasChanges: boolean,
 ): CatalogDiagnostic | undefined {
   const baselineByRoot = new Map(window.baseline.map((point) => [point.rootId, point]));
-  const currentByRoot = new Map(window.current.map((point) => [point.rootId, point]));
+  const currentRoots = new Set(window.current.map((point) => point.rootId));
 
   for (const point of window.current) {
     const baseline = baselineByRoot.get(point.rootId);
@@ -103,7 +103,7 @@ function checkRevisionContinuity(
   }
 
   for (const point of window.baseline) {
-    if (!currentByRoot.has(point.rootId)) {
+    if (!currentRoots.has(point.rootId)) {
       return revisionDiagnostic(
         'catalog-revision-conflict',
         'every baseline root must be present in the current revision set',

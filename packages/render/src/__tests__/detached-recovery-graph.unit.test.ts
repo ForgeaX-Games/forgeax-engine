@@ -1,6 +1,5 @@
-import type { RhiCommandEncoder, RhiDevice } from '@forgeax/engine-rhi';
+import type { RhiDevice } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-null';
-import { ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { RhiErrorListenerRegistry } from '../lifecycle';
 import type { RenderFrameState } from '../record/frame-snapshot';
@@ -8,7 +7,6 @@ import { makeZeroCameraFallbackSnapshot } from '../record/frame-snapshot';
 import type { PipelineState, RenderSystemInternals } from '../record/render-context';
 import {
   ensureCompiledFrameGraph,
-  executeCompiledFrameGraph,
   inspectRenderGraphGenerationAllocation,
   retire as retireCompiledGraph,
   settleCompiledFrameGraphCandidate,
@@ -16,6 +14,8 @@ import {
 } from '../record/typed-frame-graph';
 import type { RenderPipeline } from '../render-pipeline';
 import type { ExtractedLights } from '../render-system-extract';
+import { createTemporalFrameTransaction } from '../temporal/frame';
+import type { TerrainShadowReceiver } from '../terrain/shadow-family';
 
 function createRecoveryGraphHarness(texture = false) {
   let failBuild = false;
@@ -42,8 +42,8 @@ function createRecoveryGraphHarness(texture = false) {
     },
   };
   const frameState = {
+    temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
     compiledFrameGraph: null,
-    compiledFrameGraphTopologyKey: null,
     graphGeneration: 0,
     compiledFrameGraphGeneration: 0,
     standardLightingGraphSignature: '',
@@ -63,7 +63,7 @@ function createRecoveryGraphHarness(texture = false) {
     format: 'rgba8unorm',
     colorAttachmentFormat: 'rgba8unorm',
   } as unknown as PipelineState;
-  const lights = {
+  let lights = {
     cascadeCount: undefined,
     pointShadow: [],
     spot: [],
@@ -73,12 +73,21 @@ function createRecoveryGraphHarness(texture = false) {
     frameState,
     internals,
     pipelineState,
-    lights,
+    get lights() {
+      return lights;
+    },
+    setCascadeCount(cascadeCount: 1 | 2 | 3 | 4) {
+      lights = { ...lights, cascadeCount };
+    },
     setDevice(nextDevice: RhiDevice) {
       device = nextDevice;
     },
-    compile(width = 1) {
-      return ensureCompiledFrameGraph(
+    compile(
+      width = 1,
+      terrainReceivers: readonly TerrainShadowReceiver[] = [],
+      shadowMapSize = 16,
+    ) {
+      const args: Parameters<typeof ensureCompiledFrameGraph> = [
         internals,
         frameState,
         pipelineState,
@@ -86,11 +95,18 @@ function createRecoveryGraphHarness(texture = false) {
         lights,
         width,
         1,
-        undefined,
-      );
+        lights.cascadeCount === undefined ? undefined : shadowMapSize,
+      ];
+      args[23] = terrainReceivers;
+      return ensureCompiledFrameGraph(...args);
     },
     accept() {
       settleCompiledFrameGraphCandidate(frameState, true);
+    },
+    invalidateTopology() {
+      const installed = frameState.compiledFrameGraph;
+      if (installed === null) throw new Error('no installed graph to invalidate');
+      frameState.compiledFrameGraph = { ...installed, topologyKey: 'invalidated' };
     },
     setFail(value: boolean) {
       failBuild = value;
@@ -99,6 +115,71 @@ function createRecoveryGraphHarness(texture = false) {
 }
 
 describe('detached recovery graph execution boundary', () => {
+  it('refuses stale Terrain routing after failed replacement and restores the accepted mapping on rejected submission', async () => {
+    const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    vi.spyOn(device, 'limits', 'get').mockReturnValue({
+      ...device.limits,
+      maxTextureArrayLayers: 256,
+    });
+    const harness = createRecoveryGraphHarness();
+    harness.setDevice(device);
+    harness.setCascadeCount(4);
+    const originalRoots = [{ worldId: 0, entityKey: 7 }];
+    const replacementRoots = [{ worldId: 1, entityKey: 7 }];
+    const original = harness.compile(1, originalRoots);
+    if (original === null) throw new Error('original Terrain graph failed');
+    harness.accept();
+    const accepted = harness.frameState.compiledFrameGraph;
+    harness.setFail(true);
+    expect(harness.compile(1, replacementRoots)).toBeNull();
+    expect(harness.frameState.compiledFrameGraph).toBe(accepted);
+    // The same roster may still use its accepted graph while compilation fails.
+    expect(harness.compile(2, originalRoots)).toBe(original);
+    expect(harness.compile(1, originalRoots, 32)).toBeNull();
+    harness.setCascadeCount(2);
+    expect(harness.compile(1, originalRoots)).toBeNull();
+    harness.setCascadeCount(4);
+    harness.setFail(false);
+    const rejected = harness.compile(1, replacementRoots);
+    if (rejected === null) throw new Error('replacement Terrain graph failed');
+    expect(rejected).not.toBe(original);
+    settleCompiledFrameGraphCandidate(harness.frameState, false);
+    expect(harness.frameState.compiledFrameGraph).toBe(accepted);
+    expect(harness.compile(1, originalRoots)).toBe(original);
+    const retry = harness.compile(1, replacementRoots);
+    if (retry === null) throw new Error('Terrain graph retry failed');
+    expect(retry).not.toBe(rejected);
+    expect(retry).not.toBe(original);
+    harness.accept();
+    expect(harness.compile(1, replacementRoots)).toBe(retry);
+    const installed = harness.frameState.compiledFrameGraph;
+    if (installed === null) throw new Error('retry graph was not installed');
+    const topology = JSON.parse(installed.topologyKey).topology;
+    expect(topology.shadow.directional.terrainReceivers).toEqual(replacementRoots);
+    await retry.retire();
+  });
+
+  it('rejects an exhausted Terrain layer carrier instead of falling back to an accepted graph', async () => {
+    const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    vi.spyOn(device, 'limits', 'get').mockReturnValue({
+      ...device.limits,
+      maxTextureArrayLayers: 256,
+    });
+    const harness = createRecoveryGraphHarness();
+    harness.setDevice(device);
+    harness.setCascadeCount(4);
+    const originalRoots = [{ worldId: 0, entityKey: 1 }];
+    const graph = harness.compile(1, originalRoots);
+    if (graph === null) throw new Error('original Terrain graph failed');
+    harness.accept();
+    const accepted = harness.frameState.compiledFrameGraph;
+    const exhausted = Array.from({ length: 64 }, (_, entityKey) => ({ worldId: 0, entityKey }));
+    expect(harness.compile(1, exhausted)).toBeNull();
+    expect(harness.frameState.compiledFrameGraph).toBe(accepted);
+    expect(harness.compile(1, originalRoots)).toBe(graph);
+    await graph.retire();
+  });
+
   it('counts shared physical textures once across active, candidate and retiring generations', async () => {
     const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
     let finish: () => void = () => undefined;
@@ -114,7 +195,7 @@ describe('detached recovery graph execution boundary', () => {
     harness.setDevice(device);
     const first = harness.compile();
     if (first === null) throw new Error('first compile failed');
-    harness.frameState.compiledFrameGraphTopologyKey = null;
+    harness.invalidateTopology();
     const second = harness.compile();
     if (second === null) throw new Error('replacement compile failed');
     expect(first).not.toBe(second);
@@ -148,7 +229,23 @@ describe('detached recovery graph execution boundary', () => {
     expect(destroys).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps topology inspection while rejecting detached LKG and then retires it on replacement', async () => {
+  it('installs the graph, topology key and target lookup as one record', async () => {
+    const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const harness = createRecoveryGraphHarness();
+    harness.setDevice(device);
+
+    const graph = harness.compile();
+    if (graph === null) throw new Error('compile failed');
+    const installed = harness.frameState.compiledFrameGraph;
+    expect(installed?.graph).toBe(graph);
+    expect(installed?.topologyKey).toEqual(expect.any(String));
+    expect(installed?.targets.graphGeneration).toBe(harness.frameState.graphGeneration);
+    harness.accept();
+    expect(harness.compile()).toBe(graph);
+    expect(harness.frameState.compiledFrameGraph).toBe(installed);
+  });
+
+  it('retains the accepted graph when a replacement build fails and retires it on replacement', async () => {
     const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
     const harness = createRecoveryGraphHarness();
     harness.setDevice(device);
@@ -157,49 +254,22 @@ describe('detached recovery graph execution boundary', () => {
     expect(candidate).not.toBeNull();
     if (candidate === null) return;
     harness.accept();
-    harness.frameState.compiledFrameGraphTopologyKey = null;
-    harness.frameState.perFrameGraph = null;
+    harness.invalidateTopology();
     harness.setFail(true);
-    expect(harness.compile()).toBeNull();
-    expect(harness.frameState.compiledFrameGraph).toBe(candidate);
+    expect(harness.compile()).toBe(candidate);
+    expect(harness.frameState.compiledFrameGraph?.graph).toBe(candidate);
 
     harness.setFail(false);
     const replacement = harness.compile();
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(candidate);
-    expect(harness.frameState.compiledFrameGraph).toBe(replacement);
-    expect(harness.frameState.compiledFrameGraphTopologyKey).not.toBeNull();
+    expect(harness.frameState.compiledFrameGraph?.graph).toBe(replacement);
     expect(harness.frameState.retiredCompiledFrameGraphs.has(candidate)).toBe(false);
     harness.accept();
     expect(harness.frameState.retiredCompiledFrameGraphs.has(candidate)).toBe(true);
 
     harness.setFail(true);
     expect(harness.compile()).toBe(replacement);
-  });
-
-  it('does not execute or submit a detached graph', () => {
-    const execute = vi.fn(() => ok(undefined));
-    const submit = vi.fn(() => ok(undefined));
-    const frameState = {
-      compiledFrameGraph: { execute },
-      compiledFrameGraphTopologyKey: null,
-      retiredCompiledFrameGraphs: new Set(),
-    } as unknown as RenderFrameState;
-    const internals = {
-      errorRegistry: { fire: vi.fn() },
-      device: { queue: { submit } },
-    } as never;
-
-    const submitted = executeCompiledFrameGraph(
-      internals,
-      frameState,
-      {} as never,
-      {} as RhiCommandEncoder,
-    );
-
-    expect(submitted).toBe(false);
-    expect(execute).not.toHaveBeenCalled();
-    expect(submit).not.toHaveBeenCalled();
   });
 
   it('projects active candidate overlap and graph-generation peak bytes', async () => {
@@ -211,7 +281,7 @@ describe('detached recovery graph execution boundary', () => {
     expect(first).not.toBeNull();
     if (first === null) return;
     harness.accept();
-    harness.frameState.compiledFrameGraphTopologyKey = null;
+    harness.invalidateTopology();
     const replacement = harness.compile();
     expect(replacement).not.toBeNull();
     if (replacement === null) return;
@@ -247,13 +317,13 @@ describe('detached recovery graph execution boundary', () => {
     // Force two ordinary graph replacements. Do not call the allocation
     // inspection between them: the renderer owner must observe compile and
     // retirement events itself rather than treating inspect() as a sampler.
-    harness.frameState.compiledFrameGraphTopologyKey = null;
+    harness.invalidateTopology();
     const second = harness.compile();
     expect(second).not.toBeNull();
     if (second === null) return;
     harness.accept();
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    harness.frameState.compiledFrameGraphTopologyKey = null;
+    harness.invalidateTopology();
     const third = harness.compile();
     expect(third).not.toBeNull();
     if (third === null) return;
@@ -282,7 +352,7 @@ describe('detached recovery graph execution boundary', () => {
     harness.accept();
     (device as unknown as { destroyBuffer: RhiDevice['destroyBuffer'] }).destroyBuffer = () =>
       ({ ok: false, error: { code: 'webgpu-runtime-error' } }) as never;
-    harness.frameState.compiledFrameGraphTopologyKey = null;
+    harness.invalidateTopology();
     const replacement = harness.compile();
     expect(replacement).not.toBeNull();
     if (replacement === null) return;
@@ -311,7 +381,6 @@ describe('detached recovery graph execution boundary', () => {
     const candidateFrameState = {
       ...harness.frameState,
       compiledFrameGraph: null,
-      compiledFrameGraphTopologyKey: null,
       retiredCompiledFrameGraphs: new Set(),
     } as unknown as RenderFrameState;
     shareRenderGraphGenerationAllocationOwner(harness.frameState, candidateFrameState);
@@ -353,9 +422,7 @@ it('restores the complete graph projection and retires a failed resize candidate
   harness.accept();
   const state = harness.frameState;
   const previous = {
-    graph: state.compiledFrameGraph,
-    key: state.compiledFrameGraphTopologyKey,
-    lookup: state.perFrameGraph,
+    installed: state.compiledFrameGraph,
     generation: state.graphGeneration,
     compiledGeneration: state.compiledFrameGraphGeneration,
     lighting: state.standardLightingGraphSignature,
@@ -366,9 +433,7 @@ it('restores the complete graph projection and retires a failed resize candidate
   settleCompiledFrameGraphCandidate(state, false);
   settleCompiledFrameGraphCandidate(state, false);
   expect(retire).toHaveBeenCalledTimes(1);
-  expect(state.compiledFrameGraph).toBe(previous.graph);
-  expect(state.compiledFrameGraphTopologyKey).toBe(previous.key);
-  expect(state.perFrameGraph).toBe(previous.lookup);
+  expect(state.compiledFrameGraph).toBe(previous.installed);
   expect(state.graphGeneration).toBe(previous.generation);
   expect(state.compiledFrameGraphGeneration).toBe(previous.compiledGeneration);
   expect(state.standardLightingGraphSignature).toBe(previous.lighting);
@@ -388,7 +453,7 @@ it('keeps the accepted graph when an unsubmitted candidate is replaced again and
   const accepted = harness.compile();
   if (accepted === null) throw new Error('initial graph missing');
   harness.accept();
-  const acceptedKey = harness.frameState.compiledFrameGraphTopologyKey;
+  const acceptedInstall = harness.frameState.compiledFrameGraph;
   const acceptedRetire = vi.spyOn(accepted, 'retire');
   const first = harness.compile(2);
   if (first === null) throw new Error('first candidate missing');
@@ -397,8 +462,8 @@ it('keeps the accepted graph when an unsubmitted candidate is replaced again and
   if (second === null) throw new Error('second candidate missing');
   const secondRetire = vi.spyOn(second, 'retire');
   settleCompiledFrameGraphCandidate(harness.frameState, false);
-  expect(harness.frameState.compiledFrameGraph).toBe(accepted);
-  expect(harness.frameState.compiledFrameGraphTopologyKey).toBe(acceptedKey);
+  expect(harness.frameState.compiledFrameGraph).toBe(acceptedInstall);
+  expect(acceptedInstall?.graph).toBe(accepted);
   expect(acceptedRetire).not.toHaveBeenCalled();
   expect(firstRetire).toHaveBeenCalledTimes(1);
   expect(secondRetire).toHaveBeenCalledTimes(1);

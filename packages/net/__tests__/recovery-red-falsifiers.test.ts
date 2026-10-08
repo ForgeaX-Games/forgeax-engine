@@ -171,7 +171,7 @@ describe('M16 recovery red falsifiers', () => {
     const replication = profile();
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const session = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
-    const replica = createReplicaCoordinator(new World(), replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(new World(), replication);
     session.attachReplica(replica, replication.limits);
     authorityEndpoint.poll();
     session.receiveEvents();
@@ -188,23 +188,31 @@ describe('M16 recovery red falsifiers', () => {
   });
 
   it('unresolved-reference-retention: rejects without retained deferred work', () => {
+    const Link = defineComponent('UnresolvedRecoveryLink', { target: 'entity' });
     const replication = defineReplication({
       name: 'unresolved-red-falsifier',
       entities: { with: [NetworkedRecovery] },
-      components: [NetworkedRecovery],
+      components: [NetworkedRecovery, Link],
     });
     if (!replication.ok) throw replication.error;
     const replica = createReplicaCoordinator(new World(), replication.value);
-    const result = applyReplicationPacket(
-      replica,
-      packet(replication.value.fingerprint, { tick: 1, kind: 'baseline', entities: [] }),
-    );
-    expect(result.ok).toBe(true);
-    const recoveryReplica = replica as unknown as {
-      getPendingUnresolvedReferences(): number;
-    };
-
-    expect(recoveryReplica.getPendingUnresolvedReferences()).toBe(0);
+    const refused = applyReplicationPacket(replica, packet(replication.value.fingerprint, {
+      tick: 1,
+      kind: 'baseline',
+      entities: [{ id: 1, kind: 'upsert', components: [{ name: Link.name, data: { target: 99 } }] }],
+    }));
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.error.code).toBe('remap-unresolved-reference');
+    expect(replica.snapshot()).toEqual([]);
+    expect(replica.stopped).toBe(false);
+    expect(applyReplicationPacket(replica, packet(replication.value.fingerprint, {
+      tick: 1,
+      kind: 'baseline',
+      entities: [{ id: 1, kind: 'upsert', components: [{ name: NetworkedRecovery.name, data: { enabled: true } }] }],
+    })).ok).toBe(true);
+    expect(replica.readComponent(1, Link)).toBeUndefined();
+    expect(replica.readComponent(1, NetworkedRecovery)).toEqual({ enabled: true });
   });
 
   it('dispose-pending-connect: retires pending connection resources', async () => {

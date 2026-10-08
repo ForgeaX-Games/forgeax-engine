@@ -7,7 +7,7 @@
 import type { Component, ComponentId } from '../component';
 import * as componentOwner from '../component';
 import { type Archetype, type ArchetypeId, archetypeKey, createArchetype } from './archetype';
-import { createSparseTagSet, type SparseTagSet } from './change-detection';
+import type { SparseTagSet } from './change-detection';
 import { canonicalComponents, createTable, type Table, type TableId, tableKey } from './table';
 
 /**
@@ -86,14 +86,6 @@ export function getOrCreateTable(
   graph.tableDedupByKey.set(key, table.id);
   graph.tableGeneration += 1;
   return table;
-}
-
-export function getOrCreateSparseTagSet(graph: ArchetypeGraph, component: Component): SparseTagSet {
-  const current = graph.sparseTags.get(componentOwner.componentId(component));
-  if (current !== undefined) return current;
-  const set = createSparseTagSet(component);
-  graph.sparseTags.set(componentOwner.componentId(component), set);
-  return set;
 }
 
 /**

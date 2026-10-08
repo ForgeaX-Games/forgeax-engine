@@ -1,10 +1,13 @@
-import { validateMeshCardLayout } from '@forgeax/engine-geometry';
+import { admitsMeshCardLayout, validateMeshCardLayout } from '@forgeax/engine-geometry';
 // @forgeax/engine-assets-runtime -- inline pack-payload loader bodies
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
 
 import {
+  attachMeshDistanceField,
   createProceduralMesh,
+  deriveVertexLayoutProjection,
+  MESH_VISIBILITY_DISTANCE_FIELD_CODEC,
   PROCEDURAL_FLOATS_PER_VERTEX,
   prepareMeshData,
 } from '@forgeax/engine-geometry';
@@ -30,6 +33,7 @@ import type {
 } from '@forgeax/engine-types';
 import {
   AssetError,
+  isMaterialTextureParameterType,
   MATERIAL_CHILD_FORBIDDEN_FIELDS,
   parseShadowCapsuleSet,
   resolveMaterialTextureCoordinates,
@@ -148,6 +152,7 @@ function parseMeshLodPayload(
 export const meshLoader: Loader = {
   kind: 'mesh',
   load(payload) {
+    if (payload.distanceField !== undefined) return undefined;
     const procedural = createProceduralMesh(payload);
     if (procedural !== undefined) return procedural.ok ? procedural.value : undefined;
 
@@ -155,6 +160,16 @@ export const meshLoader: Loader = {
     const indexData = payload.indices;
     const rawAttributes = (payload.attributes as Record<string, unknown> | undefined) ?? {};
     const attributes: Record<string, unknown> = { ...rawAttributes };
+    // JSON transport must restore every canonical attribute before derived geometry admission.
+    for (const attribute of deriveVertexLayoutProjection(
+      rawAttributes as TypesMeshAsset['attributes'],
+    ).attributes) {
+      const value = rawAttributes[attribute.key];
+      if (Array.isArray(value))
+        attributes[attribute.key] =
+          attribute.key === 'skinIndex' ? new Uint16Array(value) : new Float32Array(value);
+    }
+
     const rawAabb = payload.aabb;
     let aabb: Float32Array | undefined;
     if (rawAabb instanceof Float32Array) {
@@ -209,7 +224,7 @@ export const meshLoader: Loader = {
     const parsedLods = parseMeshLodPayload(payload.lods, payload.lodHysteresis, undefined);
     if (!parsedLods.ok) return undefined;
 
-    const skinIndexRaw = rawAttributes.skinIndex;
+    const skinIndexRaw = attributes.skinIndex;
     if (skinIndexRaw instanceof Uint16Array) {
       attributes.skinIndex = skinIndexRaw;
     } else if (Array.isArray(skinIndexRaw)) {
@@ -218,7 +233,7 @@ export const meshLoader: Loader = {
       return undefined;
     }
 
-    const skinWeightRaw = rawAttributes.skinWeight;
+    const skinWeightRaw = attributes.skinWeight;
     if (skinWeightRaw instanceof Float32Array) {
       attributes.skinWeight = skinWeightRaw;
     } else if (Array.isArray(skinWeightRaw)) {
@@ -328,9 +343,7 @@ export const meshLoader: Loader = {
     if (
       cardLayout !== undefined &&
       (!validateMeshCardLayout(cardLayout).ok ||
-        submeshes.some((section) => section.topology !== 'triangle-list') ||
-        morphTargets !== undefined ||
-        attributes.skinIndex !== undefined)
+        !admitsMeshCardLayout({ submeshes, morphTargets, skinIndex: attributes.skinIndex }))
     )
       return undefined;
     return {
@@ -351,97 +364,149 @@ export const meshLoader: Loader = {
     };
   },
   loadPack(input, ctx) {
-    if (input.payload.vertices instanceof Float32Array && input.payload.kind === 'mesh') {
-      if (input.artifacts.body !== undefined)
-        return {
-          ok: false,
-          error: new AssetError({
-            code: 'asset-parse-failed',
-            expected: 'one Mesh geometry source',
-            hint: 'submit native Mesh data or a body artifact, never both',
-          }),
-        } as never;
-      const result = prepareMeshData(
-        input.payload as unknown as TypesMeshAsset,
-        input.guid,
-        input.refs,
-      );
-      if (!result.ok) return { ok: false, error: result.error } as never;
-      return input.payload as unknown as TypesMeshAsset;
-    }
-    const artifact = input.artifacts.body;
-    if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
-    const decoded = unpackMeshBin(artifact.bytes, input.guid);
-    if (!decoded.ok) return { ok: false, error: decoded.error } as never;
-    const materialSlots = decoded.value.materialSlots.map((slot) => {
-      const refIndex = slot.defaultMaterialRef;
-      const ref = refIndex === undefined ? undefined : input.refs[refIndex];
-      if (refIndex !== undefined && ref === undefined) return undefined;
-      if (ref === undefined) {
+    const distanceField = input.payload.distanceField;
+    const fieldArtifact = input.artifacts['distance-field.bin'];
+    const original = input;
+    const loadGeometry = () => {
+      let input = original;
+      if (distanceField !== undefined) {
+        const { distanceField: _, ...geometry } = original.payload;
+        input = { ...original, payload: geometry };
+      }
+      if (input.payload.vertices instanceof Float32Array && input.payload.kind === 'mesh') {
+        if (input.artifacts.body !== undefined)
+          return {
+            ok: false,
+            error: new AssetError({
+              code: 'asset-parse-failed',
+              expected: 'one Mesh geometry source',
+              hint: 'submit native Mesh data or a body artifact, never both',
+            }),
+          } as never;
+        const result = prepareMeshData(
+          input.payload as unknown as TypesMeshAsset,
+          input.guid,
+          input.refs,
+        );
+        if (!result.ok) return { ok: false, error: result.error } as never;
+        return input.payload as unknown as TypesMeshAsset;
+      }
+      const artifact = input.artifacts.body;
+      if (artifact === undefined) return meshLoader.load(input.payload, input.refs, ctx);
+      const decoded = unpackMeshBin(artifact.bytes, input.guid);
+      if (!decoded.ok) return { ok: false, error: decoded.error } as never;
+      const materialSlots = decoded.value.materialSlots.map((slot) => {
+        const refIndex = slot.defaultMaterialRef;
+        const ref = refIndex === undefined ? undefined : input.refs[refIndex];
+        if (refIndex !== undefined && ref === undefined) return undefined;
+        if (ref === undefined) {
+          return {
+            slotName: String(slot.slotName),
+            ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+          };
+        }
+        const parsed = AssetGuid.parse(ref);
+        if (!parsed.ok) return undefined;
         return {
           slotName: String(slot.slotName),
           ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
+          defaultMaterial: parsed.value,
         };
+      });
+      if (materialSlots.some((slot) => slot === undefined)) {
+        return {
+          ok: false,
+          error: new MeshBinAssetError({
+            sourceKey: input.guid,
+            expected: 'material slot references must resolve through the pack refs table',
+            actual: 'material reference is out of bounds or is not a valid AssetGuid',
+            reason: 'metadata-invalid',
+            actualFacts: { field: 'metadata' },
+          }),
+        } as never;
       }
-      const parsed = AssetGuid.parse(ref);
-      if (!parsed.ok) return undefined;
-      return {
-        slotName: String(slot.slotName),
-        ...(typeof slot.sourceKey === 'string' ? { sourceKey: slot.sourceKey } : {}),
-        defaultMaterial: parsed.value,
-      };
-    });
-    if (materialSlots.some((slot) => slot === undefined)) {
-      return {
+      const parsedLods = parseMeshLodPayload(
+        decoded.value.lods,
+        decoded.value.lodHysteresis,
+        input.refs,
+      );
+      if (!parsedLods.ok) {
+        return {
+          ok: false,
+          error: new MeshBinAssetError({
+            sourceKey: input.guid,
+            expected: 'LOD mesh references must resolve through the pack refs table',
+            actual: 'LOD reference is out of bounds, malformed, or has invalid coverage metadata',
+            reason: 'metadata-invalid',
+            actualFacts: { field: 'metadata' },
+          }),
+        } as never;
+      }
+      return meshLoader.load(
+        {
+          vertices: decoded.value.vertices,
+          ...(decoded.value.indices !== undefined ? { indices: decoded.value.indices } : {}),
+          submeshes: decoded.value.submeshes,
+          ...(decoded.value.cardLayout === undefined
+            ? {}
+            : { cardLayout: decoded.value.cardLayout }),
+          materialSlots,
+          ...(decoded.value.aabb !== undefined ? { aabb: decoded.value.aabb } : {}),
+          ...(decoded.value.morphTargets !== undefined
+            ? { morphTargets: decoded.value.morphTargets }
+            : {}),
+          ...(decoded.value.morphWeights !== undefined
+            ? { morphWeights: decoded.value.morphWeights }
+            : {}),
+          ...(parsedLods.value.lods === undefined ? {} : { lods: parsedLods.value.lods }),
+          ...(parsedLods.value.lodHysteresis === undefined
+            ? {}
+            : { lodHysteresis: parsedLods.value.lodHysteresis }),
+          attributes: decoded.value.attributes,
+        },
+        input.refs,
+        ctx,
+      );
+    };
+    const mesh = loadGeometry();
+    if (distanceField === undefined && fieldArtifact === undefined) return mesh;
+    const failure = (reason: string) =>
+      ({
         ok: false,
-        error: new MeshBinAssetError({
-          sourceKey: input.guid,
-          expected: 'material slot references must resolve through the pack refs table',
-          actual: 'material reference is out of bounds or is not a valid AssetGuid',
-          reason: 'metadata-invalid',
-          actualFacts: { field: 'metadata' },
+        error: new AssetError({
+          code: 'asset-parse-failed',
+          expected: 'a complete Mesh distance field matching geometry and source sidedness',
+          hint: 'Recook and republish the same mesh GUID through its source Meta.',
+          detail: { field: 'distanceField', value: distanceField, reason },
         }),
-      } as never;
-    }
-    const parsedLods = parseMeshLodPayload(
-      decoded.value.lods,
-      decoded.value.lodHysteresis,
-      input.refs,
-    );
-    if (!parsedLods.ok) {
-      return {
-        ok: false,
-        error: new MeshBinAssetError({
-          sourceKey: input.guid,
-          expected: 'LOD mesh references must resolve through the pack refs table',
-          actual: 'LOD reference is out of bounds, malformed, or has invalid coverage metadata',
-          reason: 'metadata-invalid',
-          actualFacts: { field: 'metadata' },
-        }),
-      } as never;
-    }
-    return meshLoader.load(
-      {
-        vertices: decoded.value.vertices,
-        ...(decoded.value.indices !== undefined ? { indices: decoded.value.indices } : {}),
-        submeshes: decoded.value.submeshes,
-        ...(decoded.value.cardLayout === undefined ? {} : { cardLayout: decoded.value.cardLayout }),
-        materialSlots,
-        ...(decoded.value.aabb !== undefined ? { aabb: decoded.value.aabb } : {}),
-        ...(decoded.value.morphTargets !== undefined
-          ? { morphTargets: decoded.value.morphTargets }
-          : {}),
-        ...(decoded.value.morphWeights !== undefined
-          ? { morphWeights: decoded.value.morphWeights }
-          : {}),
-        ...(parsedLods.value.lods === undefined ? {} : { lods: parsedLods.value.lods }),
-        ...(parsedLods.value.lodHysteresis === undefined
-          ? {}
-          : { lodHysteresis: parsedLods.value.lodHysteresis }),
-        attributes: decoded.value.attributes,
+      }) as never;
+    if (mesh === undefined || !('kind' in mesh) || mesh.kind !== 'mesh') return mesh;
+    if (!fieldArtifact) return failure('mesh distance field artifact is missing');
+    const { assetCodec, integrity } = fieldArtifact.descriptor;
+    if (
+      assetCodec?.name !== MESH_VISIBILITY_DISTANCE_FIELD_CODEC.name ||
+      assetCodec.version !== MESH_VISIBILITY_DISTANCE_FIELD_CODEC.version ||
+      assetCodec.profile !== MESH_VISIBILITY_DISTANCE_FIELD_CODEC.profile
+    )
+      return failure('unsupported mesh distance field artifact codec');
+    if (!integrity) return failure('mesh distance field artifact integrity is missing');
+    const artifact = { integrity: { ...integrity }, assetCodec: { ...assetCodec } };
+    return attachMeshDistanceField(mesh as TypesMeshAsset, distanceField, fieldArtifact.bytes).then(
+      (result) => {
+        if (!result.ok) return failure(result.error.detail.reason);
+        const field = result.value.distanceField;
+        if (!field) return failure('mesh distance field attachment is missing');
+        return {
+          ok: true as const,
+          value: {
+            ...result.value,
+            distanceField: {
+              ...field,
+              artifact,
+            },
+          },
+        };
       },
-      input.refs,
-      ctx,
     );
   },
 };
@@ -591,7 +656,7 @@ export const materialLoader: Loader = {
                   'name' in parameter &&
                   typeof parameter.name === 'string' &&
                   'type' in parameter &&
-                  (parameter.type === 'texture' || parameter.type === 'texture_cube'),
+                  isMaterialTextureParameterType(parameter.type),
               )
               .map((parameter) => parameter.name),
           )
@@ -823,6 +888,7 @@ export const animationClipLoader: Loader = {
   kind: 'animation-clip',
   load(payload) {
     const duration = typeof payload.duration === 'number' ? payload.duration : 0;
+    if (!Number.isFinite(duration) || duration < 0) return undefined;
     const channelsRaw = payload.channels;
     if (!Array.isArray(channelsRaw)) return undefined;
     const channels: AnimationChannel[] = [];
@@ -836,7 +902,11 @@ export const animationClipLoader: Loader = {
         typeof targetId !== 'string' ||
         !/^[0-9a-f]{32}$/.test(targetId) ||
         Object.keys(chObj).some(
-          (key) => key !== 'targetId' && key !== 'property' && key !== 'sampler',
+          (key) =>
+            key !== 'targetId' &&
+            key !== 'property' &&
+            key !== 'sampler' &&
+            !(chObj.property === 'property' && key === 'binding'),
         )
       ) {
         return undefined;
@@ -845,7 +915,8 @@ export const animationClipLoader: Loader = {
         property !== 'translation' &&
         property !== 'rotation' &&
         property !== 'scale' &&
-        property !== 'weights'
+        property !== 'weights' &&
+        property !== 'property'
       )
         return undefined;
       if (samplerObj === undefined) return undefined;
@@ -860,6 +931,34 @@ export const animationClipLoader: Loader = {
       } else {
         return undefined;
       }
+      if (
+        input.length === 0 ||
+        input.some(
+          (time, index) =>
+            !Number.isFinite(time) || time < 0 || (index > 0 && time <= (input[index - 1] ?? NaN)),
+        )
+      )
+        return undefined;
+      if (
+        property === 'property' &&
+        Array.isArray(outputRaw) &&
+        (outputRaw.every((value) => typeof value === 'string') ||
+          outputRaw.every((value) => typeof value === 'boolean'))
+      ) {
+        if (
+          interpolation !== 'STEP' ||
+          typeof chObj.binding !== 'string' ||
+          chObj.binding.length === 0
+        )
+          return undefined;
+        channels.push({
+          targetId: targetId as AnimationChannel['targetId'],
+          property,
+          binding: chObj.binding,
+          sampler: { input, output: outputRaw as string[] | boolean[], interpolation },
+        });
+        continue;
+      }
       let output: Float32Array;
       if (outputRaw instanceof Float32Array) {
         output = outputRaw;
@@ -868,14 +967,42 @@ export const animationClipLoader: Loader = {
       } else {
         return undefined;
       }
-      if (interpolation !== 'LINEAR' && interpolation !== 'STEP') return undefined;
-      channels.push({
-        targetId: targetId as AnimationChannel['targetId'],
-        property: property as AnimationChannel['property'],
-        sampler: { input, output, interpolation },
-      });
+      if (interpolation !== 'LINEAR' && interpolation !== 'STEP' && interpolation !== 'CUBICSPLINE')
+        return undefined;
+      const factor = interpolation === 'CUBICSPLINE' ? 3 : 1;
+      const width = output.length / input.length / factor;
+      if (
+        input.length < (factor === 3 ? 2 : 1) ||
+        !Number.isInteger(width) ||
+        width < 1 ||
+        output.some((value) => !Number.isFinite(value)) ||
+        ((property === 'translation' || property === 'scale') && width !== 3) ||
+        (property === 'rotation' && width !== 4) ||
+        (property === 'weights' && width > 8)
+      )
+        return undefined;
+      if (property === 'property') {
+        if (typeof chObj.binding !== 'string' || chObj.binding.length === 0) return undefined;
+        channels.push({
+          targetId: targetId as AnimationChannel['targetId'],
+          property,
+          binding: chObj.binding,
+          sampler: { input, output, interpolation },
+        });
+      } else
+        channels.push({
+          targetId: targetId as AnimationChannel['targetId'],
+          property,
+          sampler: { input, output, interpolation },
+        });
     }
-    return { kind: 'animation-clip', duration, channels };
+    if (payload.events !== undefined && !Array.isArray(payload.events)) return undefined;
+    return {
+      kind: 'animation-clip',
+      duration,
+      channels,
+      ...(payload.events === undefined ? {} : { events: payload.events }),
+    };
   },
 };
 

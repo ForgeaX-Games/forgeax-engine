@@ -1,3 +1,4 @@
+import { atmosphereAvailable } from '../environment/capability';
 // Material shader policy and async adapter.
 // Variant selection, module caching, and manifest material preparation stay
 // independent from renderer lifetime and generation-scoped ready state.
@@ -61,7 +62,11 @@ export interface ShaderDeviceAdapterInternal extends ShaderCatalogDevice {
    * `module-forgeax::default-shadow-caster` returns OK on frame 1.
    */
   seedModule(label: string, module: ShaderModule): void;
-  /** Whether this generation successfully compiled the module for actual use. */
+  /**
+   * Whether this generation drew with the module: a pipeline requested the
+   * label and it compiled. Seeding alone (boot prewarm) does not count, so a
+   * replacement generation rebuilds only what its predecessor actually used.
+   */
   hasModule(label: string): boolean;
   invalidateModule(label: string): void;
 }
@@ -89,10 +94,12 @@ export function makeShaderDeviceAdapter(
   const errorCache = new Map<string, RhiError>();
   const pending = new Map<string, number>();
   const epochs = new Map<string, number>();
+  const requested = new Set<string>();
 
   return {
     createShaderModule(desc): Result<ShaderModule, RhiError> {
       const key = desc.label ?? desc.code;
+      requested.add(key);
       const cachedModule = moduleCache.get(key);
       if (cachedModule !== undefined) return ok(cachedModule);
       const cachedError = errorCache.get(key);
@@ -100,9 +107,10 @@ export function makeShaderDeviceAdapter(
 
       // WebGPU's raw createShaderModule is synchronous. Only the explicitly
       // selected immediate adapter uses that entry: generated feature programs
+      // and first-use built-in Standard variants on supporting backends
       // can avoid a slow getCompilationInfo() round trip, while the default
-      // validated adapter keeps the compiler-readiness barrier for ordinary
-      // render pipelines. The public async factory still owns diagnostics;
+      // validated adapter keeps the compiler-readiness barrier for declared
+      // and authored shaders. The public async factory still owns diagnostics;
       // pipeline creation remains the validation point for the fast path.
       if (mode === 'immediate' && immediateCreateShaderModule !== undefined) {
         const immediateResult = immediateCreateShaderModule(rhiDevice, {
@@ -146,7 +154,7 @@ export function makeShaderDeviceAdapter(
       moduleCache.set(label, module);
     },
     hasModule(label: string): boolean {
-      return moduleCache.has(label);
+      return requested.has(label) && moduleCache.has(label);
     },
     invalidateModule(label: string): void {
       epochs.set(label, (epochs.get(label) ?? 0) + 1);
@@ -365,6 +373,12 @@ export async function prepareMaterialShaders(
     }
     if (msEntry.variants.some((v) => 'PROBE_BLEND_AVAILABLE' in v.defines)) {
       variantDefines.PROBE_BLEND_AVAILABLE = false;
+    }
+    if (msEntry.variants.some((v) => 'ATMOSPHERE_AVAILABLE' in v.defines)) {
+      variantDefines.ATMOSPHERE_AVAILABLE = atmosphereAvailable(
+        storageBufferCapable,
+        rhiDevice.limits.maxSampledTexturesPerShaderStage,
+      );
     }
     if (msEntry.variants.some((v) => 'EXTENDED_LIGHTING_AVAILABLE' in v.defines)) {
       variantDefines.EXTENDED_LIGHTING_AVAILABLE = extendedLightingShaderAvailable;
@@ -599,6 +613,7 @@ export function isSharedMaterialUserRegionCompatible(
         sampler: entry.sampler ?? null,
         texture: entry.texture ?? null,
         storageTexture: entry.storageTexture ?? null,
+        externalTexture: entry.externalTexture ?? null,
       }) ===
       JSON.stringify({
         binding: canonical.binding,
@@ -607,6 +622,7 @@ export function isSharedMaterialUserRegionCompatible(
         sampler: canonical.sampler ?? null,
         texture: canonical.texture ?? null,
         storageTexture: canonical.storageTexture ?? null,
+        externalTexture: canonical.externalTexture ?? null,
       })
     );
   });
@@ -632,6 +648,9 @@ export function selectNoColorPbrVariant(
   return manifestEntry?.variants.find(
     (variant) =>
       variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
+      (!('ATMOSPHERE_AVAILABLE' in variant.defines) ||
+        variant.defines.ATMOSPHERE_AVAILABLE ===
+          variantSet?.includes('ATMOSPHERE_AVAILABLE=true')) &&
       (!('VISIBLE_SURFACE_AVAILABLE' in variant.defines) ||
         variant.defines.VISIBLE_SURFACE_AVAILABLE === visibleSurfaceRequested) &&
       (!('COVERAGE_ONLY' in variant.defines) ||
@@ -965,6 +984,7 @@ export function resolveMaterialShaderVariantSet(
 ): string | undefined {
   const declaredAxes = new Set(variants.flatMap((variant) => Object.keys(variant.defines)));
   const declaresCapabilityVariants =
+    declaredAxes.has('ATMOSPHERE_AVAILABLE') ||
     declaredAxes.has('COVERAGE_ONLY') ||
     declaredAxes.has('WEBGL2_COMPAT') ||
     declaredAxes.has('STORAGE_BUFFER_AVAILABLE') ||
@@ -997,38 +1017,40 @@ export function resolveMaterialShaderVariantSet(
   const filtered: Record<string, boolean> = {};
   for (const axis of declaredAxes) {
     filtered[axis] =
-      axis === 'WEBGL2_COMPAT'
-        ? backendKind === 'wgpu-webgl2'
-        : axis === 'STORAGE_BUFFER_AVAILABLE'
-          ? backendKind !== 'wgpu-webgl2' && storageBuffer
-          : axis === 'SKINNING_DISABLED'
-            ? (requested[axis] ?? true)
-            : axis === 'ALPHA_MASK' ||
-                axis === 'GPU_DRIVEN_SCENE_INDEX_AVAILABLE' ||
-                axis === 'GPU_DRIVEN_SCENE_INDEX_EXPLICIT' ||
-                axis === 'COVERAGE_ONLY' ||
-                axis === 'VISIBLE_SURFACE_AVAILABLE'
-              ? (requested[axis] ?? false)
-              : axis === 'CLUSTER_FORWARD_AVAILABLE'
-                ? storageBuffer && backendKind !== 'wgpu-webgl2' && (requested[axis] ?? false)
-                : axis === 'PER_INSTANCE_REGION'
-                  ? requestedVariantSet === '' || (requested[axis] ?? false)
-                  : axis === 'VERTEX_COLOR_AVAILABLE'
+      axis === 'ATMOSPHERE_AVAILABLE'
+        ? atmosphereAvailable(storageBuffer && backendKind !== 'wgpu-webgl2', sampledTextureLimit)
+        : axis === 'WEBGL2_COMPAT'
+          ? backendKind === 'wgpu-webgl2'
+          : axis === 'STORAGE_BUFFER_AVAILABLE'
+            ? backendKind !== 'wgpu-webgl2' && storageBuffer
+            : axis === 'SKINNING_DISABLED'
+              ? (requested[axis] ?? true)
+              : axis === 'ALPHA_MASK' ||
+                  axis === 'GPU_DRIVEN_SCENE_INDEX_AVAILABLE' ||
+                  axis === 'GPU_DRIVEN_SCENE_INDEX_EXPLICIT' ||
+                  axis === 'COVERAGE_ONLY' ||
+                  axis === 'VISIBLE_SURFACE_AVAILABLE'
+                ? (requested[axis] ?? false)
+                : axis === 'CLUSTER_FORWARD_AVAILABLE'
+                  ? storageBuffer && backendKind !== 'wgpu-webgl2' && (requested[axis] ?? false)
+                  : axis === 'PER_INSTANCE_REGION'
                     ? requestedVariantSet === '' || (requested[axis] ?? false)
-                    : axis === 'EXTENDED_LIGHTING_AVAILABLE'
-                      ? extendedLightingAvailable
-                      : axis === 'PROBE_BLEND_AVAILABLE'
-                        ? storageBuffer && (requested[axis] ?? false)
-                        : axis === 'TRANSMISSION_AVAILABLE' ||
-                            axis === 'REFLECTION_FALLBACK_AVAILABLE'
-                          ? (requested[axis] ?? false)
-                          : axis === 'DIRECTIONAL_PCSS_AVAILABLE'
-                            ? directionalPcssCapable(backendKind)
-                            : axis === 'PROJECTOR_AVAILABLE'
-                              ? projectorAvailable
-                              : // Authored axes keep the manifest's all-true default.
-                                // Only Engine-owned admission axes default to disabled.
-                                (requested[axis] ?? true);
+                    : axis === 'VERTEX_COLOR_AVAILABLE'
+                      ? requestedVariantSet === '' || (requested[axis] ?? false)
+                      : axis === 'EXTENDED_LIGHTING_AVAILABLE'
+                        ? extendedLightingAvailable
+                        : axis === 'PROBE_BLEND_AVAILABLE'
+                          ? storageBuffer && (requested[axis] ?? false)
+                          : axis === 'TRANSMISSION_AVAILABLE' ||
+                              axis === 'REFLECTION_FALLBACK_AVAILABLE'
+                            ? (requested[axis] ?? false)
+                            : axis === 'DIRECTIONAL_PCSS_AVAILABLE'
+                              ? directionalPcssCapable(backendKind)
+                              : axis === 'PROJECTOR_AVAILABLE'
+                                ? projectorAvailable
+                                : // Authored axes keep the manifest's all-true default.
+                                  // Only Engine-owned admission axes default to disabled.
+                                  (requested[axis] ?? true);
   }
   const sorted = Object.entries(filtered).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return sorted.every(([, value]) => value)
@@ -1051,4 +1073,26 @@ export function normalizeMaterialShaderVariantSet(
   return manifestEntry !== undefined && manifestEntry.variants.length === 0
     ? undefined
     : requestedVariantSet;
+}
+
+/** Feature-owned graphics use the same device admission as ordinary materials. */
+export function resolveFeatureShaderSource(
+  catalog: ShaderCatalog,
+  device: RhiDevice,
+  identifier: string,
+): string | undefined {
+  const entry = Array.from(catalog.materialShaderManifestEntries()).find(
+    (entry) => entry.identifier === identifier,
+  );
+  if (entry === undefined) return undefined;
+  const variantSet = resolveMaterialShaderVariantSet(
+    undefined,
+    entry.variants,
+    device.caps.backendKind,
+    device.caps.storageBuffer,
+    device.limits.maxSampledTexturesPerShaderStage,
+  );
+  return variantSet === undefined
+    ? entry.composedWgsl
+    : entry.variants.find((variant) => variant.definesKey === variantSet)?.composedWgsl;
 }

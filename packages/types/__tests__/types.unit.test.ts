@@ -1358,13 +1358,13 @@ describe('@forgeax/engine-types/inspector-client - defaultConnect (feat-20260517
 // ParamSchemaEntry type shape.
 //
 // Assertions (post feat-20260613 fix-issue-4 V1-Set deletion):
-// - MATERIAL_PARAM_TYPES is a 16-member readonly tuple — the single SSOT
+// - MATERIAL_PARAM_TYPES is a 17-member readonly tuple — the single SSOT
 //   for paramSchema entry types (no V1/V2 dual-path).
 // - Each member is a valid WGSL scalar/vector/sampler/texture type literal.
 // - ParamSchemaEntry[] is usable as a type alias over the discriminated
 //   union (Numeric / TextureBinding / StorageBinding families).
 //
-// Anchors: requirements section 3.4 (now 16 entries, post-D-7 expansion);
+// Anchors: requirements section 3.4 (17 entries after texture_external);
 //          plan-strategy D-7 paramSchema type set v2.
 
 
@@ -1383,14 +1383,15 @@ const EXPECTED_TYPES: ReadonlySet<string> = new Set([
   'sampler',
   'sampler_comparison',
   'storage_buffer',
+  'texture_external',
 ]);
 
-describe('MATERIAL_PARAM_TYPES - 16-tuple SSOT (post fix-issue-4)', () => {
-  it('has exactly 16 members', () => {
-    expect(MATERIAL_PARAM_TYPES.length).toBe(16);
+describe('MATERIAL_PARAM_TYPES - 17-tuple SSOT (post fix-issue-4)', () => {
+  it('has exactly 17 members', () => {
+    expect(MATERIAL_PARAM_TYPES.length).toBe(17);
   });
 
-  it('contains all 14 expected WGSL-compatible type literals', () => {
+  it('contains all 15 expected WGSL-compatible type literals', () => {
     const set = new Set(MATERIAL_PARAM_TYPES);
     for (const t of EXPECTED_TYPES) {
       expect(set.has(t)).toBe(true);

@@ -76,7 +76,21 @@ export async function prepareSdfCardsBaseFixture() {
   };
 }
 
+let preparedFixture: ReturnType<typeof buildSdfCardsFixture> | undefined;
+
+/** Coalesce immutable build work; each caller owns an independent POD copy. */
 export async function prepareSdfCardsFixture() {
+  preparedFixture ??= buildSdfCardsFixture();
+  const pending = preparedFixture;
+  try {
+    return structuredClone(await pending);
+  } catch (error) {
+    if (preparedFixture === pending) preparedFixture = undefined;
+    throw error;
+  }
+}
+
+async function buildSdfCardsFixture() {
   const { layout, field, card, ray, sources } = await prepareSdfCardsBaseFixture();
   const hollow = (
     await buildMeshDistanceField(
@@ -145,7 +159,11 @@ export async function prepareSdfCardsFixture() {
     )
   ).unwrap();
   const sheet = {
-    field: { ...loadedSheetField, values: Array.from(loadedSheetField.values) },
+    field: {
+      ...loadedSheetField,
+      bricks: Array.from(loadedSheetField.bricks),
+      values: Array.from(loadedSheetField.values),
+    },
     positions: sheetPositions,
     indices: sheetIndices,
     one: (await buildMeshCardLayout(sheetPositions, sheetIndices)).unwrap(),
@@ -206,9 +224,9 @@ export async function prepareSdfCardsFixture() {
     hollowLayout,
     normalMap,
     textured,
-    hollow: { ...hollow, values: Array.from(hollow.values) },
+    hollow: { ...hollow, bricks: Array.from(hollow.bricks), values: Array.from(hollow.values) },
     layout,
-    field: { ...field, values: Array.from(field.values) },
+    field: { ...field, bricks: Array.from(field.bricks), values: Array.from(field.values) },
     card,
     ray,
   };

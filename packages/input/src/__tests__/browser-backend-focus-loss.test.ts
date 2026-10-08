@@ -198,9 +198,9 @@ describe('browser-backend focus loss', () => {
     expect(cancelled.gamepads?.[0]?.justPressed.has(0)).toBe(false);
     expect(cancelled.gamepads?.[0]?.justReleased.has(0)).toBe(false);
     const previousSnapshot = snapshotFromSample(acquired);
-    expect(
-      snapshotFromSample(cancelled, undefined, undefined, previousSnapshot).mouse.justReleased(0),
-    ).toBe(false);
+    expect(snapshotFromSample(cancelled, undefined, previousSnapshot).mouse.justReleased(0)).toBe(
+      false,
+    );
     const inputMap = [
       { action: 'keyboard', bindings: [{ type: 'key' as const, key: 'w' }] },
       { action: 'mouse', bindings: [{ type: 'mouseButton' as const, button: 0 as const }] },

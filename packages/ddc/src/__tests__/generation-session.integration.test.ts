@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type DdcEntry, DdcEntryStore, ddcOutputDigest } from '../entry-store.js';
 import { DdcLifecycle } from '../lifecycle.js';
 import { DdcGenerationSession } from '../session.js';
@@ -63,15 +63,70 @@ describe('DDC generation session integration', () => {
   it('heartbeats staged candidates during a long generation before commit', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-session-'));
     roots.push(root);
+    // Advance lease time independently of contended filesystem/CPU scheduling.
+    // The session still uses real timers and writes real on-disk heartbeats.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const session = new DdcGenerationSession(root, { generation: 1, leaseTtlMs: 100 });
     try {
       const candidate = await session.stageEntry(entry());
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      const initialExpiry = candidate.lease.expiresAt;
+      for (let beat = 0; beat < 2; beat++) {
+        const previousExpiry = candidate.lease.expiresAt;
+        now = previousExpiry - 25;
+        await vi.waitFor(() => expect(candidate.lease.expiresAt).toBeGreaterThan(previousExpiry), {
+          timeout: 2000,
+          interval: 10,
+        });
+      }
+      expect(now).toBeGreaterThan(initialExpiry);
       await expect(session.commitEntry(candidate, KEY)).resolves.toMatchObject({
         result: 'current',
       });
     } finally {
+      try {
+        await session.close();
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  it('discards a candidate while its real heartbeat completion is pending', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-session-'));
+    roots.push(root);
+    let notifyStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    let resume = () => {};
+    const completion = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const actualHeartbeat = DdcLifecycle.prototype.heartbeat;
+    const heartbeat = vi
+      .spyOn(DdcLifecycle.prototype, 'heartbeat')
+      .mockImplementation(async function (this: DdcLifecycle, lease) {
+        const renewed = await actualHeartbeat.call(this, lease);
+        notifyStarted();
+        await completion;
+        return renewed;
+      });
+    const session = new DdcGenerationSession(root, { generation: 1, leaseTtlMs: 100 });
+    try {
+      const candidate = await session.stageEntry(entry());
+      const originalLease = candidate.lease;
+      await started;
       await session.close();
+      resume();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(candidate.lease).toBe(originalLease);
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+      await expect(session.commitEntry(candidate, KEY)).rejects.toThrow('closed');
+    } finally {
+      resume();
+      await session.close();
+      heartbeat.mockRestore();
     }
   });
 

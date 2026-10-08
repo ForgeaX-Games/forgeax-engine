@@ -1,28 +1,63 @@
-/** Staged frame state committed only after the renderer submit barrier. */
-export interface RendererFrameTransaction<T> {
-  readonly candidate: T;
-  readonly commit: () => T;
-  readonly abort: () => void;
+import type { FrameReceipt, RenderInspection } from '../render-contract';
+
+export interface PendingFrameCompletion {
+  readonly frameId: number;
+  readonly deviceGeneration: number;
+  readonly presentation: FrameReceipt['presentation'];
+  readonly stages: ReturnType<typeof observeFrameCompletionStages>;
 }
 
-export function stageRendererFrame<T>(
-  candidate: T,
-  onAbort: () => void = () => undefined,
-): RendererFrameTransaction<T> {
-  let closed = false;
-  return {
-    candidate,
-    commit: () => {
-      if (closed) throw new Error('renderer frame transaction is closed');
-      closed = true;
-      return candidate;
+/** Copy only the eight newest receipts without releasing their continuations. */
+export function inspectFrameCompletionContinuations(
+  frameId: number,
+  deviceGeneration: number,
+  continuations: ReadonlyMap<ContinuationTerminator, PendingFrameCompletion>,
+): RenderInspection['frame'] {
+  const pendingCompletions: PendingFrameCompletion[] = [];
+  for (const completion of continuations.values()) {
+    if (pendingCompletions.length === 8) pendingCompletions.shift();
+    pendingCompletions.push(completion);
+  }
+  return Object.freeze({
+    frameId,
+    deviceGeneration,
+    pendingCompletionCount: continuations.size,
+    pendingCompletions: Object.freeze(
+      pendingCompletions.map(({ stages, ...identity }) =>
+        Object.freeze({ ...identity, ...stages() }),
+      ),
+    ),
+  });
+}
+
+/** Observe the original fences without replacing or resolving either Promise. */
+export function observeFrameCompletionStages(
+  queue: Promise<unknown>,
+  reflection: Promise<unknown> | undefined,
+): () => Readonly<{
+  queue: 'pending' | 'fulfilled' | 'rejected';
+  reflection: 'pending' | 'fulfilled' | 'rejected' | 'not-required';
+}> {
+  let queueState: 'pending' | 'fulfilled' | 'rejected' = 'pending';
+  let reflectionState: 'pending' | 'fulfilled' | 'rejected' | 'not-required' =
+    reflection === undefined ? 'not-required' : 'pending';
+  void queue.then(
+    () => {
+      queueState = 'fulfilled';
     },
-    abort: () => {
-      if (closed) return;
-      closed = true;
-      onAbort();
+    () => {
+      queueState = 'rejected';
     },
-  };
+  );
+  void reflection?.then(
+    () => {
+      reflectionState = 'fulfilled';
+    },
+    () => {
+      reflectionState = 'rejected';
+    },
+  );
+  return () => Object.freeze({ queue: queueState, reflection: reflectionState });
 }
 
 export type RendererFrameStage = 'build' | 'execute' | 'finish' | 'submit';

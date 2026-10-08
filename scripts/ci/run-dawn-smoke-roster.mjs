@@ -287,20 +287,89 @@ export function resolveRunnableEntries({ repoRoot = root, roster, roots = roster
   };
 }
 
-export function partitionRunnableEntries(entries, { shardIndex, shardCount = SHARD_COUNT } = {}) {
+// CI smoke-fleet shards retain the full 60-frame roster, then fixed workflow tails.
+// Run 37197385959 passed all four Smoke jobs. Its 34 exact gate durations and
+// gate timings remain placement inputs; run 37208526589 supplies the updated
+// post-roster tails (including reporting/cleanup), with M7 moved from 1 to 3.
+// These are placement inputs; next-head total CI timing still requires a full run.
+const measuredSmokeGateSeconds = new Map([
+  ['app-learn-render-1-getting-started-1-hello-window/smoke', 16],
+  ['app-learn-render-1-getting-started-2-hello-triangle/smoke', 8],
+  ['app-learn-render-1-getting-started-3-shaders/smoke', 9],
+  ['app-learn-render-1-getting-started-5-transformations/smoke', 18],
+  ['app-learn-render-1-getting-started-6-coordinate-systems/smoke', 10],
+  ['app-learn-render-2-lighting-1-colors/smoke', 10],
+  ['app-learn-render-2-lighting-2-basic-lighting/smoke', 25],
+  ['app-learn-render-2-lighting-3-materials/smoke', 9],
+  ['app-learn-render-2-lighting-4-lighting-maps/smoke', 14],
+  ['app-learn-render-2-lighting-6-multiple-lights/smoke', 19],
+  ['app-learn-render-4-advanced-opengl-1-depth-testing/smoke', 10],
+  ['app-learn-render-4-advanced-opengl-10-anti-aliasing-msaa/smoke', 15],
+  ['app-learn-render-4-advanced-opengl-2-stencil-testing/smoke', 28],
+  ['app-learn-render-4-advanced-opengl-3-blending/smoke', 10],
+  ['app-learn-render-4-advanced-opengl-4-face-culling/smoke', 9],
+  ['app-learn-render-5-advanced-lighting-5-parallax-mapping/smoke', 15],
+  ['app-learn-render-5-advanced-lighting-9-ssao/smoke', 14],
+  ['app-learn-render-6-pbr-2-ibl-irradiance/smoke', 14],
+  ['app-learn-render-6-pbr-3-ibl-specular/smoke', 30],
+  ['app-learn-render-6-pbr-4-transmission-refraction/features-a', 183],
+  ['app-learn-render-6-pbr-4-transmission-refraction/features-b', 85],
+  ['app-learn-render-6-pbr-4-transmission-refraction/frames', 21],
+  ['hello-cinder-fall/smoke', 32],
+  ['hello-cube/smoke', 7],
+  ['hello-deep-agent-feedback/smoke', 186],
+  ['hello-level-switch/smoke', 10],
+  ['hello-physics/smoke', 19],
+  ['hello-sprite-lit/smoke', 13],
+  ['hello-sprite/smoke', 10],
+  ['hello-tilemap/smoke', 8],
+  ['hello-transform-gizmo/browser', 235],
+  ['hello-transform-gizmo/smoke', 23],
+  ['hello-triangle/smoke', 7],
+  ['hello-volumetric-fog/smoke', 9],
+]);
+const defaultSmokeGateSeconds = 11;
+// Run 37229582157: complete Bloom plus upload took 239 s. Transfer that
+// reservation from lane 3 to lane 1; these mixed-run inputs are estimates.
+export const ciSmokeShardTailSeconds = Object.freeze([235, 622, 244, 392]);
+
+export function smokeGateSeconds(entry) {
+  return measuredSmokeGateSeconds.get(entry.gateId) ?? defaultSmokeGateSeconds;
+}
+
+export function partitionRunnableEntries(
+  entries,
+  { shardIndex, shardCount = SHARD_COUNT, scope } = {},
+) {
   if (!Number.isInteger(shardCount) || shardCount < 1)
     throw new Error(`invalid shardCount: ${shardCount}`);
   if (!Number.isInteger(shardIndex) || shardIndex < 0 || shardIndex >= shardCount)
     throw new Error(`invalid shardIndex: ${shardIndex}`);
-  return [...entries]
-    .sort(
-      (a, b) =>
-        a.package.localeCompare(b.package) ||
-        a.path.localeCompare(b.path) ||
-        a.gateId.localeCompare(b.gateId) ||
-        a.commandId.localeCompare(b.commandId),
-    )
-    .filter((_, index) => index % shardCount === shardIndex);
+  const ordered = [...entries].sort(
+    (a, b) =>
+      a.package.localeCompare(b.package) ||
+      a.path.localeCompare(b.path) ||
+      a.gateId.localeCompare(b.gateId) ||
+      a.commandId.localeCompare(b.commandId),
+  );
+  // Fixed tails exist only in the four-shard smoke-fleet (`sharded`) layout.
+  const totals = Array.from({ length: shardCount }, (_value, shard) =>
+    scope === 'sharded' && shardCount === ciSmokeShardTailSeconds.length
+      ? ciSmokeShardTailSeconds[shard]
+      : 0,
+  );
+  const assignment = new Map();
+  const ranked = ordered
+    .map((entry, index) => ({ entry, index, seconds: smokeGateSeconds(entry) }))
+    .sort((left, right) => right.seconds - left.seconds || left.index - right.index);
+  for (const { entry, seconds } of ranked) {
+    let selected = 0;
+    for (let shard = 1; shard < shardCount; shard += 1)
+      if (totals[shard] < totals[selected]) selected = shard;
+    assignment.set(entry, selected);
+    totals[selected] += seconds;
+  }
+  return ordered.filter((entry) => assignment.get(entry) === shardIndex);
 }
 
 export function validateShardReport(report, { frames = SMOKE_MIN_FRAMES, scope = 'sharded' } = {}) {
@@ -776,7 +845,11 @@ export function aggregateReports({
   const assignedByKey = new Map();
   const results = [];
   for (let index = 0; index < shardCount; index += 1) {
-    const expected = partitionRunnableEntries(expectedRunnable, { shardIndex: index, shardCount });
+    const expected = partitionRunnableEntries(expectedRunnable, {
+      shardIndex: index,
+      shardCount,
+      scope,
+    });
     for (const entry of expected) assignedByKey.set(gateKey(entry), index);
     const report = byIndex.get(index);
     const expectedKeys = new Set(expected.map(gateKey));
@@ -944,9 +1017,18 @@ export async function runEntry({
   process.stdout.write(`[dawn-roster] run ${entry.package}: ${entry.command}\n`);
   const result = await runBrowserCommand(entry.command, {
     cwd: root,
-    env: { ...process.env, SMOKE_MIN_FRAMES: String(frames) },
+    env: {
+      ...process.env,
+      SMOKE_MIN_FRAMES: String(frames),
+      // This owner already qualifies its lightweight correctness viewport;
+      // do not enable that policy for unrelated fleet owners.
+      ...(process.env.CI === 'true' && entry.gateId === 'hello-transform-gizmo/browser'
+        ? { FORGEAX_BROWSER_CI_LIGHTWEIGHT: '1' }
+        : {}),
+    },
     timeoutMs,
     label: entry.package,
+    gpuLease: true,
   });
   if (result.cancelled) throw new Error(`Dawn smoke cancelled by ${result.cancelled}`);
   // A receipt cannot authorize a process whose cleanup failed.
@@ -1043,7 +1125,7 @@ export async function runShard({
     throw new Error(`checked-out product head ${actualHead} does not match expectedProductSha`);
   const { resolved, rosterDigest: digest } = checkRoster({ rosterPath, roots });
   const entries = selectSmokeEntries(resolved, scope);
-  const assigned = partitionRunnableEntries(entries, { shardIndex, shardCount });
+  const assigned = partitionRunnableEntries(entries, { shardIndex, shardCount, scope });
   preflightRunEntries(assigned.filter((entry) => entry.oracle.kind !== 'assertion'));
   const results = [];
   for (const entry of assigned) {

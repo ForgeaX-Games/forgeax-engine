@@ -20,7 +20,7 @@
 //     the producer from the snapshot; `frame-start-scan-system.ts` is the
 //     bridge that calls `backend.sample()` and writes the Resource
 
-import type { ActionConfig, ActionState, GetVectorOptions } from './action-state';
+import type { ActionState, GetVectorOptions } from './action-state';
 import { getAxis, getVector } from './action-state';
 import type { GestureEvent, GestureState } from './gesture-recognizer';
 import { IDENTITY_GESTURE } from './gesture-recognizer';
@@ -52,6 +52,13 @@ export type GamepadButtonIndex =
   | 16;
 
 /** Standard-layout gamepad axis index (0-3 per W3C Gamepad spec). */
+import type {
+  GamepadFeedback,
+  GamepadFeedbackIntent,
+  GamepadFeedbackResult,
+  GamepadFeedbackTarget,
+} from './gamepad-feedback';
+
 export type GamepadAxisIndex = 0 | 1 | 2 | 3;
 
 /** W3C MouseEvent.button index (0=primary, 1=auxiliary, 2=secondary). */
@@ -59,6 +66,8 @@ export type MouseButtonIndex = 0 | 1 | 2;
 
 /** Per-slot gamepad frame data produced by `sample()`. */
 export interface GamepadSlotSample {
+  readonly feedbackTarget?: GamepadFeedbackTarget;
+  readonly dualRumble?: boolean;
   readonly index: number;
   /**
    * True when the browser reports a standard mapping OR the SDL controller
@@ -244,6 +253,8 @@ export interface InputSnapshot {
    * runtime concern.
    */
   gamepad(i: number): {
+    readonly feedbackTarget: GamepadFeedbackTarget | undefined;
+    readonly dualRumble: boolean;
     readonly connected: boolean;
     readonly standardMapping: boolean;
     button(b: GamepadButtonIndex): boolean;
@@ -347,6 +358,8 @@ export interface InputSnapshot {
  * tests inject fakes that emit synthetic samples.
  */
 export interface InputBackend {
+  readonly feedback?: GamepadFeedback;
+  dispatchFeedback?(intents: readonly GamepadFeedbackIntent[]): void;
   /**
    * Produce one frame's worth of input data and reset the per-frame
    * accumulators (movement delta + edge sets). Held-key state and
@@ -394,6 +407,8 @@ export interface InputBackend {
 
 /** Snapshot value returned by `InputBackend.sample()` (POD). */
 export interface InputBackendSample {
+  readonly feedbackResults?: readonly GamepadFeedbackResult[];
+  readonly feedbackLostResults?: number;
   readonly downKeys: ReadonlySet<string>;
   readonly upKeys: ReadonlySet<string>;
   /** Physical code identity (KeyboardEvent.code), when the producer has it. */
@@ -467,59 +482,29 @@ export function createEmptyInputBackendSample(): InputBackendSample {
  * sets, and `movementDelta` is a frozen literal. Subsequent backend
  * activity does not bleed into the snapshot.
  */
-function emptyGamepadReader(): ReturnType<InputSnapshot['gamepad']> {
+function buildGamepadReader(
+  slot: GamepadSlotSample | undefined,
+): ReturnType<InputSnapshot['gamepad']> {
+  const standard = slot?.standardMapping === true;
   return Object.freeze({
-    connected: false,
-    standardMapping: false,
-    button(_b: GamepadButtonIndex): boolean {
-      return false;
-    },
-    buttonValue(_b: GamepadButtonIndex): number {
-      return 0;
-    },
-    justPressed(_b: GamepadButtonIndex): boolean {
-      return false;
-    },
-    justReleased(_b: GamepadButtonIndex): boolean {
-      return false;
-    },
-    axis(_a: GamepadAxisIndex): number {
-      return 0;
-    },
-  });
-}
-
-function buildGamepadReader(slot: GamepadSlotSample): ReturnType<InputSnapshot['gamepad']> {
-  if (!slot.standardMapping) {
-    // AC-04: non-standard layout reports connected=true +
-    // standardMapping=false + all readpoints empty signal.
-    return Object.freeze({
-      connected: true,
-      standardMapping: false,
-      button: emptyGamepadReader().button,
-      buttonValue: emptyGamepadReader().buttonValue,
-      justPressed: emptyGamepadReader().justPressed,
-      justReleased: emptyGamepadReader().justReleased,
-      axis: emptyGamepadReader().axis,
-    });
-  }
-  return Object.freeze({
-    connected: true,
-    standardMapping: true,
+    feedbackTarget: slot?.feedbackTarget,
+    dualRumble: slot?.dualRumble ?? false,
+    connected: slot !== undefined,
+    standardMapping: standard,
     button(b: GamepadButtonIndex): boolean {
-      return slot.pressed.has(b);
+      return standard && slot.pressed.has(b);
     },
     buttonValue(b: GamepadButtonIndex): number {
-      return slot.buttonValues.get(b) ?? 0;
+      return standard ? (slot.buttonValues.get(b) ?? 0) : 0;
     },
     justPressed(b: GamepadButtonIndex): boolean {
-      return slot.justPressed.has(b);
+      return standard && slot.justPressed.has(b);
     },
     justReleased(b: GamepadButtonIndex): boolean {
-      return slot.justReleased.has(b);
+      return standard && slot.justReleased.has(b);
     },
     axis(a: GamepadAxisIndex): number {
-      return slot.axes[a];
+      return standard ? slot.axes[a] : 0;
     },
   });
 }
@@ -537,7 +522,6 @@ function buildGamepadReader(slot: GamepadSlotSample): ReturnType<InputSnapshot['
 export function snapshotFromSample(
   sample: InputBackendSample,
   actionStates?: readonly ActionState[],
-  inputMap?: readonly ActionConfig[],
   previousSnapshot?: InputSnapshot,
 ): InputSnapshot {
   // structuralCopy: copying into local sets isolates the snapshot from
@@ -613,7 +597,10 @@ export function snapshotFromSample(
   // index, but the diffGamepadFrame output is a sparse list keyed by .index.
   const gamepadSlotMap = new Map<number, GamepadSlotSample>();
   for (const slot of gamepadSlots) {
-    gamepadSlotMap.set(slot.index, slot);
+    gamepadSlotMap.set(slot.index, {
+      ...slot,
+      ...(slot.feedbackTarget ? { feedbackTarget: Object.freeze({ ...slot.feedbackTarget }) } : {}),
+    });
   }
 
   // Build action lookup map for snap.action(name) readpoint.
@@ -675,7 +662,6 @@ export function snapshotFromSample(
     },
     gamepad(i) {
       const slot = gamepadSlotMap.get(i);
-      if (!slot) return emptyGamepadReader();
       return buildGamepadReader(slot);
     },
     capabilities: caps,
@@ -713,19 +699,18 @@ export function snapshotFromSample(
       });
     },
     getAxis(neg, pos) {
-      if (!actionStates || !inputMap) return 0;
-      return getAxis(inputMap, actionStates, neg, pos);
+      if (!actionStates) return 0;
+      return getAxis(actionStates, neg, pos);
     },
     getVector(negX, posX, negY, posY, opts) {
-      if (!actionStates || !inputMap) return { x: 0, y: 0 };
-      return getVector(inputMap, actionStates, negX, posX, negY, posY, opts);
+      if (!actionStates) return { x: 0, y: 0 };
+      return getVector(actionStates, negX, posX, negY, posY, opts);
     },
     pointerEvents: pointerEvts,
     gesture,
     gestureEvents: gestureEvts,
   };
   (snapshot as unknown as Record<string, unknown>)._actionStates = actionStates;
-  (snapshot as unknown as Record<string, unknown>)._inputMap = inputMap;
   return Object.freeze(snapshot);
 }
 

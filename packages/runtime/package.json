@@ -28,9 +28,6 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "bench": "vitest bench --run",
-    "test:bench": "vitest bench --run",
-    "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json",
     "bench:nineslice": "node ../../scripts/bench/bench-nineslice-100panel.mjs"
   },
   "dependencies": {
@@ -61,6 +58,7 @@
     "@forgeax/engine-vfx": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-terrain": "workspace:*",
     "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-naga": "workspace:*",
@@ -87,13 +85,8 @@
         "reason": "renderer entry without bundled canvas; fps reported by hello-triangle / hello-cube apps that consume the renderer"
       },
       "bench": {
-        "enabled": true,
-        "reportPath": "bench-result.json",
-        "suite": "@forgeax/engine-runtime",
-        "baseline": {
-          "source": "inline",
-          "threshold": 5000000
-        }
+        "enabled": false,
+        "reason": "runtime owns no benchmarked hot path; the transparent-sort bench lives with its owner in @forgeax/engine-render"
       },
       "gate": {
         "enabled": true,

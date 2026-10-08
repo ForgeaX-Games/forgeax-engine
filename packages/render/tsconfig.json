@@ -15,7 +15,6 @@
   "references": [
     { "path": "../assets-runtime" },
     { "path": "../audio-webaudio" },
-    { "path": "../codec" },
     { "path": "../ecs" },
     { "path": "../geometry" },
     { "path": "../graphics-extras" },
@@ -33,6 +32,7 @@
     { "path": "../shader" },
     { "path": "../vite-plugin-shader" },
     { "path": "../skinning" },
-    { "path": "../types" }
+    { "path": "../types" },
+    {"path": "../terrain"}
   ]
 }

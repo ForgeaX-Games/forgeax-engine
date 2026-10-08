@@ -328,7 +328,7 @@ async function main() {
         '--use-angle=swiftshader',
         '--ignore-gpu-blocklist',
         '--disable-gpu-driver-bug-workarounds',
-        '--disable-dawn-features=disallow_unsafe_apis',
+        '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
         '--autoplay-policy=no-user-gesture-required',
       ],
     });
@@ -1181,9 +1181,9 @@ async function main() {
       'three peers before C disconnect',
     );
     const disconnectBefore = await readState(contexts[0].pages()[0]);
-    const cBeforeClose = await readState(latePage);
+    // Incarnation IDs must be compared within the surviving receiver stream.
     const cRemoved = new Set(
-      cBeforeClose.snakes
+      disconnectBefore.snakes
         .filter((snake) => snake.playerNetworkId === cIdentity)
         .map((snake) => `${snake.playerNetworkId}:${snake.networkEntityId}`),
     );
@@ -1216,7 +1216,7 @@ async function main() {
     }
     const cAfterClose = await readState(contexts[0].pages()[0]);
     const removedNow = [...cRemoved].filter((identity) => !identitySet(cAfterClose).has(identity));
-    const cWasAbsentBeforeClose = !cBeforeClose.snakes.some((snake) => snake.playerNetworkId === cIdentity);
+    const cWasAbsentBeforeClose = !disconnectBefore.snakes.some((snake) => snake.playerNetworkId === cIdentity);
     const cEntityRemoval = cRemoved.size === 0 ? cWasAbsentBeforeClose : removedNow.some((identity) => identity.startsWith(`${cIdentity}:`));
     const cPlayerRemoved = !cAfterClose.snakes.some((snake) => snake.playerNetworkId === cIdentity);
     const peerRemoval = authorityAfterClose.peerIds.length < authorityBeforeClose.peerIds.length;

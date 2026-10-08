@@ -56,7 +56,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   // asserts the PBR baseline against literal byte values.
   //
   // Coverage:
-  //   - 1040 B payload (STANDARD_PBR_UBO_SIZE)
+  //   - 1056 B payload (STANDARD_PBR_UBO_SIZE)
   //   - slot 0 = baseColor.rgb + 1 (alpha hardcoded)
   //   - slot 1 first 8 B = metallic, roughness (f32x2)
   //   - slot 1 last 4 u32 (channelMap) = [2, 1, 0, 0]
@@ -105,7 +105,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(typeof mod.buildPbrMaterialUboPayload).toBe('function');
     });
 
-    it('1040 B payload size + standard PBR slot layout (baseline)', () => {
+    it('1056 B payload size + standard PBR slot layout (baseline)', () => {
       if (typeof mod.buildPbrMaterialUboPayload !== 'function') {
         throw new Error('helper not exported yet');
       }
@@ -119,7 +119,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         specularColor: [0.11, 0.22, 0.33],
       });
       const buf = mod.buildPbrMaterialUboPayload(snap);
-      expect(buf.byteLength).toBe(1040);
+      expect(buf.byteLength).toBe(1056);
       const f32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
       // feat-20260613 fix-issue-1 (D-8 channelMap split): the 4 channelMap
       // u32 slots collapse into 4 independent f32 channel selectors at
@@ -1246,10 +1246,6 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       material: MaterialSnapshot;
       materials?: readonly MaterialSnapshot[];
     }) => boolean;
-    entityHasTransparentSubmesh?: (source: {
-      material: MaterialSnapshot;
-      materials?: readonly MaterialSnapshot[];
-    }) => boolean;
   };
 
   function makeTransparentSnap(opts: {
@@ -1420,27 +1416,20 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(spriteMod.computeSplitLdrSprite([opaqueMixed], false)).toBe(false);
     });
 
-    it('isEntityFullyTransparent / entityHasTransparentSubmesh classify mixed meshes', () => {
-      if (
-        typeof mod.isEntityFullyTransparent !== 'function' ||
-        typeof mod.entityHasTransparentSubmesh !== 'function'
-      ) {
+    it('isEntityFullyTransparent classifies mixed meshes', () => {
+      if (typeof mod.isEntityFullyTransparent !== 'function') {
         throw new Error('per-submesh transparency helpers not exported yet');
       }
       const opaque = makeTransparentSnap({ transparent: false });
       const transp = makeTransparentSnap({ transparent: true });
-      // Mixed: opaque[0] + transparent[1] -> has a transparent submesh but not
-      // fully transparent (must draw in BOTH geometry pass and blend sub-pass).
+      // Mixed: opaque[0] + transparent[1] is not fully transparent.
       const mixed = { material: opaque, materials: [opaque, transp] };
-      expect(mod.entityHasTransparentSubmesh(mixed)).toBe(true);
       expect(mod.isEntityFullyTransparent(mixed)).toBe(false);
       // Fully transparent (e.g. a sprite / 4.3 window quad).
       const full = { material: transp, materials: [transp] };
-      expect(mod.entityHasTransparentSubmesh(full)).toBe(true);
       expect(mod.isEntityFullyTransparent(full)).toBe(true);
       // Fully opaque.
       const none = { material: opaque, materials: [opaque, opaque] };
-      expect(mod.entityHasTransparentSubmesh(none)).toBe(false);
       expect(mod.isEntityFullyTransparent(none)).toBe(false);
     });
   });
@@ -1448,15 +1437,9 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
 
 // ─── bug-20260622-tilemap-ysort-transparent-sort-modes-followup M2 m2-1 ───
 //
-// AC-04 (error signal SSOT) + AC-05 (LAYER_Y footY ordering) + R-2
-// (mode=DISTANCE without a cameraPos falls back to the original list).
-// `sortTransparentDispatch` itself is render-system.ts-private (closure-
-// scoped helper invoked once per draw); the public-surface contract sits on
-// `transparentSortEntries` (same primary `layer ASC` + secondary mode-formula
-// + identical fallback semantics). Asserting against the exported helper
-// gives byte-exact coverage of the 4-mode dispatch SSOT without instantiating
-// the full RenderSystem (which would need a real GPU device + canvas, far
-// outside unit-test scope; plan-strategy R-2 mitigation).
+// AC-04 (error signal SSOT). Transparent-sort ordering (LAYER_Y footY,
+// DISTANCE without a camera) is gated on the production owner in
+// packages/render/src/systems/__tests__/transparent-dispatch.unit.test.ts.
 // biome-ignore lint/complexity/noUselessLoneBlockStatements: mirrors the per-test-file block-scope idiom this consolidated test file already uses (lines 31/159/261/501/633 -- each ported slab from a pre-consolidation file lives in its own block so helper names cannot collide).
 {
   // --- AC-04: setTransparentSortConfig mode=99 -> Result.err with 4 SSOT fields ---
@@ -1483,119 +1466,6 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       // The KV resource MUST stay un-inserted after a rejected write
       // (charter P3 -- structured failure, never silently coerce).
       expect(world.hasResource(TRANSPARENT_SORT_CONFIG_KEY)).toBe(false);
-    });
-  });
-
-  // --- AC-05: mode=LAYER_Y, 3 entities footY=10/20/30 same layer -> 30/20/10 ---
-  describe('AC-05 LAYER_Y footY ordering (same layer, deeper foot draws later)', () => {
-    it('footY=10/20/30 same layer -> output order footY=30/20/10 (back-to-front)', async () => {
-      const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_LAYER_Y } = await import(
-        '../../../render/src/systems/transparent-sort-config'
-      );
-      const { transparentSortEntries } = await import('../systems/transparent-sort');
-      const world = new World();
-      setTransparentSortConfig(world, {
-        mode: TRANSPARENT_SORT_MODE_LAYER_Y,
-        yzAlpha: 1.0,
-      }).unwrap();
-
-      // footY = posY - pivotY * sizeY. Pin pivotY=0 + sizeY=1 so footY === posY
-      // -- the 10/20/30 numbers land verbatim, no algebra to second-guess.
-      // mode=1 sortValue = -footY; ASC over [-10, -20, -30] yields entries
-      // ordered footY=30, 20, 10 (deepest foot draws last = back-to-front).
-      const entries = [
-        {
-          entityIndex: 0,
-          materialHandle: 0,
-          layer: 0,
-          posX: 0,
-          posY: 10,
-          posZ: 0,
-          pivotY: 0,
-          sizeY: 1,
-        },
-        {
-          entityIndex: 1,
-          materialHandle: 0,
-          layer: 0,
-          posX: 0,
-          posY: 20,
-          posZ: 0,
-          pivotY: 0,
-          sizeY: 1,
-        },
-        {
-          entityIndex: 2,
-          materialHandle: 0,
-          layer: 0,
-          posX: 0,
-          posY: 30,
-          posZ: 0,
-          pivotY: 0,
-          sizeY: 1,
-        },
-      ];
-      const sorted = transparentSortEntries(entries, world);
-      expect(sorted.map((e) => e.posY)).toEqual([30, 20, 10]);
-    });
-  });
-
-  // --- R-2: mode=DISTANCE without a cameraPos returns entries unchanged ---
-  // plan-strategy R-2 risk mitigation: sortTransparentDispatch mode=3 +
-  // cameras[0] missing must keep the original dispatch list (PR #401
-  // baseline). transparentSortEntries surfaces the same fallback through
-  // the public helper -- the 2-arg call (no cameraPos) falls through to
-  // the mode=0 posZ formula; with posZ pinned constant the sort becomes
-  // a no-op preserving insertion order (charter P3 deterministic output).
-  describe('R-2 mode=DISTANCE + cameraPos absent preserves insertion order', () => {
-    it('transparentSortEntries(entries, world) with mode=3 + no cameraPos = insertion order', async () => {
-      const { setTransparentSortConfig, TRANSPARENT_SORT_MODE_DISTANCE } = await import(
-        '../../../render/src/systems/transparent-sort-config'
-      );
-      const { transparentSortEntries } = await import('../systems/transparent-sort');
-      const world = new World();
-      setTransparentSortConfig(world, {
-        mode: TRANSPARENT_SORT_MODE_DISTANCE,
-        yzAlpha: 1.0,
-      }).unwrap();
-
-      // posZ pinned identical so the fallback (posZ ASC) is a no-op; the
-      // assertion guards both R-2 (no crash, no reorder) and "fallback is
-      // deterministic" together.
-      const entries = [
-        {
-          entityIndex: 7,
-          materialHandle: 0,
-          layer: 0,
-          posX: 1,
-          posY: 0,
-          posZ: 0,
-          pivotY: 0.5,
-          sizeY: 1,
-        },
-        {
-          entityIndex: 8,
-          materialHandle: 0,
-          layer: 0,
-          posX: 2,
-          posY: 0,
-          posZ: 0,
-          pivotY: 0.5,
-          sizeY: 1,
-        },
-        {
-          entityIndex: 9,
-          materialHandle: 0,
-          layer: 0,
-          posX: 3,
-          posY: 0,
-          posZ: 0,
-          pivotY: 0.5,
-          sizeY: 1,
-        },
-      ];
-      const sorted = transparentSortEntries(entries, world);
-      expect(sorted.map((e) => e.entityIndex)).toEqual([7, 8, 9]);
     });
   });
 }

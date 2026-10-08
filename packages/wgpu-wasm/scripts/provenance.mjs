@@ -78,10 +78,10 @@ export function assertCurrentSourceContentKey(manifest, expectedSourceContentKey
   }
 }
 
-export async function verifyProvenance({ expectedSourceContentKey } = {}) {
+export async function verifyProvenance({ expectedSourceContentKey, pkgDirectory = PKG } = {}) {
   let manifest;
   try {
-    manifest = JSON.parse(await readFile(MANIFEST, 'utf8'));
+    manifest = JSON.parse(await readFile(join(pkgDirectory, 'provenance.json'), 'utf8'));
   } catch (error) {
     throw new Error(`provenance manifest unavailable: ${error instanceof Error ? error.message : error}`);
   }
@@ -91,8 +91,8 @@ export async function verifyProvenance({ expectedSourceContentKey } = {}) {
   const currentSourceContentKey =
     expectedSourceContentKey ?? `sha256-${(await resolveAsset()).sha256}`;
   assertCurrentSourceContentKey(manifest, currentSourceContentKey);
-  const artifact = await fileFact(join(PKG, 'wgpu_wasm_bg.wasm'));
-  const glue = await fileFact(join(PKG, 'wgpu_wasm.js'));
+  const artifact = await fileFact(join(pkgDirectory, 'wgpu_wasm_bg.wasm'));
+  const glue = await fileFact(join(pkgDirectory, 'wgpu_wasm.js'));
   if (artifact.sha256 !== manifest.artifactSha256 || artifact.bytes !== manifest.artifactBytes) {
     throw new Error('provenance artifact bytes do not match manifest');
   }

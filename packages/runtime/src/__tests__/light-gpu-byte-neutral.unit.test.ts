@@ -123,7 +123,7 @@ describe('w7 -- light GPU pack byte-neutral (AC-11)', () => {
     expect(on.byteLength).toBe(off.byteLength);
   });
 
-  it('packDirectLightSlot writes Point color into slots 4..6 byte-for-byte (80 B)', () => {
+  it('packDirectLightSlot writes Point color into slots 4..6 byte-for-byte (96 B)', () => {
     const snap: PointLightSnapshot = {
       kind: 'point',
       position: vec3.create(1.5, -2.25, 0.125),
@@ -132,13 +132,13 @@ describe('w7 -- light GPU pack byte-neutral (AC-11)', () => {
       invRangeSquared: 0.04,
     };
     const out = packDirectLightSlot(snap);
-    expect(out.byteLength).toBe(80);
+    expect(out.byteLength).toBe(96);
     expect(out[4]).toBeCloseTo(0.4, 6);
     expect(out[5]).toBeCloseTo(0.5, 6);
     expect(out[6]).toBeCloseTo(0.6, 6);
   });
 
-  it('packDirectLightSlot writes Spot color slots 4..6 + direction slots 8..10 byte-for-byte (80 B)', () => {
+  it('packDirectLightSlot writes Spot color slots 4..6 + direction slots 8..10 byte-for-byte (96 B)', () => {
     const snap: SpotLightSnapshot = {
       kind: 'spot',
       position: vec3.create(0, 5, 0),
@@ -156,7 +156,7 @@ describe('w7 -- light GPU pack byte-neutral (AC-11)', () => {
       shadowAtlasTile: -1,
     };
     const out = packDirectLightSlot(snap);
-    expect(out.byteLength).toBe(80);
+    expect(out.byteLength).toBe(96);
     expect(out[4]).toBeCloseTo(0.3, 6);
     expect(out[5]).toBeCloseTo(0.4, 6);
     expect(out[6]).toBeCloseTo(0.5, 6);

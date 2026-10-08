@@ -1,4 +1,10 @@
-import { createBoxGeometry } from '@forgeax/engine-geometry';
+import { createHash } from 'node:crypto';
+import {
+  buildVisibilityDistanceField,
+  createBoxGeometry,
+  encodeMeshDistanceField,
+  MESH_VISIBILITY_DISTANCE_FIELD_CODEC,
+} from '@forgeax/engine-geometry';
 import { decodePackBlob, preparePackProgram } from '@forgeax/engine-pack/runtime';
 import {
   AssetGuid,
@@ -1754,5 +1760,88 @@ it.each([
   } finally {
     source.dispose();
     external.dispose();
+  }
+});
+
+it('retains a prepared mesh distance field through native publication, JSON transport and restore', async () => {
+  const source = producer();
+  const restored = producer();
+  const assets = reader(source);
+  const mesh = createBoxGeometry(2, 3, 4).unwrap();
+  const positions = mesh.attributes.position;
+  if (!(positions instanceof Float32Array) || !mesh.indices)
+    throw new Error('expected indexed box');
+  const field = (
+    await buildVisibilityDistanceField(positions, mesh.indices, {
+      voxelSize: 0.5,
+      triangleSidedness: new Uint8Array(mesh.indices.length / 3),
+    })
+  ).unwrap();
+  const prepared: MeshAsset = {
+    ...mesh,
+    distanceField: { ...field, sectionSidedness: mesh.submeshes.map(() => 0 as const) },
+  };
+  const encoded = (await encodeMeshDistanceField(field)).unwrap();
+  const artifact = {
+    integrity: {
+      algorithm: 'sha256',
+      digest: `sha256:${createHash('sha256').update(encoded).digest('hex')}`,
+    },
+    assetCodec: MESH_VISIBILITY_DISTANCE_FIELD_CODEC,
+  };
+  const content = (await prepareRuntimePackContent(id, { box: prepared })).unwrap();
+  const legacy = new AssetRegistry({} as never);
+  try {
+    const admitted = (await source.admit(content)).unwrap();
+    const row = defined(admitted.rows[0]);
+    const native = (await assets.loadByGuid<MeshAsset>(assets.parseGuid(row.guid))).unwrap();
+    expect(native.distanceField?.values).toEqual(field.values);
+    expect(native.distanceField).toMatchObject({ artifact });
+    // Omitting the in-memory publication forces ordinary package JSON and artifact reads.
+    const { publication: _, ...wireRow } = row;
+    legacy.setCatalogSource(
+      {
+        enumerate: async () => ok([wireRow]),
+        subscribe: () => () => {},
+        openPackage: source.catalog.openPackage,
+      },
+      source.fetch,
+    );
+    const wire = (await legacy.loadByGuid<MeshAsset>(legacy.parseGuid(row.guid))).unwrap();
+    expect(wire.distanceField?.meshDigest).toBe(field.meshDigest);
+    expect(wire.distanceField?.values).toEqual(field.values);
+    expect(wire.distanceField).toMatchObject({ artifact });
+    (await restored.restore(JSON.parse(JSON.stringify(source.snapshot())))).unwrap();
+    const recovered = reader(restored);
+    try {
+      const mesh = (await recovered.loadByGuid<MeshAsset>(recovered.parseGuid(row.guid))).unwrap();
+      expect(mesh.distanceField?.values).toEqual(field.values);
+      expect(mesh.distanceField).toMatchObject({ artifact });
+    } finally {
+      recovered.clearCatalogSource();
+      recovered.invalidateAll();
+    }
+    for (const invalid of [
+      { ...prepared, morphTargets: [{ position: new Float32Array(positions.length) }] },
+      {
+        ...prepared,
+        attributes: {
+          ...prepared.attributes,
+          skinIndex: new Uint16Array((positions.length / 3) * 4),
+        },
+      },
+      {
+        ...prepared,
+        distanceField: { ...field, sectionSidedness: [1 as const] },
+      },
+    ])
+      expect((await prepareRuntimePackContent(other, { box: invalid })).ok).toBe(false);
+  } finally {
+    legacy.clearCatalogSource();
+    legacy.invalidateAll();
+    assets.clearCatalogSource();
+    assets.invalidateAll();
+    source.dispose();
+    restored.dispose();
   }
 });

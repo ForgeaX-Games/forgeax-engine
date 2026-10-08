@@ -23,6 +23,10 @@ export async function probeRuntimeVase(page, read, evidenceDir) {
   };
   const initial = await wait(state => state?.generation !== undefined && !state.busy);
   assert.equal(initial.error, undefined);
+  await page.evaluate(() => {
+    if (globalThis.__forgeaxVaseReadiness)
+      globalThis.__forgeaxVaseReadiness.loadingWaitStartedAtMs = performance.now();
+  });
   await page.locator('#forgeax-loading').waitFor({ state: 'hidden', timeout: 60_000 });
   await mkdir(evidenceDir, { recursive: true });
   await settleRender();

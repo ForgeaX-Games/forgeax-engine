@@ -53,7 +53,11 @@ describe('ai-weapon-spirit frozen Toon material', () => {
     const record = validateCookedMaterialRecord(
       (cooked.payload as { cooked: unknown }).cooked,
     ).unwrap();
-    expect(record.programs).toHaveLength(1);
+    expect(record.programs).toHaveLength(2);
+    expect(record.programs.map((program) => program.selections[0]?.context.capability)).toEqual([
+      'storage-buffer',
+      'storage-buffer-atmosphere',
+    ]);
     expect(record.programs[0]?.selections).toMatchObject([
       { pass: 'Forward', context: { pass: 'forward' } },
       { pass: 'ShadowCaster', context: { pass: 'shadow' } },
@@ -90,7 +94,7 @@ describe('ai-weapon-spirit frozen Toon material', () => {
       (cooked.payload as { cooked: unknown }).cooked,
     ).unwrap();
     expect(record.resolved.parameters).toEqual(original.parameters);
-    expect(record.programs).toHaveLength(2);
+    expect(record.programs).toHaveLength(4);
     const shadow = record.programs.find((program) =>
       program.selections.some((selection) => selection.pass === 'ShadowCaster'),
     );

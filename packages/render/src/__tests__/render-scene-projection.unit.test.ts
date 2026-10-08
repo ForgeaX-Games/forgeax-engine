@@ -2,7 +2,6 @@ import { RuntimeMeshVertices } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import { vec3 } from '@forgeax/engine-math';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { GlobalTransform, propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -32,7 +31,6 @@ import {
   PersistentRenderScene,
   RenderScene,
 } from '../scene/render-scene';
-import { primitiveKey, viewKey } from '../scene/visibility/types';
 import type { SkinPaletteReceipt } from '../systems/skin-palette-types';
 import { classifySceneDataCoverage } from '../temporal/coverage';
 
@@ -43,13 +41,27 @@ function projected<T>(value: T): Exclude<T, Error> {
 
 const material = {} as MaterialSnapshot;
 
-function guid(value: string) {
-  const parsed = AssetGuid.parse(value);
-  if (!parsed.ok) throw new Error(`invalid fixture guid: ${value}`);
-  return parsed.value;
+function emptyLights(): ExtractedFrame['lights'] {
+  return {
+    directional: undefined,
+    directionalCount: 0,
+    point: [],
+    spot: [],
+    rect: [],
+    pointShadow: [],
+    lightViewProj: undefined,
+    splitPlanes: undefined,
+    cascadeCount: undefined,
+    cascadeBlend: undefined,
+    shadowMapSize: undefined,
+    depthBias: undefined,
+    normalBias: undefined,
+    directionalShadowQuality: undefined,
+    directionalShadowError: undefined,
+    directionalCsmConfig: undefined,
+    directionalCsmDirection: undefined,
+  };
 }
-
-const LOD_MESH_GUID = guid('019d0000-0000-7000-8000-000000000001');
 
 const SKIN_RECEIPT = {
   identity: 'skin:0:1',
@@ -164,6 +176,7 @@ describe('RenderScene canonical owner', () => {
     const lease = createRenderReadLease(world);
     const frame = {
       cameras: [{ ...makeZeroCameraFallbackSnapshot(), worldId: 0, entityKey: camera as number }],
+      lights: emptyLights(),
       renderables: [],
       dispatch: [],
       hiddenEntityReports: [],
@@ -204,6 +217,7 @@ describe('RenderScene canonical owner', () => {
     );
     const frame = {
       cameras: [camera],
+      lights: emptyLights(),
       renderables,
       dispatch: [],
       hiddenEntityReports: [],
@@ -338,6 +352,7 @@ describe('RenderScene canonical owner', () => {
       );
       return {
         cameras: [{ ...makeZeroCameraFallbackSnapshot(), worldId: 0, entityKey: 1 }],
+        lights: emptyLights(),
         renderables: [
           {
             ...snapshot(entity as number, 0),
@@ -409,45 +424,6 @@ describe('RenderScene canonical owner', () => {
     expect(next?.max[0]).toBe(10);
   });
 
-  it('exposes the full instance union for an occlusion proxy', () => {
-    const world = new World();
-    const lease = createRenderReadLease(world);
-    const renderable = {
-      ...instancesSnapshot(19, 0, 2),
-      localAabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
-    };
-    if (renderable.instances === undefined) throw new Error('expected instance fixture');
-    const transforms = new Float32Array(renderable.instances.transforms);
-    transforms[12] = -60;
-    transforms[28] = 60;
-    const grouped = {
-      ...renderable,
-      transform: snapshot(19, 100).transform,
-      instances: { ...renderable.instances, transforms },
-    };
-    const frame = {
-      cameras: [{ ...makeZeroCameraFallbackSnapshot(), worldId: 0, entityKey: 1 }],
-      renderables: [grouped],
-      dispatch: [],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    const persistent = new PersistentRenderScene();
-    try {
-      persistent.extractComposition([world], { cameraOwner: 0, resourceOwner: 0 }, 0, () => frame, [
-        lease,
-      ]);
-      const slot = persistent.compositionSlot(0, 19);
-      if (slot === undefined) throw new Error('expected retained instance slot');
-      expect(persistent.compositionCullingWorldBounds(slot)).toEqual({
-        min: [39, -1, -1],
-        max: [161, 1, 1],
-      });
-    } finally {
-      lease.dispose();
-      persistent.dispose();
-    }
-  });
-
   it('cancels a transient create/remove pair without allocating a slot', () => {
     const projection = new RenderScene();
 
@@ -501,285 +477,6 @@ describe('RenderScene canonical owner', () => {
     expect(projection.materialize().map((record) => record.transform.world[12])).toEqual([3, 8]);
   });
 
-  it('suppresses an occluded LOD candidate after two zero results and reopens it on a hit', () => {
-    const world = new World();
-    const camera = {
-      ...makeZeroCameraFallbackSnapshot(),
-      worldId: 0,
-      entityKey: 1,
-    };
-    const candidate = {
-      ...snapshot(7, 1),
-      lods: [{ mesh: LOD_MESH_GUID, screenCoverage: 0.5 }],
-      localAabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
-    } as RenderableSnapshot;
-    const dispatch = {
-      entityIndex: candidate.entityKey,
-      materialHandle: 0,
-      renderableIndex: 0,
-      passIndex: 0,
-      queue: 2000,
-      layer: 0,
-      tags: {},
-      renderState: undefined,
-      defines: undefined,
-      vertexEntry: undefined,
-      fragmentEntry: undefined,
-      materialShaderId: 'forgeax::default-unlit',
-      paramSnapshot: undefined,
-    };
-    const frame = {
-      cameras: [camera],
-      dispatch: [dispatch],
-      renderables: [candidate],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    const persistent = new PersistentRenderScene();
-    const lease = createRenderReadLease(world);
-    persistent.extractComposition([world], { cameraOwner: 0, resourceOwner: 0 }, 0, () => frame, [
-      lease,
-    ]);
-    const renderableInput = [candidate];
-    const dispatchInput = [dispatch];
-    persistent.updateVisibilityFacet([world], camera, renderableInput);
-    const view = viewKey({
-      attachmentId: world.identity,
-      cameraEntity: camera.entityKey ?? 0,
-      viewRole: 'main',
-      viewGeneration: camera.historyVersion ?? 0,
-    });
-    const primitive = primitiveKey({
-      attachmentId: world.identity,
-      worldGeneration: 0,
-      primitiveSlot: 0,
-      slotGeneration: 0,
-    });
-    const facets = persistent.visibilityFacetStore();
-    const initialProjection = persistent.projectVisibility(
-      [world],
-      camera,
-      renderableInput,
-      dispatchInput,
-    );
-    const beforeCompletionRevision = facets.drawRevisionValue;
-    expect(facets.applyCompletion(view, primitive, 0, { level: 0, confidence: 1 })).toBe(true);
-    expect(facets.drawRevisionValue).toBe(beforeCompletionRevision);
-    expect(persistent.projectVisibility([world], camera, renderableInput, dispatchInput)).toBe(
-      initialProjection,
-    );
-    facets.applyConfidence(view, primitive, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 1,
-    });
-    facets.applyConfidence(view, primitive, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 2,
-    });
-    const hidden = persistent.projectVisibility([world], camera, renderableInput, dispatchInput);
-    expect(hidden.renderables).toHaveLength(0);
-    expect(hidden.dispatch).toHaveLength(0);
-    expect(hidden.suppressed).toBe(1);
-
-    facets.applyConfidence(view, primitive, {
-      type: 'result',
-      samples: 1,
-      submissionGeneration: 3,
-    });
-    const reopened = persistent.projectVisibility([world], camera, renderableInput, dispatchInput);
-    expect(reopened.renderables).toHaveLength(1);
-    expect(reopened.dispatch).toHaveLength(1);
-    expect(reopened.activeEntityKeys.size).toBe(1);
-    lease.dispose();
-  });
-
-  it('keeps a secondary World primitive identity stable across composition reorder', () => {
-    const worldA = new World();
-    const worldB = new World();
-    const leaseA = createRenderReadLease(worldA);
-    const leaseB = createRenderReadLease(worldB);
-    const cameraA = { ...makeZeroCameraFallbackSnapshot(), worldId: 0, entityKey: 10 };
-    const candidateB = {
-      ...snapshot(7, 1),
-      worldId: 1,
-      lods: [{ mesh: LOD_MESH_GUID, screenCoverage: 0.5 }],
-      localAabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
-    } as RenderableSnapshot;
-    const ordinaryA = snapshot(8, -1);
-    const dispatchFor = (renderableIndex: number) => ({
-      entityIndex: 7,
-      materialHandle: 0,
-      renderableIndex,
-      passIndex: 0,
-      queue: 2000,
-      layer: 0,
-      tags: {},
-      renderState: undefined,
-      defines: undefined,
-      variantSet: undefined,
-      vertexEntry: undefined,
-      fragmentEntry: undefined,
-      materialShaderId: 'forgeax::default-unlit',
-      paramSnapshot: undefined,
-    });
-    const frameAB = {
-      cameras: [cameraA],
-      dispatch: [dispatchFor(1)],
-      renderables: [ordinaryA, candidateB],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    const persistent = new PersistentRenderScene();
-    persistent.extractComposition(
-      [worldA, worldB],
-      { cameraOwner: 0, resourceOwner: 0 },
-      0,
-      () => frameAB,
-      [leaseA, leaseB],
-    );
-    persistent.updateVisibilityFacet([worldA, worldB], cameraA, [ordinaryA, candidateB]);
-    const viewA = viewKey({
-      attachmentId: worldA.identity,
-      cameraEntity: 10,
-      viewRole: 'main',
-      viewGeneration: 0,
-    });
-    const primitiveB = primitiveKey({
-      attachmentId: worldA.identity,
-      worldGeneration: 1,
-      primitiveSlot: 1,
-      slotGeneration: 0,
-    });
-    const facets = persistent.visibilityFacetStore();
-    facets.applyConfidence(viewA, primitiveB, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 1,
-    });
-    facets.applyConfidence(viewA, primitiveB, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 2,
-    });
-
-    const reorderedCandidateB = { ...candidateB, worldId: 0 };
-    const reorderedOrdinaryA = { ...ordinaryA, worldId: 1 };
-    const cameraAReordered = { ...cameraA, worldId: 1 };
-    const frameBA = {
-      cameras: [cameraAReordered],
-      dispatch: [dispatchFor(0)],
-      renderables: [reorderedCandidateB, reorderedOrdinaryA],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    persistent.extractComposition(
-      [worldB, worldA],
-      { cameraOwner: 1, resourceOwner: 1 },
-      0,
-      () => frameBA,
-      [leaseB, leaseA],
-    );
-    persistent.updateVisibilityFacet([worldB, worldA], cameraAReordered, [reorderedCandidateB]);
-    const projected = persistent.projectVisibility(
-      [worldB, worldA],
-      cameraAReordered,
-      [reorderedCandidateB],
-      [dispatchFor(0)],
-    );
-    expect(projected.suppressed).toBe(1);
-    expect(projected.renderables).toHaveLength(0);
-    leaseA.dispose();
-    leaseB.dispose();
-  });
-
-  it('clears visibility facets when a same-World topology rebuild reuses slots', () => {
-    const world = new World();
-    const lease = createRenderReadLease(world);
-    const camera = { ...makeZeroCameraFallbackSnapshot(), worldId: 0, entityKey: 10 };
-    const candidate = {
-      ...snapshot(7, 1),
-      lods: [{ mesh: LOD_MESH_GUID, screenCoverage: 0.5 }],
-      localAabb: new Float32Array([-1, -1, -1, 1, 1, 1]),
-    } as RenderableSnapshot;
-    const dispatch = {
-      entityIndex: 7,
-      materialHandle: 0,
-      renderableIndex: 0,
-      passIndex: 0,
-      queue: 2000,
-      layer: 0,
-      tags: {},
-      renderState: undefined,
-      defines: undefined,
-      variantSet: undefined,
-      vertexEntry: undefined,
-      fragmentEntry: undefined,
-      materialShaderId: 'forgeax::default-unlit',
-      paramSnapshot: undefined,
-    };
-    const frame = {
-      cameras: [camera],
-      dispatch: [dispatch],
-      renderables: [candidate],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    const persistent = new PersistentRenderScene();
-    persistent.extractComposition([world], { cameraOwner: 0, resourceOwner: 0 }, 0, () => frame, [
-      lease,
-    ]);
-    persistent.updateVisibilityFacet([world], camera, [candidate]);
-    const view = viewKey({
-      attachmentId: world.identity,
-      cameraEntity: 10,
-      viewRole: 'main',
-      viewGeneration: 0,
-    });
-    const before = persistent.compositionSlots()[0];
-    const primitive = primitiveKey({
-      attachmentId: world.identity,
-      worldGeneration: 0,
-      primitiveSlot: before?.slot ?? 0,
-      slotGeneration: before?.generation ?? 0,
-    });
-    const facets = persistent.visibilityFacetStore();
-    facets.applyConfidence(view, primitive, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 1,
-    });
-    facets.applyConfidence(view, primitive, {
-      type: 'result',
-      samples: 0,
-      submissionGeneration: 2,
-    });
-    expect(persistent.projectVisibility([world], camera, [candidate], [dispatch]).suppressed).toBe(
-      1,
-    );
-
-    // A real journal change forces the composition rebuild. The callback adds
-    // a new renderable, so the previous slot generation could otherwise ABA
-    // into the newly rebuilt projection.
-    world.spawn({ component: Transform, data: {} }).unwrap();
-    world.update().unwrap();
-    const extra = { ...snapshot(8, 2), localAabb: candidate.localAabb };
-    const rebuiltFrame = {
-      cameras: [camera],
-      dispatch: [dispatch, { ...dispatch, entityIndex: 8, renderableIndex: 1 }],
-      renderables: [candidate, extra],
-      hiddenEntityReports: [],
-    } as unknown as ExtractedFrame;
-    persistent.extractComposition(
-      [world],
-      { cameraOwner: 0, resourceOwner: 0 },
-      0,
-      () => rebuiltFrame,
-      [lease],
-    );
-    persistent.updateVisibilityFacet([world], camera, [candidate]);
-    expect(persistent.projectVisibility([world], camera, [candidate], [dispatch]).suppressed).toBe(
-      0,
-    );
-    lease.dispose();
-  });
   it('notifies the GPU residency owner for shared-ref payload mutations', () => {
     const world = new World();
     const lease = createRenderReadLease(world);
@@ -788,6 +485,7 @@ describe('RenderScene canonical owner', () => {
     const persistent = new PersistentRenderScene({ onRuntimeAssetChange });
     const frame = {
       cameras: [],
+      lights: emptyLights(),
       renderables: [],
       dispatch: [],
       hiddenEntityReports: [],
@@ -1017,7 +715,6 @@ describe('RenderScene canonical owner', () => {
       expect(after).toMatchObject({ slot: before?.slot, generation: before?.generation });
       const projected = persistent.projectVisibility(
         [world],
-        cameraMoved.cameras[0],
         cameraMoved.renderables,
         cameraMoved.dispatch,
       );

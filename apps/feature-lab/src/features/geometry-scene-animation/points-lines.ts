@@ -36,7 +36,7 @@ export default defineFeature({
   catalog: 'Points/Lines rendering',
   kind: 'visual',
   summary:
-    'Points { sizePx, shape } and Lines { widthPx, dash } expand ordinary point-list / line-list MeshAssets drawn with Materials.unlit into screen-space quads in the Standard main pass.',
+    'Points { sizePx, shape } and Lines { width, dash } expand ordinary point-list / line-list MeshAssets drawn with Materials.unlit into screen-space quads in the Standard main pass.',
   expect:
     'ON: five large yellow round dots above three thick magenta bars. OFF: the same vertices at 1 px - nearly invisible specks and hairlines.',
   setup({ app, world }) {
@@ -84,12 +84,12 @@ export default defineFeature({
       world.allocSharedRef<'MeshAsset', MeshAsset>('MeshAsset', lines),
       style([1, 0.2, 0.9, 1]),
       {},
-      { component: Lines, data: { widthPx: 16 } },
+      { component: Lines, data: { width: 16 } },
     );
     return {
       toggle(on) {
         world.set(dots, Points, { sizePx: on ? 40 : 1 } as never);
-        world.set(bars, Lines, { widthPx: on ? 16 : 1 } as never);
+        world.set(bars, Lines, { width: on ? 16 : 1 } as never);
       },
       checks() {
         const checks = new CheckList();

@@ -8,6 +8,7 @@ import {
   ok,
   type Result,
 } from '@forgeax/engine-types';
+import { validateMeshCollisionAttachment } from '../mesh-collision';
 import { decodeMeshBinary, normalizeMeshPayload } from './mesh-binary';
 import { createProceduralMesh } from './primitive-mesh';
 
@@ -64,7 +65,9 @@ export const meshAssetDecoder: AssetDecoder<MeshAsset> = {
       payload.kind !== 'mesh' ||
       !(payload.vertices instanceof Float32Array) ||
       payload.vertices.length === 0 ||
-      payload.aabb === undefined
+      payload.aabb === undefined ||
+      (payload.collision !== undefined &&
+        !validateMeshCollisionAttachment(payload as MeshAsset, payload.collision).ok)
     ) {
       return err({
         code: 'asset-package-invalid',

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { compileShader } from '../../index.js';
@@ -10,13 +11,13 @@ const template = `#define_import_path forgeax_material::standard
 #import forgeax_material::slot::surface::{evaluate_surface}
 #import forgeax_material::surface_v1::{SurfaceInput, SurfaceData}
 @fragment fn fs_main() -> @location(0) vec4<f32> {
-  let input = SurfaceInput(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 0.0, 1.0), vec4<f32>(1.0), vec3<f32>(0.0, 0.0, 1.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec4<f32>(1.0), true, vec4<f32>(0.0), vec4<f32>(0.0));
+  let input = SurfaceInput(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 0.0, 1.0), vec4<f32>(1.0), vec3<f32>(0.0, 0.0, 1.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec4<f32>(1.0), true, vec4<f32>(0.0), vec4<f32>(0.0), mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0)), 0.0);
   let surface = evaluate_surface(input);
   return vec4<f32>(surface.baseColor, surface.opacity);
 }`;
 
 const surfaceV1 = `#define_import_path forgeax_material::surface_v1
-struct SurfaceInput { positionOS: vec3<f32>, positionWS: vec3<f32>, geometricNormalWS: vec3<f32>, vertexNormalWS: vec3<f32>, tangentWS: vec4<f32>, viewDirectionWS: vec3<f32>, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv4: vec2<f32>, uv5: vec2<f32>, uv6: vec2<f32>, uv7: vec2<f32>, vertexColor: vec4<f32>, frontFacing: bool, uvFootprint0: vec4<f32>, uvFootprint1: vec4<f32>,}
+struct SurfaceInput { positionOS: vec3<f32>, positionWS: vec3<f32>, geometricNormalWS: vec3<f32>, vertexNormalWS: vec3<f32>, tangentWS: vec4<f32>, viewDirectionWS: vec3<f32>, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, uv4: vec2<f32>, uv5: vec2<f32>, uv6: vec2<f32>, uv7: vec2<f32>, vertexColor: vec4<f32>, frontFacing: bool, uvFootprint0: vec4<f32>, uvFootprint1: vec4<f32>, objectToWorld: mat3x3<f32>, frameTime: f32,}
 struct SurfaceData { baseColor: vec3<f32>, normalWS: vec3<f32>, metallic: f32, roughness: f32, emissive: vec3<f32>, occlusion: f32, opacity: f32, alphaClipThreshold: f32 }`;
 
 const defaultSurface = `#define_import_path forgeax_material::default_standard_surface
@@ -47,6 +48,40 @@ const material: MaterialAsset = {
 };
 
 describe('Surface composition owner-cut', () => {
+  it('compiles a time-animated authored Surface against the actual Engine ABI', async () => {
+    const sources = buildMaterialSourceCatalog({
+      engine: [
+        { path: 'standard.wgsl', source: template },
+        {
+          path: 'surface_v1.wgsl',
+          source: readFileSync(
+            new URL('../../../../shader/src/surface_v1.wgsl', import.meta.url),
+            'utf8',
+          ),
+        },
+        { path: 'default.wgsl', source: defaultSurface },
+      ],
+      project: [
+        {
+          path: 'timed-surface.wgsl',
+          source: customSurface.replace('vec3<f32>(0.6)', 'vec3<f32>(input.frameTime)'),
+        },
+      ],
+    }).unwrap();
+    const composed = composeSurfaceSource({
+      material: 'timed-surface',
+      pass: 'forward',
+      templateModule: 'forgeax_material::standard',
+      surfaceModule: 'game::rusted_surface',
+      sources,
+    }).unwrap();
+    const compiled = await compileShader(composed.source, {
+      id: 'actual-surface-frame-clock',
+      imports: composed.imports,
+    });
+    expect(compiled.ok, compiled.ok ? '' : JSON.stringify(compiled.error)).toBe(true);
+  });
+
   it('shares pure helper symbols when Surface and template import the same module', async () => {
     const importedTemplate = template.replace(
       '@fragment',

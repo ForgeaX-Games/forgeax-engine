@@ -1,7 +1,12 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
-import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
+import type {
+  AnimationClip,
+  AnimationTargetIdValue,
+  AnimationTransformChannel,
+  Handle,
+} from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { subscribeAnimationDiagnostics } from '../animation-diagnostic';
 import { AnimationPlayer } from '../animation-player';
@@ -56,7 +61,10 @@ describe('animation runtime diagnostics', () => {
     if (firstChannel === undefined) throw new Error('fixture requires one animation channel');
     const twoChannels: AnimationClip = {
       ...singleChannel,
-      channels: [...singleChannel.channels, { ...firstChannel, property: 'rotation' }],
+      channels: [
+        ...singleChannel.channels,
+        { ...(firstChannel as AnimationTransformChannel), property: 'rotation' },
+      ],
     };
     const player = await playerWithClip(world, twoChannels);
     const observed: unknown[] = [];
@@ -215,6 +223,68 @@ describe('animation runtime diagnostics', () => {
         detail: expect.objectContaining({ reason: 'channel-missing', targetId: TARGET_ID }),
       }),
     );
+  });
+
+  it('preserves missing-slot diagnostic order and the first covering channel across three clips', async () => {
+    const world = new World();
+    const translation = clip();
+    const player = await playerWithClip(world, translation);
+    const rotation: AnimationClip = {
+      kind: 'animation-clip',
+      duration: 1,
+      channels: [
+        {
+          targetId: TARGET_ID,
+          property: 'rotation',
+          sampler: {
+            input: new Float32Array([0, 1]),
+            output: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+            interpolation: 'LINEAR',
+          },
+        },
+      ],
+    };
+    const rotationHandle = world.allocSharedRef('AnimationClip', rotation);
+    const emptyHandle = world.allocSharedRef('AnimationClip', {
+      kind: 'animation-clip',
+      duration: 1,
+      channels: [],
+    } satisfies AnimationClip);
+    world
+      .set(player, AnimationPlayer, {
+        clips: [world.allocSharedRef('AnimationClip', translation), rotationHandle, emptyHandle],
+        times: [0, 0, 0],
+        weights: [1, 1, 1],
+        speeds: [1, 1, 1],
+      })
+      .unwrap();
+    const target = world.spawn({ component: Transform, data: {} }).unwrap() as EntityHandle;
+    world
+      .addComponent(target, { component: AnimationTargetId, data: { value: TARGET_ID } })
+      .unwrap();
+    world.addComponent(target, { component: AnimatedBy, data: { player } }).unwrap();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    world.update(0.25);
+    world.update(0.25);
+
+    expect(diagnostics(warn)).toEqual([
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          reason: 'channel-missing',
+          property: 'rotation',
+          clip: rotationHandle as number,
+          channel: 0,
+        }),
+      }),
+      expect.objectContaining({
+        detail: expect.objectContaining({
+          reason: 'channel-missing',
+          property: 'translation',
+          channel: 0,
+        }),
+      }),
+    ]);
   });
 
   it('emits no diagnostic in production', async () => {

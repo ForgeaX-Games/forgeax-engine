@@ -30,15 +30,14 @@
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { PROCEDURAL_FLOATS_PER_VERTEX } from '@forgeax/engine-geometry';
 import {
   bakeGlyphMesh,
-  conservativeCubeAabb,
+  buildGlyphMeshAsset,
   layoutGlyphText,
   resetFontConcurrency,
   trackFontConcurrency,
 } from '@forgeax/engine-graphics-extras';
-import type { FontAsset, Handle, MaterialAsset, MeshAsset, Submesh } from '@forgeax/engine-types';
+import type { FontAsset, Handle, MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { err, ok, type Result, TextError, toShared, unpackSlot } from '@forgeax/engine-types';
 import { MeshFilter, MeshRenderer } from './components';
 import { GlyphText } from './components/glyph-text';
@@ -251,34 +250,18 @@ function processEntity(
     // buffers in place (a no-op if not yet resident -- the next render's
     // ensureResident then uploads the latest registered POD).
     const meshHandle = cached.meshHandle;
-    const submeshes = [
-      {
-        indexOffset: 0,
-        indexCount: layout.indices.length,
-        vertexCount: layout.vertices.length / PROCEDURAL_FLOATS_PER_VERTEX,
-        topology: 'triangle-list',
-        materialSlot: 0,
-      },
-    ] satisfies readonly Submesh[];
-    // A dynamic label can begin empty, so its first bake has a degenerate AABB.
-    // Keep the shared MeshAsset's culling/picking bounds in lockstep with the
-    // dirty layout; otherwise the GPU buffers update but the render walk still
-    // rejects the label as an empty mesh.
+    const updated = buildGlyphMeshAsset(layout);
+    // Publish the same payload used for the initial bake before updating residency.
+    // This also refreshes CPU attributes for exact picking after the text changes.
     const mesh = world.sharedRefs.resolve<'MeshAsset', MeshAsset>(meshHandle);
-    if (mesh.ok) {
-      const aabb = conservativeCubeAabb(layout.radius);
-      // Keep both sides of the pull boundary coherent. A zero-glyph first
-      // bake may have no resident GPU buffers yet, so updating only the GPU
-      // store would lose the new text on the next ensureResident pull.
-      Object.assign(mesh.value, {
-        vertices: layout.vertices,
-        indices: layout.indices,
-        submeshes,
-        materialSlots: [{ slotName: 'Default' }],
-        aabb,
-      });
-    }
-    gpuStore.updateMesh(meshHandle, layout.vertices, layout.indices, 0, submeshes);
+    if (mesh.ok) Object.assign(mesh.value, updated);
+    gpuStore.updateMesh(
+      meshHandle,
+      updated.vertices,
+      updated.indices as Uint16Array,
+      0,
+      updated.submeshes,
+    );
     // A color change replaces the material payload at this entity's stable
     // derived slot and re-binds the new producer handle in place.
     const materialId = resolveTextMaterial(world, gt, font, slot);

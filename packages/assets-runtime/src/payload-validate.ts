@@ -1,3 +1,4 @@
+import { isStripTopology } from '@forgeax/engine-types';
 // @forgeax/engine-assets-runtime -- register-time payload validation
 // (feat-20260705-runtime-tier2-decomposition M1 / w4, D-4 F1 straight-cut).
 // Pure move from asset-registry.ts; zero identifier changes.
@@ -27,7 +28,7 @@ import { ASSET_ERROR_HINTS, AssetError } from '@forgeax/engine-types';
  *       floatsPerVertex: vertices.length / projectedFloatsPerVertex } (non-integer)
  *   (d) otherwise compute vertexCount from the same projection;
  *       scan indices for maxIndex;
- *       if maxIndex + 1 !== vertexCount -> same AssetError shape with
+ *       if maxIndex >= vertexCount -> same AssetError shape with
  *       detail = { vertexCount: maxIndex + 1, floatsPerVertex: vertices.length / (maxIndex + 1) }
  *
  * Isomorphic with `validateMaterialPayload` — both are private module-level helpers,
@@ -132,7 +133,7 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
         },
       });
     }
-    if ((topology === 'line-strip' || topology === 'triangle-strip') && !hasIndices) {
+    if (isStripTopology(topology) && !hasIndices) {
       return new AssetError({
         code: 'asset-invalid-value',
         expected: `submesh[${i}] strip topology carries an index buffer`,
@@ -224,7 +225,8 @@ export function validateMeshPayload(asset: Asset): AssetError | null {
     if (idx !== undefined && idx > maxIndex) maxIndex = idx;
   }
 
-  if (maxIndex + 1 !== vertexCount) {
+  // Indexed draws may share a larger vertex allocation; unused vertices are legal.
+  if (maxIndex >= vertexCount) {
     return new AssetError({
       code: 'mesh-vertex-stride-mismatch',
       expected: expectedStride,

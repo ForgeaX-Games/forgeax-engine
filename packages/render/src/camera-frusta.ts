@@ -1,4 +1,5 @@
 import { frustum, mat4 } from '@forgeax/engine-math';
+import { cameraLensProjection } from './camera-projection';
 import type { CameraSnapshot } from './render-contract';
 
 /**
@@ -19,20 +20,7 @@ export function buildCameraFrusta(cameras: readonly CameraSnapshot[]): readonly 
       planes.push(new Float32Array(0));
       continue;
     }
-    const projection = mat4.create();
-    if (camera.projection === 'orthographic') {
-      mat4.orthographicReverseZ(
-        projection,
-        camera.orthoLeft,
-        camera.orthoRight,
-        camera.orthoTop,
-        camera.orthoBottom,
-        camera.near,
-        camera.far,
-      );
-    } else {
-      mat4.perspectiveReverseZ(projection, camera.fov, camera.aspect, camera.near, camera.far);
-    }
+    const projection = cameraLensProjection(camera);
     const view = mat4.create();
     mat4.invert(view, camera.world);
     const viewProjection = mat4.create();

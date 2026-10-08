@@ -33,7 +33,6 @@
 
 import type {
   FontAsset,
-  GlyphMetric,
   ImportContext,
   ImportedAsset,
   Importer,
@@ -41,6 +40,7 @@ import type {
   SamplerAsset,
   TextureAsset,
 } from '@forgeax/engine-types';
+import { atlasFontData } from './atlas-font-data.js';
 import type { BakeAtlas, MsdfGenerator } from './cli-font.js';
 import { realGeneratorFactory } from './cli-font.js';
 
@@ -52,26 +52,6 @@ export function sourceKeyForFontOutput(kind: string): string | undefined {
 
 export function fontOutputSourceKeys(): readonly string[] {
   return ['texture', 'sampler', 'font'].map((kind) => sourceKeyForFontOutput(kind) as string);
-}
-
-/** Map the @zappar atlas glyphs into the FontAsset glyph-metrics record. */
-function atlasGlyphsToMetrics(atlas: BakeAtlas): Record<number, GlyphMetric> {
-  const glyphs: Record<number, GlyphMetric> = {};
-  for (const g of atlas.glyphs) {
-    glyphs[g.unicode] = {
-      advance: g.advance,
-      bearingX: g.xoffset,
-      bearingY: g.yoffset,
-      size: { w: g.atlasSize[0], h: g.atlasSize[1] },
-      region: {
-        x: g.atlasPosition[0],
-        y: g.atlasPosition[1],
-        w: g.atlasSize[0],
-        h: g.atlasSize[1],
-      },
-    };
-  }
-  return glyphs;
 }
 
 function makeAtlasTexture(atlas: BakeAtlas): TextureAsset {
@@ -86,17 +66,6 @@ function makeAtlasTexture(atlas: BakeAtlas): TextureAsset {
     data: atlas.texture.data,
     colorSpace: 'linear',
     mips: { kind: 'none' },
-  };
-}
-
-function makeFontCommon(atlas: BakeAtlas): FontAsset['common'] {
-  return {
-    lineHeight: atlas.metrics.lineHeight,
-    base: atlas.metrics.ascender,
-    distanceRange: atlas.fieldRange,
-    pxRange: atlas.fieldRange,
-    atlasWidth: atlas.textureSize[0],
-    atlasHeight: atlas.textureSize[1],
   };
 }
 
@@ -172,8 +141,7 @@ async function importFont(ctx: ImportContext): Promise<ImportResult> {
       kind: 'font',
       atlasGuid: atlasSub?.guid ?? '',
       samplerGuid: samplerSub?.guid ?? '',
-      glyphs: atlasGlyphsToMetrics(atlas),
-      common: makeFontCommon(atlas),
+      ...atlasFontData(atlas),
     } as unknown as FontAsset;
     out.push({
       guid: fontSub.guid,

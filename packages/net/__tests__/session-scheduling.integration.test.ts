@@ -3,6 +3,7 @@ import { createWorldContext, defineComponent, FixedUpdate, World } from '@forgea
 import { createMemoryEndpointPair } from '../src/endpoint/memory';
 import type { PeerId } from '../src/endpoint/endpoint';
 import { createAuthorityCoordinator } from '../src/replication/authority';
+import { encodeReplicationPacket } from '../src/replication/codec';
 import { defineReplication } from '../src/replication/profile';
 import { createReplicaCoordinator } from '../src/replication/replica';
 import { NetSession } from '../src/session/net-session';
@@ -63,8 +64,9 @@ describe('NetSession scheduling integration', () => {
     const authoritySession = authorityWorld.getResource<NetSession>('net-session');
     const replicaSession = replicaWorld.getResource<NetSession>('net-session');
     authoritySession.attachAuthority(createAuthorityCoordinator(authorityWorld, profile));
-    const replica = createReplicaCoordinator(replicaWorld, profile, replicaEndpoint);
+    const replica = createReplicaCoordinator(replicaWorld, profile);
     replicaSession.attachReplica(replica, profile.limits);
+    replicaSession.receiveEvents(); // Announce identity before the first simulation tick.
 
     replicaWorld.addSystem(FixedUpdate, {
       name: 'observe-replica-before-simulation',
@@ -88,7 +90,7 @@ describe('NetSession scheduling integration', () => {
   });
 
   it('keeps the World healthy when the authority ACK ledger applies backpressure', async () => {
-    const [authorityEndpoint] = createMemoryEndpointPair();
+    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const profile = scheduledProfile();
     const authorityWorld = new World({ time: { fixedDeltaSeconds: 1, maxDeltaSeconds: 5 } });
     authorityWorld.spawn(
@@ -102,6 +104,9 @@ describe('NetSession scheduling integration', () => {
     );
     const authoritySession = authorityWorld.getResource<NetSession>('net-session');
     authoritySession.attachAuthority(createAuthorityCoordinator(authorityWorld, profile));
+    replicaEndpoint.send(1 as PeerId, encodeReplicationPacket({
+      version: 2, kind: 'session-open', sessionId: 2 as never, epoch: 0, sequence: 0,
+    }, profile.limits).unwrap()).unwrap();
 
     authorityWorld.update(1).unwrap();
     expect(authoritySession.getRecoverySnapshot().pendingPackets).toBe(1);

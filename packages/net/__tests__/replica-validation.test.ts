@@ -72,9 +72,9 @@ describe('replica atomic validation', () => {
   });
 
   it('rejects unresolved cross-batch references without closing the transport owner', () => {
-    const [, replicaEndpoint] = createMemoryEndpointPair();
+    const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const world = new World();
-    const replica = createReplicaCoordinator(world, profile(), replicaEndpoint);
+    const replica = createReplicaCoordinator(world, profile());
     replicaEndpoint.poll();
     const result = applyReplicationPacket(replica, {
       version: 2,
@@ -90,7 +90,8 @@ describe('replica atomic validation', () => {
     if (result.ok) return;
     expect(result.error.code).toBe('remap-unresolved-reference');
     expect(replica.snapshot()).toEqual([]);
-    expect(replica.disconnect()).toBeUndefined();
+    expect(authorityEndpoint.send(2 as never, new Uint8Array([7])).ok).toBe(true);
+    expect(replicaEndpoint.poll()).toEqual([{ kind: 'message', peerId: 1, data: new Uint8Array([7]) }]);
   });
 
   it.each([

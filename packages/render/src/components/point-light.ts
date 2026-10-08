@@ -26,6 +26,7 @@
 // SpotLight; `range` semantics aligned with KHR_lights_punctual).
 
 import { defineComponent } from '@forgeax/engine-ecs';
+import { LIGHTING_CHANNELS_DEFAULT } from './lighting-channels';
 
 /**
  * Omnidirectional point light (KHR_lights_punctual `point` type).
@@ -57,6 +58,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   // resolves to color=[1, 1, 1], intensity=1, range=10.0.
  */
 export const PointLight = defineComponent('PointLight', {
+  // f64 preserves invalid author inputs until render validation (no u32 wrapping).
+  lightingChannels: { type: 'f64', default: LIGHTING_CHANNELS_DEFAULT },
   // color carries an explicit layer-2 default [1,1,1] (white); the array
   // layer-3 fallback is all-zero, so the default MUST be explicit (D-5).
   color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },

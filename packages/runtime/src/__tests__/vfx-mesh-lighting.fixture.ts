@@ -427,8 +427,8 @@ fn vfx_update(ctx: VfxUpdateContext, particle: ptr<function, VfxParticle>) {}`,
           world.update(1 / 60).unwrap();
           const submitted = await drawFrame();
           if (!submitted.ok) throw new Error(inspect({ error: submitted.error, events: errors }));
-          const observed = await renderer.observe(submitted.value, { include: ['draws'] });
-          if (!observed.ok) throw observed.error;
+          const completed = await submitted.value.completed;
+          if (!completed.ok) throw completed.error;
           // IBL precompute publishes asynchronously. Sequential material samples
           // must share active resources, not compare fallback with a later bake.
           if (

@@ -1,4 +1,5 @@
 import { copyPreparedAsset, validateAssetReferences } from '../prepare-payload.js';
+import { captureTerrainClosure } from '../terrain-closure.js';
 // @forgeax/engine-assets-runtime -- load-by-guid + pack-fetch collaboration module
 // (feat-20260705-runtime-tier2-decomposition M1 / w7, D-4). Free functions
 // taking the AssetRegistry instance as first param; logic byte-preserved from the
@@ -6,6 +7,7 @@ import { copyPreparedAsset, validateAssetReferences } from '../prepare-payload.j
 // + the DDC / pack-index / pack-file fetch + parse pipeline).
 
 import { decompressZstd } from '@forgeax/engine-codec';
+import { validateArtifactPath } from '@forgeax/engine-pack/artifact-path';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
 import { err, ok, type Result, type RhiError } from '@forgeax/engine-rhi';
@@ -23,15 +25,15 @@ import {
   type ImageError,
   type ImageMetadata,
   type LoadContext,
-  type LoaderAsyncResult,
   type MaterialAsset,
   materialChildForbiddenFields,
   type ParseErrorDetail,
 } from '@forgeax/engine-types';
 import type { AssetRegistry, ParsedPackFile } from '../asset-registry';
 import { packEnvelopeIssue } from '../internal/pack-envelope.js';
-import { bytesOf, jsonOf, type PackageReadFailure, readPackage } from '../internal/package-read.js';
+import { bytesOf, type PackageReadFailure, readPackage } from '../internal/package-read.js';
 import { validatePublicationReferences } from '../internal/publication-references.js';
+import { readRetainedPackJson } from '../internal/retained-pack-json.js';
 import {
   createMaterialLoader,
   type MaterialLoadError,
@@ -39,9 +41,9 @@ import {
   type MaterialPublication,
   type MaterialReady,
 } from '../material/loader';
-import { readArtifact } from './artifact-io';
+import { artifactUrl, readArtifact } from './artifact-io';
 import { type CatalogRecord, resolveCatalogAssetUrl } from './catalog';
-import { buildBreadcrumbHint, buildSceneChildContext } from './instantiate';
+import { buildBreadcrumbHint, createSceneChildContextLookup } from './instantiate';
 import { traceAssetLoadPhase } from './load-trace';
 import { resolveRuntimeProjection } from './runtime-projection';
 
@@ -117,6 +119,17 @@ export async function loadByGuid<T = Asset>(
   const result = await loadByGuidInternal<T>(registry, guid, parentContext, new Set());
   if (!isCurrent()) return invalidated(key);
   if (!result.ok) return result;
+  const loaded = result.value as Asset;
+  if (loaded.kind === 'terrain' && !captureTerrainClosure(registry, loaded)) {
+    registry.invalidate(key);
+    return err(
+      new AssetError({
+        code: 'asset-invalidated',
+        expected: 'an unchanged complete terrain closure',
+        hint: 'reload the entire terrain publication',
+      }),
+    );
+  }
   const after = validateRegistryReferences(registry, key);
   if (!after.ok) registry.invalidate(key);
   return after.ok ? result : after;
@@ -176,7 +189,7 @@ async function loadMaterialPublicationByGuid(
   const entry = await resolveCatalogEntry(registry, request.guid.toLowerCase());
   if (!isCurrent() || entry === undefined) return undefined;
   const fetcher = boundFetcher ?? registry.openPackage(entry.packageUrl);
-  let pack = registry.packFileCache.get(entry.packageUrl);
+  let pack = registry.packFiles.get(entry.packageUrl)?.value;
   if (pack === undefined) {
     const fetched = await fetchAndCachePackFile(
       registry,
@@ -185,62 +198,110 @@ async function loadMaterialPublicationByGuid(
       fetcher,
     );
     if (!isCurrent() || !fetched.ok) return undefined;
-    pack = registry.packFileCache.get(entry.packageUrl);
+    pack = registry.packFiles.get(entry.packageUrl)?.value;
   }
   const asset = pack?.assets.find(
     (candidate) => candidate.guid.toLowerCase() === request.guid.toLowerCase(),
   );
   if (asset === undefined || asset.kind !== 'material') return undefined;
-  const record = cookedRecordFromPayload(asset.payload);
+  let record = cookedRecordFromPayload(asset.payload);
   if (record === undefined) return undefined;
-  const parsed = validateCookedMaterialRecord(record);
-  if (!parsed.ok) return { guid: request.guid, record };
   const artifacts: Record<string, { bytes: Uint8Array; digest?: string }> = {};
   const descriptors = Object.entries(asset.artifacts ?? {});
-  for (const { artifact } of parsed.value.programs) {
-    if (artifacts[artifact.path] !== undefined) continue;
-    // Inline transport has no descriptors. Once a descriptor set is present,
-    // every program must be present there; embedded bytes cannot hide a missing file.
-    if (descriptors.length === 0) {
-      artifacts[artifact.path] = { bytes: artifact.bytes, digest: artifact.digest };
-      continue;
-    }
-    // Program paths are asset-local keys. The Pack descriptor owns the
-    // transport path, which may be relocated by the package finalizer.
-    const artifactKey = artifact.path;
-    const descriptor = asset.artifacts?.[artifactKey];
-    if (descriptor === undefined)
-      return {
-        guid: request.guid,
-        record,
-        artifactError: {
-          code: 'asset-artifact-missing',
-          expected: `one artifact descriptor for '${artifact.path}'`,
-        },
-      };
-    const artifactCacheKey = `${request.guid.toLowerCase()}\0${entry.packageUrl}\0${artifact.path}\0${artifact.digest}`;
-    const loaded = await registry.artifactCache.read(artifactCacheKey, () =>
-      readArtifact(
-        { packageUrl: entry.packageUrl, guid: request.guid, artifactKey, descriptor },
-        fetcher,
+  // Legacy inline-only records keep the original validation and byte route.
+  if (descriptors.length === 0) {
+    const parsed = validateCookedMaterialRecord(record);
+    if (!parsed.ok) return { guid: request.guid, record };
+    for (const { artifact } of parsed.value.programs)
+      artifacts[artifact.path] ??= { bytes: artifact.bytes, digest: artifact.digest };
+    return { guid: request.guid, record, artifacts };
+  }
+
+  // Compact production transport restores bytes before the existing complete
+  // record validator runs. Inline records retain their bytes for equality checks.
+  const rawPrograms = (record as { programs?: unknown }).programs;
+  if (!Array.isArray(rawPrograms)) return { guid: request.guid, record };
+  const artifactReads = new Map<string, ReturnType<typeof registry.artifactCache.read>>();
+  const pendingPrograms = rawPrograms
+    .map(async (rawProgram) => {
+      if (rawProgram === null || typeof rawProgram !== 'object') return undefined;
+      const program = rawProgram as Record<string, unknown>;
+      if (program.artifact === null || typeof program.artifact !== 'object') return undefined;
+      const artifact = program.artifact as Record<string, unknown>;
+      if (typeof artifact.path !== 'string' || typeof artifact.digest !== 'string')
+        return undefined;
+
+      // Start independent reads together; retain first-path deduplication and the
+      // original ordered publication/error decision below.
+      let pending = artifactReads.get(artifact.path);
+      if (pending === undefined) {
+        const artifactKey = artifact.path;
+        const descriptor = asset.artifacts?.[artifactKey];
+        if (descriptor === undefined)
+          return {
+            publication: {
+              guid: request.guid,
+              record,
+              artifactError: {
+                code: 'asset-artifact-missing',
+                expected: `one artifact descriptor for '${artifact.path}'`,
+              },
+            } satisfies MaterialPublication,
+          };
+        // Share the bound publication read with generic GUID loading. The
+        // descriptor and material record still verify the bytes independently;
+        // GUID invalidation clears both consumers' cached and pending reads.
+        const artifactCacheKey = `${request.guid.toLowerCase()}\0${entry.packageUrl}\0${artifactKey}`;
+        pending = registry.artifactCache.read(artifactCacheKey, () =>
+          readArtifact(
+            { packageUrl: entry.packageUrl, guid: request.guid, artifactKey, descriptor },
+            fetcher,
+          ),
+        );
+        artifactReads.set(artifact.path, pending);
+      }
+      const loaded = await pending;
+      if (!isCurrent()) return undefined;
+      if (!loaded.ok)
+        return {
+          publication: {
+            guid: request.guid,
+            record,
+            artifactError: {
+              code:
+                loaded.error.code === 'asset-artifact-integrity-mismatch'
+                  ? loaded.error.code
+                  : 'asset-artifact-missing',
+              expected: loaded.error.expected,
+              actual: loaded.error.detail.observed,
+            },
+          } satisfies MaterialPublication,
+        };
+      return { program, artifact, path: artifact.path, bytes: loaded.value };
+    })
+    .map((pending) =>
+      pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
       ),
     );
+  const hydratedPrograms: unknown[] = [];
+  for (const pending of pendingPrograms) {
+    const settled = await pending;
+    if ('error' in settled) throw settled.error;
     if (!isCurrent()) return undefined;
-    if (!loaded.ok)
-      return {
-        guid: request.guid,
-        record,
-        artifactError: {
-          code:
-            loaded.error.code === 'asset-artifact-integrity-mismatch'
-              ? loaded.error.code
-              : 'asset-artifact-missing',
-          expected: loaded.error.expected,
-          actual: loaded.error.detail.observed,
-        },
-      };
-    artifacts[artifact.path] = { bytes: loaded.value };
+    const hydrated = settled.value;
+    if (hydrated === undefined) return { guid: request.guid, record };
+    if ('publication' in hydrated) return hydrated.publication;
+    artifacts[hydrated.path] ??= { bytes: hydrated.bytes };
+    hydratedPrograms.push(
+      hydrated.artifact.bytes === undefined
+        ? { ...hydrated.program, artifact: { ...hydrated.artifact, bytes: hydrated.bytes } }
+        : hydrated.program,
+    );
   }
+  record = { ...(record as Record<string, unknown>), programs: hydratedPrograms };
+  if (!validateCookedMaterialRecord(record).ok) return { guid: request.guid, record };
   return { guid: request.guid, record, artifacts };
 }
 
@@ -396,63 +457,6 @@ async function loadByGuidInternal<T = Asset>(
       }),
     ),
   );
-}
-
-/**
- * feat-20260603-asset-import-loader-injection M1 / w6: load an
- * upstream-branch kind (texture / font) straight from its catalog entry
- * through the injected async loader, then register the produced POD. Replaces
- * the bespoke `loadTextureFromEntry` / `loadFontFromEntry` methods; the decode
- * / glyph-parse logic moved verbatim into the loader bodies (D-2 — loader is
- * pure of `registerWithGuid`, which stays here).
- */
-export async function loadFromUpstreamEntry<T = Asset>(
-  registry: AssetRegistry,
-  guidKey: string,
-  entry: {
-    packageUrl: string;
-    kind: string;
-    name?: string;
-    metadata?: ImageMetadata | undefined;
-  },
-): Promise<Result<T, AssetError | ImageError | RhiError>> {
-  const loader = registry.loaders.get(entry.kind);
-  if (loader === undefined) {
-    return err(
-      new AssetError({
-        code: 'loader-not-registered',
-        expected: `a loader registered for kind '${entry.kind}'`,
-        hint: ASSET_ERROR_HINTS['loader-not-registered'],
-        detail: { kind: entry.kind, registeredKinds: registry.loaders.registeredKinds() },
-      }),
-    );
-  }
-  const isCurrent = currentLoad(registry, guidKey);
-  const out = loader.load(
-    { ...entry, guidKey },
-    undefined,
-    makeLoadContext(registry, registry.openPackage(entry.packageUrl)),
-  );
-  // Upstream-branch loaders are async (Promise<LoaderAsyncResult>).
-  const result = (await out) as LoaderAsyncResult;
-  if (!isCurrent()) return invalidated(guidKey);
-  if (!result.ok) {
-    return err(result.error as AssetError | ImageError | RhiError);
-  }
-  const guid = AssetGuid.parse(guidKey);
-  if (!guid.ok) {
-    return err(
-      new AssetError({
-        code: 'asset-parse-failed',
-        expected: `valid GUID ${guidKey}`,
-        hint: ASSET_ERROR_HINTS['asset-parse-failed'],
-      }),
-    );
-  }
-  return registry.catalog(guid.value, result.value) as Result<
-    T,
-    AssetError | ImageError | RhiError
-  >;
 }
 
 /**
@@ -694,67 +698,6 @@ export async function ddcLoad<T = Asset>(
   // carry rich AssetRef[] keep their edge metadata end-to-end.
   const packRefs: readonly AssetRef[] = packResult.value.refs.map((g) => ({ guid: g }));
 
-  // feat-20260622 M5 / w17 (D-8, R5): the former material parent preload
-  // "Path B" (an independent early-return that loaded the parent BEFORE the
-  // unified for-loop and carried the precise breadcrumb hint `loading parent
-  // material X for child Y`) is folded into the unified envelope.refs
-  // for-loop. The parent GUID already rides on the material envelope.refs
-  // (gltf-importer w5 writes it; the on-disk pack refs[] carries it as a
-  // GUID string -> packRefs above projects it), so the unified for-loop
-  // recurses on it like any other edge. Here we only resolve the parent
-  // GUID -> AssetGuid and stamp `parent` onto the asset payload (the
-  // renderer-facing field read by walkMaterialPassesOverSharedRefs); the
-  // parent EDGE load + the `loading parent material X for child Y` breadcrumb
-  // + the not-a-material guard all move into the for-loop's
-  // sourceField.fieldName==='parent' / parent-edge branch below. No early
-  // return: the material registers (register-before-recurse) and its parent
-  // edge loads through the same unified path as texture / scene edges.
-  let assetToRegister: Asset = asset;
-  let parentGuidKey =
-    asset.kind === 'material' && asset.parent !== undefined
-      ? AssetGuid.format(asset.parent).toLowerCase()
-      : undefined;
-  if (
-    asset.kind === 'material' &&
-    'parentGuid' in (asset as unknown as Record<string, unknown>) &&
-    typeof (asset as unknown as Record<string, unknown>).parentGuid === 'string'
-  ) {
-    const parentGuidStr = (asset as unknown as MaterialAsset & { parentGuid: string }).parentGuid;
-    const parentGuid = AssetGuid.parse(parentGuidStr);
-    if (!parentGuid.ok) {
-      return err(
-        new AssetError({
-          code: 'asset-parse-failed',
-          expected: `valid parent GUID for child ${guidKey}`,
-          hint: `parent GUID '${parentGuidStr}' is not a valid UUID format`,
-        }),
-      );
-    }
-    parentGuidKey = parentGuidStr.toLowerCase();
-    const rawMaterial = asset as unknown as Record<string, unknown>;
-    const childForValidation = {
-      ...rawMaterial,
-      parent: parentGuid.value,
-    } as unknown as MaterialAsset;
-    const forbidden = materialChildForbiddenFields(childForValidation);
-    if (forbidden.length > 0) {
-      return err(
-        new AssetError({
-          code: 'asset-parse-failed',
-          expected: `parent-bearing material ${guidKey} to contain only parent and values`,
-          hint: 'remove root-owned colorSpace, passes, and parameters from the child payload',
-          detail: { field: 'material-child-contract', got: forbidden },
-        }),
-      );
-    }
-    const values = rawMaterial.values;
-    assetToRegister = {
-      kind: 'material',
-      ...(values !== undefined ? { values } : {}),
-      parent: parentGuid.value,
-    } as unknown as MaterialAsset;
-  }
-
   registry.loadState.begin(
     guidKey,
     registry.loaders.referencePolicy(asset.kind) === 'deferred'
@@ -770,13 +713,20 @@ export async function ddcLoad<T = Asset>(
   // Promise for A can be fulfilled. The inFlight entry in `loadByGuid` is
   // the second line of defense — it catches concurrent same-GUID calls
   // before the asset is catalogued.
-  const registerResult = registerParsedAsset<T>(registry, guid, assetToRegister, guidKey, packRefs);
+  const registerResult = registerParsedAsset<T>(registry, guid, asset, guidKey, packRefs);
   if (!registerResult.ok) {
     purgeFailedLoad(registry, guidKey, entry.packageUrl, registerResult.error);
     return registerResult;
   }
   const registeredPayload = registerResult.value;
   registry.loadState.resolveAsset(guidKey, registeredPayload);
+  // The material parent edge loads through the unified refs loop below;
+  // `catalog` already normalized a wire `parentGuid` into `parent`.
+  const registeredAsset = registeredPayload as Asset;
+  const parentGuidKey =
+    registeredAsset.kind === 'material' && registeredAsset.parent !== undefined
+      ? AssetGuid.format(registeredAsset.parent).toLowerCase()
+      : undefined;
 
   // feat-20260622 M4 / w12 (D-5): the recursion source is the just-catalogued
   // envelope's refs[]. The for-loop is kind-agnostic
@@ -790,6 +740,8 @@ export async function ddcLoad<T = Asset>(
   const refs: readonly AssetRef[] =
     registry.loaders.referencePolicy(asset.kind) === 'deferred' ? [] : (envelope?.refs ?? []);
   if (refs.length > 0) {
+    const sceneChildContext =
+      asset.kind === 'scene' ? createSceneChildContextLookup(registry, asset) : undefined;
     const subResults = await Promise.all(
       refs.map((ref) => {
         const refGuidKey = ref.guid.toLowerCase();
@@ -842,8 +794,8 @@ export async function ddcLoad<T = Asset>(
               (ref.sourceField.arrayIndex !== undefined ? `[${ref.sourceField.arrayIndex}]` : '');
             childContext.sourceField = ref.sourceField;
           }
-        } else if (asset.kind === 'scene') {
-          childContext = buildSceneChildContext(registry, asset, refGuidKey, guidKey);
+        } else if (sceneChildContext !== undefined) {
+          childContext = sceneChildContext(refGuidKey, guidKey);
         }
         // feat-20260622 M5 / w17 (D-8): the material parent edge. Identify it
         // by either the rich dev-path marker (sourceField.fieldName==='parent')
@@ -979,6 +931,15 @@ export async function ddcLoad<T = Asset>(
   }
 
   registry.loadState.promoteReady(guidKey);
+  if (asset.kind === 'terrain' && !captureTerrainClosure(registry, asset)) {
+    const error = new AssetError({
+      code: 'asset-invalidated',
+      expected: 'the complete terrain closure adopted with this root',
+      hint: 'reload the whole terrain publication after repairing partial dependency replacement',
+    });
+    purgeFailedLoad(registry, guidKey, entry.packageUrl, error);
+    return err(error);
+  }
   traceAssetLoadPhase('catalog.promote-ready.complete', {
     guid: guidKey,
     packageUrl: entry.packageUrl,
@@ -992,7 +953,6 @@ export async function ddcLoad<T = Asset>(
     purgeFailedLoad(registry, guidKey, entry.packageUrl, error);
     return err(error);
   }
-  const registeredAsset = registeredPayload as Asset;
   if (registeredAsset.kind === 'material') {
     const publication = await loadMaterialPublicationByGuid(
       registry,
@@ -1046,23 +1006,26 @@ async function loadPackV2Asset(
       refs: registry.loadState.get(guidKey)?.refs ?? [],
     });
   traceAssetLoadPhase('pack.v2.start', { guid: guidKey, packageUrl });
-  const cached = registry.packFileCache.get(packageUrl);
+  const cached = registry.packFiles.get(packageUrl)?.value;
   if (cached === undefined) {
-    const inFlight = registry.packFileInFlight.get(packageUrl);
+    const inFlight = registry.packFiles.get(packageUrl)?.pending;
     if (inFlight !== undefined) await inFlight.catch(() => undefined);
     if (!isCurrent()) return invalidated(guidKey);
     traceAssetLoadPhase('pack.fetch.start', { guid: guidKey, packageUrl });
     const fetched =
-      registry.packFileCache.get(packageUrl) === undefined
+      registry.packFiles.get(packageUrl)?.value === undefined
         ? await fetchAndCachePackFile(registry, packageUrl, guidKey, fetcher)
         : undefined;
     if (!isCurrent()) return invalidated(guidKey);
     traceAssetLoadPhase('pack.fetch.complete', {
       guid: guidKey,
       packageUrl,
-      detail: { cached: registry.packFileCache.has(packageUrl), ok: fetched?.ok ?? true },
+      detail: {
+        cached: registry.packFiles.get(packageUrl)?.value !== undefined,
+        ok: fetched?.ok ?? true,
+      },
     });
-    if (registry.packFileCache.get(packageUrl) === undefined) {
+    if (registry.packFiles.get(packageUrl)?.value === undefined) {
       if (fetched === undefined) {
         return err(
           new AssetError({
@@ -1075,7 +1038,7 @@ async function loadPackV2Asset(
       return fetched as unknown as Result<{ asset: Asset; refs: readonly string[] }, AssetError>;
     }
   }
-  const pack = registry.packFileCache.get(packageUrl);
+  const pack = registry.packFiles.get(packageUrl)?.value;
   if (pack?.schemaVersion !== '2.0.0') return undefined;
   const asset = pack.assets.find((candidate) => candidate.guid.toLowerCase() === guidKey);
   traceAssetLoadPhase('pack.parse.complete', {
@@ -1092,17 +1055,54 @@ async function loadPackV2Asset(
       }),
     );
   }
+  const streams: Record<string, { descriptor: ArtifactDescriptor; url: string }> = {};
   const artifacts: Record<string, { descriptor: ArtifactDescriptor; bytes: Uint8Array }> = {};
-  for (const [artifactKey, descriptor] of Object.entries(asset.artifacts ?? {})) {
-    const cacheKey = `${guidKey}\0${packageUrl}\0${artifactKey}`;
-    const artifact = await registry.artifactCache.read(cacheKey, () =>
-      readArtifact({ packageUrl, guid: guidKey, artifactKey, descriptor }, fetcher),
+  const pendingArtifacts = Object.entries(asset.artifacts ?? {})
+    .map(async ([artifactKey, descriptor]) => {
+      if (descriptor.delivery === 'stream')
+        return { stream: true as const, artifactKey, descriptor };
+      const cacheKey = `${guidKey}\0${packageUrl}\0${artifactKey}`;
+      const artifact = await registry.artifactCache.read(cacheKey, () =>
+        readArtifact({ packageUrl, guid: guidKey, artifactKey, descriptor }, fetcher),
+      );
+      return { stream: false as const, artifactKey, descriptor, artifact };
+    })
+    .map((pending) =>
+      pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      ),
     );
+  for (const pending of pendingArtifacts) {
+    const settled = await pending;
+    if ('error' in settled) throw settled.error;
+    const loadedArtifact = settled.value;
+    const { artifactKey, descriptor } = loadedArtifact;
+    if (loadedArtifact.stream) {
+      const path = validateArtifactPath(descriptor.path, {
+        packageRoot: packageUrl,
+        guid: guidKey,
+        artifactKey,
+      });
+      if (!path.ok)
+        return err(
+          new AssetError({
+            code: 'asset-parse-failed',
+            expected: path.error.expected,
+            hint: path.error.hint,
+            detail: { sourcePath: `${packageUrl}#${artifactKey}` },
+          }),
+        );
+      streams[artifactKey] = { descriptor, url: artifactUrl(packageUrl, path.value) };
+      continue;
+    }
     if (!isCurrent()) return invalidated(guidKey);
+    const artifact = loadedArtifact.artifact;
     if (!artifact.ok)
       return artifact as unknown as Result<{ asset: Asset; refs: readonly string[] }, AssetError>;
     artifacts[artifactKey] = { descriptor, bytes: artifact.value };
   }
+  if (!isCurrent()) return invalidated(guidKey);
   traceAssetLoadPhase('loader.load.start', { guid: guidKey, packageUrl });
   const loaded = await registry.loaders.loadPack(
     {
@@ -1111,6 +1111,7 @@ async function loadPackV2Asset(
       payload: structuredClone(asset.payload),
       refs: asset.refs ?? [],
       artifacts,
+      streams,
     },
     makeLoadContext(registry, fetcher),
   );
@@ -1142,7 +1143,11 @@ function purgeFailedLoad(
   for (const key of doomed) {
     if (registry.assetCatalog.delete(key)) registry.catalogEpoch++;
   }
-  registry.packFileCache.delete(packageUrl);
+  const state = registry.packFiles.get(packageUrl);
+  if (state !== undefined) {
+    delete state.value;
+    if (state.pending === undefined) registry.packFiles.delete(packageUrl);
+  }
 }
 
 /**
@@ -1247,9 +1252,14 @@ export async function transportOrFail<T = Asset>(
     await registry.packIndexCachePatchQueue;
     if (!isCurrent()) return invalidated(guidKey);
   } else {
-    // No inline rows -- fall back to a full pack-index re-read so the freshly
-    // imported DDC entry is visible (legacy / non-row-returning transports).
+    // No inline rows -- re-read the whole pack-index so the freshly imported DDC
+    // entry is visible (legacy / non-row-returning transports). Dropping the
+    // cache first keeps the import's own row change from invalidating this load;
+    // forcing the read queues it behind any in-flight read, whose pre-import
+    // response must not be the index this load resolves against.
     registry.packIndexCache = undefined;
+    await registry.refreshCatalog();
+    if (!isCurrent()) return invalidated(guidKey);
   }
   const entry = await resolveCatalogEntry(registry, guidKey);
   if (!isCurrent()) return invalidated(guidKey);
@@ -1298,46 +1308,6 @@ export function registerParsedAsset<T = Asset>(
 }
 
 /**
- * Fetch a .pack.json file, find the asset entry matching guidKey, and
- * reconstruct the Asset from its payload.
- */
-/**
- * bug-20260610: fetch one pack file and return the raw asset entry without
- * parsing. Used by `loadByGuidProd` for material kinds so the caller can
- * recursively preload `refs[]` (texture sub-assets) BEFORE the synchronous
- * materialLoader runs and rewrites values handle fields to their refs[]
- * GUID strings (feat-20260614 M8 / D-19: GUID verbatim, no handle minting).
- */
-export async function fetchPackEntry(
-  registry: AssetRegistry,
-  packageUrl: string,
-  guidKey: string,
-): Promise<
-  Result<{ kind: string; payload: Record<string, unknown>; refs?: string[] }, AssetError>
-> {
-  const parsed = await readPackFile(registry, packageUrl);
-  if (!parsed.ok) return parsed;
-  const packFile = parsed.value;
-  const assetEntry = (packFile.assets ?? []).find(
-    (a) => a.guid.toLowerCase() === guidKey.toLowerCase(),
-  );
-  if (assetEntry === undefined) {
-    return err(
-      new AssetError({
-        code: 'asset-not-found',
-        expected: `GUID ${guidKey} present in pack file ${packageUrl}`,
-        hint: ASSET_ERROR_HINTS['asset-not-found'],
-      }),
-    );
-  }
-  return ok({
-    kind: assetEntry.kind,
-    payload: assetEntry.payload,
-    ...(assetEntry.refs !== undefined ? { refs: assetEntry.refs } : {}),
-  });
-}
-
-/**
  * Fetch one pack file, locate the requested asset entry, and either parse it
  * inline or expose the entry to the caller (for kinds that need to preload
  * `refs[]` BEFORE running the loader — currently 'material', whose
@@ -1345,8 +1315,8 @@ export async function fetchPackEntry(
  * (feat-20260614 M8 / D-19: GUID verbatim, no handle minting at load time)).
  *
  * bug-20260610 Fix B (M3 / D-4): the fetch+parse result is cached per
- * `packageUrl` in `packFileCache`; concurrent calls for the same URL share
- * a single in-flight promise via `packFileInFlight`. Only the raw parsed
+ * `packageUrl` in `packFiles`; concurrent calls for the same URL share
+ * a single in-flight promise via `packFiles`. Only the raw parsed
  * body is cached — `parseAssetPayload` still runs per-call (CON-2).
  */
 export async function fetchPackFile(
@@ -1356,7 +1326,7 @@ export async function fetchPackFile(
   _kind: string,
 ): Promise<Result<{ asset: Asset; refs: readonly string[] }, AssetError>> {
   // ── cache hit ───────────────────────────────────────────────────────
-  const cached = registry.packFileCache.get(packageUrl);
+  const cached = registry.packFiles.get(packageUrl)?.value;
   if (cached !== undefined) {
     const assetEntry = cached.assets.find((a) => a.guid.toLowerCase() === guidKey.toLowerCase());
     if (assetEntry === undefined) {
@@ -1372,7 +1342,7 @@ export async function fetchPackFile(
   }
 
   // ── in-flight dedup ─────────────────────────────────────────────────
-  const inFlight = registry.packFileInFlight.get(packageUrl);
+  const inFlight = registry.packFiles.get(packageUrl)?.pending;
   if (inFlight !== undefined) {
     try {
       const packFile = await inFlight;
@@ -1497,7 +1467,7 @@ async function readPackFile(
         detail: { field, value: packageUrl, reason: 'invalid Pack envelope' },
       }),
     );
-  const read = await readPackage(fetcher, packageUrl, jsonOf);
+  const read = await readPackage(fetcher, packageUrl, readRetainedPackJson);
   if (!read.ok) {
     return read.error.malformed ? invalid('JSON') : err(packageReadFailed(packageUrl, read.error));
   }
@@ -1532,9 +1502,9 @@ async function readPackFile(
  * Fetch a pack file from the network, parse the JSON body, store the
  * result in the cache, and return the requested asset entry.
  *
- * Registers the in-flight promise in `packFileInFlight` so concurrent
+ * Registers the in-flight promise in `packFiles` so concurrent
  * callers share a single fetch. On success the body moves to
- * `packFileCache`; on failure the in-flight entry is removed so
+ * `packFiles`; on failure the in-flight entry is removed so
  * subsequent retries re-fetch (D-7).
  */
 export async function fetchAndCachePackFile(
@@ -1549,19 +1519,17 @@ export async function fetchAndCachePackFile(
     return result.value;
   });
 
-  registry.packFileInFlight.set(packageUrl, fetchPromise);
+  const state = registry.packFiles.get(packageUrl) ?? {};
+  state.pending = fetchPromise;
+  registry.packFiles.set(packageUrl, state);
 
   try {
     const packFile = await fetchPromise;
     if (!isCurrent()) {
-      if (registry.packFileInFlight.get(packageUrl) === fetchPromise)
-        registry.packFileInFlight.delete(packageUrl);
+      registry.settlePackFile(packageUrl, fetchPromise);
       return invalidated(guidKey);
     }
-    if (registry.packFileInFlight.get(packageUrl) === fetchPromise) {
-      registry.packFileCache.set(packageUrl, packFile);
-      registry.packFileInFlight.delete(packageUrl);
-    }
+    registry.settlePackFile(packageUrl, fetchPromise, packFile);
 
     const assetEntry = packFile.assets.find((a) => a.guid.toLowerCase() === guidKey.toLowerCase());
     if (assetEntry === undefined) {
@@ -1575,9 +1543,7 @@ export async function fetchAndCachePackFile(
     }
     return parseAndReturnAsset(registry, assetEntry);
   } catch (e) {
-    if (registry.packFileInFlight.get(packageUrl) === fetchPromise) {
-      registry.packFileInFlight.delete(packageUrl);
-    }
+    registry.settlePackFile(packageUrl, fetchPromise);
     if (e instanceof AssetError) {
       return err(e);
     }

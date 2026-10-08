@@ -1,6 +1,10 @@
 import { World } from '@forgeax/engine-ecs';
 import { createStateProjection } from '@forgeax/engine-ecs/projection';
-import { createBoxGeometry } from '@forgeax/engine-geometry';
+import {
+  buildMeshCardLayout,
+  buildVisibilityDistanceField,
+  createBoxGeometry,
+} from '@forgeax/engine-geometry';
 import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { expect, test } from 'vitest';
 import { resolveAssetHandle } from '../resolve-asset-handle';
@@ -67,9 +71,27 @@ test('content rebind and generation replacement do not leave values on the old a
   expect(resolveAssetHandle<MaterialAsset>(world, b).unwrap().values?.roughness).toBe(0.5);
 });
 
-test('shared numeric mesh writes isolate aliases and regenerate matching attributes and bounds', () => {
+test('shared numeric mesh writes isolate aliases and retire static attachments until removal', async () => {
   const world = new World();
-  const base = createBoxGeometry(1, 1, 1).unwrap();
+  const geometry = createBoxGeometry(1, 1, 1).unwrap();
+  const positions = geometry.attributes.position;
+  if (!(positions instanceof Float32Array) || !geometry.indices)
+    throw new Error('expected indexed box');
+  const base: MeshAsset = {
+    ...geometry,
+    cardLayout: (
+      await buildMeshCardLayout(positions, geometry.indices, { resolution: 8 })
+    ).unwrap(),
+    distanceField: {
+      ...(
+        await buildVisibilityDistanceField(positions, geometry.indices, {
+          voxelSize: 0.5,
+          triangleSidedness: new Uint8Array(geometry.indices.length / 3),
+        })
+      ).unwrap(),
+      sectionSidedness: geometry.submeshes.map(() => 0 as const),
+    },
+  };
   const handle = world.allocSharedRef('MeshAsset', base);
   const input = base.vertices.slice();
   for (let row = 0; row < input.length; row += 12) input[row] = (input[row] ?? 0) * 2;
@@ -84,6 +106,10 @@ test('shared numeric mesh writes isolate aliases and regenerate matching attribu
   expect(first.vertices).toEqual(expected);
   expect(first.aabb?.[0]).toBe((base.aabb?.[0] ?? 0) * 2);
   expect(first.aabb?.[3]).toBe((base.aabb?.[3] ?? 0) * 2);
+  expect(first).not.toHaveProperty('distanceField');
+  expect(first).not.toHaveProperty('cardLayout');
+  expect(base.distanceField).toBeDefined();
+  expect(base.cardLayout).toBeDefined();
   world.despawn(content).unwrap();
   expect(resolveAssetHandle<MeshAsset>(world, handle).unwrap()).toBe(base);
 });

@@ -138,7 +138,7 @@ describe('plugin Pack source contract', () => {
     const parsed = parsePackSourceJson(document).unwrap();
     expect(parsed.format).toBe('direct');
     if (parsed.format !== 'direct') throw new Error('expected direct');
-    const projected = projectDirectPackJson(parsed).unwrap();
+    const projected = projectDirectPackJson(parsed);
     expect(projected.assets[0]?.refs).toEqual([guid]);
     expect(projected.assets[0]?.guid).not.toBe(guid);
     expect(

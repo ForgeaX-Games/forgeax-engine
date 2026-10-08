@@ -12,9 +12,16 @@ import type {
 } from '@forgeax/engine-rhi';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
 import { digestBytes } from '../protocol/codec';
+import { EVENT_SEMANTICS } from '../protocol/event-semantics';
 import { computeTextureLayout, projectTextureExtent, textureBlockLayout } from '../texel-layout';
-import type { HandleId, RhiCallEvent, RhiCapsRecorded, Tape } from '../types';
-import { _getCreateEventReferencedHandleIds } from './closure';
+import type {
+  HandleId,
+  RecordedBlasBuild,
+  RecordedTlasBuild,
+  RhiCallEvent,
+  RhiCapsRecorded,
+  Tape,
+} from '../types';
 
 const SNAPSHOT_TIMEOUT_MS = 30_000;
 
@@ -155,7 +162,6 @@ enum RecorderState {
   Armed = 'armed',
   Snapshotting = 'snapshotting',
   Recording = 'recording',
-  Finalizing = 'finalizing',
   Error = 'error',
 }
 
@@ -217,6 +223,16 @@ interface RecorderInternal {
   handleMap: WeakMap<object, HandleId>;
   textureViewHandleMap: WeakMap<TextureView, HandleId>;
   /**
+   * Bind-group events whose external texture had no snapshot when created.
+   * A browser may return the same GPUExternalTexture for one VideoFrame, so a
+   * bind group cached before capture is patched to the snapshot view once the
+   * captured frame imports that texture again.
+   */
+  pendingExternalBindings: WeakMap<
+    object,
+    { readonly event: RhiCallEvent; readonly index: number }[]
+  >;
+  /**
    * @internal
    * Bootstrap create-event table. Populated by registerHandle when called
    * with a create event payload — records every create* (buffer, texture,
@@ -227,6 +243,7 @@ interface RecorderInternal {
   bootstrapCreates: Map<HandleId, RhiCallEvent>;
   /** Handles whose initialData event was emitted by the current capture. */
   snapshotSeededHandles: Set<HandleId>;
+  omittedSeeds: Set<HandleId>;
   /** Generation token invalidating async snapshot work after timeout/error. */
   snapshotGeneration: number;
   /** Last observable progress of the current/most recent resource snapshot. */
@@ -250,7 +267,8 @@ interface RecorderInternal {
   frameIdx: number;
   bootstrap: boolean;
   recordedCaps: RhiCapsRecorded | undefined;
-  onFrameEndUnsubscribe?: (() => void) | undefined;
+  /** Last successful canvas configure observed by the recorder proxy. */
+  canvasConfiguration: Pick<RhiCapsRecorded, 'canvasFormat' | 'canvasColorSpace'> | undefined;
   /** true when the current recording is valid. */
   valid: boolean;
   /**
@@ -261,6 +279,22 @@ interface RecorderInternal {
    * a separate channel.
    */
   capturedDevice: RhiDevice | undefined;
+  /**
+   * @internal
+   * Frame-scoped recorded resources (external-texture snapshots) destroyed at
+   * the next frame end; an imported external texture expires with its frame.
+   */
+  frameEndReleases: (() => void)[];
+  /**
+   * @internal
+   * BLAS/TLAS builds recorded inside a capture. They become bootstrap build
+   * state only once that capture's prefix is no longer assembled (next arm or
+   * next idle build), so the current tape keeps its capture-start state.
+   */
+  deferredAccelerationStructureBuilds: {
+    readonly blas: readonly RecordedBlasBuild[];
+    readonly tlas: readonly RecordedTlasBuild[];
+  }[];
 }
 
 function snapshotProgressDetail(
@@ -455,7 +489,7 @@ function reconcileSwapchainViewFormats(s: RecorderInternal): void {
 
 function hasBootstrapDependency(s: RecorderInternal, handleId: HandleId): boolean {
   for (const event of s.bootstrapCreates.values()) {
-    if (_getCreateEventReferencedHandleIds(event).includes(handleId)) return true;
+    if (EVENT_SEMANTICS[event.kind].read(event).includes(handleId)) return true;
   }
   return false;
 }
@@ -498,6 +532,8 @@ export interface DebugRhiInstance extends RhiInstance {
   transitionToError(): void;
   /** Clear error state to idle, allowing re-arm. */
   disposeError(): void;
+  /** Drops the finalized frame's events and blobs; the assembled tape owns them now. */
+  releaseTape(): void;
   /**
    * Snapshot a resource's GPU bytes into the tape as an initialData event.
    *
@@ -520,7 +556,10 @@ export interface DebugRhiInstance extends RhiInstance {
    * success. Returns the first snapshot failure as a Result so the caller can
    * fail fast rather than record a partial seed set.
    */
-  snapshotAllLiveResources(timeoutMs?: number): Promise<Result<void, RhiDebugError>>;
+  snapshotAllLiveResources(
+    timeoutMs?: number,
+    maxResourceBytes?: number,
+  ): Promise<Result<void, RhiDebugError>>;
   /**
    * @internal
    * Append an event from a standalone wrapper (e.g. `wrapCreateShaderModule`)
@@ -547,6 +586,14 @@ export interface DebugRhiInstance extends RhiInstance {
   pushExternalCreateEvent(handle: object, kind: string, event: RhiCallEvent): HandleId;
   /**
    * @internal
+   * Record the canvas storage format and presented color space observed after
+   * a successful context configure; the tape header carries the latest one.
+   */
+  recordCanvasConfiguration(
+    configuration: Pick<RhiCapsRecorded, 'canvasFormat' | 'canvasColorSpace'>,
+  ): void;
+  /**
+   * @internal
    * Drop all device-bound recorder state after the host observes a real
    * device loss. A tape recorded against the lost device cannot seed a fresh
    * device, so the next capture must start from the rebuilt resource graph.
@@ -563,6 +610,8 @@ export interface DebugRhiInstance extends RhiInstance {
   bootstrapCreatesSize(): number;
   /** @internal Return the create-event identities owned by the bootstrap registry. */
   bootstrapEvents(): readonly RhiCallEvent[];
+  /** @internal Live resources excluded from the current capture's seed scope. */
+  omittedSeeds(): ReadonlySet<HandleId>;
   /**
    * @internal
    * Read-only view of the descriptor registry keyed by handleId. Test-only
@@ -584,6 +633,16 @@ export interface DebugRhiInstance extends RhiInstance {
 // ============================================================================
 // Type for standalone createShaderModule function (from rhi-webgpu)
 // ============================================================================
+
+/** Native identity exposed by the recorder device at backend-only boundaries. */
+export interface RecorderDevice extends RhiDevice {
+  /** @internal Backend identity; never part of the portable device contract. */
+  readonly _realDevice: RhiDevice;
+}
+
+export function recorderDeviceIdentity(device: RhiDevice): RhiDevice | undefined {
+  return (device as Partial<RecorderDevice>)._realDevice;
+}
 
 export type CreateShaderModuleFn = (
   device: RhiDevice,

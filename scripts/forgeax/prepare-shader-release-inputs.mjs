@@ -1,13 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   engineShaderSourceDigest,
   PACKAGED_SOURCE_RECORD,
 } from '../../packages/vite-plugin-shader/dist/source-digest.mjs';
 import { reusableSharedShader, sharedShaderInputFingerprint } from '../lib/shared-build-cache.mjs';
 
-const root = resolve(dirname(new URL(import.meta.url).pathname), '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sourceRoot = resolve(root, 'packages/shader/src');
 const inputIndex = process.argv.indexOf('--input');
 const inputRoot = resolve(
@@ -39,25 +40,39 @@ if (sharedIndex >= 0 && !process.argv[sharedIndex + 1]) {
 const shaderManifests = new Map();
 if (process.argv.includes('--build')) {
   for (const profile of profiles) {
-    if (sharedIndex >= 0 && process.env.FORGEAX_BUILD_NO_TASK_CACHE !== '1') {
+    if (process.env.FORGEAX_BUILD_NO_TASK_CACHE !== '1') {
       const inputFingerprint = sharedShaderInputFingerprint(root, {
         pointShadows: !profileFlags[profile].includes('--no-point-shadows'),
         hdrpSsao: !profileFlags[profile].includes('--no-hdrp-ssao'),
       });
-      const shared = reusableSharedShader(
-        root,
-        resolve(root, process.argv[sharedIndex + 1]),
-        inputFingerprint,
-        (reason) =>
-          console.log(
-            `[shader-profile] shared ${profile} unavailable: ${reason}; using source producer`,
+      const candidates = [
+        ...(sharedIndex >= 0 ? [['shared', resolve(root, process.argv[sharedIndex + 1])]] : []),
+        // Core transfers this producer's ordinary receipt and payload inside
+        // engine-dist. A mismatched point input cannot satisfy base admission.
+        [
+          'core',
+          resolve(
+            root,
+            'packages/vite-plugin-shader/dist/engine-inputs/ci',
+            profile,
+            'manifest.json',
           ),
-      );
-      if (shared !== null) {
-        shaderManifests.set(profile, shared);
-        console.log(`[shader-profile] verified shared ${profile}; compile count=0`);
-        continue;
+        ],
+        ['cached', resolve(inputRoot, profile, 'manifest.json')],
+      ];
+      for (const [kind, path] of candidates) {
+        const shared = reusableSharedShader(root, path, inputFingerprint, (reason) =>
+          console.log(
+            `[shader-profile] ${kind} ${profile} unavailable: ${reason}; trying next input`,
+          ),
+        );
+        if (shared !== null) {
+          shaderManifests.set(profile, shared);
+          console.log(`[shader-profile] verified ${kind} ${profile}; compile count=0`);
+          break;
+        }
       }
+      if (shaderManifests.has(profile)) continue;
     }
     // Inherit the caller's process group so the browser gate's existing
     // supervisor also owns this compiler and its children on cancellation.

@@ -2,6 +2,8 @@ import { rendererCrashProbe } from './render-worker-recovery-fixture';
 import { HANDLE_CUBE, HANDLE_QUAD } from '@forgeax/engine-assets-runtime';
 import {
   Camera,
+  DirectionalLight,
+  PointLight,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -97,7 +99,22 @@ const entry: ExecutionBootstrapEntry = (data) => {
             mips: { kind: 'none' },
           };
           let update: () => void;
-          if (mode === 'video') {
+          if (mode === 'lighting-channels') {
+            const material = world.allocSharedRef('MaterialAsset', Materials.standard({
+              baseColor: [0.5, 0.5, 0.5, 1], roughness: 0.7,
+              emissive: [0.02, 0.02, 0.02], emissiveIntensity: 1,
+            }));
+            const receiver = world.spawn(
+              { component: Transform, data: { scale: [3, 3, 0.2] } },
+              { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+              { component: MeshRenderer, data: { materials: [material], lightingChannels: 2 } },
+            ).unwrap();
+            world.spawn({ component: DirectionalLight, data: { direction: [0, 0, -1],
+              intensity: 3, castShadow: false, lightingChannels: 0x80000001 } }).unwrap();
+            world.spawn({ component: Transform, data: { pos: [0, 2, 4] } },
+              { component: PointLight, data: { intensity: 0.2, range: 10 } }).unwrap();
+            update = () => world.set(receiver, MeshRenderer, { lightingChannels: 0x80000000 }).unwrap();
+          } else if (mode === 'video') {
             assets.catalog(atlasGuid, { kind: 'video', url: 'native-frame-fixture.webm' }).unwrap();
             const source = new OffscreenCanvas(16, 16);
             const context = source.getContext('2d');

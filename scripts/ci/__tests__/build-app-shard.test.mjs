@@ -52,7 +52,7 @@ test('CI publishes one catalog projection and leaves app publication to each app
   assert.doesNotMatch(planner, /catalog-only.*env|env: \{[\s\S]*process\.env/);
 });
 
-test('shared producer builds both plugin dependency closures before invoking Vite', () => {
+test('shared producer builds the union of all plugin closures once before invoking Vite', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   const producer = workflow.slice(
     workflow.indexOf('  shared-app-inputs:'),
@@ -60,21 +60,14 @@ test('shared producer builds both plugin dependency closures before invoking Vit
   );
   const build = producer.indexOf('name: Build shared producer plugin dependencies');
   const invoke = producer.indexOf('node scripts/ci/build-shared-app-inputs.mjs');
-  assert.ok(build >= 0, 'shared producer must build plugin dependencies');
-  assert.ok(invoke > build, 'shared producer must build plugins before invoking the producer');
-  assert.match(
-    producer.slice(build, invoke),
-    /pnpm --filter @forgeax\/engine-vite-plugin-pack\.\.\. build/,
-  );
-  assert.match(
-    producer.slice(build, invoke),
-    /pnpm --filter @forgeax\/engine-vite-plugin-shader\.\.\. build/,
-  );
-  assert.match(
-    producer.slice(build, invoke),
-    /pnpm --filter @forgeax\/engine-audio-webaudio\.\.\. build/,
-  );
-  assert.match(producer.slice(build, invoke), /pnpm --filter @forgeax\/engine-gltf\.\.\. build/);
+  assert.ok(build >= 0);
+  assert.ok(invoke > build);
+  const closure = producer.slice(build, invoke);
+  assert.equal([...closure.matchAll(/\bpnpm\b/g)].length, 1, 'common dependencies build once');
+  for (const owner of ['vite-plugin-pack', 'vite-plugin-shader', 'audio-webaudio', 'gltf']) {
+    assert.ok(closure.includes(`--filter @forgeax/engine-${owner}...`), `${owner} closure lost`);
+  }
+  assert.match(closure, /--filter @forgeax\/engine-gltf\.\.\. build/);
 });
 
 test('shared producer provisions wgpu-wasm before plugin closure', () => {
@@ -855,7 +848,7 @@ test('Bevy smoke fleet does not hydrate app-dist archives it rebuilds locally', 
   assert.match(bevy, /app-dist-0\/1\/2[\s\S]*duplicate/);
 });
 
-test('metrics browser starts independently while runtime and the stable join preserve Smoke barriers', () => {
+test('metrics run independently while complete CI still requires Smoke', () => {
   const contract = JSON.parse(
     readFileSync(join(repoRoot, 'scripts', 'ci', 'build-artifact-contract.json'), 'utf8'),
   );
@@ -889,15 +882,20 @@ test('metrics browser starts independently while runtime and the stable join pre
   );
   assert.match(
     runtime,
-    /needs: \[core-build, shared-app-inputs, post-merge-gate, smoke-fleet, bevy-smoke-fleet\]/,
+    /needs: \[core-build, shared-app-inputs, post-merge-gate, bevy-smoke-fleet\]/,
   );
   assert.match(runtime, /needs\.bevy-smoke-fleet\.result == 'success'/);
+  assert.doesNotMatch(runtime, /needs\.smoke-fleet\./);
   assert.doesNotMatch(browser, /needs\.smoke-fleet\./);
   assert.match(browser, /needs\.shared-app-inputs\.result == 'success'/);
-  assert.match(stableJoin, /needs\.smoke-fleet\.result == 'success'/);
+  assert.doesNotMatch(stableJoin, /needs\.smoke-fleet\./);
+  assert.match(
+    workflow,
+    /needs: \[build-artifacts, primary-pnpm,[^\n]*smoke-fleet[^\n]*metrics-validate/,
+  );
   assert.match(
     stableJoin,
-    /needs: \[core-build, shared-app-inputs, post-merge-gate, smoke-fleet, metrics-validate-browser, metrics-validate-runtime\]/,
+    /needs: \[core-build, shared-app-inputs, post-merge-gate, metrics-validate-browser, metrics-validate-runtime\]/,
   );
   for (const section of [browser, runtime, stableJoin]) {
     assert.match(

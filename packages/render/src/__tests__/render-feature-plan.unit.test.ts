@@ -276,6 +276,103 @@ describe('RenderFeature plan authority', () => {
     expect(nextSnapshot).toBe(firstSnapshot);
   });
 
+  it('reuses immutable shader strings while rechecking new descriptors and changed siblings', () => {
+    const first = plan();
+    const program = first.resources.find((resource) => resource.kind === 'compute-program');
+    if (program?.kind !== 'compute-program') throw new Error('Missing compute fixture');
+    const wgsl = program.program.wgsl;
+    const snapshot = cloneRenderFeaturePlanSignatureSnapshot(first);
+    const next = plan(new Uint32Array([8, 9]));
+    const changed: RenderFeatureWorkPlan = {
+      ...next,
+      resources: next.resources.map((resource) =>
+        resource.kind === 'buffer' && resource.name === 'params'
+          ? { ...resource, size: 32 }
+          : resource,
+      ),
+    };
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      expect(renderFeaturePlanSignatureSnapshotEquals(next, snapshot)).toBe(true);
+      expect(cloneRenderFeaturePlanSignatureSnapshot(next, snapshot)).toBe(snapshot);
+      expect(renderFeaturePlanSignatureSnapshotEquals(changed, snapshot)).toBe(false);
+      const updated = cloneRenderFeaturePlanSignatureSnapshot(changed, snapshot);
+      expect(updated).not.toBe(snapshot);
+      rememberRenderFeaturePlanSignature(changed, 'revision-1', updated);
+      expect(renderFeaturePlanSignatureEvidenceMatches(changed, 'revision-1')).toBe(true);
+      expect(stringify.mock.calls.some(([value]) => value === wgsl)).toBe(false);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('invalidates remembered evidence for shader and nested binding mutations', () => {
+    const value = plan();
+    const program = value.resources.find((resource) => resource.kind === 'compute-program');
+    if (program?.kind !== 'compute-program') throw new Error('Missing compute fixture');
+    const signature = renderFeaturePlanSignature(value);
+    const snapshot = cloneRenderFeaturePlanSignatureSnapshot(value);
+    rememberRenderFeaturePlanSignature(value, signature, snapshot);
+    const original = program.program.wgsl;
+    program.program.wgsl += '\n// changed shader source';
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(false);
+    expect(renderFeaturePlanSignature(value)).not.toBe(signature);
+    program.program.wgsl = original;
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(true);
+    const binding = program.program.bindings[0]?.entries[0];
+    if (binding === undefined) throw new Error('Missing binding fixture');
+    binding.binding = 2;
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(false);
+    expect(renderFeaturePlanSignature(value)).not.toBe(signature);
+  });
+
+  it('preserves escaped string identity across repeated host and graph admissions', () => {
+    const feature: RenderFeature<undefined> = {
+      identity: 'escaped-signature',
+      extract: () => ok(undefined),
+      plan: () => ok({ work: [] }),
+    };
+    const created = createRenderFeatureHost([feature]);
+    if (!created.ok) throw new Error('Missing host fixture');
+    let previous: string | undefined;
+    let previousCanonical: string | undefined;
+    for (const suffix of ['\n// "quoted" \\ path\t', '\n// other', '\n// "quoted" \\ path\t']) {
+      const value = plan();
+      const program = value.resources.find((resource) => resource.kind === 'compute-program');
+      if (program?.kind !== 'compute-program') throw new Error('Missing compute fixture');
+      program.program.wgsl += suffix;
+      const signature = created.value.recordPlanSignature?.(feature.identity, value);
+      const canonical = renderFeaturePlanSignature(value);
+      if (previous === undefined) expect(signature).toBe(canonical);
+      expect(canonical).not.toBe(previousCanonical);
+      expect(signature).not.toBe(previous);
+      if (signature === undefined) throw new Error('Missing signature fixture');
+      expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(true);
+      expect(created.value.recordPlanSignature?.(feature.identity, value)).toBe(signature);
+      previous = signature;
+      previousCanonical = canonical;
+    }
+  });
+
+  it('retains sorted usage equality while rejecting changed usage multiplicity', () => {
+    const value = plan();
+    const buffer = value.resources.find(
+      (resource) => resource.kind === 'buffer' && resource.name === 'particles',
+    );
+    if (buffer?.kind !== 'buffer') throw new Error('Missing buffer fixture');
+    const signature = renderFeaturePlanSignature(value);
+    const snapshot = cloneRenderFeaturePlanSignatureSnapshot(value);
+    rememberRenderFeaturePlanSignature(value, signature, snapshot);
+    buffer.usage.reverse();
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(true);
+    expect(renderFeaturePlanSignature(value)).toBe(signature);
+    buffer.usage[0] = 'storage';
+    expect(renderFeaturePlanSignatureEvidenceMatches(value, signature)).toBe(false);
+    expect(renderFeaturePlanSignature(value)).not.toBe(signature);
+    const changed = cloneRenderFeaturePlanSignatureSnapshot(value, snapshot);
+    expect(renderFeaturePlanSignatureSnapshotEquals(value, changed)).toBe(true);
+  });
+
   it('does not share changed inline payload bytes', () => {
     const vertex = (value: number): RenderFeatureWorkPlan => ({
       resources: [

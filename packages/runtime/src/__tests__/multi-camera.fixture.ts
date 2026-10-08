@@ -42,6 +42,7 @@ export async function verifyMultiCamera(
     readonly assets: AssetRegistry;
     readonly identity: { readonly source: string; readonly epoch: number };
   },
+  warmupFrames = 60,
 ) {
   const world = new World();
   const requestObservation = required(renderer.requestObservation).bind(renderer);
@@ -162,16 +163,16 @@ export async function verifyMultiCamera(
     }
   };
   try {
-    for (let i = 0; i < 60; i++) await draw();
+    for (let i = 0; i < warmupFrames; i++) await draw();
     if (publisher !== undefined) {
       invalidateSharedTexture = true;
-      renderValue(requestObservation(['final-srgb']));
+      renderValue(requestObservation(['final-display']));
       const receipt = await draw();
       const refreshed = required(
         required(
           renderValue(
             await renderer.observe(receipt, {
-              include: ['final-srgb'],
+              include: ['final-display'],
             }),
           ).observations,
         )[0],
@@ -381,7 +382,7 @@ export async function verifyMultiCamera(
     expect(
       required(renderer.inspect().views).every((view) => !view.passes.includes('ssao-calc')),
     ).toBe(true);
-    renderValue(requestObservation(['final-srgb']));
+    renderValue(requestObservation(['final-display']));
     const pending = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const receipt = await draw();
@@ -390,8 +391,8 @@ export async function verifyMultiCamera(
     await save('split.rhitape', capture.bytes);
     const observation = required(
       required(
-        renderValue(await renderer.observe(receipt, { include: ['final-srgb'] })).observations,
-      ).find((o) => o.domain === 'final-srgb'),
+        renderValue(await renderer.observe(receipt, { include: ['final-display'] })).observations,
+      ).find((o) => o.domain === 'final-display'),
     );
     const live = new Uint8Array(size.width * size.height * 4);
     for (let y = 0; y < size.height; y++)
@@ -552,13 +553,13 @@ export async function verifyMultiCamera(
       )
       .unwrap();
     const observeMap = async () => {
-      renderValue(requestObservation(['final-srgb']));
+      renderValue(requestObservation(['final-display']));
       const receipt = await draw();
       return required(
         required(
           renderValue(
             await renderer.observe(receipt, {
-              include: ['final-srgb'],
+              include: ['final-display'],
             }),
           ).observations,
         )[0],
@@ -614,11 +615,12 @@ export async function verifyMultiCamera(
     expect(required(afterCut[1]).temporal.frameIndex).toBe(
       required(beforeCut[1]).temporal.frameIndex + 1,
     );
-    renderValue(requestObservation(['final-srgb']));
+    renderValue(requestObservation(['final-display']));
     const miniReceipt = await draw();
     const mini = required(
       required(
-        renderValue(await renderer.observe(miniReceipt, { include: ['final-srgb'] })).observations,
+        renderValue(await renderer.observe(miniReceipt, { include: ['final-display'] }))
+          .observations,
       )[0],
     );
     await save('minimap.rgba', mini.bytes);
@@ -642,11 +644,11 @@ export async function verifyMultiCamera(
     ).toBe(1);
     for (const camera of [...cameras, minimap])
       world.set(camera, CameraView, { enabled: false }).unwrap();
-    renderValue(requestObservation(['final-srgb']));
+    renderValue(requestObservation(['final-display']));
     const empty = await draw();
     const emptyPixels = required(
       required(
-        renderValue(await renderer.observe(empty, { include: ['final-srgb'] })).observations,
+        renderValue(await renderer.observe(empty, { include: ['final-display'] })).observations,
       )[0],
     ).bytes;
     expect([...emptyPixels.subarray(0, 4)]).toEqual([0, 0, 0, 255]);
@@ -704,7 +706,7 @@ export async function verifyMultiCamera(
       required(renderer.inspect().views).find((v) => v.entityKey === Number(monitorCamera)),
     );
     expect([targetView.output, targetView.width, targetView.height]).toEqual(['texture', 32, 32]);
-    renderValue(requestObservation(['final-srgb']));
+    renderValue(requestObservation(['final-display']));
     const monitorPending = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const monitorReceipt = await draw();
@@ -713,7 +715,7 @@ export async function verifyMultiCamera(
     await save('monitor.rhitape', monitorCapture.bytes);
     const monitor = required(
       required(
-        renderValue(await renderer.observe(monitorReceipt, { include: ['final-srgb'] }))
+        renderValue(await renderer.observe(monitorReceipt, { include: ['final-display'] }))
           .observations,
       )[0],
     );

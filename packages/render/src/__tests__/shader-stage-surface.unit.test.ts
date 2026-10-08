@@ -19,7 +19,6 @@ const iblPipelineCacheSource = readFileSync(
 const fragmentConsumerSources = [
   pbrPipelineSource,
   iblPipelineCacheSource,
-  readFileSync(new URL('../ibl/skylight-bind-group.ts', import.meta.url), 'utf8'),
   readFileSync(new URL('../assembly/webgpu-renderer.ts', import.meta.url), 'utf8'),
 ];
 

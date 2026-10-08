@@ -17,7 +17,9 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-asi-world smoke",
     "rhiDebug": {
-      "riskFamilies": ["materials-textures"]
+      "riskFamilies": [
+        "materials-textures"
+      ]
     },
     "publicAssetOverrides": {
       "world/terrain.json": "../../../forgeax-engine-assets/demo-assets/hello-asi-world/terrain.json",
@@ -33,7 +35,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "feat-20260622-chunk-gpu-instancing-sprite-tilemap M3 / D-4 / L-8: AC-02 65536-cell tilemap p95>=60 fps gate cannot be validated on the GH-hosted ubuntu metrics-validate runner — that runner falls back to swiftshader WebGL2 where fps was previously fake-green (bug-20260612). The swiftshader software path slows progressively at large cell count, so the gate would flake or report unrealistic numbers. AC-02 p95 SSOT moved to verify-stage local sandbox run (charter P5); re-enable when a hardware-WebGPU CI runner is wired (precedent: apps/parity/instancing-static)."
+        "reason": "feat-20260622-chunk-gpu-instancing-sprite-tilemap M3 / D-4 / L-8: AC-02 65536-cell tilemap p95>=60 fps gate cannot be validated on the GH-hosted ubuntu metrics-validate runner \u2014 that runner falls back to swiftshader WebGL2 where fps was previously fake-green (bug-20260612). The swiftshader software path slows progressively at large cell count, so the gate would flake or report unrealistic numbers. AC-02 p95 SSOT moved to verify-stage local sandbox run (charter P5); re-enable when a hardware-WebGPU CI runner is wired (precedent: apps/parity/instancing-static)."
       },
       "bench": {
         "enabled": false,
@@ -65,8 +67,8 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

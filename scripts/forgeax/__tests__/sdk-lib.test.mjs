@@ -12,6 +12,7 @@ import {
   normalizeLicenseReport,
   normalizePackageArchive,
   normalizePnpmStore,
+  normalizeSdkRegistryLockfile,
   prepareWasmPackageForPack,
   waitForNpmPublications,
   writePackageArchive,
@@ -163,6 +164,17 @@ afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+it('SDK registry locks retain integrity and resolve owned packages through the consumer registry', () => {
+  const owned = 'http://127.0.0.1:40000/tarballs/revision/forgeax-view-1.2.3.tgz';
+  const input = `packages:\n  '@forgeax/view@1.2.3':\n    resolution: {integrity: sha512-owned, tarball: ${owned}}\n  'external@1.0.0':\n    resolution: {integrity: sha512-external, tarball: https://registry.npmjs.org/external/-/external-1.0.0.tgz}\n`;
+  const result = normalizeSdkRegistryLockfile(input, [owned]);
+  expect(result).toContain('resolution: {integrity: sha512-owned}');
+  expect(result).toContain('tarball: https://registry.npmjs.org/external/-/external-1.0.0.tgz');
+  expect(result).not.toContain('127.0.0.1');
+  expect(() => normalizeSdkRegistryLockfile(`tarball: ${owned}\n`, [owned])).toThrow(
+    'sdk-registry-lockfile-shape',
+  );
+});
 describe('normalizePnpmStore', () => {
   it('removes empty sideEffects metadata whose deps key is not reproducible', async () => {
     const { root, path } = await writeIndex('empty.json', {
@@ -420,7 +432,7 @@ describe('SDK verifier template contract', () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-sdk-launcher-test-'));
     tempRoots.push(root);
     const sdk = join(root, 'sdk with space');
-    const template = join(sdk, 'templates', 'empty');
+    const template = join(sdk, 'toolchain', 'cli-runtime');
     const toolBin = join(root, 'tool bin');
     await mkdir(join(sdk, 'bin'), { recursive: true });
     await mkdir(template, { recursive: true });
@@ -434,11 +446,17 @@ describe('SDK verifier template contract', () => {
     await writeFile(
       packageManagerScript,
       [
+        "if(process.env.FORGEAX_LAUNCHER_TEST_FAIL){process.stdout.write('missing tool package\\n');process.exit(23);}",
         "import { mkdir, writeFile } from 'node:fs/promises';",
         "import { resolve } from 'node:path';",
         "const engineBin = resolve(process.cwd(), 'node_modules', '@forgeax', 'engine', 'dist', 'bin', 'forgeax.mjs');",
         "await mkdir(resolve(engineBin, '..'), { recursive: true });",
         `await writeFile(engineBin, ${JSON.stringify(engineSource)});`,
+        "const view = resolve(process.cwd(), 'node_modules/@forgeax/view');",
+        'await mkdir(view, { recursive: true });',
+        "await writeFile(resolve(view, 'package.json'), JSON.stringify({ name: '@forgeax/view', exports: { './host.pack.json': './host.pack.json' } }));",
+        "await writeFile(resolve(view, 'host.pack.json'), '{}');",
+
         "await writeFile(resolve(process.cwd(), 'package-manager-marker'), process.argv.slice(2).join('\\n'));",
       ].join('\n'),
     );
@@ -476,6 +494,18 @@ describe('SDK verifier template contract', () => {
     expect(
       await readFile(join(sdk, '.forgeax', 'cli-runtime', 'package-manager-marker'), 'utf8'),
     ).toContain('install');
+    await rm(join(sdk, '.forgeax', 'cli-runtime', 'node_modules', '@forgeax', 'view'), {
+      recursive: true,
+      force: true,
+    });
+    const failed = spawnSync(process.execPath, [launcher], {
+      cwd: sdk,
+      env: { ...process.env, PATH: toolBin, FORGEAX_LAUNCHER_TEST_FAIL: '1' },
+      encoding: 'utf8',
+    });
+    expect(failed.status).toBe(23);
+    expect(failed.stderr).toContain('missing tool package');
+    expect(failed.stdout).not.toContain('engine-bin-ok');
   });
 
   it('keeps the generated template typecheck script in the SDK gates', async () => {
@@ -614,17 +644,17 @@ describe('SDK verifier template contract', () => {
     const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
     const interaction = source.slice(
       source.indexOf('const before ='),
-      source.indexOf("await page.keyboard.down('KeyW')"),
+      source.indexOf("page.keyboard.down('KeyW')"),
     );
     expect(interaction).toContain("const canvas = page.locator('canvas').first();");
-    expect(interaction).toContain('const canvasBox = await canvas.boundingBox();');
-    expect(interaction).toContain('await page.mouse.click(centerX, centerY);');
+    expect(interaction).toMatch(/const canvasBox = await [^\n]*canvas\.boundingBox\(\)/);
+    expect(interaction).toMatch(/await [^\n]*page\.mouse\.click\(centerX, centerY\)/);
   });
 
   it('waits for the game-3d guide mount before taking the gameplay baseline', async () => {
     const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
     const readiness = source.slice(
-      source.indexOf('async function openReadyProjectPage'),
+      source.indexOf('async function waitForProjectPage'),
       source.indexOf('async function readSelectedPlayerProjection'),
     );
     expect(readiness).toContain("document.querySelector('#game-ui')?.childElementCount");
@@ -636,7 +666,7 @@ describe('SDK verifier template contract', () => {
   it('waits for the startup fade to finish before sending gameplay input', async () => {
     const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
     const readiness = source.slice(
-      source.indexOf('async function openReadyProjectPage'),
+      source.indexOf('async function waitForProjectPage'),
       source.indexOf('async function readSelectedPlayerProjection'),
     );
     expect(readiness).toContain("document.querySelector('#forgeax-loading')");
@@ -682,11 +712,11 @@ describe('SDK verifier template contract', () => {
   it('holds gameplay input until the game-owned projection proves movement', async () => {
     const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
     const journey = source.slice(
-      source.indexOf("await page.keyboard.down('KeyW');"),
+      source.indexOf("page.keyboard.down('KeyW')"),
       source.indexOf('const movementDelta ='),
     );
     expect(journey).toContain('const movementDeadline = Date.now() + 120_000');
-    expect(journey).toContain('readSelectedPlayerProjection(page)');
+    expect(journey).toContain('readSelectedPlayerProjection(page, movementDeadline)');
     expect(journey).toContain('candidate.position[2] < before.position[2] - 0.01');
     expect(journey).toContain('candidate.fixedTick > before.fixedTick');
     expect(journey).toContain('sdk-selected-third-person-movement-timeout');
@@ -694,14 +724,14 @@ describe('SDK verifier template contract', () => {
     expect(journey).not.toContain('inputStartFrameId');
     expect(journey).not.toContain('waitForFunction(\n        async');
     expect(journey).toContain('finally');
-    expect(journey).toContain("await page.keyboard.up('KeyW');");
+    expect(journey).toMatch(/await [^\n]*page\.keyboard\.up\('KeyW'\)/);
   });
 
   it('keeps frame timeout diagnostics bounded and runtime-specific', async () => {
     const source = await readFile(join(repositoryRoot, 'scripts/forgeax/verify-sdk.mjs'), 'utf8');
     const frameDiagnostics = source.slice(
       source.indexOf('const MAX_DIAGNOSTIC_ITEMS'),
-      source.indexOf('async function openReadyProjectPage'),
+      source.indexOf('async function waitForProjectPage'),
     );
     expect(frameDiagnostics).toContain('MAX_DIAGNOSTIC_ITEMS = 32');
     expect(frameDiagnostics).toContain('DIAGNOSTIC_TEXT_LIMIT = 4_000');

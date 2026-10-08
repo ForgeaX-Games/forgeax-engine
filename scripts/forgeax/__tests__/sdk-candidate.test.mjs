@@ -33,6 +33,7 @@ async function createFixture() {
       ok: true,
       sdkVersion: '1.2.3',
       engineCommit: 'a'.repeat(40),
+      viewCommit: 'b'.repeat(40),
     })}\n`,
   );
   const engineArchive = await createArchive(
@@ -69,6 +70,7 @@ describe('sealed SDK candidates', () => {
     expect(candidate).toMatchObject({
       sdkVersion: '1.2.3',
       engineCommit: 'a'.repeat(40),
+      viewCommit: 'b'.repeat(40),
       sourceWorkflowRunId: 12345,
     });
     expect(candidate.npmPackages.map(({ name }) => name)).toEqual([
@@ -89,6 +91,21 @@ describe('sealed SDK candidates', () => {
     await expect(validateCandidate({ candidateRoot: root })).rejects.toThrow(
       'sdk-candidate-artifact-mismatch',
     );
+  });
+
+  it('rejects a changed View source pin after sealing', async () => {
+    const { root, gates } = await createFixture();
+    await sealCandidate({ candidateRoot: root, sourceWorkflowRunId: 12345, gateSpecs: gates });
+    await writeFile(
+      join(root, 'sdk-build-result.json'),
+      JSON.stringify({
+        ok: true,
+        sdkVersion: '1.2.3',
+        engineCommit: 'a'.repeat(40),
+        viewCommit: 'c'.repeat(40),
+      }),
+    );
+    await expect(validateCandidate({ candidateRoot: root })).rejects.toThrow();
   });
 
   it('requires all four passing gate reports', async () => {

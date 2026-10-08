@@ -332,7 +332,6 @@
             "apps/hello/format-tier1/scripts/smoke-dawn.mjs",
             "apps/hello/format-tier1/evidence/morph-visual-evidence.json",
             "packages/gltf/src/__tests__/morph-import.integration.test.ts",
-            "packages/render/src/__tests__/morph-culling-reentry.dawn.test.ts",
             "apps/hello/format-tier1/evidence/final-gates.json"
           ],
           "error": {

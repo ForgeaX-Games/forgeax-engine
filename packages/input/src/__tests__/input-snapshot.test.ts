@@ -29,8 +29,8 @@ function sample(
 describe('keyboard snapshot edges', () => {
   it('derives justPressed from the previous frozen snapshot', () => {
     const first = snapshotFromSample(sample(['a']));
-    const held = snapshotFromSample(sample(['a']), undefined, undefined, first);
-    const released = snapshotFromSample(sample([], ['a']), undefined, undefined, held);
+    const held = snapshotFromSample(sample(['a']), undefined, first);
+    const released = snapshotFromSample(sample([], ['a']), undefined, held);
 
     expect(first.keyboard.down('a')).toBe(true);
     expect(first.keyboard.justPressed('a')).toBe(true);
@@ -62,7 +62,7 @@ describe('keyboard snapshot edges', () => {
     expect(snap.keyboard.upCode('KeyA')).toBe(true);
     expect(snap.keyboard.justPressedCode('KeyA')).toBe(true);
 
-    const next = snapshotFromSample(sample([]), undefined, undefined, snap);
+    const next = snapshotFromSample(sample([]), undefined, snap);
     expect(next.keyboard.justPressed('a')).toBe(false);
     expect(next.keyboard.up('a')).toBe(false);
   });
@@ -94,12 +94,10 @@ describe('mouse snapshot edges', () => {
     const held = snapshotFromSample(
       { ...sample([]), buttons: [true, false, false] },
       undefined,
-      undefined,
       first,
     );
     const released = snapshotFromSample(
       { ...sample([]), buttons: [false, false, false] },
-      undefined,
       undefined,
       held,
     );
@@ -124,7 +122,7 @@ describe('mouse snapshot edges', () => {
     expect(tap.mouse.justPressed(0)).toBe(true);
     expect(tap.mouse.justReleased(0)).toBe(true);
 
-    const next = snapshotFromSample(sample([]), undefined, undefined, tap);
+    const next = snapshotFromSample(sample([]), undefined, tap);
     expect(next.mouse.justPressed(0)).toBe(false);
     expect(next.mouse.justReleased(0)).toBe(false);
   });

@@ -81,7 +81,7 @@ const entry: ExecutionBootstrapEntry = (data) => {
         if (observe) {
           if (renderer.requestObservation === undefined)
             throw new Error('Missing Renderer observation');
-          value(renderer.requestObservation(['final-srgb']));
+          value(renderer.requestObservation(['final-display']));
         }
         const result = draw(request);
         const views = renderer.inspect().views ?? [];
@@ -90,7 +90,7 @@ const entry: ExecutionBootstrapEntry = (data) => {
           if (!result.ok) channel.postMessage({ id, error: result.error });
           else {
             const picture = renderer
-              .observe(result.value, { include: ['final-srgb'] })
+              .observe(result.value, { include: ['final-display'] })
               .then((observation) =>
                 observation.ok
                   ? {
@@ -98,7 +98,7 @@ const entry: ExecutionBootstrapEntry = (data) => {
                       views,
                       cut,
                       observation: observation.value.observations?.find(
-                        (row) => row.domain === 'final-srgb',
+                        (row) => row.domain === 'final-display',
                       ),
                     }
                   : { error: observation.error },

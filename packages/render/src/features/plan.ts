@@ -150,6 +150,18 @@ export type RenderFeatureResourceDeclaration =
       readonly data?: never;
     };
 
+/** Renderer-owned once-per-frame scene captures; only frame-scoped work may declare them. */
+export type RenderFeatureSceneResource = Extract<
+  RenderFeatureResourceDeclaration,
+  { readonly kind: 'scene-depth' | 'scene-noise' }
+>;
+
+export function isRenderFeatureSceneResource(
+  resource: RenderFeatureResourceDeclaration,
+): resource is RenderFeatureSceneResource {
+  return resource.kind === 'scene-depth' || resource.kind === 'scene-noise';
+}
+
 export type RenderFeatureDispatch =
   | {
       readonly kind: 'direct';
@@ -258,6 +270,9 @@ export interface RenderFeaturePlanView {
 }
 
 export interface RenderFeaturePlanContext {
+  /** Read a build-time cooked utility selected for the receiving device. */
+  readonly getFeatureShaderSource?: ((identifier: string) => string | undefined) | undefined;
+
   readonly materialContext?: MaterialCookRasterContext;
   readonly caps: Readonly<RhiCaps>;
   readonly frame: { readonly frameNumber: number };
@@ -368,7 +383,7 @@ export type RenderFeaturePlanSignatureNode =
       readonly keys: readonly string[];
       readonly values: readonly RenderFeaturePlanSignatureNode[];
     }
-  | { readonly kind: 'primitive'; readonly token: string };
+  | { readonly kind: 'primitive'; readonly token: string; readonly stringValue?: string };
 
 export interface RenderFeaturePlanSignatureSnapshot {
   readonly resources: readonly RenderFeaturePlanSignatureNode[];
@@ -391,7 +406,13 @@ function compareStableKeys(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function stablePrimitiveToken(value: unknown): string {
+function stablePrimitiveToken(
+  value: unknown,
+  previous?: Extract<RenderFeaturePlanSignatureNode, { readonly kind: 'primitive' }>,
+): string {
+  // WGSL strings are immutable even when their enclosing descriptor is rebuilt.
+  // Keep the canonical token while still checking every mutable container.
+  if (typeof value === 'string' && previous?.stringValue === value) return previous.token;
   return JSON.stringify(value) ?? 'undefined';
 }
 
@@ -483,10 +504,12 @@ function cloneSignatureNode(
       values,
     });
   }
-  const token = stablePrimitiveToken(value);
+  const token = stablePrimitiveToken(value, previous?.kind === 'primitive' ? previous : undefined);
   return previous?.kind === 'primitive' && previous.token === token
     ? previous
-    : { kind: 'primitive', token };
+    : typeof value === 'string'
+      ? { kind: 'primitive', token, stringValue: value }
+      : { kind: 'primitive', token };
 }
 
 function signatureResourceValue(resource: RenderFeatureResourceDeclaration): unknown {
@@ -537,7 +560,8 @@ function equalSignatureNode(value: unknown, snapshot: RenderFeaturePlanSignature
     }
     return true;
   }
-  if (snapshot.kind === 'primitive') return stablePrimitiveToken(value) === snapshot.token;
+  if (snapshot.kind === 'primitive')
+    return stablePrimitiveToken(value, snapshot) === snapshot.token;
   if (snapshot.kind === 'array') {
     if (!Array.isArray(value) || value.length !== snapshot.values.length) return false;
     for (let index = 0; index < snapshot.values.length; index += 1) {
@@ -605,7 +629,7 @@ function equalSortedUsage(usage: unknown, snapshot: RenderFeaturePlanSignatureNo
       ) {
         expectedCount += 1;
       }
-      if (stablePrimitiveToken(usage[candidate]) === expected.token) currentCount += 1;
+      if (stablePrimitiveToken(usage[candidate], expected) === expected.token) currentCount += 1;
     }
     if (expectedCount !== currentCount) return false;
   }

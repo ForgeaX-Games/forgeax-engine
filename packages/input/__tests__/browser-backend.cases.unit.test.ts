@@ -270,7 +270,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       it('attaches input, visibility, pointer-lock-error, and click listeners', () => {
         const { canvas, doc, win, store } = buildBBFakes();
         attachBrowserInputBackend(canvas, { document: doc, window: win });
-        expect(store.count()).toBe(12);
+        expect(store.count()).toBe(15); // Input plus Host haptic connection/visibility listeners.
       });
 
       it('translates keyboard events into the snapshot held-key set', () => {
@@ -301,8 +301,8 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
 
         store.fire('canvas', 'pointerdown', { button: 0, pointerType: 'mouse', pointerId: 1 });
         store.fire('canvas', 'pointerdown', { button: 2, pointerType: 'mouse', pointerId: 1 });
-        store.fire('canvas', 'pointermove', { movementX: 5, movementY: -3, pointerType: 'mouse', pointerId: 1 });
-        store.fire('canvas', 'pointermove', { movementX: 1, movementY: 1, pointerType: 'mouse', pointerId: 1 });
+        store.fire('canvas', 'pointermove', { movementX: 5, movementY: -3, buttons: 3, pointerType: 'mouse', pointerId: 1 });
+        store.fire('canvas', 'pointermove', { movementX: 1, movementY: 1, buttons: 3, pointerType: 'mouse', pointerId: 1 });
 
         const sample1 = backend.sample();
         expect(sample1.buttons).toEqual([true, false, true]);
@@ -394,11 +394,17 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       it('detach removes every listener and is idempotent on second call', () => {
         const { canvas, doc, win, store } = buildBBFakes();
         const handle = attachBrowserInputBackend(canvas, { document: doc, window: win });
-        expect(store.count()).toBe(12);
+        expect(store.count()).toBe(15);
         handle();
         expect(store.count()).toBe(0);
         expect(() => handle()).not.toThrow();
         handle.backend.detach();
+        for (let cycle = 0; cycle < 10; cycle++) {
+          const next = attachBrowserInputBackend(canvas, { document: doc, window: win });
+          expect(store.count()).toBe(15);
+          next();
+          expect(store.count()).toBe(0);
+        }
       });
 
       it('detach exits PointerLock when the canvas is the active lock target', () => {

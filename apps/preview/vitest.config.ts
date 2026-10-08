@@ -11,6 +11,9 @@ export default defineProject({
   test: {
     environment: 'node',
     name: '@forgeax/preview',
+    // jsdom runs in Node. Keep the App's real Node dependency closure native
+    // instead of client-transforming its filesystem import adapters.
+    server: { deps: { external: [/\/packages\/app\/dist\//] } },
     exclude: ['**/node_modules/**', '**/dist/**', '**/*.browser.test.ts'],
   },
 });

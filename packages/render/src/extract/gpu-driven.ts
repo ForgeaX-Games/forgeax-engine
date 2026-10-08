@@ -294,6 +294,9 @@ export function buildGpuDrivenDraws(
                 expected: `receipt for ${materialShaderId}`,
               });
             }
+            // A published direct-only ABI is a supported ordinary-lane choice.
+            // Canonical Scene programs still fail closed when their entry is lost.
+            if (receipt.sceneIndexEntry === undefined && !requiresReceipt) return undefined;
             const skinReceipt: GpuDrivenSkinReceipt | undefined =
               input.baseSnapshot.skin !== undefined && receipt.skinPaletteAddress !== undefined
                 ? {

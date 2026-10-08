@@ -18,7 +18,7 @@ const RENDER_ATTACHMENT = 0x10;
 const artifactDir = process.env.FORGEAX_M10_ARTIFACT_DIR ?? resolve(process.cwd(), '.forgeax-gauntlet', 'm10-render-feature');
 mkdirSync(artifactDir, { recursive: true });
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (globalThis.navigator === undefined) {
   Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });

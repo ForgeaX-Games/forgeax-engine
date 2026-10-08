@@ -56,6 +56,34 @@ describe('ExecutionReport contract', () => {
     expect(isExecutionReport({ ...report, workerId: 1 })).toBe(false);
   });
 
+  it('accepts bounded Host streaming counters and rejects malformed observations', () => {
+    const report = createExecutionReport(
+      capabilities(),
+      selectExecutionWorkers({ capabilities: capabilities() }).unwrap(),
+    );
+    const streaming = {
+      encodedBytes: 0,
+      pcmBytes: 384000,
+      pendingBytes: 1000,
+      pendingReads: 1,
+      underruns: 0,
+    };
+    const observed = { ...report, audio: { ...report.audio, streaming } };
+    expect(isExecutionReport(observed)).toBe(true);
+    expect(
+      isExecutionReport({
+        ...observed,
+        audio: { ...observed.audio, streaming: { ...streaming, pendingReads: -1 } },
+      }),
+    ).toBe(false);
+    expect(
+      isExecutionReport({
+        ...observed,
+        audio: { ...observed.audio, streaming: { ...streaming, retained: 1 } },
+      }),
+    ).toBe(false);
+  });
+
   it('rejects frame counters that break the submitted/completed invariant', () => {
     const report = createExecutionReport(
       capabilities(false),

@@ -51,6 +51,8 @@ function makeMockRuntime(capsOverride: Partial<RhiCaps> = {}): {
       backendKind: 'webgpu' as const,
       storageBuffer: true,
       float32Filterable: true,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
       maxStorageBuffersPerShaderStage: 4,
       ...capsOverride,

@@ -42,6 +42,17 @@ import {
 } from './material/artifact-types.js';
 import type { MaterialShaderManifestEntry } from './types.js';
 
+interface AdmittedManifest {
+  readonly text: string;
+  readonly manifest: unknown;
+}
+
+// Expanded publication rows hold every composed WGSL source (hundreds of MB for
+// the engine manifest). Registries that fetched identical text share one
+// verified expansion; each registry strongly holds its own, so the weak index
+// releases it when the last registry is gone.
+const admittedManifests = new Map<string, WeakRef<AdmittedManifest>>();
+
 // ─── Device dependency-injection interface ──────────────────────────────────────
 
 /**
@@ -208,6 +219,7 @@ export class ShaderRegistry {
   readonly #materialPrograms = new Map<string, MaterialShaderProgram>();
   readonly #paramSchemaProjectionOwner = new ParamSchemaProjectionOwner();
   readonly #materialShaderManifestEntries: MaterialShaderManifestEntry[] = [];
+  #admitted: AdmittedManifest | undefined;
   #manifestLoaded = false;
 
   constructor(opts: ShaderRegistryOptions) {
@@ -221,6 +233,7 @@ export class ShaderRegistry {
     for (const [hash, entry] of this.#entries) candidate.#entries.set(hash, entry);
     candidate.#materialShaderManifestEntries.push(...this.#materialShaderManifestEntries);
     candidate.#manifestLoaded = this.#manifestLoaded;
+    candidate.#admitted = this.#admitted;
     for (const [source, program] of this.#materialPrograms)
       candidate.#materialPrograms.set(source, program);
     return candidate;
@@ -297,37 +310,44 @@ export class ShaderRegistry {
       );
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      markShaderManifestStage('shader-manifest-json-failed', {
-        url: this.#manifestUrl,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return err(
-        manifestMalformed({
-          message: 'ShaderRegistry: manifest JSON parse failed',
-          hint: 'manifest.json must be valid JSON; rebuild via @forgeax/engine-vite-plugin-shader generateBundle',
-          reason: e instanceof Error ? e.message : String(e),
-        }),
-      );
+    const url = this.#manifestUrl;
+    let admitted = admittedManifests.get(url)?.deref();
+    if (admitted?.text !== raw) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e) {
+        markShaderManifestStage('shader-manifest-json-failed', {
+          url: this.#manifestUrl,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return err(
+          manifestMalformed({
+            message: 'ShaderRegistry: manifest JSON parse failed',
+            hint: 'manifest.json must be valid JSON; rebuild via @forgeax/engine-vite-plugin-shader generateBundle',
+            reason: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      }
+      try {
+        parsed = await readShaderManifestPublication(parsed);
+      } catch (e) {
+        markShaderManifestStage('shader-manifest-publication-failed', {
+          url: this.#manifestUrl,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return err(
+          manifestMalformed({
+            message: 'ShaderRegistry: shader source publication is invalid',
+            hint: 'rebuild the shader manifest with the matching Engine producer',
+            reason: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      }
+      admitted = { text: raw, manifest: parsed };
+      admittedManifests.set(url, new WeakRef(admitted));
     }
-    try {
-      parsed = await readShaderManifestPublication(parsed);
-    } catch (e) {
-      markShaderManifestStage('shader-manifest-publication-failed', {
-        url: this.#manifestUrl,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return err(
-        manifestMalformed({
-          message: 'ShaderRegistry: shader source publication is invalid',
-          hint: 'rebuild the shader manifest with the matching Engine producer',
-          reason: e instanceof Error ? e.message : String(e),
-        }),
-      );
-    }
+    const parsed = admitted.manifest;
 
     if (typeof parsed !== 'object' || parsed === null || !('entries' in parsed)) {
       return err(
@@ -416,6 +436,7 @@ export class ShaderRegistry {
     }
     this.#materialShaderManifestEntries.length = 0;
     this.#materialShaderManifestEntries.push(...validatedMaterialShaderEntries);
+    this.#admitted = admitted;
     this.#manifestLoaded = true;
     markShaderManifestStage('shader-manifest-validated', {
       url: this.#manifestUrl,

@@ -33,7 +33,7 @@
   "devDependencies": {
     "@forgeax/apps-shared": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "@forgeax/engine-fbx": "workspace:*",
     "@forgeax/engine-import": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",

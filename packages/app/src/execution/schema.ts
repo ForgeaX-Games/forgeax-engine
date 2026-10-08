@@ -176,13 +176,33 @@ export function isExecutionReport(value: unknown): value is ExecutionReport {
   }
   if (
     !isRecord(audio) ||
-    !hasExactKeys(audio, ['owner', 'contextState', 'activeSourceCount', 'lastError'])
+    !hasExactKeys(audio, [
+      'owner',
+      'contextState',
+      'activeSourceCount',
+      'lastError',
+      ...('streaming' in audio ? ['streaming'] : []),
+    ])
   )
     return false;
   if (audio.owner !== 'host') return false;
   if (!['running', 'suspended', 'closed'].includes(audio.contextState as string)) return false;
   if (!Number.isInteger(audio.activeSourceCount) || (audio.activeSourceCount as number) < 0)
     return false;
+  if ('streaming' in audio) {
+    const counters = [
+      'encodedBytes',
+      'pcmBytes',
+      'pendingBytes',
+      'pendingReads',
+      'underruns',
+    ] as const;
+    if (!isRecord(audio.streaming) || !hasExactKeys(audio.streaming, counters)) return false;
+    for (const key of counters) {
+      if (!Number.isInteger(audio.streaming[key]) || (audio.streaming[key] as number) < 0)
+        return false;
+    }
+  }
   if (audio.lastError !== null) {
     if (!isRecord(audio.lastError)) return false;
     if (!hasExactKeys(audio.lastError, ['code', 'expected', 'hint', 'detail'])) return false;

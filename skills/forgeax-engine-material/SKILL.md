@@ -73,6 +73,13 @@ inspect `renderer.inspect().transmission` for detached capability/resource/lifec
 transmission is producer-owned and must be repaired through source -> Pack -> GUID load, including the
 structured BLEND rejection path.
 
+On a 16-sampled-texture device, transmission shares the `metallicTexture` / `roughnessTexture` /
+`alphaTexture` slots. Authoring one of those split maps on a transmissive material there drops
+refraction and reports `MaterialSampledTextureBudgetExceededError` (`detail.conflicts` names the
+maps); remove them or target a 21-texture device. Check before rendering with
+`materialSampledTextureBudget(world, assets, handle)` or the `material.preview` result's
+`sampledTextureBudget`. Contract: `packages/render/README.md` §Standard sampled-texture budget.
+
 ## Diffuse transmission (foliage, paper, thin cloth)
 
 Back-lit thin surfaces use `diffuseTransmission` (0..1) and `diffuseTransmissionColor`, with optional
@@ -104,6 +111,24 @@ matches Unreal's path-traced balance, and do not port its GGX back-scatter peak 
 
 A glTF source carrying the extension imports through the same fields; out-of-range values fail as
 `gltf-material-physical-invalid`.
+
+## Projection and non-PBR materials
+
+| Need | Entry |
+|:--|:--|
+| Texture without usable UVs (rocks, terrain, kitbash) | `Materials.standard({ ..., triplanar: { space: 'world' \| 'object', scale, sharpness } })` |
+| Baked object-space normal map | `Materials.standard({ normalTexture, normalMapSpace: 'object' })` |
+| Diffuse only, no highlight | `Materials.lambert({ baseColor, ... })` |
+| Lit look without lights (sculpt, preview) | `Materials.matcap({ texture, sampler })` |
+| Debug the shading normal | `Materials.normal()` |
+
+`space: 'object'` keeps the texture on a moving mesh; `'world'` keeps it in the
+world. Triplanar refuses alpha masking and the slots it cannot project, and
+object-space normals refuse `bumpTexture`, with `material-authoring-contract-invalid`
+(`detail.parameter` names the option). Neither reaches the ray reference
+(`ray-material-unsupported`). Matcap and Normal are unlit: no lights, no
+shadow receipt. Evidence and falsifiers live in `apps/hello/material-projection`
+(render README §Projection and the non-PBR material family).
 
 ## Order-independent transparency
 
@@ -155,10 +180,23 @@ that same data.
 For a render target or reflection probe, the material consumes the public
 `RenderTargetTextureSource` projection produced by the Renderer. The source is
 bound to the named texture slot with its exact dimension and mip view; it is not
-an asset handle or an app-local texture registry. Probe sampling uses the
+an asset handle or an app-local texture registry. A `3d` or `2d-array` target
+binds to a `texture_3d` or `texture_2d_array` param (source `dimension: '3d'` /
+`'2d-array'`); a material sampling a target is excluded from that target's own
+capture. Probe sampling uses the
 renderer-owned selected probe, roughness mip, local box projection, and
 Skylight irradiance fallback. Read pixels only after the matching
 `FrameReceipt.completed` promise resolves.
+
+A caller `GPUTexture` or a video uses `renderer.importTexture({ kind:
+'gpu-texture' | 'video', ... })`; bind `handle.source` through
+`world.allocSharedRef('ExternalTextureSource', ...)` into any texture slot
+(ordinary slots copy video frames). For zero-copy video, the root declares a
+`texture_external` parameter and the entity uses a child material
+`{ kind: 'material', parent: rootGuid, values: { slot: source } }`; spreading the
+loaded root payload into a new object loses its cooked projection. Branch on
+`external-texture-invalid` / `external-texture-state-invalid` `detail.reason`
+(`packages/render/README.md` §External textures).
 
 Standard PBR always applies geometric specular anti-aliasing: roughness widens
 by the screen-space normal spread in Forward, Deferred, IBL, and clearcoat.
@@ -200,7 +238,8 @@ asset and material owners:
 
 1. Confirm the `MeshAsset` has `point-list` or paired `line-list` topology.
 2. Admit exactly one `Points` or `Lines` component with finite positive
-   `sizePx` or `widthPx`.
+   `sizePx` or `width`. `Lines.widthUnits` selects `pixels` (default) or
+   `world`; `Lines.cap` selects `butt` (default) or `round` ends and joins.
 3. Select `Materials.unlit`; do not author a replacement shader or mesh.
 4. Let Standard extract, prepare, and record the retained expansion.
 5. Use `renderer.inspect` and the RHI debug capture when source, derived,

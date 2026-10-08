@@ -733,6 +733,25 @@ It requires the recorder to be absent, measures raw/combined in ABBA order with
 5 ms reconstruction / 15% median App-step / 256 bytes-per-texel bounds. These are
 acceptance targets; a completed script without a passing report is not acceptance.
 
+### Lite reflections
+
+`diffuseGi.reflections` adds a dedicated world-traced specular ray per texel and
+composes it before SSR. The ordinary-frame Dawn fixture covers raw and combined
+modes:
+
+```bash
+pnpm ci:graphics --probe dawn -- pnpm exec vitest run --project=dawn \
+  packages/runtime/src/__tests__/renderer-reflections.dawn.test.ts --maxWorkers=1
+```
+
+It checks that a mirror sees an emitter behind the camera at the path-tracer radiance
+times a quadrature GGX albedo, that glossy and rough receivers spread the band, that a
+matte occluder removes it (leak falsifier), that SSR misses keep the same value, and
+that the composite equals the SSR fallback (single count). It also records
+`ray-*` GPU pass timings, the tape, and replay equality with a missing-composite
+falsifier. Evidence goes to `FORGEAX_RAY_EVIDENCE` (default
+`artifacts/raytracing/lite-reflections/dawn`).
+
 ### Distance-field admission audit
 
 Run `bun scripts/raytracing/gltf/audit-distance-fields.mjs <source.gltf> <output>`
@@ -868,11 +887,41 @@ node scripts/raytracing/gltf/falsify-global-sdf-prefixes.mjs <query-input> <froz
 
 Prefix diagnosis first reproduces the frozen composition and full-cohort query
 byte-for-byte, then changes only `maxSteps`. Each prefix retains every input ray;
-selected indices only bound the captured step history. RHI Debug replays every
-prefix on a fresh device. Nonterminal positions are sampled positions; terminal
+selected indices only bound the captured step history. After releasing the
+producer, RHI Debug creates one fresh device and replays all prefixes on it. Nonterminal positions are sampled positions; terminal
 hits include pullback. Both commands require a new output directory. The
 falsifier changes a grid byte and a non-selected ray result independently; each
 must fail whole-cohort admission before a capture is accepted.
+
+For a query produced by an ordinary Renderer frame, use its original RHI Debug
+capture and the frozen `readResourceAtWork` files. `query-work` is a FrameModel
+work index; `frozen-resource-prefix` names four files ending in `-voxels.bin`,
+`-grid.bin`, `-rays.bin`, and `-hits.bin`:
+
+```bash
+node scripts/raytracing/gltf/trace-global-sdf-prefixes.mjs --capture <frame.rhitape> <query-work> <frozen-resource-prefix> <new-output> <ray-indices>
+node scripts/raytracing/gltf/falsify-global-sdf-prefixes.mjs --capture <frame.rhitape> <query-work> <frozen-resource-prefix> <new-output> <ray-indices>
+```
+
+The capture entry checks the exact current query WGSL, replays the original tape
+on a fresh device, and resolves every buffer through that work's actual binding
+range. All four frozen files must match those readbacks. Settings come from
+binding 4 of the same work; there is no separate native step/factor override.
+The original whole cohort is reproduced before the shared prefix loop, and the
+final control restores the original 16 setting bytes and all hit records.
+Replay on that fresh device checks each complete hit buffer and all 16 settings bytes;
+only the maxSteps word changes. Observed indices bound intermediate history and
+never filter the ray buffer. The capture falsifier independently corrupts a
+voxel and an unobserved ray result; both must fail source admission.
+
+`FORGEAX_RASTER_CDP` selects an existing browser and
+`FORGEAX_RASTER_REPLAY_URL` selects the diagnostic page. When that browser is on
+another host, `FORGEAX_RASTER_RELAY=1` relays only the page origin's HTTP and
+WebSocket traffic through the runner. The command closes its own page and relay
+connections, retaining existing browser targets. Reported times measure
+wall-clock diagnostic transfer/readback/replay overhead, not product GPU or
+frame performance. Failed runs retain `failure.json`; they are not passes.
+
 
 
 | RHI Debug selection | Meaning |
@@ -1037,3 +1086,108 @@ owner. The six falsifiers mutate only private copies: material bytes, re-sealed
 cohort rays, replay coverage, source validation, Global position and Card
 position. They must fail for their
 specific missing invariant; successful diagnostics do not admit cache GI.
+
+## Near-field and Global continuation
+
+The frozen `createSoftwareSdfQuery` composes existing detail and Global queries through
+one GPU interval handoff. It preserves complete source identity and incomplete outcomes;
+it is not an ordinary Renderer GI route. Run the shared Browser/Dawn
+`software-sdf-query` fixture for non-unit rays, near hits, inside starts, missing fields,
+budget exhaustion, repeated recording, exact replay and three omitted-work controls.
+
+For Sponza or another archived composition/query fixture:
+
+```bash
+bun scripts/raytracing/gltf/inspect-software-sdf-query.mjs <input> <captured-output>
+bun scripts/raytracing/gltf/inspect-software-sdf-query.mjs <input> <captured-output> --report <separate-report.json>
+bun scripts/raytracing/gltf/inspect-software-sdf-query.mjs <input> <captured-output> --falsify-continuation
+```
+
+Use `--report` to preserve a frozen capture directory; its parent directory must
+already exist. Without it, the report is written inside the capture directory.
+The last command must fail at the continuation-byte comparison; it changes only an
+in-memory readback copy. The first verifies source/field seeds, original and clipped
+rays, work/resource lineage and every continuation byte. It publishes per-ray near
+state, negative-start metadata, selected route, interval, Global state, geometric
+reference discrepancy and per-work GPU timing samples. Disabled Global results never
+count as final scene misses. Its archived fixture uses 128 detail and 256 Global steps,
+clearance expansion (or explicit `--ray-distance`) and a unit Global minimum-step factor; other configurations need
+an explicit inspector contract update, not silently assumed defaults.
+
+### Thin sheets and open gaps
+
+This independent fixture qualifies visibility before Card or lighting integration.
+It cooks finite two-sided sheets through `buildVisibilityDistanceField`; every
+triangle reference is cross-checked against analytic rectangle intersections.
+No Sponza material, alpha, or signed-interior assumption enters this fixture.
+The primary pnpm CI job runs `node --test scripts/raytracing/gltf/__tests__/*.test.mjs`,
+including the fixed-ray regression across voxel spacing and foreground depth.
+It installs the `.bun-version` runtime required by the source producer explicitly.
+
+```bash
+bun scripts/raytracing/gltf/prepare-thin-gap-sdf.mjs artifacts/thin-gap/input
+# Capture the same manifest with both production detail expansion settings.
+bun scripts/raytracing/gltf/inspect-thin-gap-sdf.mjs \
+  artifacts/thin-gap/input artifacts/thin-gap/clearance \
+  artifacts/thin-gap/ray-distance artifacts/thin-gap/comparison
+```
+
+| Controlled input | Values |
+|:--|:--|
+| Voxel spacing / gap width | 5 and 10 cm / 5 and 20 cm |
+| Foreground sheet depth | 20 and 22.5 cm; outer mesh bounds remain fixed |
+| Caller | World origin at 35 cm height; receiver origin at 0.1 mm height |
+| Rays | 64 by 24 per caller; zero TMin, fixed direction distribution per scene; one masked-source control |
+
+The capture host records composition, detail, continuation and Global for each
+manifest row with a 1 m detail interval. It saves the canonical tape, named buffer
+readbacks and `gpu.json`, including fresh-device replay differences and recorder-off
+timestamps. The paired inspector invokes the existing continuation inspector for
+both settings, writing each derived inspection into the comparison directory so
+even a rejected comparison leaves the captures unchanged. It verifies identical
+shaders, all other seeds and composition
+outputs. It checks source geometry against the field identity and recomputes every
+reference before reporting foreground misses, blocked gaps, closest-surface
+identity and geometric proximity. `analysis.json` retains every ray;
+`summary.json` retains denominators, tape hashes and stage timing medians.
+
+`blockedOpenGap` counts a back-wall reference reported at or before 1 mm behind the
+foreground sheet. This diagnostic threshold is separate from nearest-surface
+distance. A nearby surface does not prove correct first-surface or material
+correspondence. This fixture exposes failure regions; a completed run is not GI
+quality acceptance. See the Harness thin-gap report for frozen captures and its
+standalone capture host.
+
+## Raw Card atlas display
+
+The offline display consumes the five tightly packed readbacks from a Card capture,
+including the native Renderer path before surface lighting exists:
+
+```bash
+node scripts/raytracing/visualize-card-atlas.mjs <prefix> <width> <height> [scale=1]
+# Example: cold-cards.albedoRoughness.bin, cold-cards.normals.bin, etc.
+node scripts/raytracing/visualize-card-atlas.mjs artifacts/cold-cards 48 32 4
+```
+
+Supply the extent from the captured texture descriptor. Inputs are four
+`rgba16float` planes (`albedoRoughness`, `normals`, `emissionMetallic`, `f0Validity`)
+and one `depth32float` plane (`depth`), each named `<prefix>.<plane>.bin`. Output
+`<prefix>.atlas.png` is a nearest-neighbor 3 by 3 contact sheet:
+
+| Left | Middle | Right |
+|:--|:--|:--|
+| Albedo, linear to sRGB | Roughness, linear gray | Shading normal, decoded oct XY |
+| Geometric normal, decoded oct ZW | Emission, Reinhard then sRGB | Metallic, linear gray |
+| F0, linear RGB | Validity status | Depth, linear gray |
+
+`<prefix>.atlas.json` records source SHA-256, byte counts, raw ranges, extent,
+scaling, status counts and display transforms. Normal XY and ZW are two separately
+encoded vectors; the first three raw lanes are not XYZ. Black F0/emission is a
+valid material value, not empty coverage. Validity colors are dark for empty,
+green for admitted, orange for unsupported and magenta for coverage rejected;
+non-admitted attribute panels carry that status color. Wrong byte layout,
+nonfinite texels and unknown status values fail explicitly.
+
+This tool displays captured material data. It does not validate geometry-to-Card
+correspondence, full scene coverage, ray support, radiance or GI. Keep the original
+readbacks and tape alongside the images and run the applicable per-work replay.

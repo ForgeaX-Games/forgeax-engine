@@ -8,6 +8,7 @@ import type {
   Texture,
   TextureView,
 } from '@forgeax/engine-rhi';
+import { RAY_QUERY_BACKEND_UNSUPPORTED } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
 import { RenderGraphBuilder } from '../builder.js';
 import { ok } from '../errors.js';
@@ -39,7 +40,10 @@ function caps(overrides: Partial<RhiDevice['caps']> = {}): RhiDevice['caps'] {
     rgba16floatRenderable: true,
     rg11b10ufloatRenderable: true,
     float32Filterable: true,
+    textureImport: false,
+    externalTexture: false,
     maxColorAttachments: 8,
+    rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     ...overrides,
   };
 }
@@ -909,6 +913,34 @@ describe('RenderGraphBuilder capability, execution, and lifecycle contracts', ()
       );
       expect(compiled.inspect().resources[0]?.byteSize, format).toBe(24);
       expect(compiled.inspect().resourceAllocation?.unknownByteSizeCount, format).toBe(0);
+    }
+  });
+
+  it('counts depth32float array bytes while keeping implementation-dependent depth unknown', () => {
+    for (const format of ['depth32float', 'depth24plus'] as const) {
+      const graph = new RenderGraphBuilder<Frame>();
+      const texture = value(
+        graph.createTexture(format, {
+          format,
+          size: { width: 4, height: 3, depthOrArrayLayers: 8 },
+        }),
+      );
+      const view = value(graph.view(texture, { dimension: '2d', arrayLayerCount: 1 }));
+      graph.addRasterPass('write', {
+        accesses: [{ resource: view, usage: 'depth-stencil-write' }],
+        colorAttachments: [],
+        depthStencilAttachment: { view, depthLoadOp: 'clear', depthStoreOp: 'store' },
+        encode: () => undefined,
+      });
+      const compiled = value(
+        graph.compile({ device: mockDevice(), surfaceSize: { width: 1, height: 1 } }),
+      );
+      const resource = compiled.inspect().resources[0];
+      if (format === 'depth32float') expect(resource?.byteSize).toBe(384);
+      else {
+        expect(resource?.byteSize).toBeUndefined();
+        expect(resource?.byteSizeUnknownReason).toBe('format-or-layout-unknown');
+      }
     }
   });
 

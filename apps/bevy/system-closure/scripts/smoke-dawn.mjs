@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 const FRAMES = Math.max(Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10), 60);
 const gpu = create([]);

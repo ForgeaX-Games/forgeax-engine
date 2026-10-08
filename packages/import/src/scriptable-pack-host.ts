@@ -16,15 +16,15 @@ import {
   type NativeCooker,
   NativeCookerRegistry,
 } from '@forgeax/engine-pack/native-cooker';
-import type {
-  LegacyPackInventoryDocument,
-  ScanSourceDeclaration,
+import {
+  declaredSourceGuids,
+  type LegacyPackInventoryDocument,
+  type ScanSourceDeclaration,
 } from '@forgeax/engine-pack/scanner';
 import {
   type AnyScriptablePackDefinition,
   type DirectPackAssetProjection,
   isScriptablePackAssetKind,
-  parsePackSourceJson,
   projectDirectPackJson,
   projectScriptablePackSceneComponents,
   type ScriptablePackSourceClosureEntry,
@@ -189,14 +189,7 @@ export async function declaredPackExternalOutputs(
         registry: externalImport.importerRegistry,
         fs: externalImport.fsForImport,
       });
-      if (!sourcePackage.ok) {
-        throw new AssetError({
-          code: 'asset-not-imported',
-          expected: 'the Meta importer to produce the requested dependency',
-          hint: 'repair the Meta source and rerun the Pack build',
-          detail: { sourcePath: declaration.sourcePath },
-        });
-      }
+      if (!sourcePackage.ok) throw sourcePackage.error;
       for (const asset of sourcePackage.value.product.assets) {
         if (!required.has(asset.guid.toLowerCase())) continue;
         const parsed = AssetGuid.parse(asset.guid);
@@ -214,12 +207,11 @@ export async function declaredPackExternalOutputs(
     }
     if (declaration.format !== 'pack.json') continue;
     if (declaration.value.schemaVersion === '3.0.0') {
-      const parsed = parsePackSourceJson(declaration.value);
-      if (!parsed.ok || parsed.value.format !== 'direct') continue;
-      const projected = projectDirectPackJson(parsed.value);
-      if (!projected.ok) continue;
+      const parsed = declaration.value;
+      if (parsed.format !== 'direct') continue;
+      const projected = projectDirectPackJson(parsed);
       const prepared = await prepareDirectPackTransport({
-        projected: projected.value,
+        projected,
         sourcePath: declaration.sourcePath,
         sourceRevision: declaration.sourceRevision,
         availableGuids: available,
@@ -229,7 +221,7 @@ export async function declaredPackExternalOutputs(
         ...(cookers.length === 0 ? {} : { cookers }),
         policy: {
           base: '/',
-          packagePath: `assets/${projected.value.packageId}.pack.json`,
+          packagePath: `assets/${projected.packageId}.pack.json`,
           artifactPath: (assetGuid, key) => `${assetGuid}/${key}.bin`,
           sink: () => {},
         },
@@ -238,7 +230,7 @@ export async function declaredPackExternalOutputs(
       const cookedByGuid = new Map(
         prepared.value.finalized.pack.assets.map((asset) => [asset.guid.toLowerCase(), asset]),
       );
-      for (const asset of projected.value.assets) {
+      for (const asset of projected.assets) {
         if (!required.has(asset.guid.toLowerCase())) continue;
         const parsedGuid = AssetGuid.parse(asset.guid);
         if (!parsedGuid.ok) throw parsedGuid.error;
@@ -272,6 +264,78 @@ export async function declaredPackExternalOutputs(
     }
   }
   return outputs;
+}
+
+/** Current-inventory content reads; identity-only references never invoke a producer. */
+export function createDeclaredPackAssetSnapshotSource(
+  declarations: ReadonlyMap<string, ScanSourceDeclaration>,
+  cookers: readonly NativeCooker[] = [],
+  availableGuids: readonly AssetGuidType[] = [],
+  externalImport?: ScriptablePackExternalImportOptions,
+): ScriptablePackAssetSnapshotSource {
+  const available = new Set(availableGuids.map((guid) => AssetGuid.format(guid).toLowerCase()));
+  const owners = [...declarations.values()].flatMap((declaration) => {
+    if (declaration.format === 'meta.json' && externalImport === undefined) return [];
+    const owned = declaredSourceGuids(declaration)
+      .filter((guid) => available.has(guid.toLowerCase()))
+      .map(directGuid);
+    if (owned.length === 0) return [];
+    return [
+      {
+        id: declaration.sourcePath,
+        guids: owned,
+        async build() {
+          try {
+            const outputs = await declaredPackExternalOutputs(
+              new Map([[declaration.sourcePath, declaration]]),
+              cookers,
+              owned,
+              externalImport,
+            );
+            // Retain the existing external snapshot identity and normalized payload.
+            // The staged owner supplies concurrency, retry, and private result clones.
+            return ok(
+              outputs.map((output) => ({ ...output, digest: output.digest ?? 'sha256:staged' })),
+            );
+          } catch (error) {
+            if (
+              error !== null &&
+              typeof error === 'object' &&
+              'code' in error &&
+              typeof error.code === 'string' &&
+              'expected' in error &&
+              typeof error.expected === 'string' &&
+              'hint' in error &&
+              typeof error.hint === 'string'
+            )
+              return err(error as ScriptablePackDomainError);
+            throw error;
+          }
+        },
+      },
+    ];
+  });
+  const known = new Set(
+    owners.flatMap((owner) => owner.guids.map((guid) => AssetGuid.format(guid).toLowerCase())),
+  );
+  const staged = createScriptablePackStagedAssetSnapshotSource({ generation: 1, owners });
+  return {
+    readByGuid(guid) {
+      const key = AssetGuid.format(guid).toLowerCase();
+      // A forward read of another dynamic subject must reach the existing worklist.
+      if (!known.has(key))
+        return Promise.resolve(
+          err(
+            new AssetError({
+              code: 'asset-not-found',
+              expected: `an available Asset snapshot for ${key}`,
+              hint: 'publish the referenced Pack or repair the content dependency',
+            }),
+          ),
+        );
+      return staged.readByGuid(guid);
+    },
+  };
 }
 
 /** Cook the explicit legacy Pack v2 transport without exposing v1 authoring APIs. */

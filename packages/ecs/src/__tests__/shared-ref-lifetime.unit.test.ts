@@ -14,6 +14,7 @@ it('final release does not retain externally disposed payloads', async () => {
       outDir: directory,
       format: ['esm'],
       platform: 'node',
+      noExternal: ['@forgeax/engine-types'],
       config: false,
       dts: false,
       silent: true,

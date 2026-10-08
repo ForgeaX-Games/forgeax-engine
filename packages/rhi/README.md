@@ -177,6 +177,9 @@ The descriptor projections above are wrapped by an internal `ExplicitUndefined<T
 | `rg11b10ufloatRenderable` | `boolean` | `rg11b10ufloat-renderable` feature plus device-level render-attachment probe | feature/device dependent | feature/device dependent | feature/device dependent |
 | `float32Filterable` | `boolean` | `float32-filterable` feature plus filtering sampler/bind-group-layout probe | feature/device dependent | feature/device dependent | feature/device dependent |
 | `maxColorAttachments` | `number` | `device.limits.maxColorAttachments` | adapter limit (fallback `4`) | raw limit (fallback `4`) | backend limit |
+| `textureImport` | `boolean` | `importTexture` can borrow a caller-created native `GPUTexture` of the same device | `true` | `false` (no native WebGPU device) | `false` |
+| `externalTexture` | `boolean` | `GPUDevice.importExternalTexture` exists and the realm has `HTMLVideoElement` or `VideoFrame` | `true` in browsers; `false` on Dawn node (no media realm) | `false` | `false` |
+| `rayQuery` | `RhiRayQueryCaps` | `{ supported: false, reason }` or `{ supported: true, ...RhiRayQueryLimits }` (see §Hardware Ray Query) | `backend-has-no-ray-query` | `backend-has-no-ray-query` | `EXPERIMENTAL_RAY_QUERY` + acceleration-structure limits, else `adapter-lacks-feature` |
 
 AI users gate optional fast paths via `caps.X` instead of try / catch (`caps.X = false` is an explicit signal, never an exception — charter proposition 4). The 3 `@reserved-for-wgpu-native-only` fields (`multiDrawIndirect` / `pushConstants` / `textureBindingArray`) plus the JSDoc-`@note` annotated fields are sourced from the `RhiCaps` interface JSDoc — `LSP hover` over any cap surfaces the per-field rationale.
 
@@ -191,6 +194,67 @@ return a Render status, a pass catalog, a benchmark verdict, or synthetic ticks.
 `RhiNull` and unsupported backends therefore prove refusal/zero behavior only;
 they are not accepted GPU timing evidence. Use the Render entry point and its
 bounded validator for accepted facts.
+
+
+## Hardware Ray Query
+
+`caps.rayQuery` is a closed union, never a boolean plus side fields:
+`{ supported: false, reason: 'backend-has-no-ray-query' | 'adapter-lacks-feature' }`
+or `{ supported: true, maxBlasGeometryCount, maxBlasPrimitiveCount,
+maxTlasInstanceCount, maxAccelerationStructuresPerShaderStage }`. The vocabulary in
+[`src/ray-query.ts`](./src/ray-query.ts) mirrors wgpu 30's experimental
+acceleration-structure API, so a native lowering is a field rename.
+
+| Surface | Contract |
+|:--|:--|
+| `device.createBlas(desc)` / `destroyBlas` | Opaque `Blas`; `geometries` fixes the opaque `float32x3` triangle-list topology (optional `index`) at creation. |
+| `device.createTlas(desc)` / `destroyTlas` | Opaque `Tlas` with `maxInstances`; both take `preference: 'fast-trace' \| 'fast-build'` and `updateMode: 'rebuild' \| 'refit'`. |
+| `encoder.buildAccelerationStructures(blas, tlas)` | BLAS entries build first, then TLAS entries. Instances carry a 12-number row-major 3x4 `transform`, 24-bit `customIndex`, and 8-bit `mask`; each must reference a BLAS built earlier or in the same call. Re-building the same handle is the per-frame update path. |
+| Bind group layout `accelerationStructure: {}` + resource `{ kind: 'accelerationStructure', value: tlas }` | WGSL `var scene: acceleration_structure;`; a TLAS must be built before it is bound. |
+| Shader modules containing `enable wgpu_ray_query;` | Rejected with `feature-not-enabled` unless `caps.rayQuery.supported`; detect with `wgslEnablesRayQuery`. |
+
+Every operation on an unsupported device returns `feature-not-enabled` whose hint
+names the reason; structural mistakes return `rhi-descriptor-invalid`, stale
+handles `destroy-after-destroy`, foreign handles `rhi-not-available`. The shared
+validators (`validateBlasDescriptor`, `validateTlasDescriptor`, `validateBlasBuild`,
+`validateTlasBuild`, `validateRayQueryShader`, `validateRayQueryBindGroupLayout`)
+are the single structural contract every backend applies.
+
+| Backend | `caps.rayQuery` | Evidence |
+|:--|:--|:--|
+| `rhi-webgpu` (browser / Dawn) | `backend-has-no-ray-query` (W3C WebGPU has no ray tracing feature) | [`ray-query.unit.test.ts`](../rhi-webgpu/src/__tests__/ray-query.unit.test.ts) |
+| `rhi-wgpu` (WebGL2) | `backend-has-no-ray-query` | [`ray-query.unit.test.ts`](../rhi-wgpu/src/__tests__/ray-query.unit.test.ts) |
+| `rhi-null` | `backend-has-no-ray-query` by default; `new RhiNullAdapter({ rayQuery: limits })` simulates support structurally (no tracing) | [`ray-query.unit.test.ts`](../rhi-null/src/__tests__/ray-query.unit.test.ts) |
+| `rhi-wgpu-native` (Rust, Vulkan/Metal) | Derived from device features + limits; Mesa lavapipe 25.2 exposes `VK_KHR_ray_query` | GPU vs CPU-oracle test in [`acceleration.rs`](../rhi-wgpu-native/src/acceleration.rs) |
+
+No TypeScript backend reaches native wgpu yet, so no TypeScript device reports
+`supported: true` outside RhiNull simulation (the planned route is the napi-rs design in
+[`rhi-wgpu-native`](../rhi-wgpu-native/README.md#node-binding-design-napi-rs)). Consumers
+select hardware Ray Query only on `caps.rayQuery.supported` and keep a compute/SDF
+traversal for every other device. BLAS geometry buffers carry
+`BLAS_INPUT_BUFFER_USAGE` (`0x400`, wgpu's `BufferUsages::BLAS_INPUT`), refused as data
+without `caps.rayQuery`; `validateBlasBuild` requires it. RHI Debug records and replays
+BLAS/TLAS builds and AS bind groups on the same tape (`@forgeax/engine-rhi-debug`
+§Acceleration structures). The render graph declares TLAS builds and reads
+(`@forgeax/engine-render-graph` §Access vocabulary); the render-side consumer is the world
+traversal seam (`@forgeax/engine-render` §World traversal seam).
+
+## Texture interop and zero-copy video
+
+One external-source seam, three device methods, no new handle kind for the
+borrowed texture:
+
+| Method | Contract |
+|:--|:--|
+| `nativeDevice()` | The backing `GPUDevice` for caller-created interop textures; `feature-not-enabled` without one (rhi-wgpu, rhi-null). |
+| `importTexture(texture)` | Borrows a same-device 2D `GPUTexture` with `TEXTURE_BINDING` as an ordinary `Texture`. Device identity has no spec accessor, so it is proven with one bind inside a validation error scope (async). Foreign device -> `rhi-not-available`; shape/usage -> `rhi-descriptor-invalid`; lost device -> `device-lost`; `caps.textureImport === false` -> `feature-not-enabled`. `destroyTexture` on the handle releases bookkeeping only; the caller's texture is never destroyed. |
+| `importExternalTexture({ source })` | One frame of an `HTMLVideoElement` / `VideoFrame` as an opaque `ExternalTexture`, bound through `{ kind: 'externalTexture' }`. It expires with the current task: import again every frame. An undecoded element or closed frame -> `rhi-descriptor-invalid`; `caps.externalTexture === false` -> `feature-not-enabled`. |
+
+A bind group layout entry `{ externalTexture: {} }` (WGSL `texture_external`,
+`textureSampleBaseClampToEdge`) also accepts a `textureView` resource, so the
+copy fallback and borrowed textures share the same layout and shader. rhi-null
+admits both methods structurally (`caps.textureImport` and `caps.externalTexture`
+are `true`) so renderer lifecycle is unit-testable; it produces no pixels.
 
 ## r32float-mip-sampled-storage receipt
 
@@ -264,6 +328,22 @@ constant and stencil reference belong to the pass and are not recorded in bundle
 Bundle handles have no explicit destroy operation, matching WebGPU. Dropping a cache releases
 its references; submitted GPU work retains the native resources it needs. Render owns scene
 cache admission and retirement; RHI does not infer World or asset revisions.
+
+## Canvas colour space
+
+`CanvasConfiguration.colorSpace` is forwarded exactly as the spec defines it. Proof that a
+space was honoured comes only from `RhiCanvasContext.getConfiguration()`, never from what
+`configure()` returned:
+
+| Backend | `configure({ colorSpace: 'display-p3' })` | `getConfiguration().colorSpace` |
+|:--|:--|:--|
+| `rhi-webgpu` | Forwarded to `GPUCanvasContext` | Echoed from the browser; `undefined` when the host context has no `getConfiguration` |
+| `rhi-wgpu` | Stripped (wgpu surfaces have no presentation colour space or tone mapping) | Omitted |
+| `rhi-null` | Recorded structurally | `getConfiguration()` returns `undefined` |
+
+A missing field is data: callers such as the Render Output Transform treat anything but an
+echoed `'display-p3'` as a structured sRGB fallback. RHI never converts pixels. The shader
+that writes the surface owns the gamut conversion.
 
 ## Evolution contract
 

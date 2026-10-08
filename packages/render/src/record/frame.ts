@@ -8,14 +8,28 @@ import { capsuleConeHalfAngle } from '../capsule-shadow/frame';
 import { inspectCapsuleShadow } from '../capsule-shadow/inspection';
 import { PlanarCaptureState } from '../capture/planar-state';
 import { PlanarReflectionInvalidError } from '../components/planar-reflection';
+import { settleAtmospherePublish, stageAtmospherePublish } from '../environment/storage';
+import { RenderTargetLayerInvalidError } from '../errors/render';
 import type { FogFrame } from '../extract/environment';
 import { collectGpuDrivenMaterialArtifacts } from '../gpu-driven/material-artifacts';
 import { projectMaterialBindingClasses } from '../gpu-driven/material-bindings';
 import { resolveTransparencyView } from '../oit/view';
 import type { RenderResourceScope } from '../publication/resource-scope';
 import { renderAssetByGuid, renderTime } from '../publication/resource-scope';
+import { RendererBakedField } from '../raytracing/renderer-baked-field';
 import { RendererRayDiffuse } from '../raytracing/renderer-diffuse';
+import { RendererIrradianceField } from '../raytracing/renderer-irradiance-field';
+import { RendererProbePlacement } from '../raytracing/renderer-probe-placement';
+import { RendererScreenProbe } from '../raytracing/renderer-screen-probe';
+import { isNativePlacementMaterial } from '../raytracing/scene-field-projection';
+import { renderableDrawKey } from '../scene/draw-key';
 import type { GpuRasterOwnership } from '../scene/render-scene';
+import { renderTargetLayerCount } from '../targets/contracts';
+import {
+  currentDirectionalShadowPublication,
+  directionalShadowSourceChanged,
+  prepareDirectionalCascadeCadence,
+} from './directional-cascade-cadence';
 import {
   buildDispatchPlan,
   cleanPerFrameCaches,
@@ -32,7 +46,10 @@ import { PLANAR_REFLECTION_UNIFORM_OFFSET } from './view-ubo';
 // @forgeax/engine-runtime - RenderSystem record stage: frame.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
 
-import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
+import {
+  resolveAssetHandle,
+  walkMaterialPassesOverSharedRefs,
+} from '@forgeax/engine-assets-runtime';
 import type { RenderReadLease } from '@forgeax/engine-ecs/projection';
 import { frustum, mat4, vec3 } from '@forgeax/engine-math';
 import {
@@ -50,14 +67,18 @@ import {
   type TextureView,
 } from '@forgeax/engine-rhi';
 import type { MaterialShaderArtifact } from '@forgeax/engine-shader';
-import type { MeshAsset } from '@forgeax/engine-types';
+import { TONEMAP_PARAMS_LAYOUT } from '@forgeax/engine-shader';
+import type { MaterialAsset, MeshAsset } from '@forgeax/engine-types';
 import { BUILTIN_BASE, handleSlot, toShared } from '@forgeax/engine-types';
 import { isTimestampQueryAdmitted } from '../assembly/device-feature-admission';
 import type { ExtractedCloudLayer } from '../cloud/extract';
 import { cloudShadowResolutionForQuality } from '../cloud/parameters';
 import { type CloudShadowProjection, createCloudShadowProjection } from '../cloud/shadow';
 import { CUBE_CAMERA_FACE_ORDER } from '../components/cube-camera';
-import type { DirectionalShadowQuality } from '../components/directional-shadow-filter';
+import {
+  type DirectionalShadowQuality,
+  directionalShadowFilterRadiusTexels,
+} from '../components/directional-shadow-filter';
 import type { MeshGpuHandles } from '../device/gpu-residency';
 import {
   ObservationUnavailableError,
@@ -74,12 +95,23 @@ import {
   resolveDepthOfFieldFrameParams,
 } from '../features/depth-of-field/depth-of-field-params';
 import { LENS_EFFECTS_POST_PROCESS_ID, packLensEffectsParams } from '../features/lens-effects';
-import type { GpuDrivenProduction, PreparedGpuDrivenFrame } from '../gpu-driven/production-raster';
-import { type ShadowViewIdentity, shadowViewIdentityKey } from '../gpu-driven/shadow-views';
+import { LENS_FLARE_PROGRAMS, packLensFlareParams } from '../features/lens-flare';
+import type {
+  GpuDrivenProduction,
+  PreparedGpuDrivenFrame,
+  ShadowViewRequest,
+} from '../gpu-driven/production-raster';
+import {
+  type ShadowCameraCullDilation,
+  type ShadowViewIdentity,
+  shadowCameraCullDilation,
+  shadowViewIdentityKey,
+} from '../gpu-driven/shadow-views';
 import type { GpuDrivenLodSubmitIdentity } from '../gpu-driven/view-gpu';
 import { GPU_TEXTURE_USAGE_COPY_SRC } from '../gpu-texture-usage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_MAP_READ } from '../gpu-usage';
 import type { ShadowViewInvalidationReason } from '../inspection-types';
+import { OUTPUT_GAMUT_CODE } from '../output-color-space';
 import {
   DynamicResolutionController,
   gpuPassFrameMilliseconds,
@@ -92,6 +124,7 @@ import type {
   SpotLightProjectorFrameContext,
   VolumetricFogFrameContext,
 } from '../render-contract';
+import { STANDARD_OUTPUT_TRANSFORM_FEATURE_ID } from '../render-contract';
 import type {
   DispatchEntry,
   ExtractedLights,
@@ -106,7 +139,6 @@ import type {
   PersistentGpuDrivenState,
   PersistentShadowCasterProjection,
 } from '../scene/render-scene';
-import type { OcclusionFrameProjection } from '../scene/visibility/occlusion-runtime';
 import { SHADOW_ATLAS_DEFAULT_LAYERS } from '../shadow-atlas';
 import {
   admitSsrSpatial,
@@ -115,6 +147,7 @@ import {
 } from '../ssr/admission';
 import { createSsrHistoryOwner } from '../ssr/history';
 import type { SurfaceDynamicInputFrame } from '../surface/dynamic-input';
+import { terrainShadowReceivers } from '../terrain/shadow-family';
 import type { TransmissionDemand } from '../transmission/projection';
 import { hasVolumetricFogCapability } from '../volume/capability';
 import { inspectVolumetricFogResources } from '../volume/resources';
@@ -138,6 +171,7 @@ import {
   makeZeroCameraFallbackSnapshot,
   type ReflectionFallbackReadbackRequest,
   type RenderFrameState,
+  resetFrameRecordingOutputs,
   type ValidatedRenderable,
   validateGraphTargetCaptureReadback,
   worldEntityKey,
@@ -151,7 +185,12 @@ import {
   type RenderSystemInternals,
   runRecordProfilePhase,
 } from './render-context';
-import { prepareVolumetricFogFrame, stageVolumetricFogParams } from './volume-params';
+import {
+  emptyVolumetricFogParams,
+  prepareVolumetricFogFrame,
+  promoteVolumetricFogParams,
+  stageVolumetricFogParams,
+} from './volume-params';
 
 export {
   buildDispatchPlan,
@@ -177,9 +216,6 @@ function residencyValidationCacheKey(
 ): string {
   return [world.identity, ...worlds.map((candidate) => candidate.identity)].join('\u001f');
 }
-function renderableIdentity(snapshot: Pick<RenderableSnapshot, 'worldId' | 'entityKey'>): string {
-  return `${snapshot.worldId}:${snapshot.entityKey}`;
-}
 
 /**
  * Project one shared validation result into a cull-specific renderable index
@@ -192,12 +228,12 @@ function projectValidatedRows(
   target: readonly RenderableSnapshot[],
 ): ValidatedRenderable[] {
   const byIdentity = new Map<string, ValidatedRenderable>();
-  for (const row of validated) byIdentity.set(renderableIdentity(row.source), row);
+  for (const row of validated) byIdentity.set(renderableDrawKey(row.source), row);
   const projected: ValidatedRenderable[] = [];
   for (let index = 0; index < target.length; index += 1) {
     const snapshot = target[index];
     if (snapshot === undefined) continue;
-    const row = byIdentity.get(renderableIdentity(snapshot));
+    const row = byIdentity.get(renderableDrawKey(snapshot));
     if (row === undefined) continue;
     projected.push({ ...row, source: snapshot, renderableIndex: index });
   }
@@ -331,6 +367,7 @@ import {
   warnMultiSkybox,
   warnMultiSkylight,
 } from './helpers';
+import { hasSsrSceneInputs } from './main-pass';
 import { computeSplitLdrSprite } from './main-pass-sprite-draws';
 import { uploadMeshSsboBatch } from './mesh-ssbo';
 import { writeShadowCasterUniforms } from './shadow-pass';
@@ -424,13 +461,14 @@ function prepareCubeCapture(
   for (const item of work) {
     const physical = internals.getRenderTargetPhysical?.(item.target);
     if (physical === undefined) continue;
-    const faceIndex = CUBE_CAMERA_FACE_ORDER.indexOf(item.face);
-    if (faceIndex < 0) continue;
+    const layer = CUBE_CAMERA_FACE_ORDER.indexOf(item.face);
+    if (layer < 0) continue;
     const faceWorld = mat4.create();
     mat4.invert(faceWorld, item.view);
     physicalWork.push({
       target: item.target,
-      faceIndex,
+      candidateGeneration: item.candidateGeneration,
+      layer,
       physical,
       faceCamera: {
         ...displayCamera,
@@ -468,10 +506,19 @@ function prepareCubeCapture(
       camera.planarReflection === undefined
         ? internals.getRenderTargetPhysical?.(camera.target)
         : planarCapture?.physical;
-    if (physical?.descriptor.shape !== '2d') continue;
+    if (physical === undefined || physical.descriptor.shape === 'cube') continue;
+    const layer = camera.targetLayer ?? 0;
+    const layerCount = renderTargetLayerCount(physical.descriptor);
+    if (!Number.isInteger(layer) || layer < 0 || layer >= layerCount)
+      throw new RenderTargetLayerInvalidError({
+        operation: 'write',
+        layer,
+        shape: physical.descriptor.shape,
+        layerCount,
+      });
     physicalWork.push({
       target: camera.target,
-      faceIndex: 0,
+      layer,
       physical,
       faceCamera: camera,
     });
@@ -541,8 +588,8 @@ function createReflectionFallbackReadbackRequest(
   if (!frameState.reflectionFallbackDemand || frameState.reflectionFallbackReadback !== undefined) {
     return undefined;
   }
-  const graph = frameState.perFrameGraph;
-  if (graph === undefined || graph === null) return undefined;
+  const graph = frameState.compiledFrameGraph?.targets;
+  if (graph === undefined) return undefined;
   const descriptor = graph.getColorTargetDescriptor('reflection-fallback-linear-hdr');
   const texture = graph.getColorTargetTexture('reflection-fallback-linear-hdr');
   if (
@@ -665,12 +712,8 @@ function retireVolumetricFogParams(
   internals: RenderSystemInternals,
   frameState: RenderFrameState,
 ): void {
-  const buffers = frameState.volumetricFogParamsBuffers;
-  frameState.volumetricFogParamsBuffers = [null, null];
-  frameState.volumetricFogParamsPendingSlot = null;
-  frameState.volumetricFogParamsAcceptedSlot = null;
-  frameState.volumetricFogAcceptedParams = undefined;
-  frameState.volumetricFogPendingParams = undefined;
+  const buffers = frameState.volumetricFogParams.buffers;
+  frameState.volumetricFogParams = emptyVolumetricFogParams();
   const live = buffers.filter((buffer): buffer is Buffer => buffer !== null);
   if (live.length === 0) return;
   const device = internals.device;
@@ -699,14 +742,20 @@ function volumeRevision(values: readonly number[]): number {
 /** Resolve the stable world-space projection shared by cloud and lighting. */
 function cloudShadowProjectionFor(
   cloudLayer: ExtractedCloudLayer | undefined,
-): CloudShadowProjection | undefined {
+):
+  | (CloudShadowProjection & { readonly baseHeight: number; readonly thickness: number })
+  | undefined {
   if (cloudLayer?.sunDirection === undefined) return undefined;
-  return createCloudShadowProjection({
-    center: [0, 0, 0],
-    sunDirection: cloudLayer.sunDirection,
-    range: cloudLayer.params.shadowRange,
-    resolution: cloudShadowResolutionForQuality(cloudLayer.params.quality),
-  });
+  return {
+    ...createCloudShadowProjection({
+      center: [0, 0, 0],
+      sunDirection: cloudLayer.sunDirection,
+      range: cloudLayer.params.shadowRange,
+      resolution: cloudShadowResolutionForQuality(cloudLayer.params.quality),
+    }),
+    baseHeight: cloudLayer.params.baseHeight,
+    thickness: cloudLayer.params.thickness,
+  };
 }
 
 function volumeTemporalSignature(
@@ -723,6 +772,7 @@ function volumeTemporalSignature(
     ...camera.world,
     camera.fov,
     camera.aspect,
+    camera.eye?.frustumShift ?? 0,
     camera.near,
     camera.far,
     camera.orthoLeft,
@@ -970,9 +1020,9 @@ function stageAcceptedVolumetricFogFrame(
   accepted: VolumetricFogFrameContext | undefined,
 ): VolumetricFogFrameContext | undefined {
   if (accepted === undefined) return undefined;
-  const params = frameState.volumetricFogAcceptedParams;
+  const params = frameState.volumetricFogParams.accepted?.params;
   if (params === undefined) return accepted;
-  const paramsBuffer = stageVolumetricFogParams(internals, frameState, new Float32Array(params));
+  const paramsBuffer = stageVolumetricFogParams(internals, frameState, params);
   if (paramsBuffer === undefined) return accepted;
   return { ...accepted, paramsBuffer };
 }
@@ -1091,7 +1141,6 @@ function stageSsrHistoryCandidate(
       });
       frameState.ssrHistoryOwner = undefined;
     }
-    frameState.ssrHistoryCandidate = undefined;
     frameState.ssrLastCameraEntity = camera.entityKey;
     frameState.ssrLastHistoryVersion = camera.historyVersion;
     return true;
@@ -1168,7 +1217,6 @@ function stageSsrHistoryCandidate(
     return false;
   }
   frameState.ssrTemporalParamsPayload = payload;
-  frameState.ssrHistoryCandidate = candidate;
   frameState.ssrLastCameraEntity = camera.entityKey;
   frameState.ssrLastHistoryVersion = camera.historyVersion;
   return true;
@@ -1186,8 +1234,8 @@ function updateVolumetricFogInspection(
   const resourceFacts =
     frameState.compiledFrameGraph === undefined || frameState.compiledFrameGraph === null
       ? undefined
-      : inspectVolumetricFogResources(frameState.compiledFrameGraph.inspect(), {
-          parameterBufferCount: frameState.volumetricFogParamsBuffers.filter(
+      : inspectVolumetricFogResources(frameState.compiledFrameGraph.graph.inspect(), {
+          parameterBufferCount: frameState.volumetricFogParams.buffers.filter(
             (buffer) => buffer !== null,
           ).length,
         });
@@ -1458,9 +1506,10 @@ export function* prepareFrameRecording(
     readonly onRasterLane: (owned: GpuRasterOwnership | undefined) => void;
     readonly activeEntityKeys?: ReadonlySet<number>;
     readonly activeEntityRevision?: number;
+    /** Extraction culling count; GPU-owned candidates can stay in residency rows. */
+    readonly visibleRasterRows: number;
     readonly telemetryCandidateCount?: number;
     readonly telemetrySubmit?: GpuDrivenLodSubmitIdentity;
-    readonly occlusion?: OcclusionFrameProjection;
     readonly frameTime?: number;
     readonly deviceGeneration?: number;
     readonly surfaceDynamicInput?: SurfaceDynamicInputFrame;
@@ -1529,6 +1578,15 @@ export function* prepareFrameRecording(
   const captureOnly = cubeCapture?.captureOnly === true;
   let submitted = false;
   const captureFrames: Array<
+    ReturnType<
+      typeof prepareTargetCaptureLighting<import('./target-capture-graph').CubeCaptureGraphWork>
+    > & {
+      graph: import('@forgeax/engine-render-graph').CompiledRenderGraph<
+        import('../render-pipeline').RenderPipelineFrame
+      >;
+    }
+  > = [];
+  const probeCaptureFrames: Array<
     ReturnType<typeof prepareTargetCaptureLighting> & {
       graph: import('@forgeax/engine-render-graph').CompiledRenderGraph<
         import('../render-pipeline').RenderPipelineFrame
@@ -1563,9 +1621,54 @@ export function* prepareFrameRecording(
       frameDepthOfField === undefined || frameDepthOfField === requestedCamera.depthOfField
         ? requestedCamera
         : { ...requestedCamera, depthOfField: frameDepthOfField };
+    if (
+      internals.standardProfile?.probePlacement !== undefined &&
+      (captureOnly ||
+        cameras.length !== 1 ||
+        camera.projection !== 'perspective' ||
+        (cubeCapture?.scheduledWork.length ?? 0) > 0 ||
+        (cubeCapture?.auxiliaryCameras.length ?? 0) > 0 ||
+        (cubeCapture?.sceneInputs?.length ?? 0) > 0 ||
+        (cubeCapture?.reflectionProbes?.graph.work.length ?? 0) > 0 ||
+        (internals.featureSceneInputs?.work.length ?? 0) > 0 ||
+        camera.planarReflection !== undefined)
+    ) {
+      frameState.probePlacement?.disable();
+      throw new RhiError({
+        code: 'rhi-not-available',
+        expected:
+          'one perspective display view without auxiliary, Cube, reflection or scene-input capture views for probe placement',
+        hint: 'disable placement or remove the additional views before recording',
+      });
+    }
     frameState.ssrRequested = camera.screenSpaceReflection !== undefined;
     const pipelineState = internals.getPipelineState();
     if (pipelineState === null) return false;
+    if (
+      frameState.environmentFrame?.source.kind === 'atmosphere' &&
+      (pipelineState.atmosphereAvailable !== true ||
+        !internals.device.caps.compute ||
+        !internals.device.caps.storageTexture ||
+        !internals.device.caps.rgba16floatRenderable ||
+        (internals.device.limits.maxTextureDimension3D ?? 0) < 32)
+    ) {
+      throw new RhiError({
+        code: 'rhi-not-available',
+        expected: `Atmosphere admission: bindings=${pipelineState.atmosphereAvailable}, compute=${internals.device.caps.compute}, storage=${internals.device.caps.storageTexture}, float=${internals.device.caps.rgba16floatRenderable}, dimension3D=${internals.device.limits.maxTextureDimension3D}, sampled=${internals.device.limits.maxSampledTexturesPerShaderStage}`,
+        hint: 'select a device meeting the atmosphere capabilities or remove Atmosphere',
+        detail: {
+          error: {
+            code: 'atmosphere-capability-unavailable',
+            message: 'Atmosphere device admission failed',
+            detail: {
+              atmosphereAvailable: pipelineState.atmosphereAvailable,
+              caps: internals.device.caps,
+              limits: internals.device.limits,
+            },
+          },
+        },
+      });
+    }
     if (pipelineState.device !== internals.device) {
       internals.errorRegistry.fire(
         new RendererOperationError('device-operation-failed', {
@@ -1583,13 +1686,11 @@ export function* prepareFrameRecording(
       );
       return false;
     }
-    frameState.currentFrameObservationSource = undefined;
+    resetFrameRecordingOutputs(frameState.frameOutputs);
     if (frameState.reflectionFallbackReadback !== undefined) {
       internals.device.destroyBuffer(frameState.reflectionFallbackReadback.buffer);
       frameState.reflectionFallbackReadback = undefined;
     }
-    frameState.currentDirectionalShadowView = null;
-    frameState.currentSpotShadowView = null;
 
     // Record-stage fold operator linear scan (groups transparent-sort entries
     // into fold buckets + records the fold-eligible count metric). Extracted to
@@ -1671,6 +1772,62 @@ export function* prepareFrameRecording(
       return false;
     }
     const { foldBuckets, light, standard } = lightingPreparation.value;
+    // Do not fill the GPU queue with fallback display frames while an authored
+    // image is being prepared. Retain the picture and use the ordinary barrier;
+    // no scene graph, history or draw receipt is promoted by this pending work.
+    // Capture and nonempty Feature dependencies keep their complete recording path.
+    const imagePending = [skylight?.equirectHandle, skybox?.equirectHandle].some(
+      (handle) =>
+        handle !== undefined &&
+        handle !== 0 &&
+        internals.gpuStore.getCubemapStatus(toShared<'EquirectAsset'>(handle)) === 'pending',
+    );
+    const deferImageDisplay =
+      imagePending &&
+      frameState.lastSuccessfulBarrelDistortion !== undefined &&
+      frameState.lastSuccessfulBarrelDistortion.width === internals.canvas.width &&
+      frameState.lastSuccessfulBarrelDistortion.height === internals.canvas.height &&
+      !captureOnly &&
+      cameras.length === 1 &&
+      (camera.output === undefined ||
+        (camera.output.exposure.kind === 'manual' &&
+          camera.output.colorLut === 0 &&
+          camera.output.colorLutStrength === 0)) &&
+      frameState.autoExposureState === undefined &&
+      frameState.standardLutState.lastKnownGood === null &&
+      camera.dynamicResolution === undefined &&
+      (featureGraphCandidate?.plans.every(
+        ({ plan }) => plan.resources.length === 0 && plan.passes.length === 0,
+      ) ??
+        true) &&
+      (featureGraphCandidate?.fullscreenEffects.size ?? 0) === 0 &&
+      (cubeCapture?.scheduledWork.length ?? 0) === 0 &&
+      (cubeCapture?.auxiliaryCameras.length ?? 0) === 0 &&
+      (cubeCapture?.sceneInputs?.length ?? 0) === 0 &&
+      (cubeCapture?.reflectionProbes?.graph.work.length ?? 0) === 0 &&
+      camera.planarReflection === undefined;
+    if (deferImageDisplay) {
+      const pendingEncoder =
+        sharedEncoder === undefined
+          ? internals.device.createCommandEncoder({ label: 'environment-pending' })
+          : ok(sharedEncoder);
+      if (!pendingEncoder.ok) {
+        internals.errorRegistry.fire(pendingEncoder.error);
+        return false;
+      }
+      const generation = internals.deviceScope.generation;
+      const pending = yield {
+        encoder: pendingEncoder.value,
+        device: internals.device,
+        beforeSubmit: internals.beforeSubmit,
+        isCurrent: () => internals.deviceScope.generation === generation,
+        reportError: (error: RhiError) => internals.errorRegistry.fire(error),
+      };
+      submitted = pending.ok;
+      featureGraphCandidate?.onRejected?.();
+      return submitted;
+    }
+
     // Deferred lighting is the only lane that shades capsule shadows, so only
     // there may admitted characters leave the directional cascades.
     const capsuleShadowDirectional = standard.prepared.renderPath === 'deferred';
@@ -1783,13 +1940,17 @@ export function* prepareFrameRecording(
     const reflectionFallbackCandidate =
       cubeCapture?.reflectionProbes?.fallbackDemand === true ||
       (ssrDependencies?.requested === true && ssrDependencies.reflectionFallback !== undefined);
+    // The forward Standard PBR GPU raster owns one color target while the
+    // reflection fallback adds an MRT attachment, so a forward frame keeps the
+    // ordinary CPU producer. Deferred writes the fallback in its lighting pass,
+    // never in a raster pass, so the G-buffer keeps the GPU-driven lane (and
+    // the visible-surface table that ray-traced GI requires).
+    const fallbackLaneLimit =
+      reflectionFallbackCandidate && standard.prepared.renderPath !== 'deferred';
     frameState.surfaceSubmissionObservation?.setActualLaneReason(
-      reflectionFallbackCandidate ? 'reflection-fallback-mrt' : undefined,
+      fallbackLaneLimit ? 'reflection-fallback-mrt' : undefined,
     );
-    // The Standard PBR GPU raster owns one color target. Reflection fallback
-    // adds an MRT attachment, so keep this frame on the ordinary CPU producer
-    // instead of claiming rows that the one-target GPU pipeline cannot draw.
-    const frameGpuDriven = reflectionFallbackCandidate ? undefined : gpuDriven;
+    const frameGpuDriven = fallbackLaneLimit ? undefined : gpuDriven;
     // Capture views have independent draw ownership; display-camera GPU work
     // remains active while their faces and SSR fallback attachments are recorded.
     // ProbeBlendRecord is a shared object-level fragment ABI. The prepared
@@ -1849,16 +2010,12 @@ export function* prepareFrameRecording(
       ? projectValidatedRows(validatedProjection, renderables)
       : validatedProjection;
 
-    // S_fallback is the second output of the built-in Standard PBR BRDF. A
-    // graph may still carry the detached owner tickets for inspection, but
-    // the MRT is admitted only when every CPU-rendered primary row in this
-    // frame uses that exact output contract. Unsupported compositions remain
-    // fail-closed for SSR instead of submitting a device-invalid command.
-    const sceneInputs =
-      validatedForResidency.length > 0 &&
-      validatedForResidency.every(
-        (entry) => entry.source.material.materialShaderId === 'forgeax::default-standard-pbr',
-      );
+    // Deferred SSR consumes only the opaque G-buffer selection. Later forward,
+    // transparent and medium layers do not publish into its receiver buffers.
+    const sceneInputs = hasSsrSceneInputs(
+      { validatedOrdered: validatedForResidency, dispatch: transparentDispatch },
+      standard.prepared.renderPath,
+    );
     const ssrAdmission =
       ssrDependencies === undefined
         ? undefined
@@ -2036,9 +2193,6 @@ export function* prepareFrameRecording(
             ...(frameGpuDriven.telemetrySubmit === undefined
               ? {}
               : { telemetrySubmit: frameGpuDriven.telemetrySubmit }),
-            ...(frameGpuDriven.occlusion === undefined
-              ? {}
-              : { occlusion: frameGpuDriven.occlusion }),
             ...(frameGpuDriven.frameTime === undefined
               ? {}
               : { frameTime: frameGpuDriven.frameTime }),
@@ -2081,25 +2235,32 @@ export function* prepareFrameRecording(
             return false;
           } else if (prepared.value !== undefined) {
             preparedGpuDriven = prepared.value;
-            const shadowViews: Array<{
-              readonly identity: ShadowViewIdentity;
-              readonly planes: Float32Array;
-              readonly matrix: Float32Array;
-              readonly targetSize: number | undefined;
-              readonly graphGeneration: number;
-            }> = [];
+            const shadowViews: ShadowViewRequest[] = [];
             const planesByView = shadowPlanesByView();
-            const pushShadowView = (identity: ShadowViewIdentity, matrix: Float32Array) => {
+            const pushShadowView = (
+              identity: ShadowViewIdentity,
+              matrix: Float32Array,
+              cameraCull?: ShadowCameraCullDilation,
+            ) => {
               shadowViews.push({
                 identity,
                 planes: planesByView.get(shadowViewIdentityKey(identity)) ?? shadowPlanes(matrix),
                 matrix,
                 targetSize: graphShadowMapSize,
                 graphGeneration: frameState.graphGeneration,
+                ...(cameraCull === undefined ? {} : { cameraCull }),
               });
             };
+            const directionalCameraCull =
+              lights.directionalShadowQuality === undefined
+                ? undefined
+                : shadowCameraCullDilation(
+                    directionalShadowFilterRadiusTexels(lights.directionalShadowQuality),
+                    lights.normalBias ?? 0.05,
+                    graphShadowMapSize,
+                  );
             for (const [index, matrix] of (lights.lightViewProj ?? []).entries()) {
-              pushShadowView({ kind: 'directional', index }, matrix);
+              pushShadowView({ kind: 'directional', index }, matrix, directionalCameraCull);
             }
             for (const [index, point] of lights.pointShadow.entries()) {
               for (let face = 0; face < 6; face += 1) {
@@ -2112,7 +2273,15 @@ export function* prepareFrameRecording(
             let shadowSpotIndex = 0;
             for (const spot of lights.spot) {
               if (spot.lightViewProj === undefined) continue;
-              pushShadowView({ kind: 'spot', index: shadowSpotIndex }, spot.lightViewProj);
+              pushShadowView(
+                { kind: 'spot', index: shadowSpotIndex },
+                spot.lightViewProj,
+                shadowCameraCullDilation(
+                  Math.min(2, Math.max(0, (Math.round(spot.pcfKernelSize ?? 3) - 1) / 2)),
+                  0,
+                  graphShadowMapSize,
+                ),
+              );
               shadowSpotIndex += 1;
             }
             const updateShadowViews = prepared.value.updateShadowViews;
@@ -2192,7 +2361,67 @@ export function* prepareFrameRecording(
       internals.deviceScope?.generation ?? 0,
       isTimestampQueryAdmitted(internals.device.caps),
     );
-    if (!captureOnly && internals.standardProfile?.diffuseGi !== undefined) {
+    if (internals.standardProfile?.probePlacement !== undefined) {
+      if (visibleSurface === undefined || frameGpuDriven?.scene === undefined)
+        throw new RhiError({
+          code: 'rhi-not-available',
+          expected: 'the actual visible-surface row projection for placement',
+          hint: 'prepare the ordinary rigid deferred scene',
+        });
+      for (const slot of frameGpuDriven.scene.slots) {
+        if (!visibleSurface.slotBases.has(slot.slot)) continue;
+        for (const draw of slot.snapshot.gpuDrivenDraws ?? []) {
+          if (draw.count === 0) continue;
+          const material = slot.snapshot.materials[draw.materialSlot];
+          const scope = worlds[slot.worldId] ?? world;
+          const handle = toShared<'MaterialAsset'>(material?.materialHandle ?? 0);
+          const source =
+            'resolveAsset' in scope
+              ? resolveAssetHandle<MaterialAsset>(scope, handle)
+              : scope.sharedRefs.resolve<'MaterialAsset', MaterialAsset>(handle);
+          const asset = source.ok ? source : resolveAssetHandle<MaterialAsset>(scope, handle);
+          const projection = asset.ok
+            ? internals.assets.getMaterialProjectionForPayload(asset.value)
+            : undefined;
+          const nativeSource =
+            projection === undefined && !('resolveAsset' in scope)
+              ? walkMaterialPassesOverSharedRefs(scope, handle, internals.assets)
+              : asset;
+          if (
+            material === undefined ||
+            !isNativePlacementMaterial(
+              material,
+              projection,
+              nativeSource.ok ? nativeSource.value : undefined,
+            )
+          )
+            throw new RhiError({
+              code: 'rhi-not-available',
+              expected: 'native lit Standard materials for every admitted placement row',
+              hint: 'publish the selected native Standard program and Surface; custom/unlit rows are not admitted',
+            });
+        }
+      }
+      frameState.probePlacement ??= new RendererProbePlacement();
+      frameState.probePlacementFrame = frameState.probePlacement.prepare({
+        runtime: internals,
+        seeds: internals.standardProfile.probePlacement.seeds,
+        ...(internals.standardProfile.probePlacement.global === undefined
+          ? {}
+          : {
+              globalSource: { scene: frameGpuDriven.scene, worlds, leases: renderReadLeases },
+            }),
+        camera: camera.entityKey ?? 0,
+        world: (worlds[camera.worldId ?? 0] ?? world).identity,
+        records: visibleSurface.records,
+        width: renderExtent?.internalWidth ?? Math.max(1, internals.canvas.width),
+        height: renderExtent?.internalHeight ?? Math.max(1, internals.canvas.height),
+      });
+    } else {
+      frameState.probePlacement?.disable();
+    }
+    const probePlacement = frameState.probePlacementFrame;
+    if (!captureOnly && internals.standardProfile?.diffuseGi?.gather === 'exact') {
       if (frameGpuDriven?.scene === undefined)
         throw new RhiError({
           code: 'rhi-not-available',
@@ -2221,6 +2450,81 @@ export function* prepareFrameRecording(
       frameState.rayDiffuse?.disable();
     }
     const rayDiffuse = captureOnly ? undefined : frameState.rayDiffuse?.ready;
+    const irradianceGi = internals.standardProfile?.diffuseGi;
+    // One persistent field serves both its own per-pixel gather and, as the
+    // world fallback and Card-radiance producer, the Screen Probe gather.
+    const fieldGi =
+      irradianceGi?.gather === 'irradiance-field' || irradianceGi?.gather === 'screen-probe'
+        ? irradianceGi
+        : undefined;
+    if (!captureOnly && fieldGi !== undefined) {
+      if (frameGpuDriven?.scene === undefined)
+        throw new RhiError({
+          code: 'rhi-not-available',
+          expected: `a retained scene for ${fieldGi.gather} diffuse GI`,
+          hint: 'prepare the ordinary deferred scene before enabling diffuse GI',
+        });
+      frameState.irradianceField ??= new RendererIrradianceField();
+      frameState.irradianceField.prepare({
+        runtime: internals,
+        scene: frameGpuDriven.scene,
+        worlds,
+        leases: renderReadLeases,
+        lights: [
+          ...(lights.directional === undefined ? [] : [lights.directional]),
+          ...lights.point,
+          ...lights.spot,
+          ...lights.rect,
+        ],
+        profile: {
+          gather: 'irradiance-field',
+          maxDistance: fieldGi.maxDistance,
+          environment: fieldGi.environment,
+          field: fieldGi.field,
+          ...(fieldGi.reflections === undefined ? {} : { reflections: fieldGi.reflections }),
+        },
+        width: renderExtent?.internalWidth ?? Math.max(1, internals.canvas.width),
+        height: renderExtent?.internalHeight ?? Math.max(1, internals.canvas.height),
+        // Screen Probes own the diffuse view gather; Lite reflections stay field-owned.
+        gatherView: fieldGi.gather === 'irradiance-field',
+        focus: [camera.position[0] ?? 0, camera.position[1] ?? 0, camera.position[2] ?? 0],
+      });
+    } else if (!captureOnly) {
+      frameState.irradianceField?.disable();
+    }
+    const irradianceField =
+      captureOnly || irradianceGi?.gather !== 'irradiance-field'
+        ? undefined
+        : frameState.irradianceField?.ready;
+    // Baked GI only gathers a Catalog volume: no scene, Cards or probe updates.
+    if (!captureOnly && irradianceGi?.gather === 'baked') {
+      frameState.bakedField ??= new RendererBakedField();
+      frameState.bakedField.prepare({
+        runtime: internals,
+        profile: irradianceGi,
+        width: renderExtent?.internalWidth ?? Math.max(1, internals.canvas.width),
+        height: renderExtent?.internalHeight ?? Math.max(1, internals.canvas.height),
+      });
+    } else if (!captureOnly) {
+      frameState.bakedField?.disable();
+    }
+    const bakedField = captureOnly ? undefined : frameState.bakedField?.ready;
+    if (!captureOnly && irradianceGi?.gather === 'screen-probe') {
+      frameState.screenProbe ??= new RendererScreenProbe();
+      frameState.screenProbe.prepare({
+        runtime: internals,
+        profile: irradianceGi,
+        field: frameState.irradianceField?.ready,
+        width: renderExtent?.internalWidth ?? Math.max(1, internals.canvas.width),
+        height: renderExtent?.internalHeight ?? Math.max(1, internals.canvas.height),
+      });
+    } else if (!captureOnly) {
+      frameState.screenProbe?.disable();
+    }
+    const screenProbe = captureOnly ? undefined : frameState.screenProbe?.ready;
+    const terrainReceivers = terrainShadowReceivers(
+      shadowCasterProjection?.renderables ?? renderables,
+    );
     if (cubeCapture !== undefined)
       for (const work of cubeCaptureWork) {
         const lighting = prepareTargetCaptureLighting(
@@ -2238,10 +2542,43 @@ export function* prepareFrameRecording(
           work.faceCamera,
           lighting.lights,
           graphShadowMapSize,
-          { work: [work] },
+          { work: [work], atmosphere: lighting.capturedAtmosphere !== undefined },
           lighting.lighting,
+          undefined,
+          terrainReceivers,
         );
         captureFrames.push({ ...lighting, graph });
+      }
+    if (cubeCapture !== undefined)
+      for (const probe of cubeCapture.reflectionProbes?.graph.work ?? []) {
+        if (probe.rawCaptureFace === undefined || probe.faceCamera === undefined) continue;
+        const work = {
+          ...probe,
+          target: probe.rawTexture,
+          faceCamera: probe.faceCamera,
+          candidateGeneration: probe.captureGeneration ?? 0,
+        };
+        const lighting = prepareTargetCaptureLighting(
+          cubeCapture.state,
+          work,
+          internals,
+          frameState,
+          pipelineState,
+          lights,
+        );
+        const graph = compileTargetCaptureFrameGraph(
+          lighting.runtime,
+          lighting.frameState,
+          lighting.pipeline,
+          work.faceCamera,
+          lighting.lights,
+          graphShadowMapSize,
+          { work: [], atmosphere: lighting.capturedAtmosphere !== undefined },
+          lighting.lighting,
+          { ...probe, viewBindGroupDynamicOffset: 0, step: undefined },
+          terrainReceivers,
+        );
+        probeCaptureFrames.push({ ...lighting, graph });
       }
     const transparencyView = resolveTransparencyView({
       requested: camera.transparency ?? 'sorted',
@@ -2266,7 +2603,6 @@ export function* prepareFrameRecording(
             cubeCapture?.state,
             cameras.length === 0,
             transmissionDemand,
-            frameGpuDriven?.occlusion,
             graphVolumetricFog,
             volumeTopologyCandidate,
             standard,
@@ -2281,6 +2617,7 @@ export function* prepareFrameRecording(
             analyticFog !== undefined && analyticFog.density > 0 && analyticFog.maxOpacity > 0,
             cloudShadowProjection?.resolution,
             transparencyView.topology,
+            terrainReceivers,
           ),
     );
     const acceptedExtent = resolution.submittedExtent;
@@ -2487,10 +2824,22 @@ export function* prepareFrameRecording(
           : { kind: 'off', view: temporalView };
     const recordCamera: CameraSnapshot =
       temporalView.mode === 'taa' ? { ...camera, temporal: temporalView } : camera;
+    const continuousGeometry =
+      canReusePrevious || resetReason === 'environment-change' || resetReason === 'fog-change';
+    const previousViewProjection = previousTemporalView?.currentUnjitteredViewProjection;
+    const previousCameraPosition = previousTemporalView?.currentCameraPosition;
+    screenProbe?.reproject(
+      continuousGeometry &&
+        previousViewProjection !== undefined &&
+        previousCameraPosition !== undefined
+        ? { viewProjection: previousViewProjection, cameraPosition: previousCameraPosition }
+        : undefined,
+    );
     rayDiffuse?.reconstruction?.prepare(temporalView, previousTemporalView, camera);
+    rayDiffuse?.reflections?.reconstruction?.prepare(temporalView, previousTemporalView, camera);
     if (ssrAdmission !== undefined) {
-      const historyWidth = Math.max(1, internals.canvas.width);
-      const historyHeight = Math.max(1, internals.canvas.height);
+      const historyWidth = renderExtent?.internalWidth ?? Math.max(1, internals.canvas.width);
+      const historyHeight = renderExtent?.internalHeight ?? Math.max(1, internals.canvas.height);
       if (
         !stageSsrHistoryCandidate(
           internals,
@@ -2530,9 +2879,7 @@ export function* prepareFrameRecording(
           ? 0
           : Math.max(0, currentTime - previousTime),
       ]);
-      if (frameState.volumetricFogPendingParams !== undefined) {
-        frameState.volumetricFogPendingParams.set(historyParams, 31);
-      }
+      frameState.volumetricFogParams.pending?.params.set(historyParams, 31);
       const historyParamsWritten = internals.device.queue.writeBuffer(
         activeVolumetricFogContext.paramsBuffer,
         31 * Float32Array.BYTES_PER_ELEMENT,
@@ -2715,6 +3062,11 @@ export function* prepareFrameRecording(
           preparedSpotLightProjector?.spotIndex,
           cloudShadowProjection,
           analyticFog,
+          frameState.environmentFrame?.source.kind === 'atmosphere'
+            ? frameState.environmentFrame.source.atmosphere
+            : undefined,
+          false,
+          clock.elapsedSeconds,
         );
         if (pipelineState.pointsLinesViewBuffer !== undefined) {
           writePointsLinesViewUbo(
@@ -2740,6 +3092,7 @@ export function* prepareFrameRecording(
           foldDispatchPlan,
           shadowValidatedOrdered,
           visibleSurface?.entityBases,
+          internals.device.caps.storageBuffer,
         );
       });
     }
@@ -2760,6 +3113,26 @@ export function* prepareFrameRecording(
         ),
     );
     frameState.directionalShadowCacheRecorded = false;
+    const shadowPublication =
+      lights.directionalCsmConfig?.staggerCascades === true &&
+      rasterGpuDriven?.shadowViewPool === undefined
+        ? currentDirectionalShadowPublication(
+            worlds,
+            shadowCasterProjection,
+            frameState.directionalShadowCache,
+          )
+        : undefined;
+    const cascadeCadence =
+      lights.directionalCsmConfig?.staggerCascades === true &&
+      rasterGpuDriven?.shadowViewPool === undefined
+        ? prepareDirectionalCascadeCadence(
+            lights,
+            frameState.directionalShadowCache === null
+              ? undefined
+              : frameState.directionalCascadeCadence,
+            directionalShadowCache.miss,
+          )
+        : undefined;
 
     const encoderResult =
       sharedEncoder === undefined
@@ -2817,21 +3190,6 @@ export function* prepareFrameRecording(
       planarUniform,
     );
     if (!planarUpload.ok) throw planarUpload.error;
-    for (const probe of cubeCapture?.reflectionProbes?.graph.work ?? []) {
-      if (probe.faceCamera === undefined || probe.viewBindGroupDynamicOffset === undefined)
-        continue;
-      writeViewUbo(
-        internals.device.queue,
-        pipelineState.viewUniformBuffer,
-        probe.faceCamera,
-        light,
-        lights,
-        frameState.spotShadowSnapshots,
-        probe.viewBindGroupDynamicOffset,
-        preparedSpotLightProjector?.spotIndex,
-        cloudShadowProjection,
-      );
-    }
 
     // ── feat-20260529-rendergraph-pass-abstraction M4 / w13b ───────────
     // The compiled typed graph is the sole per-frame pass owner.
@@ -2850,6 +3208,22 @@ export function* prepareFrameRecording(
     // builtin motion-blur pass receives its all-zero registration default and
     // becomes a no-op even though the temporal scene target is populated.
     const framePostProcessParams = new Map(postProcessParams);
+    // The negotiated surface color space is renderer state, not camera state: stamp the
+    // effective output gamut into this frame's Output Transform parameters so a fallback
+    // to sRGB never encodes P3 values into an sRGB surface.
+    const outputGamut = OUTPUT_GAMUT_CODE[internals.outputColorSpace?.report.effective ?? 'srgb'];
+    if (outputGamut !== 0) {
+      const extractedTonemap = postProcessParams.get(STANDARD_OUTPUT_TRANSFORM_FEATURE_ID);
+      const tonemap = new Uint8Array(TONEMAP_PARAMS_LAYOUT.byteSize);
+      if (extractedTonemap !== undefined)
+        tonemap.set(extractedTonemap.subarray(0, tonemap.byteLength));
+      new DataView(tonemap.buffer).setUint32(
+        TONEMAP_PARAMS_LAYOUT.outputGamutOffset,
+        outputGamut,
+        true,
+      );
+      framePostProcessParams.set(STANDARD_OUTPUT_TRANSFORM_FEATURE_ID, tonemap);
+    }
     if (camera.motionBlur !== undefined) {
       if (motionBlurDemand) {
         const motionBlurParams = new Uint8Array(MOTION_BLUR_PARAMS_BYTE_SIZE);
@@ -2896,6 +3270,11 @@ export function* prepareFrameRecording(
         packLensEffectsParams(camera.lensEffects, frameState.frameNumber),
       );
     }
+    if (camera.lensFlare !== undefined) {
+      const lensFlareParams = packLensFlareParams(camera.lensFlare);
+      for (const program of LENS_FLARE_PROGRAMS)
+        framePostProcessParams.set(program.name, lensFlareParams);
+    }
     if (submittedBarrelMapping !== undefined && submittedBarrelMapping.strength > 0) {
       framePostProcessParams.set(
         BARREL_DISTORTION_POST_PROCESS_ID,
@@ -2910,6 +3289,7 @@ export function* prepareFrameRecording(
     }
     const passCtx: _InternalRenderPipelineContext = {
       ...(visibleSurface === undefined ? {} : { visibleSurface }),
+      ...(probePlacement === undefined ? {} : { probePlacement }),
       resourceScopes: worlds,
       assets: internals.assets,
       world,
@@ -2965,7 +3345,6 @@ export function* prepareFrameRecording(
       dispatch: transparentDispatch,
       hdrpClusterBindGroup,
       hdrpClusterMembershipBindGroup,
-      ...(frameGpuDriven?.occlusion === undefined ? {} : { occlusion: frameGpuDriven.occlusion }),
       standardLighting: standard,
       foldDispatchPlan,
       materialSlotIndices,
@@ -3012,6 +3391,9 @@ export function* prepareFrameRecording(
       materialBgAssemblyCache: frameState.materialBgAssemblyCache,
       ...(onRenderableDraw === undefined ? {} : { onRenderableDraw }),
       directionalShadowCacheMiss: directionalShadowCache.miss,
+      ...(cascadeCadence?.cascadeMiss === undefined
+        ? {}
+        : { directionalShadowCascadeMiss: cascadeCadence.cascadeMiss }),
       ...(shadowCasterMembership === undefined ? {} : { shadowCasterMembership }),
       capsuleShadowDirectional,
       ...(capsuleShadowLight === undefined ? {} : { capsuleShadowLight }),
@@ -3025,17 +3407,23 @@ export function* prepareFrameRecording(
     uploadMaterialUniforms(passCtx);
     {
       const timing = internals.gpuPassTimingCapture;
-      for (const capture of captureFrames) {
+      for (const capture of [...captureFrames, ...probeCaptureFrames]) {
         writeViewUbo(
           internals.device.queue,
           capture.pipeline.viewUniformBuffer,
           capture.work.faceCamera,
-          light,
+          capture.lights.directional ?? light,
           capture.lights,
           frameState.spotShadowSnapshots,
           0,
           preparedSpotLightProjector?.spotIndex,
           cloudShadowProjection,
+          capture.frameState.environmentFrame?.fog,
+          capture.capturedAtmosphere?.environment.source.kind === 'atmosphere'
+            ? capture.capturedAtmosphere.environment.source.atmosphere
+            : undefined,
+          true,
+          clock.elapsedSeconds,
         );
         const groups = buildPerFrameBindGroups(
           capture.runtime,
@@ -3051,6 +3439,7 @@ export function* prepareFrameRecording(
           ...passCtx,
           ...groups,
           runtime: capture.runtime,
+          capturedAtmosphere: capture.capturedAtmosphere,
           pipelineState: capture.pipeline,
           camera: capture.work.faceCamera,
           shadowViewPlanesByView: shadowViewPlanesByView(capture.lights),
@@ -3059,6 +3448,7 @@ export function* prepareFrameRecording(
           standardLighting: capture.lighting,
         };
         delete context.gpuDrivenShadowViews;
+        delete context.directionalShadowCascadeMiss;
         delete context.gpuDrivenShadowDrawKeys;
         delete context.gpuDrivenShadowDrawKeysByView;
         delete context.gpuDrivenShadowBatchProjections;
@@ -3068,6 +3458,8 @@ export function* prepareFrameRecording(
           timing === undefined ? undefined : createPassTimingInstrumentation(timing),
         );
         if (!executed.ok) throw executed.error;
+        const publishCapture = capture.frameState.pendingAtmospherePublish;
+        if (publishCapture !== undefined) stageAtmospherePublish(frameState, publishCapture);
         internals.framePassNames?.push(...capture.graph.inspect().passes.map((pass) => pass.name));
       }
     }
@@ -3078,7 +3470,7 @@ export function* prepareFrameRecording(
     if (captureOnly) {
       internals.encodeRenderTargetReadbacks?.(
         encoder,
-        cubeCaptureWork.map((work) => work.faceIndex),
+        cubeCaptureWork.map((work) => ({ target: work.target, layer: work.layer })),
       );
       const result = yield {
         encoder,
@@ -3088,6 +3480,9 @@ export function* prepareFrameRecording(
           internals.errorRegistry.fire(error),
       };
       submitted = result.ok;
+      frameState.frameOutputs.sceneSubmitted =
+        submitted && (captureFrames.length > 0 || probeCaptureFrames.length > 0);
+      settleAtmospherePublish(frameState, submitted);
       if (submitted)
         for (const capture of captureFrames)
           internals.markRenderTargetSubmitted?.(capture.work.target, capture.work.physical);
@@ -3123,29 +3518,57 @@ export function* prepareFrameRecording(
         camera.position[2] ?? 0,
       ] as [number, number, number],
     };
-    frameState.temporalFrameInput = stagedTemporalFrame;
     frameState.temporalFrameTransaction.stage(stagedTemporalFrame);
     volumeSubmissionAttempted = volumeTopologyCandidate || activeVolumetricFogContext !== undefined;
     const ssrOwner = frameState.ssrHistoryOwner;
-    const ssrCandidate = frameState.ssrHistoryCandidate;
+    const ssrCandidate = ssrOwner?.candidate;
     const frameHooks =
       preparedGpuDriven === undefined &&
-      frameGpuDriven?.occlusion === undefined &&
       ssrCandidate === undefined &&
-      rayDiffuse === undefined
+      rayDiffuse === undefined &&
+      irradianceField === undefined &&
+      bakedField === undefined &&
+      screenProbe === undefined &&
+      probePlacement === undefined &&
+      shadowPublication === undefined
         ? undefined
         : {
-            ...(rayDiffuse === undefined ? {} : { generationFence: rayDiffuse.fence }),
-            afterGraphExecute: () =>
-              frameGpuDriven?.occlusion?.recordResolve(encoder) ?? ok(undefined),
+            generationFence: {
+              capturedGeneration: 0,
+              currentGeneration: () =>
+                [
+                  rayDiffuse?.fence,
+                  irradianceField?.fence,
+                  bakedField?.fence,
+                  screenProbe?.fence,
+                  probePlacement?.fence,
+                ].every(
+                  (fence) =>
+                    fence === undefined || fence.currentGeneration() === fence.capturedGeneration,
+                ) &&
+                (shadowPublication === undefined || shadowPublication.isCurrent())
+                  ? 0
+                  : -1,
+            },
+            onSubmittedWork: (done: Promise<void>) => {
+              probePlacement?.track(done);
+              rayDiffuse?.track(done);
+              irradianceField?.track(done);
+              bakedField?.track(done);
+              screenProbe?.track(done);
+            },
             onSubmitted: () => {
+              probePlacement?.commit();
+              rayDiffuse?.commit();
+              irradianceField?.commit();
+              bakedField?.commit();
+              screenProbe?.commit();
               if (ssrOwner !== undefined && ssrCandidate !== undefined) {
                 const committed = ssrOwner.commitFrame(ssrCandidate);
                 if (!committed.ok) {
                   ssrOwner.abortFrame(ssrCandidate, 'submit');
                   reportSsrHistoryFailure(internals, 'submit', committed.error);
                 }
-                frameState.ssrHistoryCandidate = undefined;
               }
               preparedGpuDriven?._commitResourceReplacement();
               const consumed = preparedGpuDriven?._consumeSurfaceDynamicInput?.(
@@ -3154,15 +3577,13 @@ export function* prepareFrameRecording(
               if (consumed !== undefined && !consumed.ok) {
                 internals.errorRegistry.fire(consumed.error);
               }
-              frameGpuDriven?.occlusion?.commit(true, frameState.frameNumber, profilePhase);
             },
             onAborted: () => {
+              probePlacement?.abort();
               if (ssrOwner !== undefined && ssrCandidate !== undefined) {
                 ssrOwner.abortFrame(ssrCandidate, 'submit');
-                frameState.ssrHistoryCandidate = undefined;
               }
               preparedGpuDriven?._abortResourceReplacement?.();
-              frameGpuDriven?.occlusion?.commit(false, frameState.frameNumber);
             },
           };
     // Reuse an existing timing owner. Otherwise allocate only for this ready
@@ -3188,10 +3609,11 @@ export function* prepareFrameRecording(
           ? undefined
           : (pass, encode) => profilePhase(graphExecutionPhase(pass.name), encode),
         frameHooks,
-        cubeCaptureWork.length === 0 ? undefined : cubeCaptureWork.map((work) => work.faceIndex),
+        cubeCaptureWork.length === 0
+          ? undefined
+          : cubeCaptureWork.map((work) => ({ target: work.target, layer: work.layer })),
         (done) => {
           completion = done;
-          rayDiffuse?.track(done);
           frameState.surfaceSubmissionObservation?.submit(done, frameState.graphGeneration);
           if (fallbackReadbackRequest !== undefined) {
             fallbackReadback = done.then(
@@ -3213,10 +3635,11 @@ export function* prepareFrameRecording(
       (action) => runRecordProfilePhase(profilePhase, 'record/graph-execute', action),
     );
     if (submitted) {
+      frameState.frameOutputs.sceneSubmitted = true;
       for (const capture of captureFrames)
         internals.markRenderTargetSubmitted?.(capture.work.target, capture.work.physical);
       captureCompletion = completion;
-      resolution.commit(renderExtent);
+      resolution.commit(renderExtent, gpuDriven?.visibleRasterRows ?? validatedForResidency.length);
       if (sampleResolution) {
         const passCapture = internals.gpuPassTimingCapture;
         const observation =
@@ -3279,7 +3702,10 @@ export function* prepareFrameRecording(
     );
     frameState.reflectionFallbackCompletion = reflectionFallbackCompletion;
     frameState.reflectionFallbackObservationSource = undefined;
-    if (submitted) frameState.shadowRaster.commit();
+    if (submitted) {
+      frameState.shadowRaster.commit();
+      frameState.directionalCascadeCadence = cascadeCadence?.next ?? undefined;
+    }
     if (submitted && directionalShadowCache.miss !== undefined) {
       frameState.directionalShadowCache = frameState.directionalShadowCacheRecorded
         ? directionalShadowCache.next
@@ -3305,15 +3731,7 @@ export function* prepareFrameRecording(
         frameState.volumetricFogHistoryGraph = preflightGraph;
         frameState.volumetricFogHistorySlot = activeVolumetricFogContext.historyWriteSlot;
         frameState.volumetricFogHistorySignature = activeVolumetricFogSignature;
-        if (frameState.volumetricFogParamsPendingSlot !== null) {
-          frameState.volumetricFogParamsAcceptedSlot = frameState.volumetricFogParamsPendingSlot;
-          frameState.volumetricFogAcceptedParams =
-            frameState.volumetricFogPendingParams === undefined
-              ? undefined
-              : new Float32Array(frameState.volumetricFogPendingParams);
-          frameState.volumetricFogParamsPendingSlot = null;
-          frameState.volumetricFogPendingParams = undefined;
-        }
+        promoteVolumetricFogParams(frameState.volumetricFogParams);
         if (volumetricFog?.status === 'available' && preparedVolumetricFog !== undefined) {
           frameState.volumetricFogAccepted = volumetricFog;
           frameState.volumetricFogAcceptedContext = activeVolumetricFogContext;
@@ -3328,23 +3746,24 @@ export function* prepareFrameRecording(
         frameState.volumetricFogAccepted = volumetricFog;
         frameState.volumetricFogAcceptedContext = preparedVolumetricFog;
       }
-      frameState.standardLightingInspection = inspectStandardLighting(standard);
-      frameState.pointShadowInspection = inspectPointShadow(
-        lights.pointShadow,
-        SHADOW_ATLAS_DEFAULT_LAYERS,
-      );
-      frameState.transparencyInspection = captureOnly ? undefined : transparencyView.inspection;
-      frameState.capsuleShadowInspection = inspectCapsuleShadow(
-        dispatchPlan.validatedOrdered,
-        capsuleShadowDirectional,
-        lights.directionalShadowQuality !== undefined,
-        frameState.capsuleShadowSubmission,
-      );
+      frameState.submittedInspection = {
+        standardLighting: inspectStandardLighting(standard),
+        pointShadow: inspectPointShadow(lights.pointShadow, SHADOW_ATLAS_DEFAULT_LAYERS),
+        transparency: captureOnly ? undefined : transparencyView.inspection,
+        capsuleShadow: inspectCapsuleShadow(
+          dispatchPlan.validatedOrdered,
+          capsuleShadowDirectional,
+          lights.directionalShadowQuality !== undefined,
+          frameState.capsuleShadowSubmission,
+        ),
+      };
     }
     return submitted;
   } finally {
+    frameState.probePlacementFrame?.abort();
+    frameState.probePlacementFrame = undefined;
     cubeCapture?.state.planar?.submit(submitted, captureCompletion);
-    for (const capture of captureFrames) {
+    for (const capture of [...captureFrames, ...probeCaptureFrames]) {
       if (captureCompletion === undefined) void capture.graph.retire();
       else
         void captureCompletion.then(
@@ -3353,10 +3772,9 @@ export function* prepareFrameRecording(
         );
     }
     if (!submitted) resolutionTiming?.discard();
-    if (!submitted && frameState.ssrHistoryCandidate !== undefined) {
-      frameState.ssrHistoryOwner?.abortFrame(frameState.ssrHistoryCandidate, 'submit');
-      frameState.ssrHistoryCandidate = undefined;
-    }
+    const ssrOwnerAtSettle = frameState.ssrHistoryOwner;
+    const ssrPending = ssrOwnerAtSettle?.candidate;
+    if (!submitted && ssrPending !== undefined) ssrOwnerAtSettle?.abortFrame(ssrPending, 'submit');
     // Output, DoF, and volume topology replacements are provisional until the
     // queue submission succeeds. This runs for every early-return path as
     // well, so a swapchain, encoder, or graph failure cannot leave a
@@ -3455,6 +3873,7 @@ function sameCasterContent(
   worlds: readonly RenderResourceScope[],
   leases: readonly RenderReadLease[] | undefined,
   casters: PersistentShadowCasterProjection | undefined,
+  publicationSource?: import('../scene/render-scene').ShadowPublicationSource,
 ): boolean {
   const previous = cached.casterContent;
   if (
@@ -3463,19 +3882,49 @@ function sameCasterContent(
     previous.owner !== casters.content.owner ||
     previous.sceneRevision !== casters.content.sceneRevision ||
     previous.dispatchRevision !== casters.content.dispatchRevision ||
-    leases === undefined ||
-    leases.length !== worlds.length ||
     cached.worlds.length !== worlds.length
   ) {
     return false;
   }
   for (let index = 0; index < worlds.length; index += 1) {
     if (cached.worlds[index] !== worlds[index]) return false;
+  }
+  if (publicationSource !== undefined) {
+    if (previous.publicationSource?.resources !== publicationSource.resources) return false;
+    return !hasDeformingCaster(casters.renderables);
+  }
+  if (leases === undefined || leases.length !== worlds.length) return false;
+  for (let index = 0; index < worlds.length; index += 1) {
     if (cached.worldStateTokens[index]?.worldIdentity !== leases[index]?.worldIdentity) {
       return false;
     }
   }
   return !hasDeformingCaster(casters.renderables);
+}
+
+function sameTerrainShadowContent(
+  previous: PersistentShadowCasterProjection['content'] | undefined,
+  current: PersistentShadowCasterProjection['content'] | undefined,
+): boolean {
+  const a = previous?.terrainSections ?? [],
+    b = current?.terrainSections ?? [];
+  if (a.length !== b.length) return false;
+  return a.every((source, index) => {
+    const next = b[index],
+      section = source.terrainSection,
+      nextSection = next?.terrainSection;
+    return (
+      next !== undefined &&
+      section !== undefined &&
+      nextSection !== undefined &&
+      renderableDrawKey(source) === renderableDrawKey(next) &&
+      source.assetHandle === next.assetHandle &&
+      source.terrain?.asset === next.terrain?.asset &&
+      section.lod === nextSection.lod &&
+      section.neighbors.every((lod, edge) => lod === nextSection.neighbors[edge]) &&
+      [12, 13, 14].every((axis) => source.transform.world[axis] === next.transform.world[axis])
+    );
+  });
 }
 
 function sameLightViewProj(
@@ -3510,7 +3959,7 @@ function sameDirectionalShadowQuality(
   );
 }
 
-function prepareDirectionalShadowCache(
+export function prepareDirectionalShadowCache(
   internals: RenderSystemInternals,
   frameState: RenderFrameState,
   worlds: readonly RenderResourceScope[],
@@ -3533,7 +3982,6 @@ function prepareDirectionalShadowCache(
   }
   if (
     frameState.compiledFrameGraph === null ||
-    frameState.compiledFrameGraphTopologyKey === null ||
     shadowMapSize === undefined ||
     shadowMapSize <= 0 ||
     cascadeCount === undefined ||
@@ -3548,6 +3996,27 @@ function prepareDirectionalShadowCache(
   const cached = frameState.directionalShadowCache;
   const assetCatalogEpoch = internals.assets.catalogEpoch;
   const meshResidencyEpoch = internals.gpuStore.meshResidencyEpoch;
+  const hasReadLeases = leases !== undefined && leases.length === worlds.length;
+  const publicationSource =
+    lights.directionalCsmConfig?.staggerCascades === true
+      ? currentDirectionalShadowPublication(worlds, casters, cached)
+      : undefined;
+  const cadenceSource =
+    lights.directionalCsmConfig?.staggerCascades === true &&
+    (hasReadLeases || publicationSource !== undefined)
+      ? {
+          worlds,
+          worldStateTokens: hasReadLeases ? leases.map(readWorldState) : [],
+          assetCatalogEpoch,
+          meshResidencyEpoch,
+          casterContent: casters?.content,
+        }
+      : undefined;
+  const sourceChanged =
+    cached !== null &&
+    cadenceSource !== undefined &&
+    (directionalShadowSourceChanged(cached, cadenceSource) ||
+      !sameTerrainShadowContent(cached.casterContent, casters?.content));
   const miss: ShadowViewInvalidationReason | undefined =
     cached === null
       ? 'first-publication'
@@ -3558,27 +4027,29 @@ function prepareDirectionalShadowCache(
             lights.directionalShadowQuality,
           ) ||
           cached.pipelineHandle !== frameState.installedPipelineHandle ||
-          cached.graphTopologyKey !== frameState.compiledFrameGraphTopologyKey
+          cached.graphTopologyKey !== frameState.compiledFrameGraph.topologyKey
         ? 'configuration-changed'
-        : cached.assetCatalogEpoch !== assetCatalogEpoch ||
-            cached.meshResidencyEpoch !== meshResidencyEpoch ||
-            !(
-              sameWorldState(cached, worlds, leases) ||
-              sameCasterContent(cached, worlds, leases, casters)
-            )
-          ? 'content-changed'
-          : !sameLightViewProj(cached, lightViewProj)
-            ? 'view-changed'
-            : undefined;
+        : sourceChanged
+          ? 'source-changed'
+          : cached.assetCatalogEpoch !== assetCatalogEpoch ||
+              cached.meshResidencyEpoch !== meshResidencyEpoch ||
+              !sameTerrainShadowContent(cached.casterContent, casters?.content) ||
+              !(
+                sameWorldState(cached, worlds, leases) ||
+                sameCasterContent(cached, worlds, leases, casters, publicationSource)
+              )
+            ? 'content-changed'
+            : !sameLightViewProj(cached, lightViewProj)
+              ? 'view-changed'
+              : undefined;
   if (miss === undefined) return { miss: undefined, next: null };
 
-  if (leases === undefined || leases.length !== worlds.length) {
-    // Direct record-stage test harnesses may omit the host-owned leases. They
-    // still exercise the real shadow encoder, but without the ECS read owner
-    // they must conservatively rebuild rather than inspect RenderResourceScope internals.
+  if (!hasReadLeases && publicationSource === undefined) {
+    // Neither a local read owner nor an opted-in accepted-publication owner
+    // proved this source. Bare record-stage harnesses remain conservative.
     return { miss: 'uncached', next: null };
   }
-  const worldStateTokens = leases.map(readWorldState);
+  const worldStateTokens = cadenceSource?.worldStateTokens ?? leases?.map(readWorldState) ?? [];
 
   return {
     miss,
@@ -3587,7 +4058,7 @@ function prepareDirectionalShadowCache(
       worldStateTokens: worldStateTokens as DirectionalShadowWorldState[],
       assetCatalogEpoch,
       pipelineHandle: frameState.installedPipelineHandle,
-      graphTopologyKey: frameState.compiledFrameGraphTopologyKey,
+      graphTopologyKey: frameState.compiledFrameGraph.topologyKey,
       shadowMapSize,
       cascadeCount,
       directionalShadowQuality: lights.directionalShadowQuality,

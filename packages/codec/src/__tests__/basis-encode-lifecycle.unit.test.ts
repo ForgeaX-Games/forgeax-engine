@@ -1,9 +1,5 @@
 import type { BasisEncodeMode, BasisEncodeOptions } from '@forgeax/engine-codec/encode';
-import {
-  _basisEncoderInitCount,
-  _setBasisEncoderImporter,
-  basisEncode,
-} from '@forgeax/engine-codec/encode';
+import { _setBasisEncoderImporter, basisEncode } from '@forgeax/engine-codec/encode';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const TEST_CONSTRUCTOR_SENTINEL = 'm120-controlled-constructor-throw';
@@ -212,7 +208,6 @@ describe('basisEncode lifecycle throw containment (M120)', () => {
     const third = await basisEncode(pixels, options);
     expect(third).toEqual(repaired);
     expect(importerCalls).toBe(1);
-    expect(_basisEncoderInitCount()).toBe(1);
     expect(fixture.state.constructorIds).toEqual([1, 2, 3, 4, 5]);
     expect(fixture.state.deleteIds).toEqual([2, 3, 4, 5]);
     expect(fixture.state.sourceCalls).toHaveLength(4);

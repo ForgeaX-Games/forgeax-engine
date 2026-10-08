@@ -152,12 +152,12 @@ try {
   // Chrome Beta on the Linux CI carrier must select the same software Vulkan
   // adapter as the other real Browser WebGPU gates. This keeps the CDP crash
   // aimed at Chrome's GPU process while avoiding an unbound host adapter.
-  if (browserChannel === 'chrome-beta') {
+  if (browserChannel === 'chrome-beta' && process.env.CI && process.platform === 'linux') {
     browserArgs.push(
       '--use-vulkan=swiftshader',
       '--use-angle=swiftshader',
       '--disable-gpu-driver-bug-workarounds',
-      '--disable-dawn-features=disallow_unsafe_apis',
+      '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
     );
   }
   evidence.browser = { channel: browserChannel, headless: browserHeadless, args: browserArgs };

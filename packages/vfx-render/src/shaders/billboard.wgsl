@@ -1,4 +1,6 @@
 #define_import_path forgeax::vfx-render.particles.billboard
+#pragma variant_axis ATMOSPHERE_AVAILABLE
+#pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #import forgeax_view::common::{View, view}
 #import forgeax_view::fog::{translucent_fog, ndc_world}
 // View-and-scene-depth layout: the renderer binds the View copy selected by the

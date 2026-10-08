@@ -274,7 +274,11 @@ export async function verifyLensEffects(
 
             return rgba(inspected.attachment);
           } finally {
-            (await session.dispose()).unwrap();
+            try {
+              (await session.dispose()).unwrap();
+            } finally {
+              device.nativeDevice().unwrap().destroy();
+            }
           }
         };
         const replayed = await replayPixels(capture.bytes, 'live');

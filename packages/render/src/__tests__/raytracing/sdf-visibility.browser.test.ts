@@ -6,6 +6,6 @@ it('builds, traces and replays sampled visibility in browser WebGPU', async () =
   await verifyVisibilitySdf();
 }, 120000);
 
-it('reads and replays mixed SNORM16 and geometric fields in browser WebGPU', async () => {
+it('decodes all shared-brick and geometric texels and replays browser WebGPU', async () => {
   await verifySdfStorage();
 });

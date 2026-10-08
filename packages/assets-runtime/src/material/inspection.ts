@@ -35,7 +35,7 @@ export interface MaterialRuntimeInfo {
   readonly dependencies: readonly string[];
   readonly profile: string;
   readonly sourceClosure: readonly string[];
-  readonly parameterContract: MaterialReady['parameterContract'];
+  readonly parameterContract: MaterialReady['record']['parameterContract'];
   readonly refs: MaterialReady['record']['refs'];
   readonly receipt: MaterialReady['record']['receipt'];
   /** Present for the built-in Standard module; absent for custom materials. */
@@ -114,13 +114,13 @@ function inspectReady(ready: MaterialReady): MaterialRuntimeInfo {
         });
       })();
   return {
-    materialGuid: ready.materialGuid,
+    materialGuid: ready.record.materialGuid,
     readiness: 'ready',
-    publicationGeneration: ready.publicationGeneration,
-    specializationKey: ready.specializationKey,
-    artifactDigest: ready.artifactDigest,
+    publicationGeneration: ready.record.publicationGeneration,
+    specializationKey: ready.record.specializationKey,
+    artifactDigest: ready.record.artifactDigest,
     layoutIdentity: ready.record.receipt.identity.layoutIdentity,
-    programs: ready.programs.map(({ specializationKey, artifact, selections }) => ({
+    programs: ready.record.programs.map(({ specializationKey, artifact, selections }) => ({
       specializationKey,
       artifactDigest: artifact.digest,
       byteLength: artifact.bytes.byteLength,
@@ -138,8 +138,8 @@ function inspectReady(ready: MaterialReady): MaterialRuntimeInfo {
       ...ready.record.refs.modules,
     ],
     profile: ready.record.receipt.profile,
-    sourceClosure: ready.sourceClosure,
-    parameterContract: ready.parameterContract,
+    sourceClosure: ready.record.sourceClosure,
+    parameterContract: ready.record.parameterContract,
     refs: ready.record.refs,
     ...(ready.record.resolved.surface === undefined
       ? {}
@@ -180,9 +180,9 @@ export function inspectMaterialRuntime(input: MaterialRuntimeInput): MaterialRun
   }
   const lastKnownGood = inspectReady(input.ready);
   return {
-    materialGuid: input.ready.materialGuid,
+    materialGuid: input.ready.record.materialGuid,
     readiness: 'last-known-good',
-    specializationKey: input.ready.specializationKey,
+    specializationKey: input.ready.record.specializationKey,
     lastKnownGood,
     preparationFailure: { ...input.failure.error },
     status: 'LastKnownGood',

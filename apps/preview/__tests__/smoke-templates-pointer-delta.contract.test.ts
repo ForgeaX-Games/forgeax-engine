@@ -224,10 +224,17 @@ describe('game-3d collision startup closure', () => {
       "const game3dOnlySmoke =\n  selectedTemplateSlugs.length === 1 && selectedTemplateSlugs[0] === 'game-3d';",
     );
     expect(viteConfigSource).toContain(
-      "const materialPackages = game3dOnlySmoke\n  ? []\n  : [",
+      "const materialPackages = selectedTemplateSlugs.length > 0 && !selectedTemplateSlugs.includes('game-capability-lab')\n  ? []\n  : [",
     );
     expect(viteConfigSource).toContain("...(game3dOnlySmoke\n        ? []");
     expect(viteConfigSource).toContain('surfaceEvidencePackRoot');
     expect(viteConfigSource).toContain('externalAssetRoots.filter((root) => existsSync(root))');
+  });
+
+  it('keeps all template roots and external resources while excluding independent evidence fixtures', () => {
+    expect(viteConfigSource).toContain("...(process.env.FORGEAX_TEMPLATE_SMOKE === '1'\n              ? []\n              : [surfaceEvidencePackRoot, previewUiAuthoringMetaPath])");
+    expect(viteConfigSource).toContain('...templatePackRoots,');
+    expect(viteConfigSource).toContain('...externalAssetRoots.filter((root) => existsSync(root))');
+    expect(smokeSource).toContain('for (const template of templates)');
   });
 });

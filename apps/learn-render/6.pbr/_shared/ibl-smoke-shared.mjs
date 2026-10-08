@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // apps/learn-render/6.pbr/_shared/ibl-smoke-shared.mjs
 //
 // Shared dawn-node IBL smoke driver consumed by:
@@ -79,7 +80,7 @@ export async function runIblSmoke(opts) {
   let create;
   let globals;
   try {
-    ({ create, globals } = await import('webgpu'));
+    ({ create, globals } = await import('@forgeax/engine-dawn-node'));
   } catch (err) {
     fail(`dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -215,9 +216,11 @@ export async function runIblSmoke(opts) {
   // distDir via mock fetch.
   const packIndexPath = resolve(distDir, 'pack-index.json');
 
+  let packIndexWire;
   let packIndexJson;
   try {
-    packIndexJson = JSON.parse(await readFile(packIndexPath, 'utf8'));
+    packIndexWire = JSON.parse(await readFile(packIndexPath, 'utf8'));
+    packIndexJson = decodeCatalogWire(packIndexWire).unwrap();
   } catch (err) {
     fail(`pack-index.json unreadable at ${packIndexPath}: ${err instanceof Error ? err.message : String(err)}; run 'pnpm build' for this demo first.`);
   }
@@ -262,7 +265,7 @@ export async function runIblSmoke(opts) {
     if (typeof url === 'string' && url === '/pack-index.json') {
       return {
         ok: true,
-        json: () => Promise.resolve(packIndexJson),
+        json: () => Promise.resolve(packIndexWire),
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       };
     }

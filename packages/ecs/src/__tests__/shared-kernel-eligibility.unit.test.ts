@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { defineComponent } from '../component';
+import { SharedKernelEligibilityError } from '../errors';
 import {
   defineSharedKernel,
   SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
-  SharedKernelEligibilityError,
   type SharedKernelExecutor,
   sharedKernelEligibility,
 } from '../execution/shared-kernel';

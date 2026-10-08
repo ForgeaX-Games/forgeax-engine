@@ -19,7 +19,7 @@ import {
 import { VIEW_UNIFORM_BYTES } from '../record/view-ubo';
 import { gbufferSource } from './standard-gbuffer.fixture';
 
-it('descends a real Hi-Z seed and preserves all four non-center source texels', async () => {
+it('descends a real depth-pyramid seed and preserves all four non-center source texels', async () => {
   const compiler = (await import(
     /* @vite-ignore */ new URL('../../../shader-compiler/dist/index.mjs', import.meta.url).href
   )) as {
@@ -33,6 +33,7 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
   const common = {
     'forgeax_view::common': shader('common'),
     'forgeax_pbr::gbuffer': gbufferSource,
+    'forgeax_depth_pyramid::sample': shader('depth-pyramid-sample'),
   };
   const trace = await compiler.compileShader(
     `${shader('ssr-trace')}
@@ -43,13 +44,13 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
   let deltaUv = vec2<f32>(1.0);
   let fallback = 0.0;
   let endFraction = 1.0;
-  let a = locateSsrHiZCandidate(vec2<f32>(0.25, 0.25), 1u, fullSize,
+  let a = locateSsrPyramidCandidate(vec2<f32>(0.25, 0.25), 1u, fullSize,
     startUv, deltaUv, fallback, endFraction);
-  let b = locateSsrHiZCandidate(vec2<f32>(0.75, 0.25), 1u, fullSize,
+  let b = locateSsrPyramidCandidate(vec2<f32>(0.75, 0.25), 1u, fullSize,
     startUv, deltaUv, fallback, endFraction);
-  let c = locateSsrHiZCandidate(vec2<f32>(0.25, 0.75), 1u, fullSize,
+  let c = locateSsrPyramidCandidate(vec2<f32>(0.25, 0.75), 1u, fullSize,
     startUv, deltaUv, fallback, endFraction);
-  let d = locateSsrHiZCandidate(vec2<f32>(0.75, 0.75), 1u, fullSize,
+  let d = locateSsrPyramidCandidate(vec2<f32>(0.75, 0.75), 1u, fullSize,
     startUv, deltaUv, fallback, endFraction);
   rescueProbe[0] = vec4<f32>(select(0.0, 1.0, a.valid), vec2<f32>(a.pixel), a.fraction);
   rescueProbe[1] = vec4<f32>(select(0.0, 1.0, b.valid), vec2<f32>(b.pixel), b.fraction);
@@ -70,14 +71,14 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
   rescueProbe[4] = vec4<f32>(select(0.0, 1.0, valid), select(0.0, 1.0, behind),
     select(0.0, 1.0, beyond), select(0.0, 1.0, silhouette));
 }`,
-    { id: 'forgeax_ssr::hiz-rescue-trace', imports: common },
+    { id: 'forgeax_ssr::pyramid-rescue-trace', imports: common },
   );
   if (!trace.ok || !trace.value) throw new Error(JSON.stringify(trace.error));
-  const hiz = await compiler.compileShader(shader('depth-pyramid-seed'), {
+  const pyramid = await compiler.compileShader(shader('depth-pyramid-seed'), {
     id: 'forgeax_depth_pyramid::rescue-seed',
     imports: common,
   });
-  if (!hiz.ok || !hiz.value) throw new Error(JSON.stringify(hiz.error));
+  if (!pyramid.ok || !pyramid.value) throw new Error(JSON.stringify(pyramid.error));
 
   const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
   const depth = device
@@ -88,7 +89,7 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
       usage: GPU_TEXTURE_USAGE_RENDER_ATTACHMENT | GPU_TEXTURE_USAGE_TEXTURE_BINDING,
     })
     .unwrap();
-  const hizTexture = device
+  const pyramidTexture = device
     .createTexture({
       size: { width: 2, height: 2, depthOrArrayLayers: 1 },
       mipLevelCount: 1,
@@ -152,8 +153,10 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
       })
       .unwrap();
 
-    const hizSeedModule = createShaderModuleImmediate(device, { code: hiz.value.wgsl }).unwrap();
-    const hizSeedLayout = device
+    const pyramidSeedModule = createShaderModuleImmediate(device, {
+      code: pyramid.value.wgsl,
+    }).unwrap();
+    const pyramidSeedLayout = device
       .createBindGroupLayout({
         entries: [
           {
@@ -170,10 +173,10 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
         ],
       })
       .unwrap();
-    const hizSeedPipeline = device
+    const pyramidSeedPipeline = device
       .createComputePipeline({
-        layout: device.createPipelineLayout({ bindGroupLayouts: [hizSeedLayout] }).unwrap(),
-        compute: { module: hizSeedModule, entryPoint: 'depth_pyramid_seed' },
+        layout: device.createPipelineLayout({ bindGroupLayouts: [pyramidSeedLayout] }).unwrap(),
+        compute: { module: pyramidSeedModule, entryPoint: 'depth_pyramid_seed' },
       })
       .unwrap();
 
@@ -212,13 +215,13 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
       .unwrap();
 
     const depthView = device.createTextureView(depth, {}).unwrap();
-    const hizView = device.createTextureView(hizTexture, {}).unwrap();
-    const hizSeedGroup = device
+    const pyramidView = device.createTextureView(pyramidTexture, {}).unwrap();
+    const pyramidSeedGroup = device
       .createBindGroup({
-        layout: hizSeedLayout,
+        layout: pyramidSeedLayout,
         entries: [
           { binding: 0, resource: { kind: 'textureView', value: depthView } },
-          { binding: 1, resource: { kind: 'textureView', value: hizView } },
+          { binding: 1, resource: { kind: 'textureView', value: pyramidView } },
           { binding: 2, resource: { kind: 'buffer', value: { buffer: view } } },
         ],
       })
@@ -228,7 +231,7 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
         layout: traceInputLayout,
         entries: [
           { binding: 0, resource: { kind: 'textureView', value: depthView } },
-          { binding: 3, resource: { kind: 'textureView', value: hizView } },
+          { binding: 3, resource: { kind: 'textureView', value: pyramidView } },
           { binding: 5, resource: { kind: 'buffer', value: { buffer: view } } },
         ],
       })
@@ -254,8 +257,8 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
     raster.draw(3);
     raster.end();
     const seedPass = encoder.beginComputePass();
-    seedPass.setPipeline(hizSeedPipeline);
-    seedPass.setBindGroup(0, hizSeedGroup);
+    seedPass.setPipeline(pyramidSeedPipeline);
+    seedPass.setBindGroup(0, pyramidSeedGroup);
     seedPass.dispatchWorkgroups(1);
     seedPass.end();
     const tracePass = encoder.beginComputePass();
@@ -277,7 +280,7 @@ it('descends a real Hi-Z seed and preserves all four non-center source texels', 
     ]);
   } finally {
     device.destroyTexture(depth).unwrap();
-    device.destroyTexture(hizTexture).unwrap();
+    device.destroyTexture(pyramidTexture).unwrap();
     for (const buffer of [view, output, readback]) device.destroyBuffer(buffer).unwrap();
   }
 });

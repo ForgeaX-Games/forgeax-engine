@@ -3,10 +3,12 @@ import {
   createReplicaCoordinator,
   decodeAndApplyReplicationPacket,
   type EndpointEvent,
+  encodeReplicationPacket,
   type NetEndpoint,
   type NetSession,
   netPlugin,
   type PeerId,
+  type SessionId,
 } from '@forgeax/engine-net';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -25,8 +27,10 @@ describe('Snake deterministic convergence', () => {
       | { kind: 'message'; peerId: PeerId; data: Uint8Array }
     > = [
       { kind: 'peer-connected', peerId: 2 as PeerId },
+      { kind: 'message', peerId: 2 as PeerId, data: sessionOpen(2) },
       { kind: 'message', peerId: 2 as PeerId, data: join },
       { kind: 'peer-connected', peerId: 3 as PeerId },
+      { kind: 'message', peerId: 3 as PeerId, data: sessionOpen(3) },
       { kind: 'message', peerId: 3 as PeerId, data: join },
     ];
     const sent: Uint8Array[] = [];
@@ -133,8 +137,10 @@ describe('Snake deterministic convergence', () => {
       | { kind: 'message'; peerId: PeerId; data: Uint8Array }
     > = [
       { kind: 'peer-connected', peerId: 2 as PeerId },
+      { kind: 'message', peerId: 2 as PeerId, data: sessionOpen(2) },
       { kind: 'message', peerId: 2 as PeerId, data: join },
       { kind: 'peer-connected', peerId: 3 as PeerId },
+      { kind: 'message', peerId: 3 as PeerId, data: sessionOpen(3) },
       { kind: 'message', peerId: 3 as PeerId, data: join },
     ];
     const sent: Array<{ peerId: PeerId; data: Uint8Array }> = [];
@@ -193,6 +199,7 @@ describe('Snake deterministic convergence', () => {
     // The late peer joins after the early peer has already advanced.
     pending = [
       { kind: 'peer-connected', peerId: 4 as PeerId },
+      { kind: 'message', peerId: 4 as PeerId, data: sessionOpen(4) },
       { kind: 'message', peerId: 4 as PeerId, data: join },
     ];
     expect(authority.world.update(1).ok).toBe(true);
@@ -206,6 +213,19 @@ describe('Snake deterministic convergence', () => {
     earlyClient.session.dispose();
   });
 });
+
+function sessionOpen(peerId: number): Uint8Array {
+  return encodeReplicationPacket(
+    {
+      version: 2,
+      kind: 'session-open',
+      sessionId: peerId as SessionId,
+      epoch: 0,
+      sequence: 0,
+    },
+    snakeProfile.limits,
+  ).unwrap();
+}
 
 function playerIdsInBatch(bytes: Uint8Array): number[] {
   const batch = decodePacket(bytes) as {

@@ -8,7 +8,7 @@ import type {
 import { RhiError } from '@forgeax/engine-rhi';
 import { LIGHT_TEXTURE_RESAMPLE_WGSL } from '@forgeax/engine-shader';
 import { type AssetError, err, ok, type Result, type TextureAsset } from '@forgeax/engine-types';
-import { writeCompressedTextureLevels } from '../../device/gpu-residency';
+import { writePackedTextureLevels } from '../../device/gpu-residency';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
   GPU_TEXTURE_USAGE_TEXTURE_BINDING,
@@ -203,7 +203,7 @@ export function resampleLightTextureSlice(input: {
     // the slice depend on how the source was cooked. Level 0 leads the packed
     // layout for block and uncompressed formats alike.
     const level0Asset: TextureAsset = { ...asset, mips: { kind: 'none' } };
-    const written = writeCompressedTextureLevels(device, source, level0Asset, format, asset.data);
+    const written = writePackedTextureLevels(device, source, level0Asset, format, asset.data);
     if (!written.ok) {
       release();
       return err(

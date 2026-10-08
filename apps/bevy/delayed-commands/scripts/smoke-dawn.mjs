@@ -12,7 +12,7 @@ const WIDTH = 200, HEIGHT = 150;
 const TARGET_FRAMES = 60;
 
 let create, globals;
-({ create, globals } = await import('webgpu'));
+({ create, globals } = await import('@forgeax/engine-dawn-node'));
 Object.assign(globalThis, globals);
 if (!('navigator' in globalThis)) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
 const gpu = create([]);

@@ -74,6 +74,7 @@ await compiled.retire();
 | `createTexture` / `createBuffer` | Graph allocates and retires the handle | Derived from every declared access |
 | `importTexture` / `importBuffer` | Caller resolves and owns the handle | Supplied usage must contain derived usage |
 | `view` | Typed texture subresource | Mip, layer, aspect, dimension, and optional format are explicit |
+| `importAccelerationStructure(label, { maxInstances }, resolve)` | Caller resolves and owns the `Tlas` (BLASes stay owner-private) | None; never graph-allocated, so size is unknown (`imported-owner`) |
 
 Resource and pass labels are unique diagnostics. Handles are opaque and builder-scoped; passing a foreign handle is a structured error.
 
@@ -93,6 +94,13 @@ Resource and pass labels are unique diagnostics. Handles are opaque and builder-
 |  | `sampled-storage-write` |
 
 A raster attachment with `loadOp: 'load'` is a read/write access. A clear attachment is the first write. The compiler checks overlapping texture mip/layer/aspect ranges rather than treating unrelated subresources as one hazard.
+
+An acceleration structure has two accesses: `acceleration-structure-build` (a write,
+admitted only in copy passes, which own `buildAccelerationStructures`) and
+`acceleration-structure-read` (any pass that binds the TLAS). Readers order after the
+latest earlier build like any other write/read hazard; a pass resolves the handle with
+`resources.accelerationStructure(handle)`. A build pass that has nothing to do uses
+`executeIf`, so settled structures cost no encoder work.
 
 `sampled-storage-write` declares a compute chain that fully writes a subresource
 before sampling it in a later dispatch of the same pass. It derives both texture
@@ -226,6 +234,14 @@ feature-local staging and isolated legacy tests. Renderer frame ownership uses
 `RenderGraphBuilder`; new pipeline and compute work must not add string resource
 keys or call the facade's compile/execute path.
 
+
+The facade's `InternalizedGraph.colorTargets` contains one typed texture/view
+pair per logical name. Aliases share source allocation metadata and the source pair;
+resource lifetime is read from the admitted descriptor. Unchanged compiles
+reuse it. Transient pools still retain descriptor generations; persistent
+resources still replace by logical name. The pass resolver's existing `::tex`
+spelling is interpreted at that boundary, without a second physical map row.
+
 ## Ordering and hazards
 
 The compiler scans each resource/subresource in declaration order.
@@ -242,7 +258,8 @@ The RHI remains responsible for backend state transitions and synchronization. T
 
 ## Capabilities
 
-A compute pass requires `caps.compute`. Storage accesses require the matching storage-buffer or storage-texture capability, and indirect access requires indirect drawing support. Capability absence fails compilation with `capability-missing`; the pipeline or feature owner selects a fallback lane before graph construction.
+A compute pass requires `caps.compute`. Storage accesses require the matching storage-buffer or storage-texture capability, indirect access requires indirect drawing support, and `acceleration-structure-read`
+requires `caps.rayQuery.supported` (`capability-missing`, `capability: 'ray-query'`). Capability absence fails compilation with `capability-missing`; the pipeline or feature owner selects a fallback lane before graph construction.
 
 v1 uses one command encoder and one primary queue. There is no `asyncCompute` option until the RHI exposes a real second queue, fences, and measured overlap evidence.
 

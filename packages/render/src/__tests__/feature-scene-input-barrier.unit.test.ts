@@ -123,7 +123,13 @@ it.each([
     return submitted.ok;
   }
   try {
-    if (failure === 'submit') expect(submitFrameRecordings([record()])).toBe(false);
+    if (failure === 'submit')
+      expect(() => submitFrameRecordings([record()])).toThrowError(
+        expect.objectContaining({
+          code: 'frame-submit-rejected',
+          detail: { operation: 'draw', stage: 'submit', accepted: false },
+        }),
+      );
     else
       expect(() => submitFrameRecordings([record()])).toThrow(
         failure === 'capture' ? 'capture failure' : 'scene complete failure',

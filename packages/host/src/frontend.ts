@@ -11,20 +11,21 @@ import { beforeDeadline } from './deadline.js';
 import {
   createHostAssembly,
   type HostActivationEntry,
+  type HostActivationReport,
   type HostAssembly,
   HostAssemblyError,
   type HostErrorSummary,
   type HostRootDescriptor,
   validateHostAssembly,
 } from './protocol.js';
-import { createHostStartup } from './startup.js';
+import { createHostStartup, type HostStartupOptions } from './startup.js';
 import {
   HOST_ACTIVATION_REPORT_SERVICE,
   HOST_ASSEMBLY_SERVICE,
   type HostTransportClient,
 } from './transport.js';
 
-export type FrontendHostState = 'created' | 'loading' | 'active' | 'failed' | 'disposed';
+export type FrontendHostState = HostActivationReport['state'];
 export interface FrontendHostStatus {
   readonly state: FrontendHostState;
   readonly revision: string;
@@ -37,11 +38,9 @@ export interface FrontendAssemblyState {
   readonly inspection: readonly PluginFiberInspection[];
   subscribe(listener: (state: FrontendAssemblyState) => void): () => void;
 }
-export interface FrontendHostOptions {
-  readonly context?: Context;
-  readonly startupTimeoutMs?: number;
+export interface FrontendHostOptions
+  extends Pick<HostStartupOptions, 'context' | 'startupTimeoutMs' | 'startupPlugins'> {
   readonly cleanupTimeoutMs?: number;
-  readonly startupPlugins?: readonly Plugin[];
   readonly assembly?: HostAssembly;
   readonly transport?: HostTransportClient;
   /** Static compiled resolution. Host never discovers or evaluates source modules. */

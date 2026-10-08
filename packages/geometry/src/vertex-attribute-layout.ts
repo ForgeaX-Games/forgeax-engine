@@ -59,23 +59,6 @@ const ATTRIBUTE_FORMAT_MAP = {
 
 type AttributeKey = keyof typeof ATTRIBUTE_FORMAT_MAP;
 
-const ATTRIBUTE_BYTE_STRIDE: Record<AttributeKey, number> = {
-  position: 12,
-  normal: 12,
-  uv: 8,
-  tangent: 16,
-  skinIndex: 8,
-  skinWeight: 16,
-  uv1: 8,
-  uv2: 8,
-  uv3: 8,
-  uv4: 8,
-  uv5: 8,
-  uv6: 8,
-  uv7: 8,
-  color: 16,
-};
-
 export interface GpuVertexBufferLayoutEntry {
   readonly arrayStride: number;
   readonly attributes: ReadonlyArray<{
@@ -138,7 +121,9 @@ function emitAliasEntries(entries: Entry[], toIndex: number, currentStride: numb
   }
   // When meshUvSetCount===0, allocate 8 bytes for the zero UV area.
   // Otherwise no stride increase (aliased to existing offset).
-  return lastUv === undefined ? currentStride + ATTRIBUTE_BYTE_STRIDE.uv : currentStride;
+  return lastUv === undefined
+    ? currentStride + bytesForFormat(ATTRIBUTE_FORMAT_MAP.uv)
+    : currentStride;
 }
 
 /**
@@ -181,7 +166,7 @@ export function deriveVertexBufferLayout(
       offset,
       format: ATTRIBUTE_FORMAT_MAP[key],
     });
-    offset += ATTRIBUTE_BYTE_STRIDE[key];
+    offset += bytesForFormat(ATTRIBUTE_FORMAT_MAP[key]);
   }
 
   const present = entries.length;
@@ -503,4 +488,47 @@ export function packInterleavedVertexAttributes(
     }
   }
   return ok(Object.freeze({ projection, vertices: outputFloats }));
+}
+
+const nativeLittleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
+/** Copy canonical interleaved bytes to owned attributes; callers validate semantic values. */
+export function unpackInterleavedVertexAttributes(
+  vertices: Float32Array,
+  projection: VertexLayoutProjection,
+): VertexAttributeMap | undefined {
+  const vertexCount = deriveVertexCount(vertices, projection);
+  if (vertexCount === undefined) return undefined;
+  const view = new DataView(vertices.buffer, vertices.byteOffset, vertices.byteLength);
+  const attributes: Record<string, Float32Array | Uint16Array> = {};
+  for (const entry of projection.attributes) {
+    const short = entry.format === 'uint16x4';
+    const width = short ? 2 : 4;
+    const components = entry.byteLength / width;
+    const target = short
+      ? new Uint16Array(vertexCount * components)
+      : new Float32Array(vertexCount * components);
+    if (nativeLittleEndian) {
+      const values = short
+        ? new Uint16Array(vertices.buffer, vertices.byteOffset, vertices.byteLength / 2)
+        : vertices;
+      const stride = projection.arrayStride / width;
+      let targetIndex = 0;
+      for (let base = entry.offset / width; targetIndex < target.length; base += stride) {
+        for (let component = 0; component < components; component++)
+          target[targetIndex++] = values[base + component] as number;
+      }
+    } else {
+      for (let vertex = 0; vertex < vertexCount; vertex++) {
+        for (let component = 0; component < components; component++) {
+          const offset = vertex * projection.arrayStride + entry.offset + component * width;
+          target[vertex * components + component] = short
+            ? view.getUint16(offset, true)
+            : view.getFloat32(offset, true);
+        }
+      }
+    }
+    attributes[entry.key] = target;
+  }
+  return attributes as VertexAttributeMap;
 }

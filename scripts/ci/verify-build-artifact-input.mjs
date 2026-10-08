@@ -128,6 +128,7 @@ function parseArgs(argv) {
     sharedInputManifest: null,
     inputFingerprint: null,
     sharedInputMode: null,
+    transferArtifact: null,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--consumer' && i + 1 < argv.length) {
@@ -142,6 +143,8 @@ function parseArgs(argv) {
       args.inputFingerprint = argv[++i];
     } else if (argv[i] === '--shared-input-mode' && i + 1 < argv.length) {
       args.sharedInputMode = argv[++i];
+    } else if (argv[i] === '--transfer-artifact' && i + 1 < argv.length) {
+      args.transferArtifact = argv[++i];
     }
   }
   return args;
@@ -207,7 +210,24 @@ function main() {
     process.exit(1);
   }
 
-  const requiredClasses = consumerConfig.requiredArtifactClasses || [];
+  const requiredClasses = (consumerConfig.requiredArtifactClasses || []).filter(
+    (name) =>
+      !args.transferArtifact ||
+      // Unknown classes must still reach the contract validation below.
+      !contract.artifactClasses?.[name] ||
+      contract.artifactClasses[name].transferArtifact === args.transferArtifact,
+  );
+  if (args.transferArtifact && requiredClasses.length === 0) {
+    process.stdout.write(
+      `${JSON.stringify({
+        code: 'ci-artifact-transfer-not-consumed',
+        consumer: args.consumer,
+        actual: args.transferArtifact,
+        hint: 'Select a transfer artifact declared by this consumer in build-artifact-contract.json.',
+      })}\n`,
+    );
+    process.exit(1);
+  }
   const missingPaths = [];
 
   for (const className of requiredClasses) {

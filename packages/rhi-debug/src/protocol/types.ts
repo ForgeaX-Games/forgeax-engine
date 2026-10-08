@@ -12,6 +12,7 @@ export type ResourceKind =
   | 'buffer'
   | 'texture'
   | 'query-set'
+  | 'acceleration-structure'
   | 'texture-view'
   | 'sampler'
   | 'shader-module'
@@ -34,6 +35,8 @@ export interface BootstrapResource {
   readonly kind: ResourceKind;
   readonly create: Record<string, unknown>;
   readonly initialData: readonly InitialDataSlice[];
+  /** Present only when a capture seed scope left this live resource unseeded. */
+  readonly seed?: 'omitted';
 }
 
 export interface TapeBlob {
@@ -53,6 +56,11 @@ export interface Tape {
   readonly events: readonly RhiCallEvent[];
   readonly blobs: readonly TapeBlob[];
 }
+
+/** Tape shape whose blob payloads are identified but not necessarily resident. */
+export type TapeStructure = Omit<Tape, 'blobs'> & {
+  readonly blobs: readonly { readonly hash: string }[];
+};
 
 export interface TapeEncodeOptions {
   readonly compression?: TapeBlobCompression;

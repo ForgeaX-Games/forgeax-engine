@@ -850,7 +850,7 @@ function enqueueSubmittedReceipt(receipt: Parameters<typeof app.renderer.observe
     const requested = app.renderer.requestObservation?.([
       'linear-hdr',
       'linear-ldr',
-      'final-srgb',
+      'final-display',
     ]);
     if (requested === undefined || !requested.ok) {
       browserObservation = {
@@ -884,7 +884,7 @@ async function observeSubmittedReceipt(
       return;
     }
     const observed = await app.renderer.observe(receipt, {
-      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['linear-hdr', 'linear-ldr', 'final-display'],
     });
     if (!observed.ok) {
       browserObservation = { receiptFrame: receipt.frameId, stages: [], frameIdentity: frameWindow(), error: observed.error.code };

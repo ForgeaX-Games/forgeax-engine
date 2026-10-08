@@ -7,6 +7,7 @@ import { runExtendedLightingCarrier } from '../../../src/compare/extended-case-c
 import type { SceneCase } from '../../../src/contracts/types';
 
 describe('extended-lighting recovery browser carrier', () => {
+  // Includes initialization plus three complete device rebuilds on software WebGPU.
   it('rebuilds the live Browser carrier through three device generations', async () => {
     const validation = validateSceneCase(fixture);
     expect(validation.ok).toBe(true);
@@ -41,5 +42,5 @@ describe('extended-lighting recovery browser carrier', () => {
     expect(new Set(receipt.recovery?.generations).size).toBe(4);
     expect(receipt.recovery?.resourceCounts.every((count) => count <= (receipt.recovery?.resourceCounts[0] ?? 0))).toBe(true);
     expect(receipt.finalDisplay.nonBlackPixels).toBeGreaterThan(0);
-  }, 45_000);
+  }, 90_000);
 });

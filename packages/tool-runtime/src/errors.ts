@@ -105,12 +105,3 @@ export function artifactManifestError(
 ): ToolRuntimeError {
   return { code: 'tool-artifact-manifest-invalid', expected, hint, detail };
 }
-
-export function timingError(reason: string): ToolRuntimeError {
-  return {
-    code: 'tool-timing-invalid',
-    expected: 'exclusive timing phases to be opened and closed once without overlap',
-    hint: 'close the current phase before starting the next phase and finish only after all phases close',
-    detail: { reason },
-  };
-}

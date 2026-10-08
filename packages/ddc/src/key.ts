@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { canonicalDdcDigest, writeCanonicalDdcJson } from './canonical-json.js';
 
 export interface SemanticDdcInput {
   readonly schemaVersion: string;
@@ -12,23 +12,9 @@ export interface SemanticDdcInput {
 }
 
 export function canonicalDdcJson(value: unknown): string {
-  const sorted = sortValue(value);
-  return JSON.stringify(sorted) ?? 'null';
-}
-
-function sortValue(value: unknown): unknown {
-  if (value instanceof Uint8Array) {
-    return { encoding: 'base64', bytes: Buffer.from(value).toString('base64') };
-  }
-  if (Array.isArray(value)) return value.map(sortValue);
-  if (value !== null && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      result[key] = sortValue((value as Record<string, unknown>)[key]);
-    }
-    return result;
-  }
-  return value;
+  const chunks: string[] = [];
+  writeCanonicalDdcJson(value, (chunk) => chunks.push(chunk));
+  return chunks.join('');
 }
 
 export function semanticDdcKey(input: SemanticDdcInput): string {
@@ -42,5 +28,5 @@ export function semanticDdcKey(input: SemanticDdcInput): string {
     targetProfile: input.targetProfile,
     producer: input.producer,
   };
-  return createHash('sha256').update(canonicalDdcJson(semantic)).digest('hex');
+  return canonicalDdcDigest(semantic);
 }

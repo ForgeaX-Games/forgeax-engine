@@ -1,5 +1,6 @@
 import { err, ok, type Result } from '../result.js';
 import type { TextureMipPolicy, TextureShape } from './asset.js';
+import { isCompressedFormat } from './block.js';
 
 export type TextureErrorCode =
   | 'texture-shape-invalid'
@@ -137,13 +138,4 @@ export function validateTextureShape(
     );
   }
   return ok(undefined);
-}
-
-export function isCompressedFormat(format: GPUTextureFormat): boolean {
-  return (
-    format.startsWith('bc') ||
-    format.startsWith('etc2') ||
-    format.startsWith('eac') ||
-    format.startsWith('astc')
-  );
 }

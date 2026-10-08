@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
   aggregateReports,
+  buildShardReport,
+  ciSmokeShardTailSeconds,
   discoverCandidates,
   hasUnavailableOrSkipped,
+  parseObservedFrameReceipt,
   partitionRunnableEntries,
   readRoster,
   resolveRunnableEntries,
   resultStatus,
+  selectSmokeEntries,
+  smokeGateSeconds,
   validateShardReport,
 } from '../run-dawn-smoke-roster.mjs';
 
@@ -164,6 +169,78 @@ test('roster is the explicit gate membership authority and keeps command ownersh
   assert.ok(roster.entries.every((entry) => Array.isArray(entry.gates)));
 });
 
+test('transmission aggregation requires both assertion owners and the full canonical receipt', () => {
+  const declared = readRoster().entries.filter(
+    (entry) => entry.package === '@forgeax/app-learn-render-6-pbr-4-transmission-refraction',
+  );
+  const runnable = resolveRunnableEntries({ roster: readRoster() }).runnable.filter(
+    (entry) => entry.package === declared[0].package,
+  );
+  assert.equal(runnable.length, 3);
+  const resolved = {
+    declared,
+    runnable,
+    independent: [],
+    exclusions: [],
+    declaredGateIds: runnable.map((entry) => entry.gateId),
+    runnableGateIds: runnable.map((entry) => entry.gateId),
+    independentGateIds: [],
+    excludedGateIds: [],
+  };
+  const results = runnable.map((entry) => {
+    const receipt =
+      entry.oracle.kind === 'frameReceipt'
+        ? parseObservedFrameReceipt('[smoke] frames observed=300\n[smoke] PASS', {
+            ...entry,
+            frames: 300,
+          })
+        : null;
+    return {
+      ...passResult(entry, 0),
+      oracle: entry.oracle,
+      framesExpected: 300,
+      framesObserved: receipt?.framesObserved ?? null,
+      receipt,
+      commandResults: [
+        { commandId: entry.commandId, command: entry.command, exitCode: 0, status: 'pass' },
+      ],
+    };
+  });
+  const reportFor = (selected) =>
+    buildShardReport({
+      resolved,
+      assigned: selected,
+      head,
+      expectedProductSha: head,
+      rosterDigest: digest,
+      shardIndex: 0,
+      shardCount: 1,
+      results: selected,
+      frames: 300,
+    });
+  const aggregate = (selected) =>
+    aggregateReports({
+      reports: [reportFor(selected)],
+      resolved,
+      head,
+      expectedProductSha: head,
+      rosterDigest: digest,
+      shardCount: 1,
+      frames: 300,
+    });
+  assert.equal(aggregate(results).status, 'pass');
+  for (const index of [0, 1])
+    assert.throws(
+      () => aggregate(results.filter((_, candidate) => candidate !== index)),
+      /missing/,
+    );
+  assert.throws(() => aggregate([...results, results[0]]), /duplicate/);
+  const short = structuredClone(results);
+  short[2].framesObserved = 299;
+  short[2].receipt.framesObserved = 299;
+  assert.throws(() => aggregate(short), /frame/);
+});
+
 test('manifest discovery only reports candidates and resolves gate commands', () => {
   const repoRoot = fixtureRepo();
   const candidates = discoverCandidates({ repoRoot, roots: ['apps/hello'] });
@@ -219,6 +296,51 @@ test('stable three-way partition covers runnable gates exactly once, including e
       .sort(),
     entries.map((entry) => entry.path).sort(),
   );
+});
+
+test('the observed slow Smoke fixed tail receives no additional long roster batch', () => {
+  const entries = selectSmokeEntries(resolveRunnableEntries({ roster: readRoster() }), 'sharded');
+  // Run 37208526589: all four complete Smoke jobs passed; retain the original
+  // 700-second placement bound; move the complete 239-second Bloom reservation
+  // from lane 3 to lane 1 using run 37229582157. These are placement estimates.
+  const observedFixedTailSeconds = [235, 622, 244, 392];
+  const estimatedCompleteSeconds = observedFixedTailSeconds.map(
+    (tail, shardIndex) =>
+      tail +
+      partitionRunnableEntries(entries, { shardIndex, scope: 'sharded' }).reduce(
+        (seconds, entry) => seconds + smokeGateSeconds(entry),
+        0,
+      ),
+  );
+  assert.ok(
+    Math.max(...estimatedCompleteSeconds) <= 700,
+    `observed fixed tails plus estimated roster exceed 700 seconds: ${estimatedCompleteSeconds}`,
+  );
+});
+
+test('smoke-fleet shards balance measured gate seconds against their fixed tails', () => {
+  const entries = selectSmokeEntries(resolveRunnableEntries({ roster: readRoster() }), 'sharded');
+  const shards = ciSmokeShardTailSeconds.map((_tail, shardIndex) =>
+    partitionRunnableEntries(entries, { shardIndex, scope: 'sharded' }),
+  );
+  assert.deepEqual(
+    shards
+      .flat()
+      .map((entry) => entry.gateId)
+      .sort(),
+    entries.map((entry) => entry.gateId).sort(),
+  );
+  const totals = shards.map(
+    (assigned, shard) =>
+      ciSmokeShardTailSeconds[shard] +
+      assigned.reduce((seconds, entry) => seconds + smokeGateSeconds(entry), 0),
+  );
+  const largest = Math.max(...entries.map(smokeGateSeconds));
+  assert.ok(Math.max(...totals) - Math.min(...totals) <= largest, `imbalanced: ${totals}`);
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const fleet = ci.slice(ci.indexOf('  smoke-fleet:\n'), ci.indexOf('  bevy-smoke-fleet:\n'));
+  assert.match(fleet, /group: \[0, 1, 2, 3\]/);
+  assert.match(fleet, /--shard-index \$\{\{ matrix\.group \}\} --shard-count 4\n/);
 });
 
 test('receipt-backed smoke keeps optional unavailable capability text out of the gate verdict', () => {
@@ -395,4 +517,15 @@ test('aggregate fails closed for missing, duplicate, stale, skipped, and short-f
       }),
     /duplicate/i,
   );
+});
+
+test('the complete Bloom carrier and evidence move together to Smoke lane 1', () => {
+  const ci = readFileSync('.github/workflows/ci.yml', 'utf8');
+  assert.match(ci, /- name: Hello-bloom headless smoke \(dawn-node\)\n\s+if: matrix\.group == 1\n/);
+  assert.match(
+    ci,
+    /- name: Upload Hello-bloom smoke evidence\n\s+if: always\(\) && matrix\.group == 1\n/,
+  );
+  assert.match(ci, /pnpm --filter @forgeax\/hello-bloom smoke:all/);
+  assert.deepEqual(ciSmokeShardTailSeconds, [235, 622, 244, 392]);
 });

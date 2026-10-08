@@ -19,10 +19,120 @@ fn surfaceUv(input : SurfaceInput, transform : vec4<f32>, metadata : vec4<f32>) 
   if (metadata.x >= 5.0) { source = input.uv5; }
   if (metadata.x >= 6.0) { source = input.uv6; }
   if (metadata.x >= 7.0) { source = input.uv7; }
+  return surfaceUvLinear(source, transform, metadata) + transform.xy;
+}
+
+// Scale and rotation of a slot's coordinate record; offsets do not move derivatives.
+fn surfaceUvLinear(source : vec2<f32>, transform : vec4<f32>, metadata : vec4<f32>) -> vec2<f32> {
   let scaled = source * transform.zw;
   let c = cos(metadata.y);
   let s = sin(metadata.y);
-  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c) + transform.xy;
+  return vec2<f32>(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+}
+
+const SURFACE_TRIPLANAR_OBJECT : f32 = 2.0;
+
+// Triplanar projection shared by every base slot of one Surface evaluation.
+// Plane coordinates follow Three r184 triplanarTexture (x: yz, y: zx, z: xy);
+// weights follow Unreal's world-aligned blend, pow(|n|, sharpness) normalized.
+struct SurfaceProjection {
+  position : vec3<f32>,
+  positionDx : vec3<f32>,
+  positionDy : vec3<f32>,
+  normal : vec3<f32>,
+  weights : vec3<f32>,
+};
+
+// The pipeline specialization bit travels as its own `triplanar` parameter,
+// never as a struct field: uniformity analysis taints a whole struct that also
+// carries varyings, and the UV branch's implicit-derivative sample needs a
+// uniform branch. A contract without the triplanar fields keeps the UV
+// projection and never references them.
+#ifdef TRIPLANAR_PROJECTION_AVAILABLE
+fn surfaceProjection(input : SurfaceInput, materialValue : MaterialParameters) -> SurfaceProjection {
+  let objectSpace = materialValue.triplanarSpace > SURFACE_TRIPLANAR_OBJECT - 0.5;
+  // n_os is proportional to transpose(M) * n_ws for any invertible M.
+  let normalOS = normalize(input.vertexNormalWS * input.objectToWorld);
+  let normal = select(normalize(input.vertexNormalWS), normalOS, objectSpace);
+  let position = select(input.positionWS, input.positionOS, objectSpace) * materialValue.triplanarScale;
+  let blend = pow(abs(normal), vec3<f32>(max(materialValue.triplanarSharpness, 1.0)));
+  // Derivatives come from uniform control flow: slot sampling is gated only by
+  // the pipeline specialization bit, never by a per-row material value.
+#ifdef RAY_SURFACE_CONTEXT
+  let dx = vec3<f32>(0.0);
+  let dy = vec3<f32>(0.0);
+#else
+  let dx = dpdx(position);
+  let dy = dpdy(position);
+#endif
+  return SurfaceProjection(
+    position, dx, dy, normal,
+    blend / max(blend.x + blend.y + blend.z, 1e-6),
+  );
+}
+
+fn surfaceTriplanarObjectSpace(materialValue : MaterialParameters) -> bool {
+  return materialValue.triplanarSpace > SURFACE_TRIPLANAR_OBJECT - 0.5;
+}
+#else
+fn surfaceProjection(input : SurfaceInput, materialValue : MaterialParameters) -> SurfaceProjection {
+  return SurfaceProjection(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+}
+
+fn surfaceTriplanarObjectSpace(materialValue : MaterialParameters) -> bool {
+  return false;
+}
+#endif
+
+fn surfacePlaneSample(tex : texture_2d<f32>, smp : sampler, uv : vec2<f32>, dx : vec2<f32>, dy : vec2<f32>,
+    transform : vec4<f32>, metadata : vec4<f32>) -> vec4<f32> {
+  let scale = metadata.zw;
+  return textureSampleGrad(tex, smp, (surfaceUvLinear(uv, transform, metadata) + transform.xy) * scale,
+    surfaceUvLinear(dx, transform, metadata) * scale, surfaceUvLinear(dy, transform, metadata) * scale);
+}
+
+fn surfaceTriplanarSamples(tex : texture_2d<f32>, smp : sampler, projection : SurfaceProjection,
+    transform : vec4<f32>, metadata : vec4<f32>) -> array<vec4<f32>, 3> {
+  let p = projection.position;
+  let dx = projection.positionDx;
+  let dy = projection.positionDy;
+  return array<vec4<f32>, 3>(
+    surfacePlaneSample(tex, smp, p.yz, dx.yz, dy.yz, transform, metadata),
+    surfacePlaneSample(tex, smp, p.zx, dx.zx, dy.zx, transform, metadata),
+    surfacePlaneSample(tex, smp, p.xy, dx.xy, dy.xy, transform, metadata),
+  );
+}
+
+fn surfaceSample(tex : texture_2d<f32>, smp : sampler, input : SurfaceInput, triplanar : bool,
+    projection : SurfaceProjection, transform : vec4<f32>, metadata : vec4<f32>) -> vec4<f32> {
+  if (triplanar) {
+    let samples = surfaceTriplanarSamples(tex, smp, projection, transform, metadata);
+    let w = projection.weights;
+    return samples[0] * w.x + samples[1] * w.y + samples[2] * w.z;
+  }
+  return sampleSurfaceTexture(tex, smp, surfaceUv(input, transform, metadata) * metadata.zw,
+    surfaceTextureFootprint(input, transform, metadata));
+}
+
+// Whiteout-blended triplanar tangent normals (Golus 2017): each plane's
+// tangent frame is its two projection axes, so no mesh tangent is needed.
+fn surfaceTriplanarNormal(samples : array<vec4<f32>, 3>, projection : SurfaceProjection, scale : vec2<f32>) -> vec3<f32> {
+  let n = projection.normal;
+  let x = scaleTangentSpaceNormal(decodeTangentSpaceNormalRg(samples[0].rg), scale);
+  let y = scaleTangentSpaceNormal(decodeTangentSpaceNormalRg(samples[1].rg), scale);
+  let z = scaleTangentSpaceNormal(decodeTangentSpaceNormalRg(samples[2].rg), scale);
+  let tx = vec3<f32>(x.xy + n.yz, abs(x.z) * n.x);
+  let ty = vec3<f32>(y.xy + n.zx, abs(y.z) * n.y);
+  let tz = vec3<f32>(z.xy + n.xy, abs(z.z) * n.z);
+  let w = projection.weights;
+  return normalize(tx.zxy * w.x + ty.yzx * w.y + tz * w.z);
+}
+
+// Object-to-world normal transform: cofactor(M) = det(M) * inverse(M)^T.
+fn surfaceObjectNormalToWorld(input : SurfaceInput, normalOS : vec3<f32>) -> vec3<f32> {
+  let m = input.objectToWorld;
+  let cofactor = mat3x3<f32>(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+  return normalize(cofactor * normalOS) * sign(dot(m[0], cofactor[0]));
 }
 
 fn surfaceChannel(value : vec4<f32>, channel : u32) -> f32 {
@@ -35,26 +145,22 @@ fn surfaceChannel(value : vec4<f32>, channel : u32) -> f32 {
 }
 
 fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParameters) -> SurfaceData {
+#ifdef TRIPLANAR_PROJECTION_AVAILABLE
+  let triplanar = standardUsesTriplanarProjection();
+#else
+  let triplanar = false;
+#endif
+  let projection = surfaceProjection(input, materialValue);
   var baseSample = vec4<f32>(1.0);
 #ifdef BASE_COLOR_TEXTURE_AVAILABLE
   if (standardUsesBaseColorTexture()) {
-  baseSample = sampleSurfaceTexture(
-    baseColorTexture,
-    baseColorTexture_sampler,
-    surfaceUv(input, materialValue.baseColorTextureCoordinatesTransform, materialValue.baseColorTextureCoordinatesMetadata) * materialValue.baseColorTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.baseColorTextureCoordinatesTransform, materialValue.baseColorTextureCoordinatesMetadata),
-  );
+  baseSample = surfaceSample(baseColorTexture, baseColorTexture_sampler, input, triplanar, projection, materialValue.baseColorTextureCoordinatesTransform, materialValue.baseColorTextureCoordinatesMetadata);
   }
 #endif
   var metallicRoughnessSample = vec4<f32>(1.0);
 #ifdef METALLIC_ROUGHNESS_TEXTURE_AVAILABLE
   if (standardUsesMetallicRoughnessTexture()) {
-  metallicRoughnessSample = sampleSurfaceTexture(
-    metallicRoughnessTexture,
-    metallicRoughnessTexture_sampler,
-    surfaceUv(input, materialValue.metallicRoughnessTextureCoordinatesTransform, materialValue.metallicRoughnessTextureCoordinatesMetadata) * materialValue.metallicRoughnessTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.metallicRoughnessTextureCoordinatesTransform, materialValue.metallicRoughnessTextureCoordinatesMetadata),
-  );
+  metallicRoughnessSample = surfaceSample(metallicRoughnessTexture, metallicRoughnessTexture_sampler, input, triplanar, projection, materialValue.metallicRoughnessTextureCoordinatesTransform, materialValue.metallicRoughnessTextureCoordinatesMetadata);
   }
 #endif
   // Each independent map replaces only its packed source. Scalar factors
@@ -69,12 +175,7 @@ fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParam
     } else if (standardReusesMetallicTextureFromMetallicRoughnessTexture()) {
       metallicSample = metallicRoughnessSample;
     } else {
-      metallicSample = sampleSurfaceTexture(
-        metallicTexture,
-        metallicTexture_sampler,
-        surfaceUv(input, materialValue.metallicTextureCoordinatesTransform, materialValue.metallicTextureCoordinatesMetadata) * materialValue.metallicTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.metallicTextureCoordinatesTransform, materialValue.metallicTextureCoordinatesMetadata),
-      );
+      metallicSample = surfaceSample(metallicTexture, metallicTexture_sampler, input, triplanar, projection, materialValue.metallicTextureCoordinatesTransform, materialValue.metallicTextureCoordinatesMetadata);
     }
   }
 #endif
@@ -87,12 +188,7 @@ fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParam
     } else if (standardReusesRoughnessTextureFromMetallicTexture()) {
       roughnessSample = metallicSample;
     } else {
-      roughnessSample = sampleSurfaceTexture(
-        roughnessTexture,
-        roughnessTexture_sampler,
-        surfaceUv(input, materialValue.roughnessTextureCoordinatesTransform, materialValue.roughnessTextureCoordinatesMetadata) * materialValue.roughnessTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.roughnessTextureCoordinatesTransform, materialValue.roughnessTextureCoordinatesMetadata),
-      );
+      roughnessSample = surfaceSample(roughnessTexture, roughnessTexture_sampler, input, triplanar, projection, materialValue.roughnessTextureCoordinatesTransform, materialValue.roughnessTextureCoordinatesMetadata);
     }
   }
 #endif
@@ -108,12 +204,7 @@ fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParam
     } else if (standardReusesAlphaTextureFromRoughnessTexture()) {
       alphaSample = roughnessSample;
     } else {
-      alphaSample = sampleSurfaceTexture(
-        alphaTexture,
-        alphaTexture_sampler,
-        surfaceUv(input, materialValue.alphaTextureCoordinatesTransform, materialValue.alphaTextureCoordinatesMetadata) * materialValue.alphaTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.alphaTextureCoordinatesTransform, materialValue.alphaTextureCoordinatesMetadata),
-      );
+      alphaSample = surfaceSample(alphaTexture, alphaTexture_sampler, input, triplanar, projection, materialValue.alphaTextureCoordinatesTransform, materialValue.alphaTextureCoordinatesMetadata);
     }
     alpha = surfaceChannel(alphaSample, u32(materialValue.alphaChannel));
   }
@@ -123,14 +214,31 @@ fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParam
   var usesNormal = false;
 #ifdef NORMAL_TEXTURE_AVAILABLE
   if (standardUsesNormalTexture()) {
-  let normalSample = sampleSurfaceTexture(
-    normalTexture,
-    normalTexture_sampler,
-    surfaceUv(input, materialValue.normalTextureCoordinatesTransform, materialValue.normalTextureCoordinatesMetadata) * materialValue.normalTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.normalTextureCoordinatesTransform, materialValue.normalTextureCoordinatesMetadata),
-  );
-  normal = applyTBN(input.vertexNormalWS, input.tangentWS,
-    scaleTangentSpaceNormal(decodeTangentSpaceNormalRg(normalSample.rg), materialValue.normalScale)) * faceDirection;
+  let transform = materialValue.normalTextureCoordinatesTransform;
+  let metadata = materialValue.normalTextureCoordinatesMetadata;
+  if (triplanar) {
+    let triplanarNormal = surfaceTriplanarNormal(
+      surfaceTriplanarSamples(normalTexture, normalTexture_sampler, projection, transform, metadata),
+      projection, materialValue.normalScale);
+    normal = select(triplanarNormal, surfaceObjectNormalToWorld(input, triplanarNormal),
+      surfaceTriplanarObjectSpace(materialValue)) * faceDirection;
+  } else {
+    let normalSample = sampleSurfaceTexture(normalTexture, normalTexture_sampler,
+      surfaceUv(input, transform, metadata) * metadata.zw, surfaceTextureFootprint(input, transform, metadata));
+#ifdef OBJECT_SPACE_NORMAL_AVAILABLE
+    let objectSpaceNormal = standardUsesObjectSpaceNormal();
+#else
+    let objectSpaceNormal = false;
+#endif
+    if (objectSpaceNormal) {
+      // Three r184 OBJECTSPACE_NORMALMAP: RGB carries the full object normal.
+      let normalOS = vec3<f32>((normalSample.rg * 2.0 - 1.0) * materialValue.normalScale, normalSample.b * 2.0 - 1.0);
+      normal = surfaceObjectNormalToWorld(input, normalOS) * faceDirection;
+    } else {
+      normal = applyTBN(input.vertexNormalWS, input.tangentWS,
+        scaleTangentSpaceNormal(decodeTangentSpaceNormalRg(normalSample.rg), materialValue.normalScale)) * faceDirection;
+    }
+  }
   usesNormal = true;
   }
 #endif
@@ -149,23 +257,13 @@ fn evaluate_standard_surface(input : SurfaceInput, materialValue : MaterialParam
   var emissiveSample = vec4<f32>(1.0);
 #ifdef EMISSIVE_TEXTURE_AVAILABLE
   if (standardUsesEmissiveTexture()) {
-  emissiveSample = sampleSurfaceTexture(
-    emissiveTexture,
-    emissiveTexture_sampler,
-    surfaceUv(input, materialValue.emissiveTextureCoordinatesTransform, materialValue.emissiveTextureCoordinatesMetadata) * materialValue.emissiveTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.emissiveTextureCoordinatesTransform, materialValue.emissiveTextureCoordinatesMetadata),
-  );
+  emissiveSample = surfaceSample(emissiveTexture, emissiveTexture_sampler, input, triplanar, projection, materialValue.emissiveTextureCoordinatesTransform, materialValue.emissiveTextureCoordinatesMetadata);
   }
 #endif
   var occlusionSample = vec4<f32>(1.0);
 #ifdef OCCLUSION_TEXTURE_AVAILABLE
   if (standardUsesOcclusionTexture()) {
-  occlusionSample = sampleSurfaceTexture(
-    occlusionTexture,
-    occlusionTexture_sampler,
-    surfaceUv(input, materialValue.occlusionTextureCoordinatesTransform, materialValue.occlusionTextureCoordinatesMetadata) * materialValue.occlusionTextureCoordinatesMetadata.zw,
-    surfaceTextureFootprint(input, materialValue.occlusionTextureCoordinatesTransform, materialValue.occlusionTextureCoordinatesMetadata),
-  );
+  occlusionSample = surfaceSample(occlusionTexture, occlusionTexture_sampler, input, triplanar, projection, materialValue.occlusionTextureCoordinatesTransform, materialValue.occlusionTextureCoordinatesMetadata);
   }
 #endif
   let vertexColor = input.vertexColor;

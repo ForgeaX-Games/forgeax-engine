@@ -19,6 +19,7 @@
     { "path": "../font" },
     { "path": "../gltf" },
     { "path": "../host" },
+    { "path": "../mesh-io" },
     { "path": "../image" },
     { "path": "../physics" },
     { "path": "../pack" },

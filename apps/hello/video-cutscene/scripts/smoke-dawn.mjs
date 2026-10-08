@@ -48,7 +48,7 @@ if (!Number.isInteger(requestedFrameCount) || requestedFrameCount < 60) {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   originalConsoleError(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
   originalConsoleError(`  rerun: ${RERUN_CMD}`);

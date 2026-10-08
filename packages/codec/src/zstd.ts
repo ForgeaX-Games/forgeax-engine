@@ -22,14 +22,10 @@ let importer: ZstdImporter = defaultImporter;
  */
 let _initPromise: Promise<FzstdDecompress> | null = null;
 
-/** Count of importer invocations; observed in tests to prove single-init (AC-12). @internal */
-let initCount = 0;
-
 function getDecompressor(): Promise<FzstdDecompress> {
   if (_initPromise !== null) {
     return _initPromise;
   }
-  initCount++;
   _initPromise = importer().catch((cause: unknown) => {
     // Clear cached failure so subsequent calls retry (do not permanently cache).
     _initPromise = null;
@@ -39,24 +35,14 @@ function getDecompressor(): Promise<FzstdDecompress> {
 }
 
 /**
- * Test-only: number of times the fzstd importer has been invoked. Proves the
- * lazy singleton loads the decompressor at most once under concurrency (AC-12).
- * @internal
- */
-export function _zstdInitCount(): number {
-  return initCount;
-}
-
-/**
  * Test-only: reset the lazy singleton and optionally override the importer, so
- * init counting / concurrency / failure-retry can be exercised deterministically.
+ * lazy import / concurrency / failure-retry can be exercised deterministically.
  * Call with no argument to restore the real fzstd importer.
  * @internal
  */
 export function _setZstdImporter(next?: ZstdImporter): void {
   importer = next ?? defaultImporter;
   _initPromise = null;
-  initCount = 0;
 }
 
 /**

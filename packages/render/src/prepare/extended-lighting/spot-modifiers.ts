@@ -1,29 +1,9 @@
-import { isCompressedFormat } from '@forgeax/engine-codec';
-import { deriveTextureLayout, type TextureAsset } from '@forgeax/engine-types';
+import { deriveTextureLayout, isCompressedFormat, type TextureAsset } from '@forgeax/engine-types';
 import {
   COOKIE_MIP_LEVEL_COUNT,
   COOKIE_SLICE_MIP_CHAIN_BYTES,
   COOKIE_SLICE_SIZE,
 } from './resources';
-
-export interface SpotModifierFactors {
-  readonly brdf: number;
-  readonly range: number;
-  readonly cone: number;
-  readonly ies?: number | undefined;
-  readonly cookie?: number | undefined;
-  readonly shadow: number;
-}
-
-export interface IesCoordinates {
-  readonly azimuth: number;
-  readonly elevation: number;
-}
-
-export interface CookieUv {
-  readonly u: number;
-  readonly v: number;
-}
 
 /**
  * The fixed GPU representation consumed by the extended-lighting Cookie
@@ -47,8 +27,6 @@ export interface CookieProjection {
   readonly matrix: Float32Array;
   readonly aspect: number;
 }
-
-const DEG_TO_RAD = Math.PI / 180;
 
 const COOKIE_PROJECTION_CACHE = new WeakMap<TextureAsset, CookieProjection | null>();
 
@@ -331,60 +309,4 @@ export function createCookieProjectionMatrixData(count: number): Float32Array {
     data[base + 15] = 1;
   }
   return data;
-}
-
-function normalized(vector: ArrayLike<number>): [number, number, number] | undefined {
-  const x = vector[0] ?? 0;
-  const y = vector[1] ?? 0;
-  const z = vector[2] ?? 0;
-  const length = Math.hypot(x, y, z);
-  return length > 0 && Number.isFinite(length) ? [x / length, y / length, z / length] : undefined;
-}
-
-export function spotModifierProduct(factors: SpotModifierFactors): number {
-  return (
-    factors.brdf *
-    factors.range *
-    factors.cone *
-    (factors.ies ?? 1) *
-    (factors.cookie ?? 1) *
-    factors.shadow
-  );
-}
-
-export function projectIesCoordinates(
-  toPoint: ArrayLike<number>,
-  rollDeg: number,
-): IesCoordinates | undefined {
-  const direction = normalized(toPoint);
-  if (direction === undefined || direction[2] >= 0) return undefined;
-  const roll = rollDeg * DEG_TO_RAD;
-  const rolledX = direction[0] * Math.cos(roll) - direction[1] * Math.sin(roll);
-  const rolledY = direction[0] * Math.sin(roll) + direction[1] * Math.cos(roll);
-  return {
-    azimuth: (Math.atan2(rolledY, rolledX) + Math.PI * 2) % (Math.PI * 2),
-    elevation: Math.acos(Math.min(1, Math.max(-1, -direction[2]))) / Math.PI,
-  };
-}
-
-export function projectCookieUv(
-  toPoint: ArrayLike<number>,
-  rollDeg: number,
-  aspect: number,
-  outerConeDeg = 45,
-): CookieUv | undefined {
-  const direction = normalized(toPoint);
-  if (direction === undefined || direction[2] >= 0 || !Number.isFinite(aspect) || aspect <= 0)
-    return undefined;
-  const cone = Math.atan2(Math.hypot(direction[0], direction[1]), -direction[2]);
-  const outerCone = outerConeDeg * DEG_TO_RAD;
-  if (cone > outerCone) return undefined;
-  const roll = rollDeg * DEG_TO_RAD;
-  const x = direction[0] * Math.cos(roll) - direction[1] * Math.sin(roll);
-  const y = direction[0] * Math.sin(roll) + direction[1] * Math.cos(roll);
-  const scale = Math.tan(outerCone);
-  return {
-    u: 0.5 + (x / -direction[2] / scale / aspect) * 0.5,
-    v: 0.5 + (y / -direction[2] / scale) * 0.5,
-  };
 }

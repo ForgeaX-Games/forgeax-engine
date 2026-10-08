@@ -9,7 +9,7 @@
 const EPSILON = 1e-6;
 
 async function main() {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (!globalThis.navigator) {
     Object.defineProperty(globalThis, 'navigator', {

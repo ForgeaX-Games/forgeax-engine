@@ -232,7 +232,7 @@ describe('material runtime readiness', () => {
     const ready = await load(materialPublicationFixture(record));
     expect(ready.status).toBe('Ready');
     if (ready.status !== 'Ready') throw new Error('Expected Ready');
-    expect(ready.parameterContract).toEqual(record.parameterContract);
+    expect(ready.record.parameterContract).toEqual(record.parameterContract);
     expect(inspectMaterialRuntime(ready).parameterContract).toEqual(record.parameterContract);
   });
 
@@ -261,7 +261,7 @@ describe('material runtime readiness', () => {
     const ready = await load(materialPublicationFixture(record));
     expect(ready.status).toBe('Ready');
     if (ready.status !== 'Ready') throw new Error('Expected Ready');
-    expect(ready.parameterContract).toEqual(record.parameterContract);
+    expect(ready.record.parameterContract).toEqual(record.parameterContract);
     expect(inspectMaterialRuntime(ready).parameterContract).toEqual(record.parameterContract);
     expect(materialParametersToParamSchema(parameters).map((parameter) => parameter.type)).toEqual([
       'f32',
@@ -377,7 +377,7 @@ describe('material runtime readiness', () => {
       });
       expect(registry.getMaterialReadiness(record.guid)).toMatchObject({
         status: 'Ready',
-        artifactDigest: record.artifactDigest,
+        record: { artifactDigest: record.artifactDigest },
       });
       for (const program of record.programs)
         expect(shaders.findMaterialArtifact(program.specializationKey)).toMatchObject({

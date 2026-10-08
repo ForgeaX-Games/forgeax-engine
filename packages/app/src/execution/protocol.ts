@@ -1,8 +1,9 @@
 import type { AudioIntent } from '@forgeax/engine-audio';
-import type { InputBackendSample } from '@forgeax/engine-input';
+import type { SharedSpanBinding } from '@forgeax/engine-ecs/shared';
+import type { GamepadFeedbackIntent, InputBackendSample } from '@forgeax/engine-input';
 import type { BrowserFrameSubmitted } from '../browser-frame-signal';
 import type { CanvasDrawingBufferSize } from '../types';
-import type { ExecutionAssetCatalog, ExecutionFrameInspection } from './types';
+import type { ExecutionAssetCatalog, ExecutionFault, ExecutionFrameInspection } from './types';
 
 export interface ExecutionFrameMessage {
   readonly kind: 'frame';
@@ -37,6 +38,7 @@ export interface ExecutionFrameCompletion {
   readonly engineUpdateMs: number;
   readonly kernelWaitMs: number;
   readonly audioIntents?: readonly AudioIntent[];
+  readonly feedbackIntents?: readonly GamepadFeedbackIntent[];
   readonly kernelDispatch?: {
     readonly eligible: boolean;
     readonly usedShared: boolean;
@@ -138,6 +140,8 @@ export interface ExecutionInitMessage {
   readonly build?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly diagnostics?: import('./types').ExecutionDiagnosticsOptions;
+  /** Renderer-realm display output color space; the Renderer owns negotiation. */
+  readonly outputColorSpace?: import('@forgeax/engine-render').OutputColorSpace;
   readonly workers: import('./types').ExecutionSelection;
 }
 
@@ -154,16 +158,9 @@ export interface ExecutionReadyMessage {
   readonly workerWebGpu: boolean;
 }
 
-export interface ExecutionFaultMessage {
+export interface ExecutionFaultMessage extends ExecutionFault {
   readonly kind: 'fault';
   readonly worldIdentity: string | null;
-  readonly source: 'bootstrap' | 'handshake' | 'runtime' | 'kernel' | 'world' | 'rebuild';
-  readonly code: string;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: unknown;
-  readonly partialWrite: boolean;
-  readonly retryable: boolean;
 }
 
 export interface ExecutionRebuildMessage {
@@ -226,6 +223,7 @@ export interface ExecutionProfileFinishMessage {
 /** Simulation completion releases source credit; it is never a presentation witness. */
 export interface ExecutionSimulationCompletion extends Omit<ExecutionFrameCompletion, 'kind'> {
   readonly kind: 'simulation-complete';
+  readonly renderRejection?: Pick<ExecutionFaultMessage, 'code' | 'expected' | 'hint' | 'detail'>;
 }
 
 export type HostToEngineMessage =
@@ -263,3 +261,28 @@ export type EngineToHostMessage =
   | ExecutionInspectCanceledMessage
   | ExecutionInspectResultMessage
   | ExecutionHostControlMessage;
+
+/** Kernel pool to kernel Worker messages; the pool sends, the Worker runtime receives. */
+export interface KernelJobMessage {
+  readonly kind: 'kernel-job';
+  readonly moduleUrl: string;
+  readonly binding: SharedSpanBinding;
+  readonly control: Int32Array;
+  readonly status: Int32Array;
+  readonly jobIndex: number;
+}
+
+export interface KernelInitMessage {
+  readonly kind: 'kernel-init';
+  readonly ready: Int32Array;
+}
+
+export interface KernelPreloadMessage {
+  readonly kind: 'kernel-preload';
+  readonly moduleUrl: string;
+  readonly control: Int32Array;
+  readonly status: Int32Array;
+  readonly jobIndex: number;
+}
+
+export type HostToKernelMessage = KernelJobMessage | KernelInitMessage | KernelPreloadMessage;

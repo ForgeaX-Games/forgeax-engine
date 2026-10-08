@@ -6,6 +6,7 @@ import type {
   LostListenerRegistry,
   RhiErrorListenerRegistry,
 } from '../lifecycle';
+import type { OutputColorSpaceState } from '../output-color-space';
 import type { GpuPassTimingReason } from '../record/gpu-pass-timing/errors.js';
 import type {
   GpuPassTimingCapture,
@@ -17,10 +18,10 @@ import type {
   FrameObservationDomain,
   RenderDebugOverlay,
   RendererOptions,
+  RenderPipelineObservationCaptureOwner,
   SsrShaderSources,
   VolumetricFogShaderSources,
 } from '../render-contract';
-import type { TypedFrameObservationCapture } from '../typed-render-graph-primitives';
 import type { RhiBackendPack } from './backend-contract';
 import type { BundlerOptions } from './bundler-contract';
 import type { RendererAssemblyImplementation } from './host-contract';
@@ -55,6 +56,8 @@ export interface WebGPURendererInternals {
     | undefined;
   gpuPassTimingSubmittedWork?: Promise<void> | undefined;
   lossObserver: { current?: (detail: string) => void };
+  /** Public output colour-space request and its current surface negotiation. */
+  outputColorSpace: OutputColorSpaceState;
   generationState: {
     current: number;
     onStaleLoss?: () => void;
@@ -63,11 +66,7 @@ export interface WebGPURendererInternals {
   gpuPassTimingFrameIdentity?: GpuPassTimingFrameIdentity | undefined;
   gpuPassTimingCapture?: GpuPassTimingCapture | undefined;
   gpuPassTimingBeginReason?: GpuPassTimingReason | undefined;
-  observationCaptureOwner?: {
-    register(capture: TypedFrameObservationCapture): void;
-    consume(frameNumber: number): readonly TypedFrameObservationCapture[];
-    drain(): readonly TypedFrameObservationCapture[];
-  };
+  observationCaptureOwner?: RenderPipelineObservationCaptureOwner;
   observationCaptureDomains?: readonly FrameObservationDomain[] | undefined;
   observationFrameId?: number | undefined;
   observationGraphGeneration?: number | undefined;

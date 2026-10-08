@@ -74,7 +74,7 @@ function snapshot(component: 'Points' | 'Lines') {
     style:
       component === 'Points'
         ? { kind: 'points', sizePx: 8, shape: 'circle' }
-        : { kind: 'lines', widthPx: 3 },
+        : { kind: 'lines', width: 3 },
     layer: 0,
     visible: true,
     sourceBounds: [-1, -1, 0, 1, 1, 0],
@@ -156,7 +156,7 @@ function makeRealScene(
         { component: Transform, data: { pos: [0.5, 0, -2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
         { component: MeshFilter, data: { assetHandle: lineMeshHandle } },
         { component: MeshRenderer, data: { materials: [materialHandle] } },
-        { component: Lines, data: { widthPx: 3 } },
+        { component: Lines, data: { width: 3 } },
       )
       .unwrap();
   } else {
@@ -190,6 +190,8 @@ async function createRealRoute(): Promise<RealRoute> {
     { rhi, profiler },
     { shaderManifestUrl: manifestUrl() },
   );
+  const initialized = await renderer.initialization;
+  if (!initialized.ok) throw initialized.error;
   return {
     renderer,
     profiler,
@@ -245,7 +247,7 @@ function prepareWorkload(
   preparation = new PointsLinesPreparation({ cache, adapter: RESOURCE_ADAPTER }),
 ) {
   const authored =
-    component === 'Points' ? { points: { sizePx: 8, shape: 1 } } : { lines: { widthPx: 3 } };
+    component === 'Points' ? { points: { sizePx: 8, shape: 1 } } : { lines: { width: 3 } };
   const admission = admitPointsLines({
     entity: component === 'Points' ? 10 : 11,
     mesh,

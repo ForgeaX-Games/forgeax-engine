@@ -29,17 +29,6 @@ type SceneWireRefResult =
   | { readonly ok: true; readonly value: SceneAsset }
   | { readonly ok: false; readonly reason: string };
 
-// The Pack envelope owns refs[] while the decoded SceneAsset remains the
-// portable payload. Keep that wire-only fact beside the decoded object so the
-// World-local projection can interpret shared-field indices without putting a
-// component registry or World into the decoder contract.
-const sceneWireRefs = new WeakMap<object, readonly string[]>();
-
-/** @internal Read the Pack refs[] retained for a decoded SceneAsset payload. */
-export function sceneAssetWireRefs(asset: SceneAsset): readonly string[] | undefined {
-  return sceneWireRefs.get(asset);
-}
-
 function resolveWireRef(
   refs: readonly string[],
   value: number,
@@ -236,7 +225,6 @@ export const sceneAssetDecoder: AssetDecoder<SceneAsset> = {
     }
     const resolved = resolveSceneWireRefs(payload, envelope.refs);
     if (!resolved.ok) return invalidScene(envelope.guid, resolved.reason);
-    sceneWireRefs.set(resolved.value, Object.freeze([...envelope.refs]));
     return ok(resolved.value);
   },
 };

@@ -354,6 +354,9 @@ export class DdcLifecycle {
   }
 
   public async commit(lease: DdcLease, validatedKey: string): Promise<DdcCommitResult> {
+    // Immutable bytes can be validated without holding the mutable head lock.
+    // Keep heartbeats runnable, then fence the live head after all expensive work.
+    const entry = await this.entries.read(validatedKey);
     return withDdcLock(this.root, `head-${lease.guid}`, async () => {
       const current = await this.read(lease.guid);
       const active = current?.active;
@@ -388,7 +391,6 @@ export class DdcLifecycle {
         await this.write({ ...current, stale: true });
         return withRevision({ result: 'stale', key: validatedKey }, current.revision);
       }
-      const entry = await this.entries.read(validatedKey);
       if (entry === null || entry.guid !== lease.guid || entry.receipt.key !== validatedKey) {
         const nextRevision = current.revision + 1;
         const failure = {
@@ -491,10 +493,15 @@ export class DdcLifecycle {
   public async heartbeat(lease: DdcLease): Promise<DdcLease> {
     return withDdcLock(this.root, `head-${lease.guid}`, async () => {
       const current = await this.read(lease.guid);
-      if (current?.active?.attempt !== lease.attempt) {
+      if (
+        current?.active?.attempt !== lease.attempt ||
+        current.revision !== lease.expectedRevision ||
+        current.desiredKey !== lease.desiredKey ||
+        Date.now() > current.active.expiresAt
+      ) {
         throw new DdcStoreError({
           code: 'ddc-lease-expired',
-          detail: 'heartbeat belongs to a stale lease',
+          detail: 'heartbeat requires the current unexpired cook lease',
           expected: lease.attempt,
           actual: current?.active?.attempt,
           lease: lease.attempt,
@@ -502,7 +509,7 @@ export class DdcLifecycle {
           rootKind: 'project-ddc',
         });
       }
-      const refreshed = { ...lease, expiresAt: Date.now() + this.leaseTtlMs };
+      const refreshed = { ...current.active, expiresAt: Date.now() + this.leaseTtlMs };
       await this.write({ ...current, active: refreshed });
       return refreshed;
     });

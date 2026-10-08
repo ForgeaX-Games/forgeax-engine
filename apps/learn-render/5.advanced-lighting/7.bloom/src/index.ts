@@ -414,7 +414,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
 // Canvas capture hook for the capture smoke harness (pixel mode). Advances the
 // World and issues one explicit observed draw before reading the Render-owned
-// final-srgb observation. Reading that receipt-bound domain avoids comparing a
+// final-display observation. Reading that receipt-bound domain avoids comparing a
 // captured Bloom graph with an earlier browser compositor frame.
 function installCaptureHook(app: App, world: App['world']): void {
   type CaptureHook = () => Promise<Uint8Array>;
@@ -426,19 +426,19 @@ function installCaptureHook(app: App, world: App['world']): void {
   win.__captureBloom = async (): Promise<Uint8Array> => {
     // Requesting all three domains keeps the Standard output split in the
     // same graph shape used by the existing receipt-observation contract;
-    // final-srgb capture is only declared on the explicit encode stage.
-    const armed = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-srgb']);
-    if (armed === undefined) throw new Error('[learn-render 5.7 bloom] final-srgb observation unavailable');
+    // final-display capture is only declared on the explicit encode stage.
+    const armed = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-display']);
+    if (armed === undefined) throw new Error('[learn-render 5.7 bloom] final-display observation unavailable');
     if (!armed.ok) throw armed.error;
     world.update(1 / 60).unwrap();
     const frame = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
     if (!frame.ok) throw frame.error;
     const observed = await renderer.observe(frame.value, {
-      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['linear-hdr', 'linear-ldr', 'final-display'],
     });
     if (!observed.ok) throw observed.error;
-    const domain = observed.value.observations?.find((item) => item.domain === 'final-srgb');
-    if (domain === undefined) throw new Error('[learn-render 5.7 bloom] final-srgb observation missing');
+    const domain = observed.value.observations?.find((item) => item.domain === 'final-display');
+    if (domain === undefined) throw new Error('[learn-render 5.7 bloom] final-display observation missing');
     const { width, height, bytesPerRow } = domain.metadata;
     const tightRowBytes = width * 4;
     if (bytesPerRow === tightRowBytes) return domain.bytes;

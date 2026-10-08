@@ -100,6 +100,38 @@ describe('browser input edge latch', () => {
     expect(next.releasedButtons).toEqual([false, false, false]);
   });
 
+  it('latches intermediate mouse chord changes delivered as pointermove', () => {
+    const env = buildEnvironment();
+    env.fire('canvas', 'pointerdown', pointerEvent('pointerdown', 2));
+    env.backend.sample();
+    const move = (buttons: number) =>
+      env.fire('canvas', 'pointermove', {
+        pointerId: 1,
+        pointerType: 'mouse',
+        buttons,
+        clientX: 100,
+        clientY: 100,
+        movementX: 0,
+        movementY: 0,
+        pressure: 0.5,
+      } as unknown as Event);
+    move(3);
+    expect(env.backend.sample()).toMatchObject({
+      buttons: [true, false, true],
+      pressedButtons: [true, false, false],
+    });
+    move(2);
+    expect(env.backend.sample()).toMatchObject({
+      buttons: [false, false, true],
+      releasedButtons: [true, false, false],
+    });
+    env.fire('canvas', 'pointerup', pointerEvent('pointerup', 2));
+    expect(env.backend.sample()).toMatchObject({
+      buttons: [false, false, false],
+      releasedButtons: [false, false, true],
+    });
+  });
+
   it('does not synthesize a second press for repeated keydown events', () => {
     const env = buildEnvironment();
     env.fire('window', 'keydown', keyEvent('w', 'KeyW'));

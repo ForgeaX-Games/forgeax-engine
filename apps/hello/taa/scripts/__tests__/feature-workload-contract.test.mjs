@@ -89,7 +89,7 @@ test('feature producer rejects payload-only zero growth when renderer allocation
     frames: 300,
     frameIdentity: { first: 1, last: 300, count: 300, contiguous: true, sequenceSha256: 'd'.repeat(64) },
     stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: String.fromCharCode(97 + index).repeat(64), frame: 300 },
       metadata: {
@@ -166,7 +166,7 @@ test('feature producer rejects cross-graph or incorrectly paired domain captures
   const domains = ['linear-HDR', 'linear-LDR', 'final-sRGB'];
   const identity = (id) => ({ id, sha256: 'a'.repeat(64) });
   const stages = domains.map((domain, index) => ({
-    id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+    id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
     domain,
     readback: { rawHash: String.fromCharCode(98 + index).repeat(64), frame: 300 },
     metadata: {
@@ -220,7 +220,7 @@ test('feature producer rejects shape-only and software Browser adapter provenanc
     frames: 300,
     frameIdentity: { first: 1, last: 300, count: 300, contiguous: true, sequenceSha256: 'c'.repeat(64) },
     stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: String.fromCharCode(98 + index).repeat(64), frame: 300 },
       metadata: {
@@ -296,7 +296,7 @@ test('Dawn raw observations keep adapter provenance without borrowing the Browse
     frames: 300,
     frameIdentity: { first: 1, last: 300, count: 300, contiguous: true, sequenceSha256: 'c'.repeat(64) },
     stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: String.fromCharCode(98 + index).repeat(64), frame: 300 },
       metadata: {

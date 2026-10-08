@@ -1,6 +1,7 @@
 import { definePack, definePackageId } from '@forgeax/engine/pack/source';
 import { defineAssetKind, type RuntimeAssetRegistry } from '@forgeax/engine/assets-runtime';
 import { createUiLoader, mountUi, type UiAsset } from '@forgeax/engine/ui';
+import { bindUiLocalization, createUiLocalization } from '@forgeax/engine/ui/localization';
 import type { Plugin } from '@forgeax/engine/plugin';
 import { ok, err } from '@forgeax/engine/types';
 
@@ -31,11 +32,17 @@ export const ui: Plugin.Object<{ readonly guide: string }> = {
       yield () => lease.dispose();
       const loaded = await assets.load(config.guide, uiKind);
       if (!loaded.ok) throw loaded.error;
+      const localized = await createUiLocalization(loaded.value, { lng: 'en' });
+      if (!localized.ok) throw localized.error;
+      const i18n = localized.value;
       const root = document.querySelector<HTMLElement>('#game-ui');
       if (!root) throw new Error('game-3d UI requires the Host #game-ui mount');
       const mounted = mountUi(loaded.value, {
         root,
         layer: 50,
+        onAction: (action) => {
+          if (action === 'language-en' || action === 'language-fr') void i18n.changeLanguage(action.slice(9));
+        },
       });
       if (!mounted.ok) throw mounted.error;
       const ui = mounted.value;
@@ -44,14 +51,16 @@ export const ui: Plugin.Object<{ readonly guide: string }> = {
         const locked = document.pointerLockElement !== null;
         ui.host.classList.toggle('locked', locked);
         const label = ui.host.shadowRoot?.querySelector<HTMLElement>('[data-ui-slot="lock"]');
-        if (label)
-          label.textContent = locked
-            ? 'Camera locked · mouse look active'
-            : 'Click to lock camera, or hold right mouse to look';
+        if (label) label.textContent = i18n.t(locked ? 'lock' : 'unlock');
+        for (const [part, key] of [['guide-title', 'title'], ['guide-controls', 'controls']]) {
+          const node = ui.host.shadowRoot?.querySelector<HTMLElement>(`[data-ui-part="${part}"]`);
+          if (node) node.textContent = i18n.t(key);
+        }
+        ui.host.lang = i18n.resolvedLanguage ?? i18n.language;
       };
       document.addEventListener('pointerlockchange', update);
       yield () => document.removeEventListener('pointerlockchange', update);
-      update();
+      bindUiLocalization(ui, i18n, update);
       const port = ctx.gameHost!.port;
       if (port && ui.host.shadowRoot) yield installVaseControls(ui.host.shadowRoot, port);
     });

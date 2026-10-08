@@ -17,6 +17,7 @@ import { atmosphereStorage } from './storage';
 
 /** Graph views of the shared device-owned sky and its lighting products. */
 export interface GraphEnvironment {
+  readonly atmosphere?: import('./luts').GraphAtmosphere;
   readonly sky: GraphTextureView;
   readonly irradiance: GraphTextureView;
   readonly prefilter: GraphTextureView;
@@ -64,7 +65,7 @@ export function addAtmosphereIbl(
     executeIf: dirty,
     encode: ({ frame, resources }) => {
       const values = new Float32Array(5 * 64);
-      for (let mip = 0; mip < 5; mip++) values[mip * 64 + 14] = mip / 4;
+      for (let mip = 0; mip < 5; mip++) values[mip * 64] = mip / 4;
       frame.runtime.device.queue
         .writeBuffer(resources.buffer(parameters.value).unwrap(), 0, values)
         .unwrap();
@@ -163,7 +164,7 @@ export function addAtmosphereIbl(
           executeIf: dirty,
           encode: ({ frame, resources, pass }) => {
             const current = ensureState(frame);
-            current.inputs ??= frame.runtime.device
+            current.inputs = frame.runtime.device
               .createBindGroup({
                 layout: current.inputLayout,
                 entries: [
@@ -202,6 +203,8 @@ export function addAtmosphereIbl(
             pass.setBindGroup(1, current.inputs);
             pass.setVertexBuffer(0, resources.buffer(vertices).unwrap());
             pass.draw(3, 1, face * 3);
+            if (product === 'prefilter' && mip === 4 && face === 5)
+              atmosphereStorage(frame).recordedEncoder = frame.encoder;
           },
         });
         if (!pass.ok) return pass;

@@ -80,7 +80,7 @@ fn fs_main(input : VsOut, @builtin(front_facing) frontFacing : bool) -> @locatio
   // Preserve native PCF and cascade blending. Thresholding BRDF radiance
   // makes shadow edges depend on view direction and amplifies small changes.
   // Toon bands stay authored here, with a readable cool ambient floor.
-  let shadowVisibility = evalDirectionalShadowFactor(normal, input.worldPos, input.viewZ);
+  let shadowVisibility = evalDirectionalShadowFactor(normal, input.worldPos, input.viewZ, 0u);
   if (nDotL > 0.08) {
     color *= mix(0.46, 1.0, shadowVisibility);
   }
@@ -133,7 +133,7 @@ fn fs_readability_candidate(input : VsOut, @builtin(front_facing) frontFacing : 
   }
   var color = mix(material.shadowColor.rgb, surfaceColor, lightBand);
 
-  let shadowVisibility = evalDirectionalShadowFactor(normal, input.worldPos, input.viewZ);
+  let shadowVisibility = evalDirectionalShadowFactor(normal, input.worldPos, input.viewZ, 0u);
   if (nDotL > 0.08) {
     // Move occluded faces toward their authored hue without multiplying the
     // already-dark result toward black a second time.

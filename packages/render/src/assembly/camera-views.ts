@@ -1,32 +1,48 @@
 import type { World } from '@forgeax/engine-ecs';
 import type { RenderReadLease } from '@forgeax/engine-ecs/projection';
-import type { RhiDevice, Texture } from '@forgeax/engine-rhi';
+import {
+  type RhiCommandEncoder,
+  type RhiDevice,
+  RhiError,
+  type Texture,
+} from '@forgeax/engine-rhi';
 import type { Handle } from '@forgeax/engine-types';
 import { createRendererCaptureOwner } from '../capture/renderer-captures';
 import { Camera } from '../components/camera';
 import { CameraView, cameraViewExtent } from '../components/camera-view';
 import { CubeCamera } from '../components/cube-camera';
+import {
+  STEREO_EYES,
+  StereoCamera,
+  type StereoEye,
+  stereoEyeViewport,
+} from '../components/stereo-camera';
 import { CameraViewInvalidError } from '../errors/render';
 import type { CameraViewInspection } from '../inspection-types';
 import type { DeviceScope } from '../lifecycle';
+import { createOutputColorSpaceState } from '../output-color-space';
 import type { PreparedRenderPublication, RenderPublicationReceiver } from '../publication/receiver';
+import { DiffuseGiBudget } from '../raytracing/diffuse-gi-budget';
 import type { GpuTimingCapture } from '../record/gpu-timing';
 import type { RenderSystemInternals } from '../record/render-context';
 import type { DrawOwnerOptions, FramePresentation } from '../render-contract';
 import { createRenderSystem, type RenderSystem } from '../render-system';
 import { selectCameraRoles } from '../render-system-extract';
 import type { RenderTarget } from '../targets/contracts';
+import type { FramebufferSnapshotSource } from '../targets/framebuffer-snapshot';
 import { type FrameRecording, submitFrameRecordings } from './frame-recording';
-import { createViewCompositor } from './view-compositor';
+import { type CompositeChannels, createViewCompositor } from './view-compositor';
 import { createViewPipelineState } from './view-pipeline-state';
 
 interface View {
+  readonly key: string;
   readonly entity: number;
+  readonly eye: StereoEye | undefined;
   readonly device: RhiDevice;
   readonly scope: DeviceScope;
   readonly system: RenderSystem;
   readonly composite: ReturnType<typeof createViewCompositor>;
-  output: { texture: Texture; width: number; height: number } | undefined;
+  output: { texture: Texture; width: number; height: number; eye?: StereoEye } | undefined;
   viewport: ReturnType<typeof cameraViewExtent>;
   target: RenderTarget | undefined;
   renderedFrames: number;
@@ -35,7 +51,9 @@ interface View {
 
 /** Renderer-owned views share one device, asset cache, frame encoder and submission. */
 export function createCameraViews(internals: RenderSystemInternals, primary: RenderSystem) {
-  const views = new Map<number, View>();
+  const views = new Map<string, View>();
+  // Every view's field splits the per-frame GI budgets through this one owner.
+  internals.giBudget ??= new DiffuseGiBudget();
   internals.rendererCaptureOwner ??= createRendererCaptureOwner((target) =>
     internals.getRenderTargetPhysical?.(target),
   );
@@ -71,6 +89,14 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
     ...[...views.values()].map((view) => view.system),
   ];
   return {
+    terrainSections() {
+      return active
+        ? [...views.values()].map((view) => ({
+            view: view.key,
+            sections: view.system.submittedTerrain,
+          }))
+        : [{ view: 'primary', sections: primary.submittedTerrain }];
+    },
     get currentSystem(): RenderSystem {
       return active ? (views.values().next().value?.system ?? primary) : primary;
     },
@@ -122,6 +148,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
     inspect(): readonly CameraViewInspection[] {
       return [...views.values()].map((v) => ({
         entityKey: v.entity,
+        ...(v.eye === undefined ? {} : { eye: v.eye }),
         viewport: [v.viewport.x, v.viewport.y, v.viewport.width, v.viewport.height],
         width: v.output?.width ?? 0,
         height: v.output?.height ?? 0,
@@ -134,6 +161,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
         temporal: v.system.temporal,
         frustum: { ...v.system.frustumStats },
         visibility: { ...v.system.visibilityStats },
+        ...(v.system.diffuseGi === undefined ? {} : { diffuseGi: v.system.diffuseGi }),
       }));
     },
     dispose() {
@@ -187,7 +215,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
             ...publication.packet.retiredAssets,
           ]) {
             internals.gpuStore.invalidateMesh(handle, publication.resources);
-            internals.gpuStore.evictTexture(
+            internals.gpuStore.invalidateTexture(
               handle as Handle<'TextureAsset', 'shared'>,
               publication.resources,
             );
@@ -199,11 +227,14 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
         const declaresViews =
           publication === undefined &&
           world !== undefined &&
-          world
-            .query({ with: [Camera, CameraView] })
-            .unwrap()
-            [Symbol.iterator]()
-            .next().done === false;
+          [CameraView, StereoCamera].some(
+            (composed) =>
+              world
+                .query({ with: [Camera, composed] })
+                .unwrap()
+                [Symbol.iterator]()
+                .next().done === false,
+          );
         const cameras =
           publication?.frame.cameras ??
           (!declaresViews || world === undefined
@@ -217,8 +248,56 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
               camera.entityKey,
               'a camera entity identity',
             );
-          return [{ entity: camera.entityKey, config: camera.view, target: camera.target }];
+          const entity = camera.entityKey;
+          const config = camera.view;
+          const stereo = camera.stereo;
+          if (stereo === undefined)
+            return [
+              {
+                key: String(entity),
+                entity,
+                eye: undefined,
+                eyeIndex: 0,
+                channels: 'all' as CompositeChannels,
+                config,
+                target: camera.target,
+              },
+            ];
+          // Each eye is an ordinary CameraView over its half of the authored rectangle.
+          return STEREO_EYES.map((eye, eyeIndex) => ({
+            key: `${entity}:${eye}`,
+            entity,
+            eye: eye as StereoEye | undefined,
+            eyeIndex,
+            channels: (stereo.layout !== 'anaglyph'
+              ? 'all'
+              : (eye === 'left') !== stereo.swapEyes
+                ? 'red'
+                : 'cyan') as CompositeChannels,
+            config: { ...config, viewport: stereoEyeViewport(config.viewport, stereo, eye) },
+            target: camera.target,
+          }));
         });
+        if (internals.standardProfile?.probePlacement !== undefined) {
+          const captures =
+            publication === undefined
+              ? world !== undefined &&
+                (world
+                  .query({ with: [CubeCamera] })
+                  .unwrap()
+                  [Symbol.iterator]()
+                  .next().done === false ||
+                  selectCameraRoles(world).auxiliary.length > 0)
+              : publication.frame.cubeCameras.length > 0 ||
+                publication.frame.auxiliaryCameras.length > 0;
+          if (captures || rows.filter((row) => row.config.enabled).length > 1)
+            throw new RhiError({
+              code: 'rhi-not-available',
+              expected:
+                'one active perspective display view without auxiliary, Cube or reflection views for probe placement',
+              hint: 'disable placement or remove the additional views',
+            });
+        }
         if (rows.length === 0) {
           const wasActive = active;
           if (active) {
@@ -250,8 +329,13 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
         if (base === null) return false;
         const selected = rows
           .filter((row) => row.config.enabled)
-          .sort((a, b) => a.config.order - b.config.order || Number(a.entity) - Number(b.entity));
-        const keys = new Set(selected.map((row) => Number(row.entity)));
+          .sort(
+            (a, b) =>
+              a.config.order - b.config.order ||
+              Number(a.entity) - Number(b.entity) ||
+              a.eyeIndex - b.eyeIndex,
+          );
+        const keys = new Set(selected.map((row) => row.key));
         for (const [key, view] of views)
           if (!keys.has(key)) {
             retire(view);
@@ -263,7 +347,11 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
           }),
         );
         const recordings: FrameRecording[] = [];
-        const pictures: { texture: Texture; viewport: ReturnType<typeof cameraViewExtent> }[] = [];
+        const pictures: {
+          texture: Texture;
+          viewport: ReturnType<typeof cameraViewExtent>;
+          channels: CompositeChannels;
+        }[] = [];
         const updated: View[] = [];
         const replaced: { view: View; old: View['output']; texture: Texture }[] = [];
         const device = internals.device;
@@ -271,6 +359,8 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
         try {
           for (const row of selected) {
             const entity = Number(row.entity);
+            const key = row.key;
+            const eye = row.eye;
             const config = row.config;
             const viewport = cameraViewExtent(
               config,
@@ -278,15 +368,15 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
               internals.canvas.height,
             );
             const target = row.target;
-            let view = views.get(entity);
+            let view = views.get(key);
             if (view !== undefined && view.target !== target) {
               retire(view);
-              views.delete(entity);
+              views.delete(key);
               view = undefined;
             }
             const created = view === undefined;
             if (view === undefined) {
-              const scope = internals.deviceScope.createChild(`camera:${entity}`);
+              const scope = internals.deviceScope.createChild(`camera:${key}`);
               try {
                 const local = createViewPipelineState(base, internals, scope);
                 const property = (value: unknown) => ({
@@ -351,12 +441,28 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
                   gpuPassTimingViewId: property(entity),
                   invalidateShaderModule: property(() => undefined),
                   encodeRenderTargetReadbacks: property(() => undefined),
+                  encodeFramebufferSnapshots: property(
+                    (encoder: RhiCommandEncoder, source: FramebufferSnapshotSource) =>
+                      internals.encodeFramebufferSnapshots?.(encoder, {
+                        ...source,
+                        camera: entity,
+                        role: 'view',
+                      }),
+                  ),
+                  // A RenderTarget is sampled back as sRGB-encoded rgba8 by the compositor
+                  // and by material consumers, so it always encodes Rec.709; only display
+                  // views follow the negotiated surface color space.
+                  ...(target === undefined
+                    ? {}
+                    : { outputColorSpace: property(createOutputColorSpaceState('srgb')) }),
                 });
                 const system = createRenderSystem(recordInternals);
                 primary.copyConfigurationTo(system);
                 system.setSurfaceDynamicInput(surfaceDynamicInput);
                 view = {
+                  key,
                   entity,
+                  eye,
                   device: internals.device,
                   scope,
                   system,
@@ -367,7 +473,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
                   renderedFrames: 0,
                   lastFrame: -Infinity,
                 };
-                views.set(entity, view);
+                views.set(key, view);
               } catch (cause) {
                 scope.dispose();
                 throw cause;
@@ -395,7 +501,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
             if (resized) {
               const texture = value(
                 internals.device.createTexture({
-                  label: `camera:${entity}:output`,
+                  label: `camera:${key}:output`,
                   size: { width, height, depthOrArrayLayers: 1 },
                   format: base.format,
                   usage: 0x10 | 0x04 | 0x01,
@@ -405,7 +511,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
                 }),
               );
               replaced.push({ view, old: view.output, texture });
-              view.output = { texture, width, height };
+              view.output = { texture, width, height, ...(eye === undefined ? {} : { eye }) };
             }
             const render =
               resized ||
@@ -428,7 +534,7 @@ export function createCameraViews(internals: RenderSystemInternals, primary: Ren
             );
             if (render) updated.push(view);
             if (target === undefined && view.output !== undefined)
-              pictures.push({ texture: view.output.texture, viewport });
+              pictures.push({ texture: view.output.texture, viewport, channels: row.channels });
           }
           const captureCamera = selected[0] ?? rows[0];
           const sharedCaptureDemand =

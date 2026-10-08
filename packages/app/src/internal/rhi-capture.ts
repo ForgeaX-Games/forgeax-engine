@@ -5,19 +5,42 @@ import type {
   EncodedTape,
   RecorderAttachment,
   RhiDebugError,
+  TapeArtifact,
 } from '@forgeax/engine-rhi-debug';
 import { createRhiDebugError } from '@forgeax/engine-rhi-debug';
+import {
+  type BrowserArtifactRef,
+  type BrowserCaptureError,
+  type BrowserCaptureOptions,
+  uploadTape,
+} from '@forgeax/engine-rhi-debug/browser';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { FrameLoopHandle } from './frame-loop';
 
-export interface RhiTapeArtifactRef {
+/** A captured `.rhitape`: streamable chunks, lazy `digest` and `bytes`. */
+export interface RhiTapeArtifactRef extends TapeArtifact {
   readonly kind: 'rhi-tape';
-  readonly digest: string;
-  readonly bytes: Uint8Array;
 }
+
+export type RhiTapeUploadOptions = Pick<
+  BrowserCaptureOptions,
+  'endpoint' | 'runId' | 'signal' | 'chunkBytes' | 'chunkAttempts'
+>;
 
 export interface RhiCapture {
   captureFrame(options?: CaptureFrameOptions): Promise<Result<RhiTapeArtifactRef, RhiDebugError>>;
+  /** Resumable chunked upload to the RHI-debug dev transport. */
+  upload(
+    artifact: RhiTapeArtifactRef,
+    options?: RhiTapeUploadOptions,
+  ): Promise<Result<BrowserArtifactRef, BrowserCaptureError>>;
+}
+
+export function uploadRhiTape(
+  artifact: RhiTapeArtifactRef,
+  options: RhiTapeUploadOptions = {},
+): Promise<Result<BrowserArtifactRef, BrowserCaptureError>> {
+  return uploadTape(artifact, options);
 }
 
 type CaptureResult = Result<EncodedTape, RhiDebugError>;
@@ -28,6 +51,7 @@ const captureDrivers = new WeakMap<RhiCapture, CaptureFrameDriver>();
 export function createRhiCapture(attachment: RecorderAttachment): RhiCapture {
   let activeCapture: Promise<Result<RhiTapeArtifactRef, RhiDebugError>> | undefined;
   const capture: RhiCapture = {
+    upload: uploadRhiTape,
     captureFrame(options) {
       const driver = captureDrivers.get(capture);
       if (driver === undefined) return captureAttachment(attachment, options);
@@ -263,10 +287,16 @@ export function mergeRhiInstrumentation(
   };
 }
 
-function toArtifact(encoded: EncodedTape): RhiTapeArtifactRef {
+export function toArtifact(tape: TapeArtifact): RhiTapeArtifactRef {
   return {
     kind: 'rhi-tape',
-    digest: encoded.digest,
-    bytes: encoded.bytes,
+    byteLength: tape.byteLength,
+    get digest() {
+      return tape.digest;
+    },
+    get bytes() {
+      return tape.bytes;
+    },
+    chunks: (chunkBytes) => tape.chunks(chunkBytes),
   };
 }

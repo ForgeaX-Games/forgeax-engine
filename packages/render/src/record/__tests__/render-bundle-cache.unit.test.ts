@@ -341,6 +341,40 @@ describe('scene pass render bundle cache', () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it('backs off a pass that re-records one batch every frame while the others repeat', async () => {
+    const d = await device();
+    const pipelines = [0, 1, 2].map(() => {
+      const created = d.createRenderPipeline({} as RenderPipelineDescriptor);
+      if (!created.ok) throw created.error;
+      return created.value;
+    });
+    const cache = new RenderBundleCache({ colorFormats: [] });
+    const create = vi.spyOn(d, 'createRenderBundleEncoder');
+    const directFrames: number[] = [];
+    const frame = (index: number, churn: boolean) => {
+      const target = pass(d);
+      cache.encode(d, target, (encoder) => {
+        if (encoder === target) directFrames.push(index);
+        for (const [batch, pipeline] of pipelines.entries()) {
+          encoder.setPipeline(pipeline);
+          encoder.draw(batch === 1 && churn ? 10 + index : 3);
+        }
+      });
+    };
+
+    for (let index = 0; index < 16; index++) frame(index, true);
+    // Frames 0-3 churn (the first and last batches are reused from frame 1),
+    // then 4 bypass frames; 8-11 churn again, then 8 bypass frames.
+    expect(directFrames).toEqual([4, 5, 6, 7, 12, 13, 14, 15]);
+    const churnCreates = create.mock.calls.length;
+    expect(churnCreates).toBe(4);
+
+    // A settled pass is re-admitted and keeps all three batches bundled.
+    for (let index = 16; index < 40; index++) frame(index, false);
+    expect(directFrames).toEqual([4, 5, 6, 7, 12, 13, 14, 15, 16, 17, 18, 19]);
+    expect(create.mock.calls.length).toBe(churnCreates + 3);
+  });
+
   it('invalidates only the changed batch and counts one lookup per drawing segment', async () => {
     const d = await device();
     const pipelines = [0, 1, 2].map(() => {

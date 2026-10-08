@@ -28,7 +28,9 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "typecheck": "tsc -b"
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "typecheck": "tsc -b",
+    "bench": "node bench/run.mjs"
   },
   "dependencies": {
     "@forgeax/engine-audio": "workspace:*",
@@ -38,7 +40,9 @@
     "@forgeax/engine-plugin": "workspace:*"
   },
   "devDependencies": {
-    "@forgeax/engine-import": "workspace:*"
+    "@forgeax/engine-import": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*"
   },
   "forgeax": {
     "metrics": {
@@ -52,7 +56,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "Web Audio API backend hot-path profiling deferred to a future feat after the tick system implementation matures"
+        "reason": "opt-in native browser DSP/control benchmark via pnpm bench; hardware measurements are preserved with source hashes rather than used as a cross-run CI threshold"
       },
       "gate": {
         "enabled": false,

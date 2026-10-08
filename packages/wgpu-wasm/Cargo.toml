@@ -42,8 +42,9 @@ web-sys = { version = "0.3", features = ["HtmlCanvasElement", "console"] }
 wasm-bindgen-test = "0.3"
 
 [profile.release]
-# Size-first profile (replaces the size-first profiles in three legacy crates — wgpu spike + naga shim + rhi-wgpu crate — all archived in feat-20260511-naga-rhi-wgpu-merge M5).
-opt-level = "z"
+# Naga composition is on the full source-build critical path. Optimize its
+# actual execution; retain the existing 5 MiB gzip gate and canonical provenance.
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "debuginfo"

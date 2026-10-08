@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 import { resolveMaterialShaderVariantSet } from '../assembly/material-shader-policy';
 import {
   createPbrSkinMeshBindGroupEntries,
-  isSkinnedShadowCasterVariant,
   pbrSkinMeshDynamicOffsets,
   SHADOW_CASTER_SHADER_ID,
   shadowCasterVariantSet,
@@ -22,19 +21,6 @@ describe('skinned shadow caster', () => {
     expect(shadowCasterVariantSet(true, true)).toBe(
       'ALPHA_MASK=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_EXPLICIT=false+SKINNING_DISABLED=false+STORAGE_BUFFER_AVAILABLE=true',
     );
-    expect(isSkinnedShadowCasterVariant(SHADOW_CASTER_SHADER_ID, '')).toBe(false);
-    expect(
-      isSkinnedShadowCasterVariant(
-        SHADOW_CASTER_SHADER_ID,
-        'ALPHA_MASK=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_EXPLICIT=false+SKINNING_DISABLED=false+STORAGE_BUFFER_AVAILABLE=false',
-      ),
-    ).toBe(true);
-    expect(
-      isSkinnedShadowCasterVariant(
-        SHADOW_CASTER_SHADER_ID,
-        'ALPHA_MASK=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_EXPLICIT=false+SKINNING_DISABLED=true+STORAGE_BUFFER_AVAILABLE=false',
-      ),
-    ).toBe(false);
   });
 
   it('uses the animated palette in WGSL and binds the same slice in the shadow pass', () => {
@@ -126,8 +112,6 @@ describe('skinned shadow caster', () => {
 
     expect(staticVariant).toBe('SKINNING_DISABLED=true+STORAGE_BUFFER_AVAILABLE=false');
     expect(skinnedVariant).toBe('SKINNING_DISABLED=false+STORAGE_BUFFER_AVAILABLE=false');
-    expect(isSkinnedShadowCasterVariant(SHADOW_CASTER_SHADER_ID, staticVariant)).toBe(false);
-    expect(isSkinnedShadowCasterVariant(SHADOW_CASTER_SHADER_ID, skinnedVariant)).toBe(true);
     expect(recordSource).toContain('entry.mesh.layoutProjection');
     expect(recordSource).toContain("skinned ? 'pbr-skin' : 'pbr'");
     expect(recordSource).toContain('createPbrSkinMeshBindGroupEntries(');

@@ -12,7 +12,10 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 // the shared preset still owns forgeaxShader + vitePluginRhiDebug + fs.allow.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
-const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures')];
+// Publish this demo's complete asset closure, without unrelated sibling sources.
+const assetRoots = [
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/newport_loft.hdr.meta.json'),
+];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-6-2-ibl-irradiance');
 
 export default withRhiDebug({

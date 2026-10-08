@@ -9,7 +9,9 @@ it('projects the accepted material snapshot across edits without consulting newe
   if (firstSlot === undefined) throw new Error('missing retained fixture slot');
   const initial = {
     ...firstSlot.snapshot.material,
-    materialRay: { programKey: 'accepted-program-A', evaluateCoverage: false },
+    materialSurfacePrograms: {
+      'ray-hit': { programKey: 'accepted-program-A', evaluateCoverage: false },
+    },
     paramSnapshot: { emissiveIntensity: 2 },
   };
   const replace = (material: typeof initial) =>
@@ -25,7 +27,9 @@ it('projects the accepted material snapshot across edits without consulting newe
   const first = source.project();
   const replacement = {
     ...initial,
-    materialRay: { programKey: 'accepted-program-B', evaluateCoverage: true },
+    materialSurfacePrograms: {
+      'ray-hit': { programKey: 'accepted-program-B', evaluateCoverage: true },
+    },
     paramSnapshot: { emissiveIntensity: 4 },
   };
   replace(replacement);

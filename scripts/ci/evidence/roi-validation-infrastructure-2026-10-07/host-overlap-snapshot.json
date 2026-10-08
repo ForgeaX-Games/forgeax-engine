@@ -1,0 +1,78 @@
+{
+  "atUtc": "2026-10-07T05:25:48.862655+00:00",
+  "scope": "Point-in-time overlap, not critical path or utilization proof",
+  "jobs": [
+    {
+      "pid": 2338,
+      "ppid": 1812,
+      "elapsed": "00:45",
+      "cpuPercent": 0.0,
+      "rssKiB": 967584,
+      "command": "node (vitest)       "
+    },
+    {
+      "pid": 7609,
+      "ppid": 2338,
+      "elapsed": "00:26",
+      "cpuPercent": 42.9,
+      "rssKiB": 671504,
+      "command": "node (vitest 1)     "
+    },
+    {
+      "pid": 25847,
+      "ppid": 74446,
+      "elapsed": "01:40:59",
+      "cpuPercent": 0.0,
+      "rssKiB": 44064,
+      "command": "node scripts/ci/run-split-vitest-browser.mjs --group-size=8 --max-workers=1"
+    },
+    {
+      "pid": 30230,
+      "ppid": 29888,
+      "elapsed": "11:45",
+      "cpuPercent": 29.5,
+      "rssKiB": 1716560,
+      "command": "/opt/homebrew/Cellar/node/26.4.0/bin/node scripts/build-shared-inputs.mjs --root /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-23-quantized-music --out /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-23-quantized-music/shared-build-inputs-release/base-ssao --no-point-shadows"
+    },
+    {
+      "pid": 57339,
+      "ppid": 55514,
+      "elapsed": "01:08:58",
+      "cpuPercent": 0.0,
+      "rssKiB": 56832,
+      "command": "/opt/homebrew/opt/node@22/bin/node ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/public-surface.unit.test.ts src/__tests__/packaged-builder.unit.test.ts src/__tests__/shared-import-ownership.unit.test.ts src/__tests__/single-worker-program-reuse.integration.test.ts src/__tests__/engine-compile-workers.unit.test.ts --passWithNoTests=false --maxWorkers=1 --no-file-parallelism --reporter=default"
+    },
+    {
+      "pid": 57473,
+      "ppid": 57339,
+      "elapsed": "01:08:56",
+      "cpuPercent": 30.4,
+      "rssKiB": 2403376,
+      "command": "/opt/homebrew/Cellar/node@22/22.23.2/bin/node --experimental-import-meta-resolve --require /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-navigation-single-worker-recovery/node_modules/.pnpm/vitest@4.1.11_@types+node@20.19.40_@vitest+browser-playwright@4.1.11_@vitest+coverage-v_194371f51fa37d6350b783b91e809005/node_modules/vitest/suppress-warnings.cjs --conditions node --conditions development /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-navigation-single-worker-recovery/node_modules/.pnpm/vitest@4.1.11_@types+node@20.19.40_@vitest+browser-playwright@4.1.11_@vitest+coverage-v_194371f51fa37d6350b783b91e809005/node_modules/vitest/dist/workers/forks.js"
+    },
+    {
+      "pid": 76467,
+      "ppid": 18522,
+      "elapsed": "44:11",
+      "cpuPercent": 0.0,
+      "rssKiB": 50848,
+      "command": "node scripts/ci/run-split-vitest-browser.mjs --file packages/runtime/src/__tests__/clamp-to-last.e2e.browser.test.ts --file packages/runtime/src/__tests__/weapon-spirit-material.browser.test.ts --group-concurrency=1 --max-workers=1"
+    },
+    {
+      "pid": 83170,
+      "ppid": 83036,
+      "elapsed": "01:50",
+      "cpuPercent": 0.0,
+      "rssKiB": 98064,
+      "command": "/opt/homebrew/Cellar/node/26.4.0/bin/node scripts/build-packages.mjs"
+    },
+    {
+      "pid": 91203,
+      "ppid": 90711,
+      "elapsed": "01:22",
+      "cpuPercent": 4.2,
+      "rssKiB": 87728,
+      "command": "/opt/homebrew/Cellar/node@22/22.23.2/bin/node scripts/build-packages.mjs"
+    }
+  ]
+}

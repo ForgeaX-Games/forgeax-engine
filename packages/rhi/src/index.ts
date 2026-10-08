@@ -58,6 +58,16 @@ import type {
 } from '@forgeax/engine-types';
 import type { RhiTextureFormatCapabilityReceipt } from './capability/texture-format';
 import type { Result, RhiError } from './errors.js';
+import type {
+  AccelerationStructureBindingLayout,
+  Blas,
+  BlasBuildEntry,
+  BlasDescriptor,
+  RhiRayQueryCaps,
+  Tlas,
+  TlasBuildEntry,
+  TlasDescriptor,
+} from './ray-query';
 
 // ============================================================================
 // 14 opaque handles (MVP-1.3)
@@ -247,6 +257,23 @@ export type ExternalImageTextureDestination = Omit<
   readonly texture: Texture;
 };
 
+declare const RhiExternalTextureBrand: unique symbol;
+/**
+ * Frame-scoped zero-copy video handle from `device.importExternalTexture`.
+ * WebGPU expires it after the current task; import again for every frame.
+ */
+export interface ExternalTexture {
+  readonly [RhiExternalTextureBrand]: void;
+}
+
+/** Closed set of browser media sources that `importExternalTexture` admits. */
+export type ExternalTextureSource = HTMLVideoElement | VideoFrame;
+
+export interface ExternalTextureDescriptor {
+  readonly source: ExternalTextureSource;
+  readonly label?: string | undefined;
+}
+
 declare const RhiTextureViewBrand: unique symbol;
 /** GPU texture view opaque handle. */
 export interface TextureView {
@@ -419,8 +446,20 @@ export type SamplerDescriptor = ExplicitUndefined<
 /** GPU bind group layout descriptor. Field set strictly matches
  *  GPUBindGroupLayoutDescriptor. */
 export type BindGroupLayoutDescriptor = ExplicitUndefined<
-  Pick<GPUBindGroupLayoutDescriptor, 'label' | 'entries'>
->;
+  Pick<GPUBindGroupLayoutDescriptor, 'label'>
+> & {
+  entries: Iterable<BindGroupLayoutEntry>;
+};
+
+/**
+ * Bind group layout entry: the spec `GPUBindGroupLayoutEntry` plus the
+ * native `accelerationStructure` binding type (a TLAS, WGSL
+ * `acceleration_structure`). Exactly one binding-type member is set, as in
+ * the spec; the acceleration-structure member requires `caps.rayQuery.supported`.
+ */
+export type BindGroupLayoutEntry = GPUBindGroupLayoutEntry & {
+  accelerationStructure?: AccelerationStructureBindingLayout | undefined;
+};
 
 /**
  * GPU texture view descriptor (Pick<GPUTextureViewDescriptor, 9 fields>).
@@ -568,7 +607,8 @@ export type RhiBindingResource =
       };
     }
   | { readonly kind: 'textureView'; readonly value: TextureView }
-  | { readonly kind: 'externalTexture'; readonly value: GPUExternalTexture };
+  | { readonly kind: 'externalTexture'; readonly value: ExternalTexture }
+  | { readonly kind: 'accelerationStructure'; readonly value: Tlas };
 
 /**
  * BindGroup entry — one slot in a BindGroup, identified by `binding` (the
@@ -1118,6 +1158,19 @@ export interface RhiCaps {
    */
   readonly float32Filterable: boolean;
   /**
+   * `importTexture` wraps a caller-created native `GPUTexture` from the same
+   * device. `false` on rhi-wgpu (no native WebGPU device), where the call
+   * returns `feature-not-enabled`. rhi-null admits it structurally.
+   */
+  readonly textureImport: boolean;
+  /**
+   * `importExternalTexture` produces zero-copy `texture_external` bindings.
+   * Requires `GPUDevice.importExternalTexture` and a media source realm
+   * (`HTMLVideoElement` or `VideoFrame`). When `false`, bind a sampled
+   * texture view in the same `externalTexture` layout slot (copy path).
+   */
+  readonly externalTexture: boolean;
+  /**
    * Maximum number of color attachments per render pass.
    *
    * @spec-anchor W3C WebGPU $3.6.2 GPUSupportedLimits.maxColorAttachments;
@@ -1129,6 +1182,14 @@ export interface RhiCaps {
    *   M1 / w5); no existing field is modified.
    */
   readonly maxColorAttachments: number;
+  /**
+   * Hardware Ray Query (inline `ray_query` in compute/fragment WGSL over a
+   * BLAS/TLAS). Absence is data: `{ supported: false, reason }` with a closed
+   * reason; browser WebGPU, wgpu WebGL2 and the default RhiNull device report
+   * `'backend-has-no-ray-query'`. When supported, the record carries the
+   * admitted acceleration-structure limits. See `./ray-query.ts`.
+   */
+  readonly rayQuery: RhiRayQueryCaps;
 }
 
 /**
@@ -1511,10 +1572,38 @@ export interface RhiDevice {
   /** Probe the complete r32float sampled/storage/readback profile once per device generation. */
   probeTextureFormatCapability(): Promise<Result<RhiTextureFormatCapabilityReceipt, RhiError>>;
 
-  /** Create GPU buffer. */
+  /**
+   * Create GPU buffer. `usage` is the W3C `GPUBufferUsage` mask plus the RHI
+   * extension `BLAS_INPUT_BUFFER_USAGE`, which returns `feature-not-enabled`
+   * unless `caps.rayQuery.supported`.
+   */
   createBuffer(desc: BufferDescriptor): Result<Buffer, RhiError>;
   /** Create GPU texture. */
   createTexture(desc: TextureDescriptor): Result<Texture, RhiError>;
+  /**
+   * Native WebGPU device for caller-created interop textures. Returns
+   * `feature-not-enabled` on backends without one (rhi-wgpu, rhi-null).
+   */
+  nativeDevice(): Result<GPUDevice, RhiError>;
+  /**
+   * Borrow a caller-owned `GPUTexture` as an RHI texture. The texture must
+   * belong to this device, be 2D and carry TEXTURE_BINDING usage; the
+   * returned handle's `destroyTexture` releases only RHI bookkeeping and never
+   * destroys the caller's texture. Device identity is validated through an
+   * error scope, so the result is asynchronous.
+   *
+   * Failure paths:
+   *   - `caps.textureImport === false` -> `feature-not-enabled`
+   *   - foreign device -> `rhi-not-available`
+   *   - wrong dimension / missing usage / destroyed -> `rhi-descriptor-invalid`
+   */
+  importTexture(texture: GPUTexture): Promise<Result<Texture, RhiError>>;
+  /**
+   * Import one frame of a video source for zero-copy sampling through a
+   * `texture_external` binding. The handle expires with the current task.
+   * Returns `feature-not-enabled` when `caps.externalTexture` is false.
+   */
+  importExternalTexture(desc: ExternalTextureDescriptor): Result<ExternalTexture, RhiError>;
   /**
    * Destroy a GPU buffer obtained from `createBuffer`.
    *
@@ -1544,6 +1633,20 @@ export interface RhiDevice {
    *   }
    */
   destroyBuffer(buf: Buffer): Result<void, RhiError>;
+
+  /**
+   * Create a bottom-level acceleration structure for opaque triangle
+   * geometry. Requires `caps.rayQuery.supported`; otherwise
+   * `feature-not-enabled`. Topology (geometry count, vertex/index counts) is
+   * fixed here; data is supplied by `encoder.buildAccelerationStructures`.
+   */
+  createBlas(desc: BlasDescriptor): Result<Blas, RhiError>;
+  /** Create a top-level acceleration structure holding up to `maxInstances` BLAS instances. */
+  createTlas(desc: TlasDescriptor): Result<Tlas, RhiError>;
+  /** Release a BLAS; TLAS builds that still reference it fail with `destroy-after-destroy`. */
+  destroyBlas(blas: Blas): Result<void, RhiError>;
+  /** Release a TLAS. */
+  destroyTlas(tlas: Tlas): Result<void, RhiError>;
   /**
    * Destroy a GPU query set obtained from `createQuerySet`.
    *
@@ -1997,6 +2100,18 @@ export interface RhiCommandEncoder {
    *   if (cb.ok) device.queue.submit([cb.value]);
    */
   finish(): Result<CommandBuffer, RhiError>;
+  /**
+   * Record acceleration-structure builds: every BLAS entry first, then every
+   * TLAS entry, so a TLAS may reference a BLAS built in the same call.
+   * Re-building an existing handle is the update path (a TLAS re-build with
+   * new instance transforms each frame; a BLAS created with
+   * `updateMode: 'refit'` may refit in place). Requires
+   * `caps.rayQuery.supported`; otherwise `feature-not-enabled`.
+   */
+  buildAccelerationStructures(
+    blas: readonly BlasBuildEntry[],
+    tlas: readonly TlasBuildEntry[],
+  ): Result<void, RhiError>;
 }
 
 /** GPU render pass encoder - records draw calls + state changes.
@@ -2261,6 +2376,38 @@ export type {
   RhiWebgpuRuntimeDetail,
 } from './errors.js';
 export { err, ok, RhiError, validateDrawArgs } from './errors.js';
+export {
+  type AccelerationStructureBindingLayout,
+  type AccelerationStructureBuildPreference,
+  type AccelerationStructureUpdateMode,
+  BLAS_INPUT_BUFFER_USAGE,
+  type Blas,
+  type BlasBuildEntry,
+  type BlasDescriptor,
+  type BlasTriangleGeometry,
+  type BlasTriangleGeometrySize,
+  type BlasVertexFormat,
+  deriveRayQueryCaps,
+  RAY_QUERY_BACKEND_UNSUPPORTED,
+  RAY_QUERY_FEATURE,
+  RAY_QUERY_WGSL_ENABLE,
+  type RhiRayQueryCaps,
+  type RhiRayQueryLimits,
+  type RhiRayQueryUnsupportedReason,
+  rayQueryUnsupported,
+  type Tlas,
+  type TlasBuildEntry,
+  type TlasDescriptor,
+  type TlasInstance,
+  validateBlasBuild,
+  validateBlasDescriptor,
+  validateRayQueryBindGroupLayout,
+  validateRayQueryBufferUsage,
+  validateRayQueryShader,
+  validateTlasBuild,
+  validateTlasDescriptor,
+  wgslEnablesRayQuery,
+} from './ray-query';
 
 // re-export common descriptor-related aliases for single-entry consumption.
 export type { AddressMode, CompareFunction, FilterMode, TextureFormat };

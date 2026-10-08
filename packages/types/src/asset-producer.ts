@@ -254,7 +254,8 @@ export type UiAuthoringProjection =
         | 'mountUi'
         | 'gameProjection'
         | 'dom-native'
-        | 'ui-artifact-companion';
+        | 'ui-artifact-companion'
+        | 'i18next';
       readonly contractVersion: '1';
     }
   | {
@@ -325,13 +326,7 @@ const UI_AUTHORING_CAPABILITY: UiAuthoringCapability = {
   input: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
   navigation: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
   font: { status: 'supported', operation: 'ui-artifact-companion', contractVersion: '1' },
-  localization: {
-    status: 'unavailable',
-    reason: {
-      code: 'missing-producer-capability',
-      hint: 'UI localization resources are not yet published through the UI authoring contract.',
-    },
-  },
+  localization: { status: 'supported', operation: 'i18next', contractVersion: '1' },
 };
 
 /** Built-in defaults for legacy rows that do not carry an explicit override. */

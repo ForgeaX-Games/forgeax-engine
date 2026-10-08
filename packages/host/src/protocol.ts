@@ -76,11 +76,7 @@ export interface HostAssemblyErrorDetailByCode {
     /** Business error code received from a remote host service, if any. */
     readonly remoteCode?: string;
   };
-  'host-assembly-not-ready': {
-    readonly entryId: string;
-    readonly fiberState: string;
-    readonly failure?: HostErrorSummary;
-  };
+  'host-assembly-not-ready': HostActivationEntry;
 }
 
 export type HostAssemblyErrorCode = keyof HostAssemblyErrorDetailByCode;

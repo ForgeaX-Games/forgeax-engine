@@ -311,7 +311,8 @@ describe('dev watcher regression', () => {
     });
     try {
       await stop.ready;
-      await writeFile(unrelated, '{"version":2}');
+      // A different size guarantees a stat change even on coarse-mtime filesystems.
+      await writeFile(unrelated, '{"version":20}');
       change?.('change', unrelated);
       await stop.reconcile();
       await vi.advanceTimersByTimeAsync(10);
@@ -324,6 +325,7 @@ describe('dev watcher regression', () => {
       expect(batches).toHaveLength(1);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      releaseBatch();
       await stop.close();
       vi.useRealTimers();
     }

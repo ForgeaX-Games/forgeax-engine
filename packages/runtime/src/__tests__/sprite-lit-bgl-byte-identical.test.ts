@@ -16,7 +16,6 @@
 //   - requirements AC-07
 
 import { describe, expect, it } from 'vitest';
-import { mergeSkylightIntoMaterialBgl } from '../../../render/src/ibl/skylight-bind-group';
 import {
   appendInjection,
   buildPbrMaterialUserRegionEntries,
@@ -130,10 +129,10 @@ describe('sprite-lit BGL byte-identical to sprite (AC-07, w4/w5 close)', () => {
         kind: 'pbr-material-merged',
       });
       expect(merged.entries.length).toBe(35);
-      // mergeSkylightIntoMaterialBgl + transmission injection must stay
+      // IBL + transmission injection must stay
       // append-only against the user region, including the generic backdrop sampler.
       const base = buildPbrMaterialUserRegionEntries();
-      const afterSky = mergeSkylightIntoMaterialBgl(base);
+      const afterSky = [...base, ...appendInjection(base, 'ibl')];
       const expected = [
         ...afterSky,
         ...appendInjection(afterSky, 'transmission'),

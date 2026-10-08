@@ -1,5 +1,6 @@
 import {
   type AnimatedBoundsMesh,
+  cubicValueEnvelope,
   deriveConservativeAnimatedBounds,
 } from '@forgeax/engine-animation/animated-bounds';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path';
@@ -24,8 +25,15 @@ export function deriveGltfAnimatedBounds(doc: GltfDoc): GltfDoc {
             {
               node: channel.targetNodeIndex,
               property: channel.property,
-              values: channel.sampler.output,
-              interpolation: channel.sampler.interpolation,
+              values:
+                channel.sampler.interpolation === 'CUBICSPLINE'
+                  ? cubicValueEnvelope(
+                      channel.sampler.input,
+                      channel.sampler.output,
+                      channel.property === 'rotation' ? 4 : 3,
+                    )
+                  : channel.sampler.output,
+              interpolation: 'LINEAR' as const,
             },
           ],
     ),
@@ -57,7 +65,13 @@ export function deriveGltfAnimatedBounds(doc: GltfDoc): GltfDoc {
         for (const clip of doc.animationClips)
           for (const channel of clip.channels)
             if (channel.targetNodeIndex === index && channel.property === 'weights')
-              for (const weight of channel.sampler.output)
+              for (const weight of channel.sampler.interpolation === 'CUBICSPLINE'
+                ? cubicValueEnvelope(
+                    channel.sampler.input,
+                    channel.sampler.output,
+                    channel.sampler.output.length / channel.sampler.input.length / 3,
+                  )
+                : channel.sampler.output)
                 maxMorphWeight = Math.max(maxMorphWeight, Math.abs(weight));
         const morphExtent = Float32Array.from(mesh.positions, (_, component) =>
           (mesh.morphTargets ?? []).reduce(

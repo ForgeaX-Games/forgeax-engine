@@ -1,6 +1,6 @@
 #define_import_path forgeax_ray::display
 #import forgeax_view::tonemap::{tonemapReinhard}
-#import forgeax_view::output_encoding::{encodeOutput}
+#import forgeax_view::output_encoding::{OUTPUT_GAMUT_SRGB, encodeOutput}
 
 struct Pixel { direct: vec4f, gather: vec4f, response: vec4f, beauty: vec4f, state: vec4u }
 struct Settings { resolution: u32, mode: u32, exposure: f32, pad: u32 }
@@ -24,5 +24,5 @@ struct Settings { resolution: u32, mode: u32, exposure: f32, pad: u32 }
   case 4u: {color=pixel.direct.xyz;}
   default: {}
  }
- return encodeOutput(tonemapReinhard(max(color,vec3f(0))*settings.exposure),1);
+ return encodeOutput(tonemapReinhard(max(color,vec3f(0))*settings.exposure),1,OUTPUT_GAMUT_SRGB);
 }

@@ -101,6 +101,9 @@ describe('TilesetAsset POD shape (M0 baseline)', () => {
           return 'tileset';
         case 'video':
           return 'video';
+        case 'navigation-mesh':
+        case 'terrain':
+          return 'TerrainAsset';
         case 'particle-effect':
           return 'particle-effect';
       }

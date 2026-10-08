@@ -1,5 +1,6 @@
 import { vec3 } from '@forgeax/engine-math';
 import type { PhysicsContactObservation } from '@forgeax/engine-physics';
+import { toShared } from '@forgeax/engine-types';
 import { expect, it } from 'vitest';
 import { createRapier3DPhysicsWorld } from '../rapier-physics-world-3d';
 import { loadRapier3D } from '../wasm-loader';
@@ -40,13 +41,14 @@ it.each([
         body(1),
         {
           shape,
+          mesh: toShared<'MeshAsset'>(0),
           halfExtents: [0.2, 0.2, 0.2],
           radius: 0.2,
           halfHeight: 0.2,
           friction: 0.5,
           restitution: 0,
           density: 1,
-          isSensor: 0,
+          isSensor: false,
           collisionGroups: 0xffffffff,
           solverGroups: 0xffffffff,
         },

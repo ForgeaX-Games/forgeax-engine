@@ -1,4 +1,4 @@
-import type { AssetCompression, DecodedImage, ImageMeta } from '@forgeax/engine-types';
+import type { AssetCompression, ImageMeta } from '@forgeax/engine-types';
 
 /**
  * External-asset-package envelope shape mirroring the
@@ -46,7 +46,7 @@ export interface ExternalSubAsset {
 }
 
 /**
- * Pure function that translates a DecodedImage POD + ImageMeta POD into
+ * Pure function that translates an ImageMeta POD into
  * an external-asset-package envelope ready to be JSON-stringified into a
  * `*.meta.json` sidecar with importer: 'image' (plan-strategy section 3.2 sequence A; AC-13
  * disk schema reuse).
@@ -61,15 +61,7 @@ export interface ExternalSubAsset {
  * Two consecutive calls with identical inputs produce JSON.stringify
  * byte-equal output (AC-16 idempotent reimport).
  */
-export function toAssetPack(decoded: DecodedImage, meta: ImageMeta): ExternalAssetPackage {
-  // decoded.bytes are not embedded in the meta envelope -- the source bytes
-  // live next to the sidecar on disk (the runtime reads them via
-  // decodeImageFromFile at app load time). We keep the parameter so future
-  // cubemap / array-layer feats can derive multi-sub-asset emit from decoded
-  // dimensions without breaking the call surface (charter P5 consistent
-  // abstraction).
-  void decoded;
-
+export function toAssetPack(meta: ImageMeta): ExternalAssetPackage {
   return {
     schemaVersion: '1.0.0',
     kind: 'external-asset-package',

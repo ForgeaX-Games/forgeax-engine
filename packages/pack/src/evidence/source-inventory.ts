@@ -1,86 +1,14 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { SourceDeclarationEvidence } from '@forgeax/engine-types';
-import { parsePackSourceJson, projectDirectPackJson } from '../pack-authoring.js';
-import { SCANNER_BLACKLIST, scan } from '../scanner.js';
+import { parsePackSourceJson } from '../pack-authoring.js';
+import { declaredPackAssets, SCANNER_BLACKLIST, scan } from '../scanner.js';
 
 /** Project root and GUID used to locate an authoritative source declaration. */
 export interface SourceInventoryRequest {
   readonly projectRoot: string;
   readonly guid: string;
-}
-
-export interface ProducerSemanticIdentityInput {
-  readonly producerRoot: string;
-  readonly sourcePath: string;
-  readonly sourceDigest: string;
-  readonly schemaVersion: string;
-  readonly importer: string;
-  readonly codec: string;
-  readonly settings: unknown;
-  readonly producer: string;
-  readonly profile: string;
-  readonly declaredGuids?: readonly string[];
-}
-
-export interface ProducerRelativeDdcIdentity {
-  readonly logicalPath: string;
-  readonly sourceDigest: string;
-  readonly key: string;
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableValue(entry)]),
-    );
-  }
-  return value;
-}
-
-export function producerRelativeLogicalPath(producerRoot: string, sourcePath: string): string {
-  const root = resolve(producerRoot);
-  const source = resolve(sourcePath);
-  const path = relative(root, source);
-  if (
-    path.length === 0 ||
-    path === '..' ||
-    path.startsWith(`..${sep}`) ||
-    resolve(root, path) !== source
-  ) {
-    throw new Error('producer source must be inside the injected producer root');
-  }
-  return path.split(sep).join('/');
-}
-
-export function producerRelativeDdcKey(input: ProducerSemanticIdentityInput): string {
-  const logicalPath = producerRelativeLogicalPath(input.producerRoot, input.sourcePath);
-  const semantic = {
-    schemaVersion: input.schemaVersion,
-    logicalPath,
-    sourceDigest: input.sourceDigest,
-    importer: input.importer,
-    codec: input.codec,
-    settings: stableValue(input.settings),
-    producer: input.producer,
-    profile: input.profile,
-    declaredGuids: [...(input.declaredGuids ?? [])].sort(),
-  };
-  return createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
-}
-
-export function producerRelativeDdcIdentity(
-  input: ProducerSemanticIdentityInput,
-): ProducerRelativeDdcIdentity {
-  return {
-    logicalPath: producerRelativeLogicalPath(input.producerRoot, input.sourcePath),
-    sourceDigest: input.sourceDigest,
-    key: producerRelativeDdcKey(input),
-  };
 }
 
 function fingerprint(meta: string, source: Uint8Array | undefined): string {
@@ -166,16 +94,12 @@ export async function readSourceInventory(
     }
     if (path.endsWith('.pack.json')) {
       if (parsed.schemaVersion === '3.0.0') {
-        const direct = parsePackSourceJson(parsed);
-        if (direct.ok && direct.value.format === 'direct') {
-          const projected = projectDirectPackJson(direct.value);
-          if (
-            projected.ok &&
-            projected.value.assets.some((asset) => asset.guid.toLowerCase() === guid)
-          ) {
-            authored = { origin: 'authoredPack', sourcePath: path };
-          }
-        }
+        const document = parsePackSourceJson(parsed);
+        if (
+          document.ok &&
+          declaredPackAssets(document.value).some((asset) => asset.guid.toLowerCase() === guid)
+        )
+          authored = { origin: 'authoredPack', sourcePath: path };
       } else if (
         Array.isArray(parsed.assets) &&
         parsed.assets.some(

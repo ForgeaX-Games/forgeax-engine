@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createToolApi,
   defineTool,
+  TOOL_REALMS,
   type ToolContribution,
 } from '../src/index.js';
 
@@ -24,6 +25,39 @@ function tool(id: string, execute: ToolContribution['execute']): ToolContributio
 }
 
 describe('Tool API provider admission', () => {
+  it('keeps the public realm vocabulary immutable', () => {
+    expect(TOOL_REALMS).toEqual(['build', 'host', 'engine', 'frontend']);
+    expect(Reflect.set(TOOL_REALMS, 0, 'unsupported')).toBe(false);
+  });
+
+  it.each(['build', 'host', 'engine', 'frontend'] as const)('calls a %s provider with trusted realm identity', async (realm) => {
+    const api = createToolApi();
+    try {
+      const operation = defineTool(
+        { ...tool(`fixture.${realm}`, () => realm).descriptor, realm },
+        (_args, context) => context.owner?.realm,
+      );
+      api.registerProvider({ providerId: realm, sourceId: 'fixture', realm, tools: [operation] });
+      await expect(api.run(operation.descriptor.id, null).terminal).resolves.toMatchObject({
+        outcome: 'succeeded', result: realm,
+      });
+    } finally {
+      await api.dispose();
+    }
+  });
+
+  it('rejects an unsupported provider realm before admission', async () => {
+    const api = createToolApi();
+    try {
+      expect(() => api.registerProvider({
+        providerId: 'invalid', sourceId: 'fixture',
+        realm: 'worker' as never, tools: [tool('fixture.invalid', () => null)],
+      })).toThrow('unsupported Tool API realm worker');
+    } finally {
+      await api.dispose();
+    }
+  });
+
   it('routes a callable operation with trusted owner and caller facts', async () => {
     let observed: unknown;
     const operation = tool('fixture.answer', async (_args, context) => {

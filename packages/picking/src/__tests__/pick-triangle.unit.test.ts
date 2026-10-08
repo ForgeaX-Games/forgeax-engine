@@ -1,5 +1,6 @@
-import { AssetRegistry } from '@forgeax/engine-assets-runtime';
+import { AssetRegistry, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
+import { mat4 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import {
   CAMERA_PROJECTION_PERSPECTIVE,
@@ -9,6 +10,7 @@ import {
   MeshRenderer,
 } from '@forgeax/engine-render';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import { Skin } from '@forgeax/engine-skinning';
 import type { Handle, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { pickTriangle, type TrianglePickOptions, type TrianglePickResult } from '../pick-triangle';
@@ -285,5 +287,39 @@ describe('pickTriangle', () => {
     if (result.status !== 'hit') return;
     expect(result.hit.entity).toBe(indexedEntity);
     expect(result.hit.triangleIndex).toBe(0);
+  });
+});
+
+describe('current skin triangle pose', () => {
+  it('hits a posed triangle outside its rest bounds and ignores the mesh node transform', () => {
+    const scene = makeScene();
+    const source = unsupportedSkinnedMesh(scene);
+    const resolved = resolveAssetHandle<MeshAsset>(scene.world, source).unwrap() as MeshAsset;
+    (resolved.attributes.position as Float32Array).set([-5, -1, 0, -3, -1, 0, -4, 1, 0]);
+    (resolved.attributes.skinWeight as Float32Array).set([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    resolved.aabb?.set([-5, -1, 0, -3, 1, 0]);
+    const mesh = scene.world.allocSharedRef('MeshAsset', resolved);
+    const joint = scene.world.spawn({ component: Transform, data: { pos: [4, 0, 0] } }).unwrap();
+    const skeleton = scene.world.allocSharedRef('SkeletonAsset', {
+      kind: 'skeleton',
+      jointCount: 1,
+      inverseBindMatrices: mat4.identity(mat4.create()),
+      jointPaths: ['root'],
+    });
+    const entity = spawnMesh(scene, mesh, { pos: [100, 20, 30], scale: [2, 3, 4] });
+    scene.world
+      .addComponent(entity, {
+        component: Skin,
+        data: { skeleton, joints: new Uint32Array([joint]) },
+      })
+      .unwrap();
+    const hit = query(scene);
+    expect(hit.status).toBe('hit');
+    if (hit.status !== 'hit') return;
+    expect(hit.hit.entity).toBe(entity);
+    expect(hit.hit.point).toEqual([0, 0, 0]);
+    expect(hit.hit.barycentric).toEqual([0.25, 0.25, 0.5]);
+    scene.world.set(joint, Transform, { pos: [8, 0, 0] }).unwrap();
+    expect(query(scene).status).toBe('miss');
   });
 });

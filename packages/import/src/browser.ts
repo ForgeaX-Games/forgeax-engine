@@ -11,7 +11,14 @@ export {
   SHADER_RESERVED_IMPORTER_KEY,
 } from './import-runner.js';
 export { ImporterRegistry } from './importer-registry.js';
+export { projectMaterialPackTransport } from './material-pack-transport.js';
 export { packMeshBin } from './mesh-bin.js';
+export { cookMeshCollision } from './mesh-collision';
+export {
+  cookMeshDistanceFieldProduct,
+  encodeMeshDistanceFieldProduct,
+  type MeshDistanceFieldProduct,
+} from './mesh-distance-field-product.js';
 export {
   deriveDefaultLodScreenCoverages,
   reconcileMeshLodMeta,

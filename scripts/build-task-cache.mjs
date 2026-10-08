@@ -26,7 +26,7 @@ export function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-export function walkFiles(directory) {
+export function walkFiles(directory, excludedPaths = new Set()) {
   if (!existsSync(directory)) return [];
   const result = [];
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
@@ -34,7 +34,8 @@ export function walkFiles(directory) {
   )) {
     if (entry.isDirectory() && IGNORED_DIRS.has(entry.name)) continue;
     const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) result.push(...walkFiles(path));
+    if (excludedPaths.has(path)) continue;
+    if (entry.isDirectory()) result.push(...walkFiles(path, excludedPaths));
     else if (entry.isFile()) result.push(path);
     else if (entry.isSymbolicLink()) {
       result.push(path);
@@ -140,7 +141,11 @@ export function rootToolchainFiles(root) {
 }
 
 export function packageInputFiles(root, directory) {
-  return [...walkFiles(directory), ...rootToolchainFiles(root)].filter(
+  // Producer scratch is not authored input; keep recipes, patches and outputs
+  // under their existing source/provenance and output-inventory checks.
+  const excludedPaths = new Set([resolve(root, 'packages/dawn-node/.native-build')]);
+  if (existsSync(resolve(directory, 'Cargo.toml'))) excludedPaths.add(resolve(directory, 'target'));
+  return [...walkFiles(directory, excludedPaths), ...rootToolchainFiles(root)].filter(
     (path) => !path.includes('/dist/') && !path.includes('\\dist\\'),
   );
 }

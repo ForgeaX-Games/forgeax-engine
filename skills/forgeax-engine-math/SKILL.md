@@ -19,7 +19,7 @@ Namespaces (`vec3` / `mat4` / `quat` / `color` ...) group pure functions with `o
 |:--|:--|:--|
 | `vec3.add/sub/scale/dot/cross/normalize/lerp(out, ...)` | out-param | Vector operations (`vec2`/`vec4` follow the same pattern). |
 | `vec3.smoothDamp(out, current, target, decayRate, dt)` | `=> Vec3` | Frame-rate-independent exponential smoothing: `lerp(current, target, 1−exp(−decayRate·dt))`, equivalent to Bevy `Vec3::smooth_nudge` / Three.js `MathUtils.damp`; also available for `vec2`/`vec4`. Do not use `lerp(p, target, rate·dt)` for tracking: it varies between 30/60 fps and overshoots when `rate·dt>1`. |
-| `vec3.catmullRom(out, p0, p1, p2, p3, t)` | `=> Vec3` | Catmull-Rom spline sampling through control points, tension 0.5: `t=0` selects `p1`, `t=1` selects `p2`; `p0`/`p3` determine endpoint tangents. Equivalent to Bevy `CubicCardinalSpline::new_catmull_rom` / Three.js `CatmullRomCurve3`; also available for `vec2`. Use for camera/animation paths and procedural curves instead of hand-written cubic matrices. Slide a four-point window `[pts[i-1..i+2]]` along the polyline. |
+| `vec3.catmullRom(out, p0, p1, p2, p3, t)` | `=> Vec3` | Catmull-Rom spline sampling through control points, tension 0.5: `t=0` selects `p1`, `t=1` selects `p2`; `p0`/`p3` determine endpoint tangents. Uniform mode, equivalent to Bevy `CubicCardinalSpline::new_catmull_rom` / Three.js explicit `catmullrom`; Three.js defaults to centripetal; also available for `vec2`. Use for camera/animation paths and procedural curves instead of hand-written cubic matrices. Slide a four-point window `[pts[i-1..i+2]]` along the polyline. |
 | `mat4.multiply/invert/lookAt/perspective/compose(out, ...)` | out-param | Matrix operations. |
 | `mat4.getTranslation(out, m)` | `=> Vec3` | Read position from world mat4 column 3. |
 | `mat4.getForward/getUp/getRight(out, m)` | `=> Vec3` | Read basis vectors; forward is -Z. |
@@ -38,6 +38,16 @@ Namespaces (`vec3` / `mat4` / `quat` / `color` ...) group pure functions with `o
 
 > [!NOTE]
 > `Transform` stores authored local TRS only; transient `GlobalTransform.world` stores the resolved world matrix, written each frame by `propagateTransforms`. Raw `world.spawn` must attach both components; SceneAsset/mount helpers supply the pair automatically.
+
+## Sample a path by distance
+
+Use `curve3.catmullRom(out, controls, t, { parameterization: 'centripetal' })`
+(default) or explicit `uniform` / `chordal`. `closed: true` wraps controls without
+a duplicate endpoint. `curve3.catmullRomTangent` supplies the analytic direction.
+Build `curve3.arcLengths(new Float32Array(subdivisions + 1), sample)` once, then
+sample at `curve3.parameterAtDistance(lengths, travelledDistance)`. Rebuild after
+control edits; increase subdivisions until the application's error budget
+converges. The caller owns the table; no Scene/animation cache is introduced.
 
 ## Read an entity pose
 
@@ -166,7 +176,7 @@ const hit = pickVertexOnEntity(world, cameraEntity, sx, sy, w, h, entity);
 if (hit) {
   const { entity, vertexIndex, worldPos, screenDist, worldDist, deformed } = hit;
   // worldPos: Vec3Like (Float32Array-like), world-space coords
-  // deformed: true when mesh is skinned → worldPos is rest-pose
+  // deformed: true when mesh is Morph/Skin evaluated -> worldPos is current pose
 }
 ```
 
@@ -177,7 +187,7 @@ if (hit) {
 - **Silent degenerate fallback**: invalid math input (zero-length normalization, perspective division with `w'=0`) falls back to safe values such as `(0,0,0)` without throwing. Callers own guards; this thin math layer prioritizes performance over charter P3. See the README's degenerate-input table.
 - **Check `worldToScreen.behind`** before screen-edge clamping: when true, `out` is meaningless and can project behind-camera points into an opposite quadrant.
 - **Run `propagateTransforms` before vertex picking**, as with `pick()`. Queries read `GlobalTransform.world` directly without propagation; newly spawned entities otherwise retain identity and yield incorrect `worldPos` without crashing.
-- **`deformed: true` still uses rest-pose `worldPos`**: meshes with both skinIndex and skinWeight report rest-pose positions transformed by `GlobalTransform.world`, not GPU skinning results. There is no GPU deformation readback; snapping must account for that offset.
+- **Current CPU pose only**: vertex and triangle queries share Morph-then-Skin projection. Unavailable vertex poses yield no candidates; use `pickTriangle` for a structured unavailable result. Propagate joints first. Custom shaders, displacement and alpha coverage are not reconstructed.
 - For higher-level rendering/picking symptoms, see [`forgeax-engine-debug`](../forgeax-engine-debug/SKILL.md).
 
 ## Further reading

@@ -25,7 +25,7 @@ function rawInput(workloadKind) {
   const stages = workloadKind === 'manual'
     ? []
     : ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: hash(String(index + 1)), frame: 60 },
       metadata: {

@@ -1,3 +1,5 @@
+import type { RhiError } from '@forgeax/engine-rhi';
+import type { AssetError } from '@forgeax/engine-types';
 import type { Antialias } from '../components/camera';
 import type { RenderPublicationError } from '../publication/contract';
 // @forgeax/engine-render -- render cluster error classes.
@@ -323,6 +325,15 @@ function shadowBoundReason(bound: ShadowInvalidConfigBound): string {
  */
 export interface EquirectProjectionFailedDetail {
   readonly handle: number;
+  /** The projection step's own structured failure, e.g. `invalid-source-format`. */
+  readonly cause: EquirectProjectionFailureCause;
+}
+
+/** The asset or RHI failure the store recorded when it marked the projection failed. */
+export interface EquirectProjectionFailureCause {
+  readonly code: AssetError['code'] | RhiError['code'];
+  readonly expected: string;
+  readonly hint: string;
 }
 
 /**
@@ -336,7 +347,8 @@ export interface EquirectProjectionFailedDetail {
  *   - `.hint` — declare `Skylight{equirect}` with a valid HDR equirect source;
  *     check `device.caps.rgba16floatRenderable`. The projection is internal —
  *     there is no user upload call to retry
- *   - `.detail = { handle }` — the numeric equirect handle id for diagnostics
+ *   - `.detail = { handle, cause }` — the equirect handle id and the recorded
+ *     asset/RHI failure (`cause.code`, e.g. `invalid-source-format`)
  */
 export class EquirectProjectionFailedError extends Error {
   readonly code = 'equirect-projection-failed' as const;
@@ -344,17 +356,20 @@ export class EquirectProjectionFailedError extends Error {
   readonly hint: string;
   readonly detail: EquirectProjectionFailedDetail;
 
-  constructor(handle: number) {
+  constructor(handle: number, cause: EquirectProjectionFailureCause) {
     const expected = `equirect handle ${handle} projects to a GPU cubemap + IBL precompute`;
     const hint =
-      `equirect handle ${handle} referenced by Skylight/SkyboxBackground failed projection; ` +
-      `declare Skylight{equirect} with a valid HDR equirect source and check device.caps.rgba16floatRenderable. ` +
-      `The projection is internal (no user upload call); the record arm does not retry`;
-    super(`equirect handle ${handle} cubemap projection failed`);
+      `equirect handle ${handle} referenced by Skylight/SkyboxBackground failed projection with ` +
+      `${cause.code} (${cause.hint}); fix detail.cause, then declare Skylight/SkyboxBackground with a new ` +
+      `equirect handle. The projection is internal (no user upload call); the record arm does not retry`;
+    super(`equirect handle ${handle} cubemap projection failed: ${cause.code}`);
     this.name = 'EquirectProjectionFailedError';
     this.expected = expected;
     this.hint = hint;
-    this.detail = { handle };
+    this.detail = {
+      handle,
+      cause: { code: cause.code, expected: cause.expected, hint: cause.hint },
+    };
   }
 }
 
@@ -561,16 +576,13 @@ export class PointShadowAtlasBoundsViolationError extends Error {
  * Structured error for `RuntimeErrorCode 'video-upload-unsupported'`
  * (feat-20260623-world-space-video-asset M3 / w11 — AC-10).
  *
- * Fired by the per-frame record stage (`videoTextureView`) when a VideoPlayer
- * entity can reach neither video upload path this frame: the general
- * `copyExternalImageToTexture` path (no host HTMLVideoElement resolved via
- * `VideoSourceProvider`) AND the high-perf `GPUExternalTexture` path
- * (capability absent). The engine surfaces this explicit failure rather than
- * silently rendering a stale/garbage texture (charter P3, plan-strategy D-6).
+ * Fired once per loss episode by the per-frame record stage
+ * (`videoTextureView`) when a VideoPlayer entity has no host video source:
+ * neither the copy path nor zero-copy `importExternalTexture` can run. The
+ * last good (or default) view stays bound so the draw survives.
  *   - `.code = 'video-upload-unsupported'`
- *   - `.expected` — at least one upload path available (host element or
- *     GPUExternalTexture capability)
- *   - `.hint` — actionable recovery: use a static texture or switch backend
+ *   - `.expected` — a host video source (both upload paths read it)
+ *   - `.hint` — actionable recovery: register a VideoSourceProvider or use a static texture
  *   - `.detail` — undefined (no narrowed detail variant)
  */
 export class VideoUploadUnsupportedError extends Error {
@@ -580,10 +592,10 @@ export class VideoUploadUnsupportedError extends Error {
 
   constructor() {
     const expected =
-      'at least one video upload path available: a host HTMLVideoElement (general copyExternalImageToTexture path) or GPUExternalTexture capability (high-perf path)';
+      'a host video source for the VideoPlayer entity; both the copy path and zero-copy importExternalTexture read it';
     const hint =
-      'this backend exposes no usable video upload path; render a static texture instead, or switch to a WebGPU backend that supports video texture upload';
-    super('video upload unsupported — no general or high-perf path available');
+      'register a VideoSourceProvider that returns the HTMLVideoElement or VideoFrame for this entity, or render a static texture instead';
+    super('video upload unsupported — no host video source for this VideoPlayer');
     this.name = 'VideoUploadUnsupportedError';
     this.expected = expected;
     this.hint = hint;
@@ -756,6 +768,37 @@ export class TransmissionCapabilityMissingError extends Error {
     super(`transmission capability is missing for material '${material}'`);
     this.name = 'TransmissionCapabilityMissingError';
     this.detail = { material, capability: 'transmission', stage, ...evidence };
+  }
+}
+
+export interface MaterialSampledTextureBudgetExceededDetail {
+  /** Stable material source handle, or -1 when the snapshot carries none. */
+  readonly materialHandle: number;
+  readonly limit: number;
+  readonly required: number;
+  /** Authored split scalar maps that occupy the shared transmission pairs. */
+  readonly conflicts: readonly string[];
+}
+
+/**
+ * A Standard transmission material cannot fit the device sampled-texture
+ * budget: its authored metallic, roughness or alpha maps occupy the pairs the
+ * low-limit layout lends to transmission. The draw renders without refraction.
+ */
+export class MaterialSampledTextureBudgetExceededError extends Error {
+  readonly code = 'material-sampled-texture-budget-exceeded' as const;
+  readonly expected =
+    'a low-limit transmission material leaves the split metallic, roughness and alpha maps unbound';
+  readonly hint =
+    'pack metallic/roughness into metallicRoughnessTexture and alpha into baseColorTexture, or run on a device with maxSampledTexturesPerShaderStage >= required';
+  readonly detail: MaterialSampledTextureBudgetExceededDetail;
+
+  constructor(detail: MaterialSampledTextureBudgetExceededDetail) {
+    super(
+      `material ${detail.materialHandle} needs ${detail.required} sampled textures for transmission with ${detail.conflicts.join(', ')}; device limit is ${detail.limit}`,
+    );
+    this.name = 'MaterialSampledTextureBudgetExceededError';
+    this.detail = detail;
   }
 }
 
@@ -1411,6 +1454,30 @@ export class OutlineInvalidParameterError extends Error {
   }
 }
 
+export class LensFlareInvalidParameterError extends Error {
+  readonly code = 'lens-flare-invalid-parameter' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: {
+    readonly field: keyof import('../components/lens-flare').LensFlareData;
+    readonly value: number;
+    readonly minimum: number;
+    readonly maximum: number;
+  };
+  constructor(
+    field: LensFlareInvalidParameterError['detail']['field'],
+    value: number,
+    minimum: number,
+    maximum: number,
+  ) {
+    super(`LensFlare.${field} is invalid`);
+    this.name = 'LensFlareInvalidParameterError';
+    this.expected = `finite LensFlare.${field} in [${minimum}, ${maximum}]`;
+    this.hint = `repair LensFlare.${field} on the camera and retry`;
+    this.detail = { field, value, minimum, maximum };
+  }
+}
+
 export class LensEffectsInvalidParameterError extends Error {
   readonly code = 'lens-effects-invalid-parameter' as const;
   readonly expected: string;
@@ -1482,12 +1549,17 @@ export interface RendererOperationCause {
 }
 
 export interface RendererOperationDetailByCode {
+  readonly 'frame-submit-rejected': {
+    readonly operation: 'draw';
+    readonly stage: 'submit';
+    readonly accepted: false;
+  };
   readonly 'world-lease-invalid': {
     readonly operation: 'attach' | 'draw';
     readonly cause: RendererOperationCause;
   };
   readonly 'frame-input-invalid': {
-    readonly operation: 'draw' | 'set-profile' | 'request-observation';
+    readonly operation: 'draw' | 'set-profile' | 'set-output-color-space' | 'request-observation';
     readonly cause: RendererOperationCause;
   };
   readonly 'scene-projection-failed': {
@@ -1517,7 +1589,13 @@ export interface RendererOperationDetailByCode {
     readonly cause: RendererOperationCause;
   };
   readonly 'renderer-state-invalid': {
-    readonly operation: 'draw' | 'set-profile' | 'request-observation' | 'recover' | 'dispose';
+    readonly operation:
+      | 'draw'
+      | 'set-profile'
+      | 'set-output-color-space'
+      | 'request-observation'
+      | 'recover'
+      | 'dispose';
     readonly state: string;
     readonly cause?: RendererOperationCause;
   };
@@ -1547,6 +1625,10 @@ export interface RendererOperationDetailByCode {
 export type RendererOperationErrorCode = keyof RendererOperationDetailByCode;
 
 const RENDERER_OPERATION_ERROR_POLICY = {
+  'frame-submit-rejected': {
+    expected: 'the frame reaches queue acceptance before submission facts advance',
+    hint: 'the aborted frame was not accepted; retain dependent gameplay isolation and retry through the frame owner',
+  },
   'world-lease-invalid': {
     expected: 'every render World is represented by a live lease owned by this Renderer',
     hint: 'attach the World to this Renderer and use the returned lease',
@@ -1801,6 +1883,38 @@ export class RenderTargetCapabilityMissingError extends Error {
   }
 }
 
+export interface RenderTargetLayerInvalidDetail {
+  /** `write` is a `Camera.targetLayer` writer; `readback` a readback request. */
+  readonly operation: 'write' | 'readback';
+  readonly layer: unknown;
+  readonly shape: import('../targets/contracts').RenderTargetShape;
+  readonly layerCount: number;
+}
+
+/**
+ * A writer or readback named a layer outside the target: a cube face, array
+ * layer, or 3D depth slice must be an integer in `[0, layerCount - 1]`.
+ */
+export class RenderTargetLayerInvalidError extends Error {
+  readonly code = 'render-target-layer-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: RenderTargetLayerInvalidDetail;
+
+  constructor(detail: RenderTargetLayerInvalidDetail) {
+    super(
+      `render-target-layer-invalid: ${detail.operation} layer ${String(detail.layer)} is outside a ${detail.shape} target with ${detail.layerCount} layer(s)`,
+    );
+    this.name = 'RenderTargetLayerInvalidError';
+    this.expected = `an integer layer in [0, ${detail.layerCount - 1}]`;
+    this.hint =
+      detail.operation === 'write'
+        ? 'set Camera.targetLayer to a layer (cube face, array layer, or 3D depth slice) of its Camera.target'
+        : 'request a layer (cube face, array layer, or 3D depth slice) that exists in the target';
+    this.detail = detail;
+  }
+}
+
 export type RenderTargetStateInvalidReason =
   | 'foreign-renderer'
   | 'destroyed'
@@ -1809,7 +1923,7 @@ export type RenderTargetStateInvalidReason =
   | 'readback-without-intent';
 
 export interface RenderTargetStateInvalidDetail {
-  readonly operation: 'inspect' | 'resize' | 'source' | 'readback' | 'destroy';
+  readonly operation: 'inspect' | 'resize' | 'source' | 'readback' | 'snapshot' | 'destroy';
   readonly reason: RenderTargetStateInvalidReason;
   readonly state: 'uninitialized' | 'candidate' | 'active' | 'rebuilding' | 'destroyed';
   readonly generation: number;
@@ -1855,9 +1969,124 @@ export class RenderTargetOperationFailedError extends Error {
   }
 }
 
+export type FramebufferSnapshotFailureReason =
+  | 'request-invalid'
+  | 'target-incompatible'
+  | 'writer-conflict'
+  | 'source-unavailable'
+  | 'source-out-of-bounds'
+  | 'destination-out-of-bounds'
+  | 'destination-invalidated';
+
+export interface FramebufferSnapshotFailedDetail {
+  readonly reason: FramebufferSnapshotFailureReason;
+  readonly expected: string;
+  readonly actual: unknown;
+  /** Receipt frame the failure is bound to; absent for request-time rejection. */
+  readonly frameId?: number;
+}
+
+const FRAMEBUFFER_SNAPSHOT_HINTS: Readonly<Record<FramebufferSnapshotFailureReason, string>> = {
+  'request-invalid':
+    'pass non-negative integer region/destination values with width and height >= 1',
+  'target-incompatible':
+    'create a 2d rgba16float RenderTarget with sampleCount 1, mipLevels 1 and sampled=true',
+  'writer-conflict':
+    'give the snapshot its own target; a camera, capture or other snapshot already writes it this frame',
+  'source-unavailable':
+    'draw a frame whose Standard scene color is rendered by the requested camera (CameraView frames need request.camera)',
+  'source-out-of-bounds':
+    'keep the region inside the camera scene-color extent reported in detail.actual',
+  'destination-out-of-bounds': 'keep destination + region inside the current target extent',
+  'destination-invalidated':
+    'the target was resized, recovered or rewritten before observe; request a new snapshot',
+};
+
+export class FramebufferSnapshotFailedError extends Error {
+  readonly code = 'framebuffer-snapshot-failed' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: FramebufferSnapshotFailedDetail;
+
+  constructor(detail: FramebufferSnapshotFailedDetail) {
+    super(`framebuffer-snapshot-failed: ${detail.reason}`);
+    this.name = 'FramebufferSnapshotFailedError';
+    this.expected = detail.expected;
+    this.hint = FRAMEBUFFER_SNAPSHOT_HINTS[detail.reason];
+    this.detail = detail;
+  }
+}
+
 export interface ReflectionProbeBudgetExceededDetail {
   readonly actual: number;
   readonly budget: number;
+}
+
+export type ExternalTextureInvalidReason =
+  | 'format'
+  | 'dimension'
+  | 'usage'
+  | 'device-mismatch'
+  | 'device-lost'
+  | 'source-unsupported'
+  | 'capability-absent';
+
+export interface ExternalTextureInvalidDetail {
+  readonly operation: 'import' | 'replace' | 'native-device';
+  readonly kind: 'gpu-texture' | 'video';
+  readonly reason: ExternalTextureInvalidReason;
+  readonly actual: string;
+}
+
+/** An `importTexture` input the renderer cannot bind as a material texture. */
+export class ExternalTextureInvalidError extends Error {
+  readonly code = 'external-texture-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: ExternalTextureInvalidDetail;
+
+  constructor(detail: ExternalTextureInvalidDetail, expected: string, hint: string) {
+    super(`external-texture-invalid: ${detail.kind} ${detail.reason} (${detail.actual})`);
+    this.name = 'ExternalTextureInvalidError';
+    this.expected = expected;
+    this.hint = hint;
+    this.detail = detail;
+  }
+}
+
+export type ExternalTextureStateInvalidReason =
+  | 'released'
+  | 'stale-generation'
+  | 'source-expired'
+  | 'foreign-renderer';
+
+export interface ExternalTextureStateInvalidDetail {
+  readonly operation: 'bind' | 'replace' | 'release';
+  readonly reason: ExternalTextureStateInvalidReason;
+  readonly generation: number;
+}
+
+/** A released, pre-recovery, or foreign external texture reached a material or handle call. */
+export class ExternalTextureStateInvalidError extends Error {
+  readonly code = 'external-texture-state-invalid' as const;
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: ExternalTextureStateInvalidDetail;
+
+  constructor(detail: ExternalTextureStateInvalidDetail) {
+    super(`external-texture-state-invalid: ${detail.operation} cannot use ${detail.reason}`);
+    this.name = 'ExternalTextureStateInvalidError';
+    this.expected = 'a live external texture imported by this renderer at its current generation';
+    this.hint =
+      detail.reason === 'stale-generation'
+        ? 'after recover(), create a GPUTexture on renderer.nativeDevice() and replace() or import it again'
+        : detail.reason === 'released'
+          ? 'import the texture again; a released handle never binds'
+          : detail.reason === 'source-expired'
+            ? 'replace() with a decoded source: an open VideoFrame, or a video with readyState >= HAVE_CURRENT_DATA'
+            : 'bind the source only in Worlds drawn by the Renderer that imported it';
+    this.detail = detail;
+  }
 }
 
 export class ReflectionProbeBudgetExceededError extends Error {
@@ -2037,8 +2266,32 @@ export class CameraViewInvalidError extends Error {
   }
 }
 
+/** Invalid StereoCamera authoring; `detail.field` names the rejected fact. */
+export class StereoCameraInvalidError extends Error {
+  readonly code = 'stereo-camera-invalid';
+  readonly hint: string;
+  readonly detail: {
+    readonly field: import('../components/stereo-camera').StereoCameraInvalidField;
+    readonly value: unknown;
+  };
+  constructor(
+    field: import('../components/stereo-camera').StereoCameraInvalidField,
+    value: unknown,
+    readonly expected: string,
+  ) {
+    super(`Invalid StereoCamera.${field}`);
+    this.name = 'StereoCameraInvalidError';
+    this.hint =
+      field === 'projection' || field === 'target' || field === 'planarReflection'
+        ? `remove StereoCamera or the conflicting Camera ${field} before drawing again`
+        : `repair StereoCamera.${field} before drawing again`;
+    this.detail = { field, value };
+  }
+}
+
 export type RenderError =
   | CameraViewInvalidError
+  | StereoCameraInvalidError
   | import('../decals/component').ProjectedDecalInvalidError
   | import('../components/planar-reflection').PlanarReflectionInvalidError
   | RenderPublicationError
@@ -2065,6 +2318,7 @@ export type RenderError =
   | SkinMaterialMismatchError
   | MaterialSkinAttrMissingError
   | TransmissionCapabilityMissingError
+  | MaterialSampledTextureBudgetExceededError
   | RenderFeatureRegistrationConflictError
   | RenderFeatureStageFailedError
   | RenderFeatureCapabilityMissingError
@@ -2081,6 +2335,7 @@ export type RenderError =
   | OutlineInvalidParameterError
   | BarrelDistortionInvalidParameterError
   | LensEffectsInvalidParameterError
+  | LensFlareInvalidParameterError
   | CloudLayerError
   | DynamicResolutionInvalidParameterError
   | DynamicResolutionRequiresTaaError
@@ -2096,8 +2351,12 @@ export type RenderError =
   | LightResourceUnavailableError
   | RenderTargetDescriptorInvalidError
   | RenderTargetCapabilityMissingError
+  | RenderTargetLayerInvalidError
   | RenderTargetStateInvalidError
   | RenderTargetOperationFailedError
+  | FramebufferSnapshotFailedError
+  | ExternalTextureInvalidError
+  | ExternalTextureStateInvalidError
   | ReflectionProbeBudgetExceededError
   | RenderIntentInvalidError
   | ProjectorBindingError

@@ -152,6 +152,78 @@ describe('Pack plugin lifecycle characterization', () => {
     watcherControl.watchers.length = 0;
   });
 
+  it.each([
+    'result',
+    'throw',
+  ] as const)('rejects ready with the original %s producer failure before publication', async (failureMode) => {
+    watcherControl.enabled = true;
+    watcherControl.autoRelease = 1;
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-producer-ready-failure-'));
+    temporaryRoots.push(root);
+    const assets = join(root, 'assets');
+    await mkdir(assets);
+    const sourcePath = join(assets, 'failed.pack.ts');
+    await writeFile(
+      sourcePath,
+      `export default {
+        schemaVersion: '2.0.0',
+        packageId: new Uint8Array([1, 144, 0, 0, 0, 0, 112, 0, 128, 0, 0, 0, 0, 0, 9, 147]),
+        build() {
+          const error = {
+            code: 'pack-build-failed',
+            expected: 'the fixture producer to publish its declared output',
+            hint: 'repair the fixture producer',
+            detail: { phase: 'build', sourcePath: ${JSON.stringify(sourcePath)} },
+          };
+          ${failureMode === 'throw' ? 'throw error;' : 'return { ok: false, error };'}
+        },
+      };`,
+    );
+    const server = createServer();
+    const plugin = pluginPack({
+      roots: [assets],
+      runtimeBinding: createStandaloneRuntimeAssetBinding('producer-ready-failure'),
+      ddc: {
+        buildCacheRoot: join(root, 'build-cache'),
+        projectDdcRoot: join(root, '.forgeax', 'ddc', 'v2'),
+      },
+    });
+    try {
+      plugin.configureServer(server);
+      // A later configureServer hook may delay the first ready consumer.
+      await waitFor(() => plugin.runtimeBinding()?.status === 'degraded');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const cause = {
+        code: 'pack-build-failed',
+        expected: 'the fixture producer to publish its declared output',
+        hint: 'repair the fixture producer',
+        detail: { phase: 'build', sourcePath },
+      };
+      await expect(plugin.ready()).rejects.toMatchObject({
+        code: 'produce-failed',
+        detail: { stage: 'produce' },
+        cause,
+      });
+      await expect(plugin.ready()).rejects.toMatchObject({ code: 'produce-failed', cause });
+      expect(plugin.catalogSnapshot()).toEqual([]);
+      await writeFile(
+        sourcePath,
+        `export default {
+          schemaVersion: '2.0.0',
+          packageId: new Uint8Array([1, 144, 0, 0, 0, 0, 112, 0, 128, 0, 0, 0, 0, 0, 9, 147]),
+          build: () => ({ ok: true, value: { 'scene/main': { kind: 'scene', entities: {} } } }),
+        };`,
+      );
+      watcherControl.watchers[0]?.emit(sourcePath);
+      await waitFor(() => plugin.runtimeBinding()?.status === 'ready');
+      await expect(plugin.ready()).resolves.toBeUndefined();
+      expect(plugin.catalogSnapshot()).toHaveLength(1);
+      expect(plugin.catalogSnapshot()[0]).toMatchObject({ kind: 'scene', publication: {} });
+    } finally {
+      await plugin.closeBundle();
+    }
+  });
+
   it('keeps serve startup, watcher, routes, and build emission observable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-lifecycle-'));
     temporaryRoots.push(root);

@@ -65,7 +65,7 @@ const pointAdmission = admitPointsLines({
 });
 const lineAdmission = admitPointsLines({
   entity: 2,
-  lines: { widthPx: 4 },
+  lines: { width: 4 },
   mesh: lineMesh,
   material,
 });

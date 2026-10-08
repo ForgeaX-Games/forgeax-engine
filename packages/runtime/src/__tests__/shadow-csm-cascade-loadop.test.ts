@@ -6,20 +6,20 @@
 // This test does NOT re-declare the decision expression and feed it to the
 // pure builder (that would be tautological — the bug could regress verbatim
 // while the suite stays green). Instead it drives the whole pipeline through
-// createRenderer + renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }): the URP cascade loop calls
+// createRenderer + the lease-bound renderer.draw input: the URP cascade loop calls
 // one typed shadow pass per cascade, whose execute closure invokes the real
 // encodeDirectionalShadowPass(c, pass, cascadeIndex). A mock GPU device
 // captures every descriptor handed to beginRenderPass on the dedicated
 // 'render-system-shadow' command encoder, so the asserted truth table is the
 // engine's decision at the real call site.
 
-import type { World as WorldType } from '@forgeax/engine-ecs';
-import type { Renderer as RendererType } from '@forgeax/engine-render';
-import type { Handle } from '@forgeax/engine-types';
+import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
+import { World } from '@forgeax/engine-ecs';
+import { Camera, DirectionalLight, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { Transform } from '@forgeax/engine-scene';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRenderer } from '../createRenderer';
 import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
-
-const ENGINE = '../createRenderer';
 
 interface ShadowPassDescriptor {
   depthLoadOp: string;
@@ -179,53 +179,6 @@ function buildManifestDataUrl(): string {
   return `data:application/json,${encodeURIComponent(JSON.stringify(manifest))}`;
 }
 
-async function importEngine(): Promise<{
-  createRenderer: (
-    canvas: unknown,
-    opts?: unknown,
-    bundler?: unknown,
-  ) => Promise<{
-    subscribe: (listener: (event: unknown) => void) => () => void;
-    draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-  }>;
-}> {
-  const engine = (await import(ENGINE)) as {
-    createRenderer: (...args: readonly unknown[]) => Promise<unknown>;
-  };
-  return {
-    createRenderer: async (...args: readonly unknown[]) => {
-      const result = (await engine.createRenderer(...args)) as
-        | { readonly ok: true; readonly value: unknown }
-        | { readonly ok: false; readonly error: unknown };
-      if (!result.ok) throw result.error;
-      return result.value as {
-        subscribe: (listener: (event: unknown) => void) => () => void;
-        draw: (worlds: unknown, opts: { cameraOwner: number; resourceOwner: number }) => void;
-      };
-    },
-  };
-}
-
-async function importEcs(): Promise<{ World: new () => unknown }> {
-  return (await import('@forgeax/engine-ecs')) as never;
-}
-
-async function importComponents(): Promise<{
-  Transform: unknown;
-  GlobalTransform: unknown;
-  MeshFilter: unknown;
-  MeshRenderer: unknown;
-  Camera: unknown;
-  DirectionalLight: unknown;
-  HANDLE_CUBE: Handle<'MeshAsset', 'shared'>;
-}> {
-  return {
-    ...(await import('@forgeax/engine-render')),
-    ...(await import('@forgeax/engine-scene')),
-    ...(await import('@forgeax/engine-assets-runtime')),
-  } as never;
-}
-
 function identityTransform(): Record<string, number[]> {
   return { pos: [0, 0, 0], quat: [0, 0, 0, 1], scale: [1, 1, 1] };
 }
@@ -246,22 +199,16 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
   const log: CaptureLog = { shadowPassDescriptors: [] };
   const device = makeMockGPUDevice(log);
   vi.stubGlobal('navigator', { ...baseNavigator, gpu: makeMockGPU(device) });
-  const { createRenderer } = await importEngine();
-  const renderer = await createRenderer(
+  const created = await createRenderer(
     makeMockCanvas(),
     {},
     { shaderManifestUrl: buildManifestDataUrl() },
   );
-  const { World } = await importEcs();
-  const C = await importComponents();
-  const world = new (
-    World as new () => {
-      spawn: (...componentDatas: unknown[]) => unknown;
-    }
-  )();
+  const renderer = created.unwrap();
+  const world = new World();
   world.spawn(
     {
-      component: C.Camera,
+      component: Camera,
       data: {
         fov: Math.PI / 4,
         aspect: 16 / 9,
@@ -274,35 +221,38 @@ async function drawCsmScene(cascadeCount: number): Promise<CaptureLog> {
         top: 1,
       },
     },
-    { component: C.Transform, data: cameraTransform() },
+    { component: Transform, data: cameraTransform() },
   );
   world.spawn({
-    component: C.DirectionalLight,
+    component: DirectionalLight,
     data: { ...directionalLight(), cascadeCount, mapSize: 1024 },
   });
   world.spawn(
-    { component: C.MeshFilter, data: { assetHandle: C.HANDLE_CUBE } },
-    { component: C.MeshRenderer, data: {} },
-    { component: C.Transform, data: identityTransform() },
+    { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+    { component: MeshRenderer, data: {} },
+    { component: Transform, data: identityTransform() },
   );
 
   const errors: { code: string }[] = [];
-  renderer.subscribe((event) => {
-    if (
-      typeof event === 'object' &&
-      event !== null &&
-      'kind' in event &&
-      event.kind === 'error' &&
-      'error' in event
-    ) {
-      errors.push(event.error as { code: string });
-    }
+  const unsubscribe = renderer.subscribe((event) => {
+    if (event.kind === 'error') errors.push(event.error);
   });
-  if (!(renderer as unknown as RendererType).attach(world as WorldType).ok) {
-    throw new Error('World attachment failed');
+  let disposed: Awaited<ReturnType<typeof renderer.dispose>>;
+  try {
+    const attached = renderer.attach(world);
+    if (!attached.ok) throw attached.error;
+    const lease = attached.value;
+    world.update().unwrap();
+    const submitted = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+    if (!submitted.ok) throw submitted.error;
+    const completed = await submitted.value.completed;
+    if (!completed.ok) throw completed.error;
+    expect(errors).toEqual([]);
+  } finally {
+    unsubscribe();
+    disposed = await renderer.dispose();
   }
-  (world as WorldType).update().unwrap();
-  renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 });
+  if (!disposed.ok) throw disposed.error;
   return log;
 }
 

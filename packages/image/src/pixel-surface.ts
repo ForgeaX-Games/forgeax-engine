@@ -416,7 +416,7 @@ function makeSurface(options: PixelSurfaceOptions): Result<PixelSurface, ImageEr
       };
     },
     toAssetPack(meta) {
-      return toAssetPack(surface.toDecodedImage(), meta);
+      return toAssetPack(meta);
     },
   };
   return ok(surface);

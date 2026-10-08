@@ -1,9 +1,9 @@
 #define_import_path forgeax_pbr::standard_lighting
-#import forgeax_view::common::{view}
+#import forgeax_view::common::{view, lightingChannelsMatch}
 #import forgeax_pbr::ibl_shared::{fresnelSchlickRoughness, standardDiffuseWeight}
 #import forgeax_pbr::ibl_sampling::{decodeSpecularEnvironmentScale, sampleIblDiffuse, sampleIblSpecular, sampleReflectionProbeSpecular, projectSpecularRadiance}
 #import forgeax_pbr::lighting_probe::{evaluateProbeDiffuse}
-#import forgeax_cloud::layer::{cloud_apply_direct_solar}
+#import forgeax_view::atmosphere::{view_apply_direct_solar}
 #import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
 #ifdef CLUSTER_FORWARD_AVAILABLE
 #import forgeax_standard::cluster::{evaluateStandardClusterLights}
@@ -83,13 +83,15 @@ fn evaluateStandardDirect(
   worldPosition : vec3<f32>, ndc : vec3<f32>, viewZ : f32,
   normal : vec3<f32>, direction : vec3<f32>, albedo : vec3<f32>,
   transmission : vec3<f32>, metallic : f32, alpha : f32, f0 : vec3<f32>, shadow : f32,
-  receiveShadows : bool,
+  receiveShadows : bool, receiverChannels : u32,
 ) -> vec3<f32> {
-  var direct = cloud_apply_direct_solar(shadow * evalDirectionalNoShadow(normal, direction, albedo, metallic, alpha, f0, transmission),
-    worldPosition, view.cloudShadowOrigin.xyz, view.cloudShadowRight.xyz, view.cloudShadowUp.xyz, view.cloudShadowProjection);
+  var direct = vec3<f32>(0.0);
+  if (lightingChannelsMatch(view.lightingChannels, receiverChannels)) {
+    direct = view_apply_direct_solar(view, shadow * evalDirectionalNoShadow(normal, direction, albedo, metallic, alpha, f0, transmission), worldPosition);
+  }
 #ifdef CLUSTER_FORWARD_AVAILABLE
   direct += evaluateStandardClusterLights(ndc, viewZ, worldPosition, normal, direction,
-    albedo, metallic, alpha, f0, transmission, false, receiveShadows);
+    albedo, metallic, alpha, f0, transmission, false, receiveShadows, receiverChannels);
 #endif
   return direct;
 }

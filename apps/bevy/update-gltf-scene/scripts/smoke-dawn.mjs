@@ -14,7 +14,7 @@ const height = 150;
 const minFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const errors = [];
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 const gpu = create([]);

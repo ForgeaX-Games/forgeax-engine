@@ -20,16 +20,14 @@ export interface ToolCommandNode {
   readonly path: string;
   readonly summary: string;
   readonly children?: readonly ToolCommandNode[];
-  readonly leaf?: {
-    readonly title: string;
-    readonly realm: ToolDescriptor['realm'];
-    readonly inputSchema?: JsonValue;
-    readonly outputSchema?: JsonValue;
+  readonly leaf?: Pick<
+    ToolDescriptor,
+    'title' | 'realm' | 'inputSchema' | 'outputSchema' | 'example'
+  > & {
     readonly inputDescription?: string;
     readonly outputDescription?: string;
     readonly capabilities: readonly string[];
     readonly errors: readonly string[];
-    readonly example?: JsonValue;
   };
 }
 

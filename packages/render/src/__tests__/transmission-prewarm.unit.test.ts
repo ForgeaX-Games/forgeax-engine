@@ -135,6 +135,10 @@ describe('Standard transmission exact-key prewarm selection', () => {
     ).toEqual([falseKey, trueKey]);
   });
 
+  it('prewarms nothing without a Standard manifest row', () => {
+    expect(selectStandardPbrTransmissionPrewarmVariants(undefined, true)).toEqual([]);
+  });
+
   it('rejects a missing exact transmission variant', () => {
     const entry = standardEntry([transmissionVariant(falseKey, false)]);
     expect(() => selectStandardPbrTransmissionPrewarmVariants(entry, true)).toThrow(
@@ -274,4 +278,29 @@ describe('GPU-driven scene-index prewarm capability selection', () => {
     );
     expect(selected?.defines.REFLECTION_FALLBACK_AVAILABLE).toBe(false);
   });
+});
+
+it.each([false, true])('prewarms only the receiving atmosphere capability %s', (available) => {
+  const entry = standardEntry(
+    [false, true].flatMap((atmosphere) =>
+      [false, true].map((probe) => ({
+        definesKey: `atmosphere=${atmosphere},probe=${probe}`,
+        composedWgsl: '',
+        defines: {
+          STORAGE_BUFFER_AVAILABLE: true,
+          ATMOSPHERE_AVAILABLE: atmosphere,
+          CLUSTER_FORWARD_AVAILABLE: true,
+          PROBE_BLEND_AVAILABLE: probe,
+        },
+      })),
+    ),
+  );
+  for (const selected of [
+    selectHdrpPbrPrewarmVariants(entry, true, true, true, true, true, available),
+    selectProbePrewarmVariants(entry, true, true, true, true, true, false, available),
+    selectSkinPrewarmVariants(entry, true, true, true, true, true, available),
+  ]) {
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.defines.ATMOSPHERE_AVAILABLE).toBe(available);
+  }
 });

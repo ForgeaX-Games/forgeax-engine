@@ -115,4 +115,24 @@ describe('RenderGraph alias-source refusal and recovery', () => {
     expect(destroyed).toHaveLength(created.length);
     expect(new Set(destroyed)).toEqual(new Set(created));
   });
+
+  it('keeps chained aliases on one source allocation through resize and retirement', () => {
+    const graph = new RenderGraph();
+    const { device, created, destroyed } = makeDevice();
+    graph.addColorTarget('source', { format: 'rgba8unorm', size: 'swapchain' }).unwrap();
+    graph.addColorTargetAlias('alias', 'source').unwrap();
+    graph.addColorTargetAlias('alias-2', 'alias').unwrap();
+    for (const name of ['source', 'alias', 'alias-2'])
+      graph.addPass(`${name}-pass`, { reads: [], writes: [name] });
+    for (const size of [4, 8]) {
+      graph.setSwapChainSize(size, size);
+      graph.compile({ ...compileOptions, device: device as never }).unwrap();
+      expect(graph.getColorTargetTexture('alias')).toBe(graph.getColorTargetTexture('source'));
+      expect(graph.getColorTargetView('alias-2')).toBe(graph.getColorTargetView('source'));
+    }
+    expect(created).toHaveLength(2);
+    graph.drain();
+    expect(destroyed).toHaveLength(2);
+    expect(new Set(destroyed)).toEqual(new Set(created));
+  });
 });

@@ -462,7 +462,7 @@ export async function runSsrGpuDispatch(
   viewPayload.set(inverseProjection, 44);
   viewPayload.set(projection, 196);
   viewPayload.set(projection, 212);
-  // The Hi-Z seed linearizes the depth attachment through the shared View
+  // The depth-pyramid seed linearizes the depth attachment through the shared View
   // projection range; keep this carrier's identity matrices paired with the
   // same finite perspective range used by the admission fixture.
   viewPayload[228] = 0.1;

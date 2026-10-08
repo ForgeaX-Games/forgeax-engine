@@ -14,13 +14,15 @@ import {
   GPU_BUFFER_USAGE_STORAGE,
 } from '../gpu-usage';
 
-it('samples the production reflection pyramid at roughness squared LOD with confidence weighting', async () => {
+it('samples the production reflection pyramid at roughness squared LOD with confidence weighting', async ({
+  annotate,
+}) => {
   const source = readFileSync(
     resolve(process.cwd(), 'packages/shader/src/ssr-compose.wgsl'),
     'utf8',
   );
   const start = source.indexOf('fn ssrReflectionLod(');
-  const end = source.indexOf('@fragment\nfn fs_ssr_compose', start);
+  const end = source.indexOf('fn ssrPackedReceiverWeight(', start);
   expect(start).toBeGreaterThan(0);
   expect(end).toBeGreaterThan(start);
   const temporalSource = readFileSync(
@@ -47,10 +49,10 @@ it('samples the production reflection pyramid at roughness squared LOD with conf
     })
     .unwrap();
   const output = device
-    .createBuffer({ size: 128, usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_SRC })
+    .createBuffer({ size: 160, usage: GPU_BUFFER_USAGE_STORAGE | GPU_BUFFER_USAGE_COPY_SRC })
     .unwrap();
   const readback = device
-    .createBuffer({ size: 128, usage: GPU_BUFFER_USAGE_MAP_READ | GPU_BUFFER_USAGE_COPY_DST })
+    .createBuffer({ size: 160, usage: GPU_BUFFER_USAGE_MAP_READ | GPU_BUFFER_USAGE_COPY_DST })
     .unwrap();
   try {
     // Distinct levels falsify accidental mip-zero-only sampling. The middle
@@ -94,10 +96,23 @@ ${temporalSource.slice(temporalStart, temporalEnd)}
   // without darkening radiance; disocclusion rejects that carry immediately.
   let red = vec4<f32>(1.0, 0.0, 0.0, 1.0);
   let empty = vec4<f32>(0.0);
-  result[4] = resolveSsrTemporal(red, empty, 0.0, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
-  result[5] = resolveSsrTemporal(empty, red, 1.0, vec3<f32>(0), vec3<f32>(0), true, true, true, empty);
-  result[6] = resolveSsrTemporal(empty, red, 1.0, vec3<f32>(0), vec3<f32>(0), true, false, true, empty);
-  result[7] = resolveSsrTemporal(red, empty, 1.0, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
+  result[4] = resolveSsrTemporal(red, empty, 0.0, false, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
+  result[5] = resolveSsrTemporal(empty, red, 1.0, false, vec3<f32>(0), vec3<f32>(0), true, true, true, empty);
+  result[6] = resolveSsrTemporal(empty, red, 1.0, false, vec3<f32>(0), vec3<f32>(0), true, false, true, empty);
+  // A steady fractional thin hit retains its confidence and radiance.
+  result[8] = resolveSsrTemporal(vec4<f32>(1.0, 0.0, 0.0, 0.1), red, 0.1, false, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
+  result[7] = resolveSsrTemporal(red, empty, 1.0, false, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
+  // An analytic thin source covers 10% on alternate jitter phases. Its
+  // steady cycle-average energy is 5%, not a long run of absent sources.
+  var thin = vec4<f32>(1.0, 0.0, 0.0, 0.05);
+  var mass = 0.0;
+  for (var phase = 0u; phase < 256u; phase++) {
+    let current = select(vec4<f32>(1.0, 0.0, 0.0, 0.1), empty, phase % 2u == 1u);
+    thin = resolveSsrTemporal(current, thin, thin.a, phase % 2u == 0u, vec3<f32>(0), vec3<f32>(1), true, true, true, empty);
+    if (phase >= 248u) { mass += thin.r * thin.a; }
+  }
+  result[9] = vec4<f32>(mass / 8.0);
+
 }`,
     }).unwrap();
     const groupLayout = device
@@ -143,18 +158,32 @@ ${temporalSource.slice(temporalStart, temporalEnd)}
     pass.setBindGroup(0, group);
     pass.dispatchWorkgroups(1);
     pass.end();
-    encoder.copyBufferToBuffer(output, 0, readback, 0, 128);
+    encoder.copyBufferToBuffer(output, 0, readback, 0, 160);
     device.queue.submit([encoder.finish().unwrap()]).unwrap();
     const mapped = (await readback.mapAsync(GPU_BUFFER_USAGE_MAP_READ)).unwrap();
     const values = [...new Float32Array(mapped.getMappedRange().unwrap().slice(0))];
     mapped.unmap();
+    await annotate('SSR thin-source energy', {
+      contentType: 'application/json',
+      bodyEncoding: 'utf-8',
+      body: JSON.stringify({
+        probe: 'roughness-mip-and-transient-miss',
+        values,
+        thinEnergyReference: 0.05,
+        thinEnergyTolerance: 0.005,
+      }),
+    });
     const expected = [
       // sampleRoughSsr exposes the premultiplied presentation value; the
       // production fragment unpremultiplies once before material blending.
       1, 0, 0, 1, 0.5, 0, 0, 0.5, 0, 0, 1, 1, 0, 0, 0.5, 0.5, 1, 0, 0, 1, 1, 0, 0, 0.9, 0, 0, 0, 0,
-      0.1, 0, 0, 1,
+      0.1, 0, 0, 1, 1, 0, 0, 0.1,
     ];
     for (const [i, value] of expected.entries()) expect(values[i]).toBeCloseTo(value, 5);
+    expect(values[36], 'thin reflection preserves its analytic cycle-average energy').toBeCloseTo(
+      0.05,
+      2,
+    );
   } finally {
     device.destroyTexture(texture).unwrap();
     device.destroyBuffer(output).unwrap();

@@ -13,10 +13,12 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+// Publish this demo's complete asset closure, without unrelated sibling sources.
 const assetRoots = [
   resolve(here, 'assets'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/meshes/cube-mesh.stub.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/container2.png.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/container2_specular.png.meta.json'),
 ];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-2-4-lighting-maps');
 

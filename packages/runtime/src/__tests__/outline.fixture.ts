@@ -2,6 +2,7 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import {
   Camera,
+  DirectionalLight,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -16,6 +17,7 @@ import {
   openReplay,
   type RecorderAttachment,
   replayDeviceRequest,
+  type V7RhiCallEvent,
 } from '@forgeax/engine-rhi-debug';
 import * as webgpu from '@forgeax/engine-rhi-webgpu';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
@@ -35,12 +37,29 @@ function counts(pixels: readonly number[]) {
   }
   return { visible, hidden };
 }
-export async function verifyOutline(renderer: Renderer, recorder: RecorderAttachment, save: Save) {
+export async function verifyOutline(
+  renderer: Renderer,
+  recorder: RecorderAttachment,
+  save: Save,
+  settleFrames = 60,
+) {
   const world = new World();
   const errors: unknown[] = [];
   const unsubscribe = renderer.subscribe((event) => {
     if (event.kind === 'error') errors.push(event.error);
   });
+  world
+    .spawn({
+      component: DirectionalLight,
+      data: {
+        direction: [0, -1, -1],
+        intensity: 1,
+        castShadow: true,
+        mapSize: 32,
+        cascadeCount: 1,
+      },
+    })
+    .unwrap();
   const material = world.allocSharedRef('MaterialAsset', Materials.unlit([0.15, 0.15, 0.15, 1]));
   const box = (x: number, z: number, scale: readonly [number, number, number]) =>
     world
@@ -92,13 +111,13 @@ export async function verifyOutline(renderer: Renderer, recorder: RecorderAttach
   };
   const observe = async (name: string) => {
     if (renderer.requestObservation === undefined) throw new Error('observation unavailable');
-    const include = ['final-srgb', 'linear-ldr'] as const;
+    const include = ['final-display', 'linear-ldr'] as const;
     value(renderer.requestObservation(include));
     const receipt = await draw();
     const observations = value(await renderer.observe(receipt, { include })).observations;
-    const observation = observations?.find((item) => item.domain === 'final-srgb');
+    const observation = observations?.find((item) => item.domain === 'final-display');
     const linear = observations?.find((item) => item.domain === 'linear-ldr');
-    if (observation === undefined) throw new Error('missing final-srgb observation');
+    if (observation === undefined) throw new Error('missing final-display observation');
     const { width, height, bytesPerRow, format } = observation.metadata;
     const pixels: number[] = [];
     for (let y = 0; y < height; y++)
@@ -130,9 +149,18 @@ export async function verifyOutline(renderer: Renderer, recorder: RecorderAttach
   const reports: unknown[] = [];
   try {
     for (let i = 0; i < 3; i++) await draw();
+    const initialCapture = recorder.captureFrame();
+    (await recorder.frameBoundary()).unwrap();
     const both = await observe('all');
+    (await recorder.frameBoundary()).unwrap();
+    await save('outline-csm-initial.rhitape', (await initialCapture).unwrap().bytes);
     expect(both.counts.visible).toBeGreaterThan(30);
     expect(both.counts.hidden).toBeGreaterThan(30);
+    expect(
+      renderer.inspect().directionalShadow.pixelEvidence,
+      'Outline must preserve the actual same-frame CSM receiver',
+    ).toBe('available');
+    expect(renderer.inspect().directionalShadow.error).toBeUndefined();
     world.set(camera, Outline, { entities: [selected, occluder] }).unwrap();
     const union = await observe('union');
     expect(union.counts.visible).toBeGreaterThan(30);
@@ -196,11 +224,98 @@ export async function verifyOutline(renderer: Renderer, recorder: RecorderAttach
     expect(restored.counts.visible).toBeGreaterThan(20);
     for (const aa of [0, 1, 2, 3]) {
       world.set(camera, Camera, { antialias: aa }).unwrap();
-      for (let i = 0; i < 60; i++) await draw();
+      for (let i = 0; i < settleFrames; i++) {
+        const receipt = await draw();
+        expect(receipt.presentation, 'Outline + cached CSM must complete ready pictures').toBe(
+          'ready',
+        );
+        expect(renderer.inspect().directionalShadow.pixelEvidence).toBe('available');
+      }
+      const cachedCapture = recorder.captureFrame();
+      (await recorder.frameBoundary()).unwrap();
+      // A one-shot observation changes the graph and legitimately re-rasters
+      // its new shadow target. Capture the ordinary settled graph first.
+      const cachedReceipt = await draw();
+      expect(cachedReceipt.presentation).toBe('ready');
+      const shadows = renderer.inspect().shadowRaster;
+      const directionalShadow = renderer.inspect().directionalShadow;
+      (await recorder.frameBoundary()).unwrap();
+      const cached = (await cachedCapture).unwrap();
+      await save(`outline-csm-aa-${aa}.rhitape`, cached.bytes);
+      const cachedTape = decodeTape(cached.bytes).unwrap();
+      const cachedModel = buildFrameModel(cachedTape);
+      const creates = [
+        ...cachedTape.bootstrap.map((resource) => resource.create as unknown as V7RhiCallEvent),
+        ...cachedTape.events,
+      ];
+      // View group 0 / binding 3 is the actual directional shadow receiver.
+      // The no-light Spot target can have the same format and extent.
+      const directionalViews = new Set(
+        cachedModel.works.flatMap((work) =>
+          work.bindings.flatMap((binding) =>
+            binding.groupIndex === 0 && binding.binding === 3 && binding.resourceId !== null
+              ? [binding.resourceId]
+              : [],
+          ),
+        ),
+      );
+      const atlas = creates.find(
+        (event) =>
+          event.kind === 'createTexture' &&
+          event.desc.format === 'depth32float' &&
+          'width' in event.desc.size &&
+          event.desc.size.width === 32 &&
+          event.desc.size.height === 32 &&
+          creates.some(
+            (view) =>
+              view.kind === 'createTextureView' &&
+              view.sourceHandleId === event.handleId &&
+              directionalViews.has(view.resultHandleId),
+          ),
+      );
+      if (atlas?.kind !== 'createTexture')
+        throw new Error('missing bound directional 32px CSM atlas');
+      const atlasViews = new Set(
+        creates.flatMap((event) =>
+          event.kind === 'createTextureView' && event.sourceHandleId === atlas.handleId
+            ? [event.resultHandleId]
+            : [],
+        ),
+      );
+      expect(
+        cachedTape.events.some(
+          (event) =>
+            event.kind === 'beginRenderPass' &&
+            event.depthStencilViewHandleId !== undefined &&
+            atlasViews.has(event.depthStencilViewHandleId),
+        ),
+        'cached frame must not raster the retained CSM atlas',
+      ).toBe(false);
+      expect(
+        cachedTape.bootstrap
+          .find((resource) => resource.handleId === atlas.handleId)
+          ?.initialData.some((slice) => slice.byteLength > 0),
+        'cached directional receiver must retain real depth bytes',
+      ).toBe(true);
+      expect(shadows.passCount).toBe(0);
+      expect(directionalShadow).toMatchObject({
+        pixelEvidence: 'available',
+        mapSize: 32,
+        cascadeCount: 1,
+      });
+      expect(directionalShadow.shadowMapBytes).toBeGreaterThan(0);
       const actual = await observe(`aa-${aa}`);
       expect(actual.counts.visible).toBeGreaterThan(20);
       expect(actual.counts.hidden).toBeGreaterThan(20);
-      reports.push({ aa, ...actual.counts });
+      reports.push({
+        aa,
+        ...actual.counts,
+        cachedDigest: cached.digest,
+        atlas: atlas.handleId,
+        atlasViews: [...atlasViews],
+        directionalShadow,
+        shadows,
+      });
     }
     world.set(camera, Camera, { antialias: 0 }).unwrap();
     await draw();

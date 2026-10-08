@@ -112,6 +112,8 @@ export type SharedHandle<T extends string> = Handle<T, 'shared'>;
 export interface AssetTagMap {
   plugin: 'PluginAsset';
   mesh: 'MeshAsset';
+  terrain: 'TerrainAsset';
+  'navigation-mesh': 'NavigationMeshAsset';
   texture: 'TextureAsset';
   equirect: 'EquirectAsset';
   sampler: 'SamplerAsset';

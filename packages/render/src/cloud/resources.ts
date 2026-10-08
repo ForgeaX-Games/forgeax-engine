@@ -1,6 +1,6 @@
 import type { CloudDensityCache } from './density';
 import type { CloudShadowProjection } from './shadow';
-import type { CloudHistory } from './temporal';
+import { type CloudHistory, cloudHistoryExtent } from './temporal';
 
 /** Evidence level for bytes owned by the prepared GPU path. */
 export type CloudGpuResourceEvidence = 'unavailable' | 'declared' | 'measured';
@@ -52,10 +52,15 @@ export function inspectCloudLayerResources(
   const shadowResolution = input.shadow?.resolution ?? 0;
   const declaredShadowBytes =
     shadowResolution * shadowResolution * CLOUD_RGBA16FLOAT_BYTES_PER_TEXEL;
-  const historyWidth = input.history?.width ?? 0;
-  const historyHeight = input.history?.height ?? 0;
+  const historyExtent =
+    input.history === undefined
+      ? { width: 0, height: 0 }
+      : cloudHistoryExtent(input.history.width, input.history.height);
   const declaredHistoryBytes =
-    historyWidth * historyHeight * CLOUD_HISTORY_SURFACE_COUNT * CLOUD_RGBA16FLOAT_BYTES_PER_TEXEL;
+    historyExtent.width *
+    historyExtent.height *
+    CLOUD_HISTORY_SURFACE_COUNT *
+    CLOUD_RGBA16FLOAT_BYTES_PER_TEXEL;
   const shadowBytes = input.shadowBytes ?? 0;
   const historyBytes = input.historyBytes ?? 0;
   const inFlightBytes = Math.max(0, input.inFlightBytes ?? 0);

@@ -15,12 +15,23 @@ const VITEST = resolve(ROOT, 'node_modules/vitest/vitest.mjs');
 // instance lifetime without removing any combination or changing its shader.
 export const DAWN_TEST_PARTITIONS = {
   transmission: [
-    'completes a 60-frame transmission stream',
-    'uses linear HDR observation',
-    'keeps IOR, thickness, and roughness',
-    'exercises both Standard render paths',
-    'submits a real clustered local-light frame',
-  ].map((pattern) => ({ pattern, count: 1 })),
+    {
+      // Six renderers fit below the existing eight-renderer budget group;
+      // share its manifest import without combining the heavy feature sweeps.
+      pattern:
+        'completes a 60-frame transmission stream|uses linear HDR observation|samples the backdrop where the refracted ray exits',
+      count: 3,
+    },
+    { pattern: 'keeps IOR, thickness, and roughness', count: 1 },
+    { pattern: 'exercises both Standard render paths', count: 1 },
+    {
+      // Each process pays the full shader-manifest import; the budget cases
+      // are light enough to share one native instance.
+      pattern:
+        'submits a real clustered local-light frame|refracts through the shared-slot variant|reports and falls back when a split scalar map',
+      count: 3,
+    },
+  ],
   'feature-depth': [
     { pattern: 'samples depth written by a vertex-only prepared graphics pass', count: 1 },
     ...['billboard-material', 'topology-segment-material', 'mesh-geometry-material'].map(
@@ -102,21 +113,41 @@ export function validateDawnPartitionReport(report, partitions, partition, cover
   return total;
 }
 
-export async function runDawnPartitions(kind, { env = process.env } = {}) {
+// A Smoke owner selects whole existing native partitions, never individual tests.
+export function selectTransmissionSmokeOwner(features, owner) {
+  const canonical = { pattern: 'emits the canonical 60-frame Dawn roster receipt', count: 1 };
+  const middle = Math.ceil(features.length / 2);
+  switch (owner) {
+    case undefined:
+      return [...features, canonical];
+    case 'features-a':
+      return features.slice(0, middle);
+    case 'features-b':
+      return features.slice(middle);
+    case 'frames':
+      return [canonical];
+    default:
+      throw new Error(`unknown transmission Smoke owner: ${owner}`);
+  }
+}
+
+export async function runDawnPartitions(kind, { env = process.env, smokeOwner } = {}) {
   const configuredPartitions = selectDawnTestPartitions(kind, env);
-  const partitions =
-    kind === 'transmission' && env.FORGEAX_DAWN_ROSTER_SMOKE === '1'
-      ? [
-          ...configuredPartitions,
-          { pattern: 'emits the canonical 60-frame Dawn roster receipt', count: 1 },
-        ]
-      : configuredPartitions;
+  const transmissionSmoke = kind === 'transmission' && env.FORGEAX_DAWN_ROSTER_SMOKE === '1';
+  const roster = transmissionSmoke
+    ? selectTransmissionSmokeOwner(configuredPartitions)
+    : configuredPartitions;
+  if (smokeOwner !== undefined && !transmissionSmoke)
+    throw new Error('Smoke owner requires the complete transmission declaration');
+  const partitions = transmissionSmoke
+    ? selectTransmissionSmokeOwner(configuredPartitions, smokeOwner)
+    : roster;
   const group = DAWN_ISOLATED_GROUPS.find((candidate) => candidate.id === kind);
   if (!partitions || !group || group.files.length !== 1)
     throw new Error(`unknown dawn-partitions group: ${kind}`);
   const temporary = mkdtempSync(join(tmpdir(), 'forgeax-dawn-partitions-'));
   const covered = new Set();
-  let total = 0;
+  const total = partitions.reduce((sum, partition) => sum + partition.count, 0);
   try {
     for (const [index, partition] of partitions.entries()) {
       const reportPath = join(temporary, `${index}.json`);
@@ -148,12 +179,13 @@ export async function runDawnPartitions(kind, { env = process.env } = {}) {
           // process enough additional time to import and close normally.
           timeoutMs: 6 * 60_000,
           label: `${kind} ${partition.pattern}`,
+          gpuLease: true,
         },
       );
       if (result.status !== 0) return result.status;
-      total = validateDawnPartitionReport(
+      validateDawnPartitionReport(
         JSON.parse(readFileSync(reportPath, 'utf8')),
-        partitions,
+        roster,
         partition,
         covered,
       );

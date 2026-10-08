@@ -27,5 +27,3 @@ export function createStandardClusterLayout(
     lightBoundsInt32Length: MAX_LIGHTS * 6,
   });
 }
-
-export const STANDARD_CLUSTER_LAYOUT = createStandardClusterLayout();

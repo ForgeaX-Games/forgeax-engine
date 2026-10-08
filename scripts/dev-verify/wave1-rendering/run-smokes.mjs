@@ -108,14 +108,6 @@ function buildPlan({ roster, resolved, rosterPath }) {
   const independentNonFrameReceipt = independent.filter(
     (entry) => entry.oracle.kind !== 'frameReceipt',
   );
-  if (shardedFrameReceiptEntries.length !== shardedEntries.length) {
-    throw new Error(
-      `sharded roster contains non-frameReceipt gates: ${sharded
-        .filter((entry) => entry.oracle.kind !== 'frameReceipt')
-        .map((entry) => entry.gateId)
-        .join(', ')}`,
-    );
-  }
   const excluded = resolved.exclusions.map((entry) => ({
     ...entry,
     gates: entry.gates.map((gate) => ({
@@ -158,7 +150,24 @@ function buildPlan({ roster, resolved, rosterPath }) {
     independentNonFrameReceipt,
     excluded,
   };
-  return { plan, shardedEntries, independentFrameReceiptEntries };
+  return { plan, independentFrameReceiptEntries };
+}
+
+// The shard aggregate and independent producer own receipt validation. A
+// passing assertion is execution evidence, but contributes no frame receipt.
+export function summarizeSmokeCoverage(plan, aggregate, independentResults) {
+  return {
+    expectedFrameReceiptGates: plan.counts.runnableFrameReceipt,
+    observedFrameReceiptGates: [
+      ...(aggregate?.runnableResults ?? []),
+      ...independentResults,
+    ].filter((result) => result.status === 'pass' && result.receipt != null).length,
+    shardedFrameReceiptGates: plan.sharded.filter((entry) => entry.oracle.kind === 'frameReceipt')
+      .length,
+    independentFrameReceiptGates: plan.counts.independentFrameReceipt,
+    independentNonFrameReceiptGates: plan.counts.independentNonFrameReceipt,
+    excludedFrameReceiptGates: plan.counts.excludedFrameReceipt,
+  };
 }
 
 function runCommand(command, env, timeoutMs) {
@@ -323,7 +332,7 @@ function printPlan(plan, outputPath) {
 }
 
 async function execute(options, context) {
-  const { plan, shardedEntries, independentFrameReceiptEntries } = context;
+  const { plan, independentFrameReceiptEntries } = context;
   const expectedProductSha = options.expectedProductSha;
   if (!/^[0-9a-f]{40}$/.test(expectedProductSha ?? ''))
     throw new Error(
@@ -407,16 +416,7 @@ async function execute(options, context) {
     rosterDigest: plan.rosterDigest,
     framesExpected: SMOKE_MIN_FRAMES,
     shardCount: SHARD_COUNT,
-    coverage: {
-      expectedFrameReceiptGates: plan.counts.runnableFrameReceipt,
-      observedFrameReceiptGates:
-        independentResults.filter((result) => result.status === 'pass').length +
-        (aggregate?.runnableResults?.filter((result) => result.status === 'pass').length ?? 0),
-      shardedFrameReceiptGates: shardedEntries.length,
-      independentFrameReceiptGates: independentFrameReceiptEntries.length,
-      independentNonFrameReceiptGates: plan.counts.independentNonFrameReceipt,
-      excludedFrameReceiptGates: plan.counts.excludedFrameReceipt,
-    },
+    coverage: summarizeSmokeCoverage(plan, aggregate, independentResults),
     shards: shardReports.map(({ report, ...entry }) => entry),
     aggregate: {
       path: relative(root, resolve(options.outputDirectory, 'aggregate.json')),

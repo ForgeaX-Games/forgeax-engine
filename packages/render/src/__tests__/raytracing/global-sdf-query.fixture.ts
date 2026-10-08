@@ -35,7 +35,11 @@ export async function verifyGlobalSdfQuery(
   };
   const source = {
     ...sdfCubeInstance,
-    field: { ...fixture.field, values: Float32Array.from(fixture.field.values) },
+    field: {
+      ...fixture.field,
+      bricks: Uint32Array.from(fixture.field.bricks),
+      values: Float32Array.from(fixture.field.values),
+    },
   };
   const compositions: GlobalSdfComposition[] = [];
   const ray = (

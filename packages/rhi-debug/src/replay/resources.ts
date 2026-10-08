@@ -1,6 +1,7 @@
 import type {
   BindGroup,
   BindGroupLayout,
+  Blas,
   Buffer,
   CommandBuffer,
   ComputePipeline,
@@ -10,15 +11,16 @@ import type {
   RhiCommandEncoder,
   RhiComputePassEncoder,
   RhiDevice,
+  RhiError,
   RhiRenderPassEncoder,
   Sampler,
   ShaderModule,
   Texture,
   TextureView,
+  Tlas,
 } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
-import type { ResourceKind } from '../protocol/types';
 
 export type ReplayResource = {
   readonly role?: string;
@@ -26,6 +28,8 @@ export type ReplayResource = {
   | { readonly kind: 'buffer'; readonly value: Buffer }
   | { readonly kind: 'texture'; readonly value: Texture }
   | { readonly kind: 'query-set'; readonly value: QuerySet }
+  | { readonly kind: 'acceleration-structure'; readonly role: 'blas'; readonly value: Blas }
+  | { readonly kind: 'acceleration-structure'; readonly role: 'tlas'; readonly value: Tlas }
   | { readonly kind: 'texture-view'; readonly value: TextureView }
   | { readonly kind: 'sampler'; readonly value: Sampler }
   | { readonly kind: 'shader-module'; readonly value: ShaderModule }
@@ -49,6 +53,32 @@ export type ReplayResource = {
         | CommandBuffer;
     }
 );
+
+/** Destroys the GPU object a resource owns; `undefined` for kinds the device never destroys. */
+export function destroyReplayResource(
+  device: RhiDevice,
+  resource: ReplayResource,
+): Result<void, RhiError> | undefined {
+  switch (resource.kind) {
+    case 'buffer':
+      return device.destroyBuffer(resource.value);
+    case 'texture':
+      return device.destroyTexture(resource.value);
+    case 'query-set':
+      return device.destroyQuerySet(resource.value);
+    case 'acceleration-structure':
+      return resource.role === 'blas'
+        ? device.destroyBlas(resource.value)
+        : device.destroyTlas(resource.value);
+    case 'texture-view':
+    case 'sampler':
+    case 'shader-module':
+    case 'pipeline':
+    case 'binding':
+    case 'encoder':
+      return undefined;
+  }
+}
 
 export interface ResourceTableEntry {
   readonly resourceId: string;
@@ -107,38 +137,32 @@ export class ResourceTable {
     return this.entries.values();
   }
 
-  reset(): Result<void, RhiDebugError> {
-    const result = this.releaseAll();
+  /** Start a new generation; `retained` entries are immutable and keep their GPU objects. */
+  reset(retained: ReadonlySet<string> = new Set()): Result<void, RhiDebugError> {
+    const result = this.release((entry) => !retained.has(entry.resourceId));
     if (!result.ok) return result;
-    this.entries.clear();
+    for (const resourceId of [...this.entries.keys()]) {
+      if (!retained.has(resourceId)) this.entries.delete(resourceId);
+    }
     this.currentGeneration += 1;
     return ok(undefined);
   }
 
   dispose(): Result<void, RhiDebugError> {
     if (this.disposed) return ok(undefined);
-    const result = this.releaseAll();
+    const result = this.release(() => true);
     this.entries.clear();
     this.disposed = true;
     return result;
   }
 
-  private releaseAll(): Result<void, RhiDebugError> {
+  private release(selected: (entry: ResourceTableEntry) => boolean): Result<void, RhiDebugError> {
     let firstFailure: Result<never, RhiDebugError> | undefined;
     for (const entry of this.entries.values()) {
-      if (entry.resource.kind === 'buffer') {
-        const result = this.device.destroyBuffer(entry.resource.value);
-        if (!result.ok && firstFailure === undefined)
-          firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
-      } else if (entry.resource.kind === 'texture') {
-        const result = this.device.destroyTexture(entry.resource.value);
-        if (!result.ok && firstFailure === undefined)
-          firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
-      } else if (entry.resource.kind === 'query-set') {
-        const result = this.device.destroyQuerySet(entry.resource.value);
-        if (!result.ok && firstFailure === undefined)
-          firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
-      }
+      if (!selected(entry)) continue;
+      const result = destroyReplayResource(this.device, entry.resource);
+      if (result !== undefined && !result.ok && firstFailure === undefined)
+        firstFailure = resourceDisposeFailure(entry.resourceId, result.error.code);
     }
     return firstFailure ?? ok(undefined);
   }
@@ -153,8 +177,4 @@ function resourceDisposeFailure(resourceId: string, cause: string): Result<never
       cause,
     }),
   );
-}
-
-export function isResourceKind(resource: ReplayResource, kind: ResourceKind): boolean {
-  return resource.kind === kind;
 }

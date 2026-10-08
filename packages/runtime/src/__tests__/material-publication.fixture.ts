@@ -2,6 +2,7 @@ import { RuntimeMaterialValue } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBoxGeometry } from '@forgeax/engine-geometry';
 import { AssetGuid } from '@forgeax/engine-pack';
+import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
 import { Camera, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { attachRecorder, buildFrameModel, decodeTape } from '@forgeax/engine-rhi-debug';
 import { Transform } from '@forgeax/engine-scene';
@@ -174,33 +175,26 @@ export async function verifyMaterialPublication(options: {
     const pack = await (await fetch(packUrl)).json();
     const row = pack.assets.find((asset: { guid: string }) => asset.guid === firstGuid);
     const descriptors = Object.values(row.artifacts) as { path: string; byteLength: number }[];
-    const cooked = (
+    expect(pack).toMatchObject({
+      scopeId: options.binding.scopeId,
+      generation: baselinePublication.generation,
+      digest: baselinePublication.digest,
+      outputSetDigest: baselinePublication.outputSetDigest,
+    });
+    const wire = (
       row.payload as {
         cooked: {
           programs: readonly {
-            specializationKey: string;
-            artifact: { path: string };
+            artifact: { path: string; digest: string; bytes?: unknown };
           }[];
         };
       }
     ).cooked;
-    // Material publication is a complete multi-program set: each compiled pass
-    // owns one independently addressable raw WGSL artifact.
-    expect(cooked.programs).toHaveLength(3);
-    expect(descriptors).toHaveLength(cooked.programs.length);
-    const publishedSources = new Map<string, string>();
-    for (const descriptor of descriptors) {
-      const program = cooked.programs.find(
-        (candidate) =>
-          descriptor.path === candidate.artifact.path ||
-          descriptor.path.endsWith(`/${candidate.artifact.path}`),
-      );
-      if (program === undefined) throw new Error(`missing program for ${descriptor.path}`);
-      const response = await fetch(new URL(descriptor.path, packUrl));
-      expect(response.status).toBe(200);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      expect(bytes.byteLength).toBe(descriptor.byteLength);
-      publishedSources.set(program.specializationKey, new TextDecoder().decode(bytes));
+    for (const program of wire.programs) {
+      expect(program.artifact).not.toHaveProperty('bytes');
+      expect(row.artifacts[program.artifact.path]).toMatchObject({
+        integrity: { digest: program.artifact.digest },
+      });
     }
     const load = async (guid: string) => {
       const parsed = AssetGuid.parse(guid);
@@ -210,6 +204,45 @@ export async function verifyMaterialPublication(options: {
       return loaded.value;
     };
     const first = await load(firstGuid);
+    const readiness = assets.getMaterialReadiness(firstGuid);
+    expect(readiness, inspect(readiness)).toMatchObject({ status: 'Ready' });
+    if (readiness?.status !== 'Ready') throw new Error(inspect(readiness));
+    const cooked = validateCookedMaterialRecord(readiness.record).unwrap();
+    // Each View layout selects three independent passes; identical WGSL bytes
+    // retain one content-addressed transport artifact across those layouts.
+    expect(cooked.programs).toHaveLength(6);
+    for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+      const programs = cooked.programs.filter((program) =>
+        program.selections.some((selection) => selection.context.capability === capability),
+      );
+      expect(programs).toHaveLength(3);
+      expect(
+        new Set(
+          programs.flatMap((program) => program.selections.map((selection) => selection.pass)),
+        ),
+      ).toEqual(new Set(['Forward', 'Overlay', 'ShadowCaster']));
+    }
+    expect(descriptors).toHaveLength(3);
+    expect(new Set(cooked.programs.map((program) => program.artifact.path)).size).toBe(
+      descriptors.length,
+    );
+    const publishedSources = new Map<string, string>();
+    for (const descriptor of descriptors) {
+      const programs = cooked.programs.filter(
+        (candidate) =>
+          descriptor.path === candidate.artifact.path ||
+          descriptor.path.endsWith(`/${candidate.artifact.path}`),
+      );
+      if (programs.length === 0) throw new Error(`missing program for ${descriptor.path}`);
+      const response = await fetch(new URL(descriptor.path, packUrl));
+      expect(response.status).toBe(200);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      expect(bytes.byteLength).toBe(descriptor.byteLength);
+      for (const program of programs) {
+        expect(program.artifact.bytes).toEqual(bytes);
+        publishedSources.set(program.specializationKey, new TextDecoder().decode(bytes));
+      }
+    }
     const inherited = await load(childGuid);
     const other = await load(otherGuid);
     const firstProjection = assets.getMaterialProjectionForPayload(first);

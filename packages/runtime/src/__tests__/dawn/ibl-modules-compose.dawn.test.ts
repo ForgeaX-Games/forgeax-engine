@@ -68,7 +68,11 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         '  return vec4<f32>(h, 0.0, 1.0);',
         '}',
       ].join('\n');
-      const composed = await composeShader(entry, { 'forgeax_pbr::ibl_shared': shared }, {});
+      const composed = await composeShader(
+        entry,
+        { 'forgeax_pbr::ibl_shared': shared, 'forgeax_pbr::brdf': readSourceSync('brdf.wgsl') },
+        {},
+      );
       expect(composed).toContain('hammersley');
       const parsed = await parse(composed);
       expect(parsed).not.toBeNull();
@@ -97,6 +101,7 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         entry,
         {
           'forgeax_pbr::ibl_shared': shared,
+          'forgeax_pbr::brdf': readSourceSync('brdf.wgsl'),
           'forgeax_pbr::ibl_irradiance': irradiance,
         },
         {},
@@ -125,6 +130,7 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         entry,
         {
           'forgeax_pbr::ibl_shared': shared,
+          'forgeax_pbr::brdf': readSourceSync('brdf.wgsl'),
           'forgeax_pbr::ibl_prefilter': prefilter,
         },
         {},
@@ -157,6 +163,7 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         entry,
         {
           'forgeax_pbr::ibl_shared': shared,
+          'forgeax_pbr::brdf': readSourceSync('brdf.wgsl'),
           'forgeax_pbr::ibl_sampling': sampling,
         },
         {},
@@ -185,6 +192,7 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         entry,
         {
           'forgeax_pbr::ibl_shared': shared,
+          'forgeax_pbr::brdf': readSourceSync('brdf.wgsl'),
           'forgeax_pbr::ibl_brdf_lut': brdfLut,
         },
         {},
@@ -212,6 +220,7 @@ describe('t41 (b) -- 6-module ibl-* family naga_oil composition', () => {
         entry,
         {
           'forgeax_pbr::ibl_shared': shared,
+          'forgeax_pbr::brdf': readSourceSync('brdf.wgsl'),
           'forgeax_pbr::ibl_equirect_to_cube': equirect,
         },
         {},

@@ -2,10 +2,11 @@
 
 /// <reference types="@webgpu/types" />
 
-import type { Result, RhiDevice } from '@forgeax/engine-rhi';
+import type { Result } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
 import { digestBytesAsync } from '../protocol/codec';
+import { EVENT_SEMANTICS } from '../protocol/event-semantics';
 import {
   readbackBufferBytes,
   readbackBufferBytesBatch,
@@ -14,12 +15,7 @@ import {
 } from '../readback';
 import { computeTextureLayout, projectTextureExtent } from '../texel-layout';
 import type { HandleId, RhiCallEvent, Tape } from '../types';
-import {
-  _collectFrameReferencedHandleIds,
-  _computeClosure,
-  _getCreateEventReferencedHandleIds,
-  _topoSortClosure,
-} from './closure';
+import { _collectFrameReferencedHandleIds, _computeClosure, _topoSortClosure } from './closure';
 import {
   isMappableBuffer,
   isSnapshottableTexture,
@@ -27,15 +23,24 @@ import {
   type RecorderInternal,
   RecorderState,
   reconcileSwapchainViewFormats,
+  recorderDeviceIdentity,
   SNAPSHOT_RESOURCE_BATCH_SIZE,
   SNAPSHOT_STAGING_BYTES,
   SNAPSHOT_TIMEOUT_MS,
+  type SnapshotProgress,
   snapshotProgressDetail,
   snapshotResourceBytes,
   snapshotStageOf,
   snapshotTimeoutDetail,
   TAPE_FORMAT_VERSION,
 } from './core';
+import { flushDeferredAccelerationStructureBuilds } from './encoder';
+
+const NO_CURRENT_RESOURCE = {
+  currentHandleId: null,
+  currentKind: null,
+  currentSizeBytes: null,
+} as const satisfies Partial<SnapshotProgress>;
 
 export function createRecorderLifecycle(s: RecorderInternal) {
   async function storeSnapshotBlob(bytes: ArrayBuffer, isCurrent: () => boolean) {
@@ -51,8 +56,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     if (
       s.state === RecorderState.Armed ||
       s.state === RecorderState.Snapshotting ||
-      s.state === RecorderState.Recording ||
-      s.state === RecorderState.Finalizing
+      s.state === RecorderState.Recording
     ) {
       return makeErr(
         createRhiDebugError('capture-busy', {
@@ -70,6 +74,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       );
     }
 
+    flushDeferredAccelerationStructureBuilds(s);
     s.state = RecorderState.Armed;
     // A previous bounded snapshot may still be unwinding after its timeout.
     // Its generation fence prevents stale cleanup from touching this capture;
@@ -81,6 +86,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     s.events = [];
     s.blobPool = new Map();
     s.snapshotSeededHandles.clear();
+    s.omittedSeeds = new Set();
     s.snapshotProgress = undefined;
     s.frameIdx = 0;
     s.bootstrap = true;
@@ -89,6 +95,11 @@ export function createRecorderLifecycle(s: RecorderInternal) {
   }
 
   function onFrameEnd(): void {
+    if (s.frameEndReleases.length > 0) {
+      const releases = s.frameEndReleases;
+      s.frameEndReleases = [];
+      for (const release of releases) release();
+    }
     if (s.state === RecorderState.Idle) {
       s.frameIdx++;
       s.bootstrap = false;
@@ -98,10 +109,10 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     // Snapshotting = the async frame-header snapshot loop is mid-flight. Its
     // readbacks await between resources, so the host rAF loop CAN fire
     // onFrameEnd while the loop is still pushing initialData events. If we let
-    // that tick advance the state machine (Recording -> frameMark -> Finalizing
-    // -> Idle), the still-running snapshot loop's later pushEvent() calls hit
-    // the Idle gate and are silently dropped -- the exact race that lost every
-    // texture initialData (material default textures all-zero -> black cube).
+    // that tick advance the state machine (Recording -> frameMark -> Idle),
+    // the still-running snapshot loop's later pushEvent() calls hit the Idle
+    // gate and are silently dropped -- the exact race that lost every texture
+    // initialData (material default textures all-zero -> black cube).
     // Ignore the tick entirely: snapshotAllLiveResources() sets Recording when
     // it completes, and the NEXT onFrameEnd records the real frame.
     if (s.state === RecorderState.Snapshotting) {
@@ -123,18 +134,11 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       s.recordedFrames++;
       s.frameIdx++;
 
-      if (s.recordedFrames >= s.requestedFrames) {
-        s.state = RecorderState.Finalizing;
-        if (s.onFrameEndUnsubscribe) {
-          s.onFrameEndUnsubscribe();
-          s.onFrameEndUnsubscribe = undefined;
-        }
-        s.state = RecorderState.Idle;
-      }
+      if (s.recordedFrames >= s.requestedFrames) s.state = RecorderState.Idle;
       return;
     }
 
-    // finalizing or error: no-op
+    // error: no-op
     s.frameIdx++;
   }
 
@@ -150,7 +154,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     // during the recorded frame and their create event is in s.events.
     // Collect handleIds that are directly declared by create* events in s.events.
     // Only include the handleId field of the create event itself — NOT backward-refs
-    // (layoutHandleId, resourceHandleIds, etc.) from _getCreateEventReferencedHandleIds.
+    // (layoutHandleId, resourceHandleIds, etc.) from EVENT_SEMANTICS read edges.
     //
     // Backward-refs from in-frame create events often point to persistent resources
     // (buffers, textures, pipelines) that were created before arm(). Including them
@@ -163,38 +167,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     // bootstrapCreates and s.events.
     const inFrameHandleIds = new Set<HandleId>();
     for (const e of s.events) {
-      // create* events declare handleId (or resultHandleId for createTextureView).
-      if (
-        e.kind.startsWith('create') &&
-        'handleId' in e &&
-        typeof (e as { handleId: unknown }).handleId === 'string'
-      ) {
-        inFrameHandleIds.add((e as { handleId: HandleId }).handleId);
-      }
-      // createTextureView declares the result via resultHandleId.
-      if (
-        e.kind === 'createTextureView' &&
-        'resultHandleId' in e &&
-        typeof (e as { resultHandleId: unknown }).resultHandleId === 'string'
-      ) {
-        inFrameHandleIds.add((e as { resultHandleId: HandleId }).resultHandleId);
-      }
-      // createCommandEncoder declares the cmd via cmdHandleId.
-      if (
-        e.kind === 'createCommandEncoder' &&
-        'cmdHandleId' in e &&
-        typeof (e as { cmdHandleId: unknown }).cmdHandleId === 'string'
-      ) {
-        inFrameHandleIds.add((e as { cmdHandleId: HandleId }).cmdHandleId);
-      }
-      // beginRenderPass / beginComputePass declare passHandleId.
-      if (
-        (e.kind === 'beginRenderPass' || e.kind === 'beginComputePass') &&
-        'passHandleId' in e &&
-        typeof (e as { passHandleId: unknown }).passHandleId === 'string'
-      ) {
-        inFrameHandleIds.add((e as { passHandleId: HandleId }).passHandleId);
-      }
+      for (const handleId of EVENT_SEMANTICS[e.kind].created(e)) inFrameHandleIds.add(handleId);
     }
 
     // Collect frame-referenced handleIds from per-frame events.
@@ -228,7 +201,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       const referencingEventKind =
         referencingEventIndex >= 0 ? s.events[referencingEventIndex]?.kind : undefined;
       const referencingCreate = [...s.bootstrapCreates.entries()].find(([, event]) =>
-        _getCreateEventReferencedHandleIds(event).includes(missing),
+        EVENT_SEMANTICS[event.kind].read(event).includes(missing),
       );
       return createRhiDebugError('tape-invalid', {
         stage: 'validate',
@@ -251,15 +224,19 @@ export function createRecorderLifecycle(s: RecorderInternal) {
 
     return {
       formatVersion: TAPE_FORMAT_VERSION,
-      rhiCapsRecorded: s.recordedCaps ?? {
-        canvasFormat: 'bgra8unorm' as GPUTextureFormat,
-        rgba16floatRenderable: false,
-        float32Filterable: false,
-        textureCompressionBc: false,
-        textureCompressionEtc2: false,
-        textureCompressionAstc: false,
-        storageBuffer: false,
-        timestampQuery: false,
+      rhiCapsRecorded: {
+        ...(s.recordedCaps ?? {
+          canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+          canvasColorSpace: 'srgb' as const,
+          rgba16floatRenderable: false,
+          float32Filterable: false,
+          textureCompressionBc: false,
+          textureCompressionEtc2: false,
+          textureCompressionAstc: false,
+          storageBuffer: false,
+          timestampQuery: false,
+        }),
+        ...s.canvasConfiguration,
       },
       events: [...dedupedPrefx, ...s.events],
       blobPool: s.blobPool,
@@ -286,11 +263,13 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       s.snapshotGeneration += 1;
       s._skipRecord = false;
       s.valid = false;
-      if (s.onFrameEndUnsubscribe) {
-        s.onFrameEndUnsubscribe();
-        s.onFrameEndUnsubscribe = undefined;
-      }
     }
+  }
+
+  function releaseTape(): void {
+    if (s.state !== RecorderState.Idle) return;
+    s.events = [];
+    s.blobPool = new Map();
   }
 
   function disposeError(): void {
@@ -364,7 +343,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     // through it. The proxy device would re-record those calls were it not for
     // the _skipRecord guard below; using the real device sidesteps the proxy
     // entirely for the readback staging buffer.
-    const realDevice = (device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device;
+    const realDevice = recorderDeviceIdentity(device) ?? device;
     const snapshotIsActive = () =>
       snapshotGeneration === undefined ||
       (s.state === RecorderState.Snapshotting && s.snapshotGeneration === snapshotGeneration);
@@ -483,6 +462,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
    */
   async function snapshotAllLiveResources(
     timeoutMs = SNAPSHOT_TIMEOUT_MS,
+    maxResourceBytes = Number.POSITIVE_INFINITY,
   ): Promise<Result<void, RhiDebugError>> {
     if (s.state !== RecorderState.Armed && s.state !== RecorderState.Snapshotting) {
       return makeErr(
@@ -512,7 +492,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
 
     try {
       const result = await Promise.race([
-        runSnapshotAllLiveResources(snapshotGeneration),
+        runSnapshotAllLiveResources(snapshotGeneration, maxResourceBytes),
         timeoutResult,
       ]);
       if (
@@ -543,8 +523,40 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     }
   }
 
+  // Snapshot progress transitions. A reset (arm / disposeError / device loss)
+  // clears the record; a run still unwinding must not resurrect it.
+  function advanceProgress(next: (progress: SnapshotProgress) => Partial<SnapshotProgress>): void {
+    if (s.snapshotProgress !== undefined)
+      s.snapshotProgress = { ...s.snapshotProgress, ...next(s.snapshotProgress) };
+  }
+  function startProgressResource(
+    handleId: HandleId,
+    kind: 'buffer' | 'texture',
+    sizeBytes: number | null,
+  ): void {
+    advanceProgress(() => ({
+      stage: 'resource-readback',
+      currentHandleId: handleId,
+      currentKind: kind,
+      currentSizeBytes: sizeBytes,
+    }));
+  }
+  function completeProgressResource(): void {
+    advanceProgress((progress) => ({
+      completedResources: progress.completedResources + 1,
+      ...NO_CURRENT_RESOURCE,
+    }));
+  }
+  function skipProgressResource(): void {
+    advanceProgress((progress) => ({
+      skippedResources: progress.skippedResources + 1,
+      ...NO_CURRENT_RESOURCE,
+    }));
+  }
+
   async function runSnapshotAllLiveResources(
     snapshotGeneration: number,
+    maxResourceBytes: number,
   ): Promise<Result<void, RhiDebugError>> {
     s.snapshotProgress = {
       startedAt: Date.now(),
@@ -552,18 +564,14 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       totalResources: s.descriptorTable.size,
       completedResources: 0,
       skippedResources: 0,
-      currentHandleId: null,
-      currentKind: null,
-      currentSizeBytes: null,
+      ...NO_CURRENT_RESOURCE,
     };
 
     // C-3 conservative timing: drain queued work so snapshots read frame-outside
     // / historical content, never a half-written in-frame value (A-2).
     const device = s.capturedDevice;
     const realDevice =
-      device === undefined
-        ? undefined
-        : ((device as RhiDevice & { _realDevice?: RhiDevice })._realDevice ?? device);
+      device === undefined ? undefined : (recorderDeviceIdentity(device) ?? device);
     if (realDevice !== undefined) {
       const prevSkip = s._skipRecord;
       s._skipRecord = true;
@@ -572,9 +580,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
       } finally {
         if (s.snapshotGeneration === snapshotGeneration) s._skipRecord = prevSkip;
       }
-      if (s.snapshotProgress !== undefined) {
-        s.snapshotProgress = { ...s.snapshotProgress, stage: 'resource-readback' };
-      }
+      advanceProgress(() => ({ stage: 'resource-readback' }));
       if (s.state !== RecorderState.Snapshotting || s.snapshotGeneration !== snapshotGeneration) {
         return makeErr(
           createRhiDebugError('capture-snapshot-failed', {
@@ -586,15 +592,10 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     }
 
     const liveEntries = [...s.descriptorTable.entries()];
-    const candidates = liveEntries.filter(([, entry]) => {
+    const candidates = liveEntries.filter(([handleId, entry]) => {
       // Mappable buffers are staging scratch, not seedable authored resources.
       if (entry.kind === 'buffer' && isMappableBuffer(entry.usage)) {
-        if (s.snapshotProgress !== undefined) {
-          s.snapshotProgress = {
-            ...s.snapshotProgress,
-            skippedResources: s.snapshotProgress.skippedResources + 1,
-          };
-        }
+        skipProgressResource();
         return false;
       }
       // Only formats with an exact snapshot and restore path may be seeded.
@@ -602,6 +603,11 @@ export function createRecorderLifecycle(s: RecorderInternal) {
         entry.kind === 'texture' &&
         !isSnapshottableTexture(entry.format, entry.size, entry.sampleCount)
       ) {
+        skipProgressResource();
+        return false;
+      }
+      if (snapshotResourceBytes(entry).payload > maxResourceBytes) {
+        s.omittedSeeds.add(handleId);
         if (s.snapshotProgress !== undefined) {
           s.snapshotProgress = {
             ...s.snapshotProgress,
@@ -627,27 +633,14 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     // it serial and deterministic rather than manufacturing a batch surface.
     if (realDevice === undefined) {
       for (const [handleId, entry] of candidates) {
-        if (s.snapshotProgress !== undefined) {
-          s.snapshotProgress = {
-            ...s.snapshotProgress,
-            stage: 'resource-readback',
-            currentHandleId: handleId,
-            currentKind: entry.kind,
-            currentSizeBytes:
-              entry.kind === 'buffer' && typeof entry.size === 'number' ? entry.size : null,
-          };
-        }
+        startProgressResource(
+          handleId,
+          entry.kind,
+          entry.kind === 'buffer' && typeof entry.size === 'number' ? entry.size : null,
+        );
         const result = await snapshotResource(handleId, snapshotGeneration);
         if (!result.ok) return result;
-        if (s.snapshotProgress !== undefined) {
-          s.snapshotProgress = {
-            ...s.snapshotProgress,
-            completedResources: s.snapshotProgress.completedResources + 1,
-            currentHandleId: null,
-            currentKind: null,
-            currentSizeBytes: null,
-          };
-        }
+        completeProgressResource();
       }
     } else {
       let offset = 0;
@@ -672,29 +665,23 @@ export function createRecorderLifecycle(s: RecorderInternal) {
               if (batchEntries.length > 0 && stagingBytes + bytes > SNAPSHOT_STAGING_BYTES) break;
               batchEntries.push(candidate);
               stagingBytes += bytes;
-            } else if (s.snapshotProgress !== undefined) {
-              s.snapshotProgress = {
-                ...s.snapshotProgress,
-                skippedResources: s.snapshotProgress.skippedResources + 1,
-              };
+            } else {
+              skipProgressResource();
             }
           }
           offset += 1;
         }
         if (batchEntries.length === 0) continue;
 
-        if (s.snapshotProgress !== undefined) {
-          s.snapshotProgress = {
-            ...s.snapshotProgress,
-            stage: 'resource-readback',
-            currentHandleId: batchEntries[0]?.[0] ?? null,
-            currentKind: kind,
-            currentSizeBytes:
-              kind === 'buffer' && typeof batchEntries[0]?.[1].size === 'number'
-                ? batchEntries[0][1].size
-                : null,
-          };
-        }
+        advanceProgress(() => ({
+          stage: 'resource-readback',
+          currentHandleId: batchEntries[0]?.[0] ?? null,
+          currentKind: kind,
+          currentSizeBytes:
+            kind === 'buffer' && typeof batchEntries[0]?.[1].size === 'number'
+              ? batchEntries[0][1].size
+              : null,
+        }));
 
         if (kind === 'buffer') {
           const batch = await readbackBufferBytesBatch(
@@ -707,26 +694,14 @@ export function createRecorderLifecycle(s: RecorderInternal) {
             {
               onResourceStart: (handleId) => {
                 const entry = s.descriptorTable.get(handleId);
-                if (s.snapshotProgress !== undefined && entry !== undefined) {
-                  s.snapshotProgress = {
-                    ...s.snapshotProgress,
-                    currentHandleId: handleId,
-                    currentKind: 'buffer',
-                    currentSizeBytes: typeof entry.size === 'number' ? entry.size : null,
-                  };
-                }
+                if (entry !== undefined)
+                  startProgressResource(
+                    handleId,
+                    'buffer',
+                    typeof entry.size === 'number' ? entry.size : null,
+                  );
               },
-              onResourceComplete: () => {
-                if (s.snapshotProgress !== undefined) {
-                  s.snapshotProgress = {
-                    ...s.snapshotProgress,
-                    completedResources: s.snapshotProgress.completedResources + 1,
-                    currentHandleId: null,
-                    currentKind: null,
-                    currentSizeBytes: null,
-                  };
-                }
-              },
+              onResourceComplete: completeProgressResource,
               isCancelled: () => !snapshotIsActive(),
             },
           );
@@ -774,16 +749,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
             };
           });
           const batch = await readbackTexturePixelsBatch(realDevice, requests, {
-            onResourceStart: (handleId) => {
-              if (s.snapshotProgress !== undefined) {
-                s.snapshotProgress = {
-                  ...s.snapshotProgress,
-                  currentHandleId: handleId,
-                  currentKind: 'texture',
-                  currentSizeBytes: null,
-                };
-              }
-            },
+            onResourceStart: (handleId) => startProgressResource(handleId, 'texture', null),
             isCancelled: () => !snapshotIsActive(),
           });
           if (!batch.ok) return batch;
@@ -794,15 +760,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
             // but the released handle must not become a seed for the next
             // frame. Buffers retain the historical batch behavior above.
             if (!s.descriptorTable.has(handleId)) {
-              if (s.snapshotProgress !== undefined) {
-                s.snapshotProgress = {
-                  ...s.snapshotProgress,
-                  skippedResources: s.snapshotProgress.skippedResources + 1,
-                  currentHandleId: null,
-                  currentKind: null,
-                  currentSizeBytes: null,
-                };
-              }
+              skipProgressResource();
               continue;
             }
             const bytes = batch.value.get(handleId);
@@ -820,29 +778,14 @@ export function createRecorderLifecycle(s: RecorderInternal) {
             if (dataHash === undefined) return cancelledResult();
             pushSnapshotEvent(s, { kind: 'initialData', handleId, dataHash });
             s.snapshotSeededHandles.add(handleId);
-            if (s.snapshotProgress !== undefined) {
-              s.snapshotProgress = {
-                ...s.snapshotProgress,
-                completedResources: s.snapshotProgress.completedResources + 1,
-                currentHandleId: null,
-                currentKind: null,
-                currentSizeBytes: null,
-              };
-            }
+            completeProgressResource();
           }
         }
         if (!snapshotIsActive()) return cancelledResult();
       }
     }
 
-    if (s.snapshotProgress !== undefined) {
-      s.snapshotProgress = {
-        ...s.snapshotProgress,
-        currentHandleId: null,
-        currentKind: null,
-        currentSizeBytes: null,
-      };
-    }
+    advanceProgress(() => NO_CURRENT_RESOURCE);
 
     if (s.state !== RecorderState.Snapshotting || s.snapshotGeneration !== snapshotGeneration) {
       return makeErr(
@@ -869,6 +812,7 @@ export function createRecorderLifecycle(s: RecorderInternal) {
     getBlobPool,
     transitionToError,
     disposeError,
+    releaseTape,
     snapshotResource,
     snapshotAllLiveResources,
   };

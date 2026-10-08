@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright';
+import browserLaunch from '../../../../scripts/ci/browser-launch.json' with { type: 'json' };
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..', '..');
 const PORT = Number.parseInt(process.env.FORGEAX_SKYBOX_WEBGL2_PORT ?? '5421', 10);
@@ -47,7 +48,7 @@ if (!serverReady) throw new Error(`Skybox preview did not start: ${serverOutput}
 const launchOptions = {
   headless: true,
   ...(process.env.FORGEAX_CHROMIUM_EXECUTABLE === undefined
-    ? {}
+    ? { channel: process.env.FORGEAX_CHROME_CHANNEL ?? browserLaunch.channel }
     : { executablePath: process.env.FORGEAX_CHROMIUM_EXECUTABLE }),
   args: [
     '--disable-gpu',

@@ -1,6 +1,7 @@
 import {
   deriveVertexLayoutProjectionFromMask,
   type MeshCardLayout,
+  unpackInterleavedVertexAttributes,
   type VertexLayoutProjection,
   validateMeshCardLayout,
 } from '@forgeax/engine-geometry';
@@ -12,8 +13,6 @@ import {
 } from '@forgeax/engine-pack';
 import { err, ok, type Result, type VertexAttributeMap } from '@forgeax/engine-types';
 import { MeshBinAssetError } from '../errors/asset';
-
-const nativeLittleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 export interface UnpackedMeshBin {
   readonly version: 4 | 5;
@@ -59,46 +58,6 @@ function fail(
       ...(actualFacts === undefined ? {} : { actualFacts }),
     }),
   );
-}
-
-function copyAttributes(
-  source: Float32Array,
-  header: MeshBinHeader,
-  projection: VertexLayoutProjection,
-): VertexAttributeMap {
-  const view = new DataView(source.buffer, source.byteOffset, source.byteLength);
-  const attributes: Record<string, Float32Array | Uint16Array> = {};
-  for (const entry of projection.attributes) {
-    const components = entry.byteLength / (entry.format === 'uint16x4' ? 2 : 4);
-    const target =
-      entry.format === 'uint16x4'
-        ? new Uint16Array(header.vertexCount * components)
-        : new Float32Array(header.vertexCount * components);
-    const short = entry.format === 'uint16x4';
-    const width = short ? 2 : 4;
-    if (nativeLittleEndian) {
-      const values = short
-        ? new Uint16Array(source.buffer, source.byteOffset, source.byteLength / 2)
-        : source;
-      const stride = header.stride / width;
-      let targetIndex = 0;
-      for (let base = entry.offset / width; targetIndex < target.length; base += stride) {
-        for (let component = 0; component < components; component++)
-          target[targetIndex++] = values[base + component] as number;
-      }
-    } else {
-      for (let vertex = 0; vertex < header.vertexCount; vertex++) {
-        for (let component = 0; component < components; component++) {
-          const offset = vertex * header.stride + entry.offset + component * width;
-          target[vertex * components + component] = short
-            ? view.getUint16(offset, true)
-            : view.getFloat32(offset, true);
-        }
-      }
-    }
-    attributes[entry.key] = target;
-  }
-  return attributes as VertexAttributeMap;
 }
 
 export function unpackMeshBin(
@@ -359,7 +318,15 @@ export function unpackMeshBin(
     }
     lodHysteresis = meta.lodHysteresis;
   }
-  const attributes = copyAttributes(vertices, header, projection);
+  const attributes = unpackInterleavedVertexAttributes(vertices, projection);
+  if (attributes === undefined)
+    return fail(
+      sourceKey,
+      'whole canonical vertices',
+      'vertex stride mismatch',
+      header,
+      'attribute-invalid',
+    );
   for (const attribute of projection.attributes) {
     const value = attributes[attribute.key];
     if (value === undefined)

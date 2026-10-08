@@ -11,57 +11,41 @@ import {
   Materials,
   MeshFilter,
   MeshRenderer,
-  type Renderer,
-  type RenderInspection,
-  type RenderWorldLease,
   ShadowParticipation,
   VolumetricFog,
 } from '@forgeax/engine-render';
-import { propagateTransforms, scenePlugin, Transform } from '@forgeax/engine-scene';
-import type { TextureAsset } from '@forgeax/engine-types';
+import { scenePlugin, Transform } from '@forgeax/engine-scene';
 import { expect, it } from 'vitest';
-import { page } from 'vitest/browser';
 import {
   createWave1RenderingRecipe,
   WAVE1_ATMOSPHERE_PRESET,
 } from '../../../../scripts/dev-verify/wave1-rendering/recipe';
 import { createRenderer } from '../createRenderer';
+import {
+  attachRenderer,
+  captureFrame,
+  createCanvas,
+  createDensity,
+  DAYLIGHT,
+  FOG_ROI,
+  type FrameSample,
+  MAX_PAUSED_FOG_MEAN_LUMA_DELTA,
+  OUTPUT_HEIGHT,
+  OUTPUT_WIDTH,
+  pixelDelta,
+  type Roi,
+  roiMeanAbsoluteLumaDelta,
+  roiStats,
+  submitFrame,
+} from './solar-atmosphere-calibration.fixture';
 
-interface ScreenshotPixels {
-  readonly width: number;
-  readonly height: number;
-  readonly pixels: Uint8Array;
-}
-
-interface Roi {
-  readonly centerX: number;
-  readonly centerY: number;
-  readonly halfWidth: number;
-  readonly halfHeight: number;
-}
-
-interface RoiStats {
-  readonly finitePixels: number;
-  readonly pixelCount: number;
-  readonly nonBlackPixels: number;
-  readonly meanLuma: number;
-  readonly radialWidth: number;
-}
-
-interface FrameSample {
-  readonly pixels: ScreenshotPixels;
-  readonly inspection: RenderInspection;
-}
-
-const OUTPUT_WIDTH = 256;
-const OUTPUT_HEIGHT = 256;
 const DISC_RADIUS = 0.03;
 // These are fixed screenshot-space tolerances for the 256x256 manual-exposure
 // carrier. They are deliberately directional: a response that merely changes
 // in the wrong direction must fail instead of being treated as calibration.
 const MIN_STRENGTH_LUMA_DELTA = 0.25;
 const MIN_WIDTH_RADIAL_DELTA = 0.0001;
-const DAYLIGHT: readonly [number, number, number] = [0, -0.25, 1];
+
 const LOW_SUN: readonly [number, number, number] = [0, -0.01, 1];
 // This direction is deliberately outside the camera's horizontal viewport.
 // DirectionalLight.direction is the outgoing vector (light -> surface), so
@@ -73,10 +57,10 @@ const SKY_ROIS: Record<'daylight' | 'low-sun', Roi> = {
   'low-sun': { centerX: 0.5, centerY: 0.5, halfWidth: 0.28, halfHeight: 0.2 },
 };
 const HORIZON_ROIS: Record<'daylight' | 'low-sun', Roi> = {
-  daylight: { centerX: 0.5, centerY: 0.7, halfWidth: 0.35, halfHeight: 0.1 },
-  'low-sun': { centerX: 0.5, centerY: 0.64, halfWidth: 0.35, halfHeight: 0.1 },
+  daylight: { centerX: 0.5, centerY: 0.46, halfWidth: 0.35, halfHeight: 0.025 },
+  'low-sun': { centerX: 0.5, centerY: 0.46, halfWidth: 0.35, halfHeight: 0.025 },
 };
-const FOG_ROI: Roi = { centerX: 0.5, centerY: 0.5, halfWidth: 0.24, halfHeight: 0.24 };
+
 // The successor's right-hand box projects into this interior ROI at both the
 // near and far positions below. Keeping the ROI away from the box edge makes
 // the foreground response a depth/composition signal instead of an edge
@@ -95,12 +79,7 @@ const TRANSPARENT_RIGHT_BOX_HALF_EXTENTS: readonly [number, number, number] = [0
 const MAX_TRANSPARENT_FROZEN_NOISE = 2;
 const MIN_TRANSPARENT_FROZEN_SIGNAL = 0.25;
 const TRANSPARENT_FROZEN_SAMPLES = 8;
-const MAX_PAUSED_FOG_MEAN_LUMA_DELTA = 1;
-const MAX_EQUAL_TIME_FOG_MEAN_LUMA_DELTA = 1;
-const MAX_EQUAL_TIME_FOG_PIXEL_LUMA_DELTA = 2;
-// The screenshot is rgba8-quantized; require the different-time response to
-// clear the matched unchanged-time redraw noise by a visible margin.
-const MIN_TIME_SENSITIVITY_FOG_PIXEL_MARGIN = 0.25;
+
 const MAX_CONTROL_BEAM_MEAN_LUMA_DELTA = 1;
 const MIN_ENABLED_BEAM_MEAN_LUMA_DELTA = 2;
 
@@ -219,196 +198,6 @@ function projectSolarDirection(
   };
 }
 
-function createDensity(): TextureAsset {
-  const size = 16;
-  const data = new Uint8Array(size * size * size);
-  for (let z = 0; z < size; z += 1) {
-    for (let y = 0; y < size; y += 1) {
-      for (let x = 0; x < size; x += 1) {
-        const u = (x + 0.5) / size;
-        const v = (z + 0.5) / size;
-        const broad = 0.5 + 0.5 * Math.sin(u * Math.PI * 2) * Math.cos(v * Math.PI * 2);
-        const detail = 0.5 + 0.5 * Math.sin((u + v) * Math.PI * 6);
-        const value = 0.18 + 0.62 * (0.7 * broad + 0.3 * detail);
-        data[(z * size + y) * size + x] = Math.round(value * 255);
-      }
-    }
-  }
-  return {
-    kind: 'texture',
-    shape: { viewDimension: '3d', extent: { width: size, height: size, depth: size } },
-    format: 'r8unorm',
-    colorSpace: 'linear',
-    mips: { kind: 'none' },
-    data,
-  };
-}
-
-function bounds(image: ScreenshotPixels, roi: Roi): readonly [number, number, number, number] {
-  return [
-    Math.max(0, Math.floor((roi.centerX - roi.halfWidth) * image.width)),
-    Math.max(0, Math.floor((roi.centerY - roi.halfHeight) * image.height)),
-    Math.min(image.width, Math.ceil((roi.centerX + roi.halfWidth) * image.width)),
-    Math.min(image.height, Math.ceil((roi.centerY + roi.halfHeight) * image.height)),
-  ];
-}
-
-function luma(pixels: Uint8Array, offset: number): number {
-  return (
-    0.2126 * (pixels[offset] ?? 0) +
-    0.7152 * (pixels[offset + 1] ?? 0) +
-    0.0722 * (pixels[offset + 2] ?? 0)
-  );
-}
-
-function roiStats(image: ScreenshotPixels, roi: Roi, excludeInnerRadius = 0): RoiStats {
-  const [x0, y0, x1, y1] = bounds(image, roi);
-  const values: Array<{ readonly x: number; readonly y: number; readonly value: number }> = [];
-  const edge: number[] = [];
-  let finitePixels = 0;
-  let nonBlackPixels = 0;
-  let total = 0;
-  for (let y = y0; y < y1; y += 1) {
-    for (let x = x0; x < x1; x += 1) {
-      const value = luma(image.pixels, (y * image.width + x) * 4);
-      values.push({ x, y, value });
-      if (x === x0 || x === x1 - 1 || y === y0 || y === y1 - 1) edge.push(value);
-      if (Number.isFinite(value)) finitePixels += 1;
-      if (value > 2) nonBlackPixels += 1;
-      total += value;
-    }
-  }
-  edge.sort((left, right) => left - right);
-  const baseline = edge[Math.floor(edge.length * 0.5)] ?? 0;
-  let weight = 0;
-  let radialMoment = 0;
-  for (const sample of values) {
-    const signal = Math.max(sample.value - baseline, 0);
-    const dx = (sample.x + 0.5) / image.width - roi.centerX;
-    const dy = (sample.y + 0.5) / image.height - roi.centerY;
-    const radius = Math.hypot(dx, dy);
-    // The authored disc is a separate source. Exclude its core and clipped
-    // screenshot pixels so the measured width belongs to the circumsolar
-    // excess rather than the disc or an LDR clamp.
-    if (radius <= excludeInnerRadius || sample.value >= 254) continue;
-    weight += signal;
-    radialMoment += signal * (dx * dx + dy * dy);
-  }
-  return {
-    finitePixels,
-    pixelCount: values.length,
-    nonBlackPixels,
-    meanLuma: total / Math.max(1, values.length),
-    radialWidth: weight > 0 ? Math.sqrt(radialMoment / weight) : 0,
-  };
-}
-
-function pixelDelta(left: ScreenshotPixels, right: ScreenshotPixels, roi?: Roi): number {
-  const [x0, y0, x1, y1] = roi === undefined ? [0, 0, left.width, left.height] : bounds(left, roi);
-  let changed = 0;
-  for (let y = y0; y < y1; y += 1) {
-    for (let x = x0; x < x1; x += 1) {
-      const offset = (y * left.width + x) * 4;
-      if (
-        (left.pixels[offset] ?? 0) !== (right.pixels[offset] ?? 0) ||
-        (left.pixels[offset + 1] ?? 0) !== (right.pixels[offset + 1] ?? 0) ||
-        (left.pixels[offset + 2] ?? 0) !== (right.pixels[offset + 2] ?? 0)
-      ) {
-        changed += 1;
-      }
-    }
-  }
-  return changed;
-}
-
-function roiMeanAbsoluteLumaDelta(
-  left: ScreenshotPixels,
-  right: ScreenshotPixels,
-  roi: Roi,
-): number {
-  const [x0, y0, x1, y1] = bounds(left, roi);
-  let total = 0;
-  let samples = 0;
-  for (let y = y0; y < y1; y += 1) {
-    for (let x = x0; x < x1; x += 1) {
-      const offset = (y * left.width + x) * 4;
-      total += Math.abs(luma(left.pixels, offset) - luma(right.pixels, offset));
-      samples += 1;
-    }
-  }
-  return total / Math.max(1, samples);
-}
-
-async function screenshotPixels(
-  canvas: HTMLCanvasElement,
-  label: string,
-): Promise<ScreenshotPixels> {
-  const shot = await page.elementLocator(canvas).screenshot({
-    path: `../../../../artifacts/sun-atmosphere-calibration/${label}.png`,
-    base64: true,
-  });
-  const base64 = typeof shot === 'string' ? shot : shot.base64;
-  const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-  const surface = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const context = surface.getContext('2d', { willReadFrequently: true });
-  if (context === null) {
-    bitmap.close();
-    throw new Error('sun-atmosphere: screenshot pixel context unavailable');
-  }
-  context.drawImage(bitmap, 0, 0);
-  const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
-  bitmap.close();
-  return { width: image.width, height: image.height, pixels: new Uint8Array(image.data) };
-}
-
-async function submitFrame(
-  world: World,
-  renderer: Renderer,
-  lease: RenderWorldLease,
-): Promise<void> {
-  propagateTransforms(world).unwrap();
-  const drawn = renderer.draw({
-    leases: [lease],
-    camera: { lease },
-    environment: { lease },
-    fixedStep: world.getResource(FixedTime).tick,
-  });
-  if (!drawn.ok) throw drawn.error;
-  const completed = await drawn.value.completed;
-  if (!completed.ok) throw completed.error;
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-async function captureFrame(
-  world: World,
-  renderer: Renderer,
-  lease: RenderWorldLease,
-  canvas: HTMLCanvasElement,
-  label: string,
-): Promise<FrameSample> {
-  await submitFrame(world, renderer, lease);
-  const pixels = await screenshotPixels(canvas, label);
-  const inspection = renderer.inspect();
-  return { pixels, inspection };
-}
-
-function createCanvas(): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = OUTPUT_WIDTH;
-  canvas.height = OUTPUT_HEIGHT;
-  canvas.style.width = `${OUTPUT_WIDTH}px`;
-  canvas.style.height = `${OUTPUT_HEIGHT}px`;
-  document.body.append(canvas);
-  return canvas;
-}
-
-function attachRenderer(renderer: Renderer, world: World): RenderWorldLease {
-  const attached = renderer.attach(world);
-  if (!attached.ok) throw attached.error;
-  return attached.value;
-}
-
 function setAtmosphere(
   world: World,
   entity: EntityHandle,
@@ -419,14 +208,14 @@ function setAtmosphere(
   world
     .set(entity, Atmosphere, {
       ...WAVE1_ATMOSPHERE_PRESET,
-      circumsolarStrength: strength,
-      circumsolarWidth: width,
+      mieScattering: strength * 3.996e-6,
+      mieAnisotropy: 1 - width * 0.2,
       sunAngularRadius,
     })
     .unwrap();
 }
 
-it('calibrates Atmosphere strength and width with fixed exposure and sun disc', async () => {
+it('calibrates physical Mie scattering and anisotropy with fixed exposure and sun disc', async () => {
   const canvas = createCanvas();
   const rendererResult = await createRenderer(
     canvas,
@@ -452,7 +241,7 @@ it('calibrates Atmosphere strength and width with fixed exposure and sun disc', 
   world
     .set(recipe.entities.camera, Camera, {
       exposureMode: CAMERA_EXPOSURE_MODE_MANUAL,
-      exposure: 1,
+      exposure: 1 / 5000,
       bloom: BLOOM_DISABLED,
       antialias: ANTIALIAS_NONE,
     })
@@ -465,7 +254,7 @@ it('calibrates Atmosphere strength and width with fixed exposure and sun disc', 
     ] as const;
     const evidence: Record<string, unknown> = {};
     for (const [name, direction] of directions) {
-      world.set(recipe.entities.sun, DirectionalLight, { direction }).unwrap();
+      world.set(recipe.entities.sun, DirectionalLight, { direction, intensity: 100_000 }).unwrap();
       setAtmosphere(world, atmosphere, 0, 1);
       world.update(1 / 60).unwrap();
       const strengthZero = await captureFrame(world, renderer, lease, canvas, `${name}-strength-0`);
@@ -488,7 +277,7 @@ it('calibrates Atmosphere strength and width with fixed exposure and sun disc', 
       const camera = world.get(recipe.entities.camera, Camera).unwrap();
       const authored = world.get(atmosphere, Atmosphere).unwrap();
       expect(camera.exposureMode).toBe(CAMERA_EXPOSURE_MODE_MANUAL);
-      expect(camera.exposure).toBe(1);
+      expect(camera.exposure).toBe(Math.fround(1 / 5000));
       expect(camera.bloom).toBe(BLOOM_DISABLED);
       expect(authored.sunAngularRadius).toBeCloseTo(DISC_RADIUS, 6);
       for (const stats of [zeroStats, oneStats, narrowStats, wideStats, horizonStats]) {
@@ -1419,206 +1208,5 @@ it.each([
     recipe.dispose();
     await scene.fiber.dispose();
     canvas.remove();
-  }
-}, 240_000);
-
-it('replays volumetric output at equal World time across render schedules', async () => {
-  const denseCanvas = createCanvas();
-  const sparseCanvas = createCanvas();
-  const createFixture = async (canvas: HTMLCanvasElement) => {
-    const rendererResult = await createRenderer(
-      canvas,
-      {},
-      { shaderManifestUrl: '/shaders/manifest.json' },
-    );
-    if (!rendererResult.ok) throw rendererResult.error;
-    const renderer = rendererResult.value;
-    const world = new World();
-    const scene = await createWorldContext(world, [scenePlugin()]);
-    const recipe = createWave1RenderingRecipe(world, { aspect: 1, includeAtmosphere: false });
-    recipe.destroy(recipe.entities.screen);
-    recipe.destroy(recipe.entities.localLight);
-    recipe.destroy(recipe.entities.skylight);
-    recipe.destroy(recipe.entities.roof);
-    world
-      .set(recipe.entities.camera, Camera, {
-        exposureMode: CAMERA_EXPOSURE_MODE_MANUAL,
-        exposure: 1,
-        bloom: BLOOM_DISABLED,
-        antialias: ANTIALIAS_NONE,
-      })
-      .unwrap();
-    world.set(recipe.entities.sun, DirectionalLight, { direction: DAYLIGHT }).unwrap();
-    const density = world.allocSharedRef('TextureAsset', createDensity());
-    const fog = world
-      .spawn({
-        component: VolumetricFog,
-        data: {
-          light: recipe.entities.sun,
-          density,
-          boundsMin: [-8, -4, -2] as const,
-          boundsMax: [8, 4, 6] as const,
-          extinction: [0.28, 0.28, 0.28] as const,
-          albedo: [0.8, 0.8, 0.8] as const,
-          emission: [0, 0, 0] as const,
-          anisotropy: 0,
-          maxDistance: 30,
-        },
-      })
-      .unwrap();
-    const lease = attachRenderer(renderer, world);
-    return { canvas, density, fog, lease, recipe, renderer, scene, world };
-  };
-
-  const dense = await createFixture(denseCanvas);
-  const sparse = await createFixture(sparseCanvas);
-  try {
-    const replay = async (
-      fixture: Awaited<ReturnType<typeof createFixture>>,
-      steps: readonly (number | undefined)[],
-      label: string,
-    ): Promise<{ readonly final: FrameSample; readonly previous: FrameSample }> => {
-      for (let index = 0; index < steps.length; index += 1) {
-        const delta = steps[index];
-        if (delta !== undefined) fixture.world.update(delta).unwrap();
-        await submitFrame(fixture.world, fixture.renderer, fixture.lease);
-      }
-      let previous: FrameSample | undefined;
-      let settled: FrameSample | undefined;
-      for (let index = 0; index < 8; index += 1) {
-        if (index < 6) {
-          await submitFrame(fixture.world, fixture.renderer, fixture.lease);
-          continue;
-        }
-        previous = settled;
-        settled = await captureFrame(
-          fixture.world,
-          fixture.renderer,
-          fixture.lease,
-          fixture.canvas,
-          `${label}-settle-${index}`,
-        );
-      }
-      if (settled === undefined || previous === undefined) {
-        throw new Error('equal-time replay produced no settled frame pair');
-      }
-      return { final: settled, previous };
-    };
-
-    const denseReplay = await replay(
-      dense,
-      [1 / 60, 1 / 60, 1 / 60, 1 / 60, 1 / 60, 1 / 60],
-      'equal-time-dense',
-    );
-    const sparseReplay = await replay(
-      sparse,
-      [1 / 30, undefined, 1 / 30, undefined, 1 / 30, undefined],
-      'equal-time-sparse',
-    );
-    const denseFinal = denseReplay.final;
-    const sparseFinal = sparseReplay.final;
-    const denseTime = dense.world.getResource(Time).elapsed;
-    const sparseTime = sparse.world.getResource(Time).elapsed;
-    expect(denseTime).toBeCloseTo(sparseTime, 8);
-    expect(denseFinal.inspection.volumetricFog?.status).toBe('available');
-    expect(sparseFinal.inspection.volumetricFog?.status).toBe('available');
-    const denseStats = roiStats(denseFinal.pixels, FOG_ROI);
-    const sparseStats = roiStats(sparseFinal.pixels, FOG_ROI);
-    const meanLumaDelta = Math.abs(denseStats.meanLuma - sparseStats.meanLuma);
-    const pixelLumaDelta = roiMeanAbsoluteLumaDelta(denseFinal.pixels, sparseFinal.pixels, FOG_ROI);
-    const denseSettleDelta = roiMeanAbsoluteLumaDelta(
-      denseReplay.previous.pixels,
-      denseFinal.pixels,
-      FOG_ROI,
-    );
-    const sparseSettleDelta = roiMeanAbsoluteLumaDelta(
-      sparseReplay.previous.pixels,
-      sparseFinal.pixels,
-      FOG_ROI,
-    );
-    expect(denseStats.finitePixels).toBe(denseStats.pixelCount);
-    expect(sparseStats.finitePixels).toBe(sparseStats.pixelCount);
-    expect(meanLumaDelta).toBeLessThanOrEqual(MAX_EQUAL_TIME_FOG_MEAN_LUMA_DELTA);
-    expect(pixelLumaDelta).toBeLessThanOrEqual(MAX_EQUAL_TIME_FOG_PIXEL_LUMA_DELTA);
-    expect(denseSettleDelta).toBeLessThanOrEqual(MAX_PAUSED_FOG_MEAN_LUMA_DELTA);
-    expect(sparseSettleDelta).toBeLessThanOrEqual(MAX_PAUSED_FOG_MEAN_LUMA_DELTA);
-
-    const laterReplay = await replay(
-      dense,
-      Array.from({ length: 30 }, () => 1 / 60),
-      'equal-time-dense-different-time',
-    );
-    const sameTimeReplay = await replay(
-      sparse,
-      Array.from({ length: 30 }, () => undefined),
-      'equal-time-sparse-same-time-control',
-    );
-    const laterFinal = laterReplay.final;
-    const sameTimeFinal = sameTimeReplay.final;
-    const laterTime = dense.world.getResource(Time).elapsed;
-    const sameTime = sparse.world.getResource(Time).elapsed;
-    const sameTimeNoise = roiMeanAbsoluteLumaDelta(
-      sparseFinal.pixels,
-      sameTimeFinal.pixels,
-      FOG_ROI,
-    );
-    const timeSensitivity = roiMeanAbsoluteLumaDelta(
-      laterFinal.pixels,
-      sameTimeFinal.pixels,
-      FOG_ROI,
-    );
-    const timeSensitivityPixels = pixelDelta(laterFinal.pixels, sameTimeFinal.pixels, FOG_ROI);
-    const laterSettleDelta = roiMeanAbsoluteLumaDelta(
-      laterReplay.previous.pixels,
-      laterFinal.pixels,
-      FOG_ROI,
-    );
-    const sameTimeSettleDelta = roiMeanAbsoluteLumaDelta(
-      sameTimeReplay.previous.pixels,
-      sameTimeFinal.pixels,
-      FOG_ROI,
-    );
-    expect(laterTime).toBeGreaterThan(denseTime);
-    expect(sameTime).toBeCloseTo(sparseTime, 8);
-    expect(sameTimeNoise).toBeLessThanOrEqual(MAX_EQUAL_TIME_FOG_PIXEL_LUMA_DELTA);
-    expect(timeSensitivity).toBeGreaterThan(sameTimeNoise + MIN_TIME_SENSITIVITY_FOG_PIXEL_MARGIN);
-    expect(timeSensitivityPixels).toBeGreaterThan(0);
-    expect(laterSettleDelta).toBeLessThanOrEqual(MAX_PAUSED_FOG_MEAN_LUMA_DELTA);
-    expect(sameTimeSettleDelta).toBeLessThanOrEqual(MAX_PAUSED_FOG_MEAN_LUMA_DELTA);
-    // biome-ignore lint/suspicious/noConsole: equal-World-time replay receipt for browser evidence.
-    console.info(
-      '[solar-atmosphere-calibration] equal-time-replay',
-      JSON.stringify({
-        denseTime,
-        sparseTime,
-        denseFrames: denseFinal.inspection.frame,
-        sparseFrames: sparseFinal.inspection.frame,
-        dense: denseStats,
-        sparse: sparseStats,
-        meanLumaDelta,
-        pixelLumaDelta,
-        denseSettleDelta,
-        sparseSettleDelta,
-        differentTime: {
-          laterTime,
-          sameTime,
-          sameTimeNoise,
-          timeSensitivity,
-          timeSensitivityPixels,
-          laterSettleDelta,
-          sameTimeSettleDelta,
-        },
-      }),
-    );
-  } finally {
-    for (const fixture of [dense, sparse]) {
-      await fixture.renderer.dispose();
-      fixture.world.despawn(fixture.fog).unwrap();
-      fixture.world.sharedRefs.release(fixture.density).unwrap();
-      fixture.recipe.dispose();
-      await fixture.scene.fiber.dispose();
-    }
-    denseCanvas.remove();
-    sparseCanvas.remove();
   }
 }, 240_000);

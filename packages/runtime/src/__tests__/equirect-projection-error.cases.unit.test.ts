@@ -113,13 +113,11 @@ import {
 import {
   assembleMaterialWithSkylightEntries,
   createSkylightFallback,
-  mergeSkylightIntoMaterialBgl,
 } from '../../../render/src/ibl/skylight-bind-group';
 import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../../../render/src/pbr-pipeline';
 import { INSTANCE_STORAGE_STRIDE_FLOATS } from '../../../render/src/record/mesh-ssbo';
 import { selectSwapChainFormat } from '../../../render/src/render-system';
 import { createSkinPaletteAllocator } from '../../../render/src/systems/skin-palette-allocator';
-import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { drawWithOwners } from './renderer-test-utils';
 
@@ -225,8 +223,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../../../render/src/systems/transparent-sort-config';
 import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
-import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
-import { transparentSortEntries } from '../systems/transparent-sort';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 void [
@@ -248,7 +244,6 @@ void [
   MeshFilter,
   MeshRenderer,
   Name,
-  REC709_LUMA_WEIGHTS,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   Skin,
@@ -298,7 +293,6 @@ void [
   it,
   makeMockShaderRegistry,
   mat4,
-  mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
   propagateTransforms,
   readFileSync,
@@ -310,8 +304,6 @@ void [
   standardMaterialShaderVariants,
   subscribeRendererErrors,
   toShared,
-  tonemapReinhardLuminance,
-  transparentSortEntries,
   unwrapRendererError,
   urpPipeline,
   vec3,
@@ -343,7 +335,6 @@ type __MergedKeep =
   | Texture
   | TextureFormat
   | TextureView
-  | TransparentEntry
   | WorldType;
 
 // Split source block: equirect projection failure error contract.
@@ -354,20 +345,32 @@ type __MergedKeep =
   describe('equirect-projection-failed error class shape', () => {
     it('has .code === equirect-projection-failed', async () => {
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.code).toBe('equirect-projection-failed');
     });
 
     it('exposes .detail.handle === the constructor argument', async () => {
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.detail).toBeDefined();
       expect(err.detail.handle).toBe(42);
     });
 
     it('exposes non-empty .hint with actionable guidance', async () => {
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.hint).toBeDefined();
       expect(typeof err.hint).toBe('string');
       expect(err.hint.length).toBeGreaterThan(0);
@@ -375,7 +378,11 @@ type __MergedKeep =
 
     it('exposes .expected describing expected state', async () => {
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.expected).toBeDefined();
       expect(typeof err.expected).toBe('string');
       expect(err.expected.length).toBeGreaterThan(0);
@@ -383,7 +390,11 @@ type __MergedKeep =
 
     it('extends Error so it can be thrown and caught', async () => {
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err).toBeInstanceOf(Error);
       expect(err.name).toBe('EquirectProjectionFailedError');
     });
@@ -395,7 +406,11 @@ type __MergedKeep =
       // 'equirect-projection-failed' is not in RuntimeErrorCode, no expression
       // can assign err.code to a RuntimeErrorCode-typed variable.
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.code).toBe('equirect-projection-failed');
     });
   });
@@ -407,7 +422,11 @@ type __MergedKeep =
       // structured error ONCE (it does not retry; R-2/AC-09). The record-stage
       // integration is covered by the M3 lazy-projection tests + smoke gate.
       const { EquirectProjectionFailedError } = await import('../../../render/src/errors/render');
-      const err = new EquirectProjectionFailedError(42);
+      const err = new EquirectProjectionFailedError(42, {
+        code: 'invalid-source-format',
+        expected: 'linear HDR',
+        hint: 'use rgba16float',
+      });
       expect(err.code).toBe('equirect-projection-failed');
       expect(err.detail.handle).toBe(42);
     });

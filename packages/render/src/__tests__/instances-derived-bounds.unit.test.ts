@@ -272,6 +272,41 @@ describe('Instances renderer-derived union bounds', () => {
       expect(cache.rowChange(3)).toBeUndefined();
     });
 
+    it('re-derives a moving same-size collection in place and still matches the linear fold', () => {
+      const cache = new InstanceBoundsCache();
+      const transforms = grid(300);
+      let seed = 3;
+      for (let revision = 1; revision < 12; revision += 1) {
+        // Whole-collection motion without dirty-row proof: a full derive per revision.
+        for (let row = 0; row < 300; row += 1) {
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+          transforms.set(translated((seed % 900) - 450, (seed % 31) - 15, seed % 7), row * 16);
+        }
+        if (revision === 6) transforms[7 * 16 + 13] = Number.NaN;
+        if (revision === 7) transforms.set(translated(0, 0, 0), 7 * 16);
+        expectSameBounds(
+          cache.get(collectionInput(transforms, revision)),
+          revision === 6
+            ? undefined
+            : deriveInstancesUnionBounds({
+                meshAabb,
+                entityWorld: translated(1, 2, 3),
+                transforms,
+              }),
+        );
+      }
+      expect(cache.inspect().derives).toBe(11);
+      // A resize gets a fresh hierarchy.
+      expectSameBounds(
+        cache.get(collectionInput(grid(17), 12)),
+        deriveInstancesUnionBounds({
+          meshAabb,
+          entityWorld: translated(1, 2, 3),
+          transforms: grid(17),
+        }),
+      );
+    });
+
     it('returns no-cull while any row is non-finite and recovers when the row is repaired', () => {
       const cache = new InstanceBoundsCache();
       const transforms = grid(40);

@@ -726,28 +726,15 @@ function walkChildren(
   stackEntities.length = 0;
   stackChildren.length = 0;
 
-  if (allowCompletedRoot) {
-    // Residual recovery may be entered once for each member of a malformed
-    // parent path. State 4 means a previous fallback walk already expanded
-    // this root and all reachable Children edges, so do not repeat that
-    // subtree for every cycle member.
-    const rootCursor = scratch.hierarchyRootCursor;
-    const rootBinding = findHierarchyLocation(writer, bindings, root, rootCursor);
-    if (rootBinding !== undefined) {
-      const state = scratch.hierarchyStates[rootCursor.bindingIndex]?.[rootCursor.row] ?? 0;
-      if (state === 4) return;
-    }
-  } else {
-    // This cursor is scratch-owned and reused for every root. A root walk is
-    // a hot invocation; allocating a cursor here would scale object churn with
-    // the number of roots even after all bindings have warmed.
-    const rootCursor = scratch.hierarchyRootCursor;
-    countPropagation('hierarchyRootCursorReuses');
-    const rootBinding = findHierarchyLocation(writer, bindings, root, rootCursor);
-    if (rootBinding !== undefined) {
-      const state = scratch.hierarchyStates[rootCursor.bindingIndex]?.[rootCursor.row] ?? 0;
-      if (state !== 0 && !refresh) return;
-    }
+  // The cursor is scratch-owned and reused for every root, so a hot root walk
+  // allocates nothing. Residual recovery may be entered once for each member
+  // of a malformed parent path; state 4 means a previous fallback walk already
+  // expanded this root and all reachable Children edges, so do not repeat it.
+  const rootCursor = scratch.hierarchyRootCursor;
+  if (!allowCompletedRoot) countPropagation('hierarchyRootCursorReuses');
+  if (findHierarchyLocation(writer, bindings, root, rootCursor) !== undefined) {
+    const state = scratch.hierarchyStates[rootCursor.bindingIndex]?.[rootCursor.row] ?? 0;
+    if (allowCompletedRoot ? state === 4 : state !== 0 && !refresh) return;
   }
   stackEntities.push(root);
   stackChildren.push(-1);
@@ -767,28 +754,17 @@ function walkChildren(
     const nextChild = stackChildren[top] ?? -1;
     if (nextChild < 0) {
       if (hierarchyBinding !== undefined) {
-        if (refresh) {
-          const states = scratch.hierarchyStates[currentCursor.bindingIndex];
-          if (states !== undefined) states[currentCursor.row] = 0;
-        }
-        const state = scratch.hierarchyStates[currentCursor.bindingIndex]?.[currentCursor.row] ?? 0;
-        if (state === 0) {
-          const states = scratch.hierarchyStates[currentCursor.bindingIndex];
+        const states = scratch.hierarchyStates[currentCursor.bindingIndex];
+        if (refresh && states !== undefined) states[currentCursor.row] = 0;
+        if ((states?.[currentCursor.row] ?? 0) === 0) {
           if (states !== undefined) states[currentCursor.row] = 1;
           const parentRaw = (hierarchyColumns(hierarchyBinding).parent[currentCursor.row] ??
             ENTITY_NULL_RAW) as number;
-          let completed = false;
-          if (parentRaw === ENTITY_NULL_RAW) {
-            composeBindingRow(
-              hierarchyBinding,
-              currentCursor.row,
-              undefined,
-              0,
-              scratch,
-              scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
-            );
-            completed = true;
-          } else {
+          // Every non-cycle outcome composes this row exactly once: under its
+          // parent when the parent is complete, otherwise as a local root.
+          let parentSource: TransformBinding | undefined;
+          let cycle = false;
+          if (parentRaw !== ENTITY_NULL_RAW) {
             const parent = parentRaw as EntityHandle;
             const parentBinding = findTransformLocation(
               transformWriter,
@@ -797,6 +773,11 @@ function walkChildren(
               parentCursor,
             );
             const parentHierarchy = findHierarchyLocation(writer, bindings, parent, childCursor);
+            // A parent outside the hierarchy bindings is a flat root, already complete (2).
+            const parentState =
+              parentHierarchy === undefined
+                ? 2
+                : (scratch.hierarchyStates[childCursor.bindingIndex]?.[childCursor.row] ?? 0);
             if (parentBinding === undefined) {
               report(
                 hierarchyError(
@@ -807,73 +788,43 @@ function walkChildren(
                   'repair the missing parent pair before retrying propagation',
                 ),
               );
-              composeBindingRow(
-                hierarchyBinding,
-                currentCursor.row,
-                undefined,
-                0,
+            } else if (parentState === 1) {
+              handleActiveCycle(
+                parent,
+                stackEntities,
+                stackChildren,
+                writer,
+                bindings,
                 scratch,
-                scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
+                scratch.hierarchyChanged,
+                report,
               );
-              completed = true;
-            } else if (parentHierarchy !== undefined) {
-              const parentState =
-                scratch.hierarchyStates[childCursor.bindingIndex]?.[childCursor.row] ?? 0;
-              if (parentState === 1) {
-                handleActiveCycle(
+              cycle = true;
+            } else if (parentState === 0) {
+              report(
+                hierarchyError(
+                  'hierarchy-broken',
+                  current,
                   parent,
-                  stackEntities,
-                  stackChildren,
-                  writer,
-                  bindings,
-                  scratch,
-                  scratch.hierarchyChanged,
-                  report,
-                );
-                completed = true;
-              } else if (parentState === 0) {
-                report(
-                  hierarchyError(
-                    'hierarchy-broken',
-                    current,
-                    parent,
-                    'Children to enumerate every parent-before-child edge',
-                    'repair the Children mirror and retry TransformPropagation',
-                  ),
-                );
-                composeBindingRow(
-                  hierarchyBinding,
-                  currentCursor.row,
-                  undefined,
-                  0,
-                  scratch,
-                  scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
-                );
-                completed = true;
-              } else {
-                composeBindingRow(
-                  hierarchyBinding,
-                  currentCursor.row,
-                  parentBinding,
-                  parentCursor.row,
-                  scratch,
-                  scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
-                );
-                completed = true;
-              }
-            } else {
-              composeBindingRow(
-                hierarchyBinding,
-                currentCursor.row,
-                parentBinding,
-                parentCursor.row,
-                scratch,
-                scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
+                  'Children to enumerate every parent-before-child edge',
+                  'repair the Children mirror and retry TransformPropagation',
+                ),
               );
-              completed = true;
+            } else {
+              parentSource = parentBinding;
             }
           }
-          if (completed && states !== undefined && states[currentCursor.row] === 1) {
+          if (!cycle) {
+            composeBindingRow(
+              hierarchyBinding,
+              currentCursor.row,
+              parentSource,
+              parentCursor.row,
+              scratch,
+              scratch.hierarchyChanged[currentCursor.bindingIndex] as Uint8Array,
+            );
+          }
+          if (states !== undefined && states[currentCursor.row] === 1) {
             states[currentCursor.row] = 2;
           }
         }

@@ -7,7 +7,12 @@ import {
 const browserReady = typeof navigator !== 'undefined' && navigator.gpu !== undefined;
 
 describe.skipIf(!browserReady)('GPU pass timing Browser dev-server runner', () => {
-  it('returns the standard unavailable observation when GPU timing is disabled', async () => {
+  // Every case creates a fresh renderer, including the disabled-timing case.
+  // Software WebGPU initialization alone can exceed Vitest's 15s default;
+  // retain the same bounded startup allowance for all three cases.
+  it('returns the standard unavailable observation when GPU timing is disabled', {
+    timeout: 30_000,
+  }, async () => {
     const { requested, omitted } = await observeBrowserGpuPassTimingDisabled();
     expect(requested.timings).toMatchObject({
       status: 'unavailable',
@@ -17,9 +22,6 @@ describe.skipIf(!browserReady)('GPU pass timing Browser dev-server runner', () =
     expect(omitted.timings).toBeUndefined();
   });
 
-  // Each timing case creates a fresh renderer. Its lavapipe initialization can
-  // exceed Vitest's 15s default, including the raster-suppressed case below.
-  // Both retain the same bounded startup allowance and three-frame assertions.
   it('keeps receipt facts and unsupported timing structured without stopping draw', {
     timeout: 30_000,
   }, async () => {

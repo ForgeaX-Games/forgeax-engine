@@ -2,22 +2,10 @@
 // forgeax_pbr::lighting_punctual remains the surface contract; the isolated
 // attenuation module below provides its resource-free volume equivalents.
 #import forgeax_pbr::lighting_attenuation::{projectSpotUv}
-#import forgeax_view::common::{DirectLightSlot}
+#import forgeax_view::common::{DirectLightSlot, View}
+#import forgeax_atmosphere::optics::{atmosphere_solar_transmittance, atmosphere_position}
 #import forgeax_cloud::layer::{cloud_apply_direct_solar}
 
-struct VolumeView {
-  _prefix : array<vec4<f32>, 6>,
-  cameraPos : vec4<f32>,
-  _lightViewProjA : mat4x4<f32>,
-  inverseViewProj : mat4x4<f32>,
-  _viewTail : array<vec4<f32>, 18>,
-  spotLightViewProj : array<mat4x4<f32>, 4>,
-  _temporalTail : array<vec4<f32>, 11>,
-  cloudShadowOrigin : vec4<f32>,
-  cloudShadowRight : vec4<f32>,
-  cloudShadowUp : vec4<f32>,
-  cloudShadowProjection : vec4<f32>,
-};
 // Volume reads the same full light_data payload as Standard surface Cluster;
 // it has no secondary light mirror.
 struct ClusterUniform {
@@ -47,7 +35,7 @@ struct VolumeSet { scene : VolumeParams, members : array<VolumeParams, 8>, };
 @group(0) @binding(3) var<uniform> volume_set : VolumeSet;
 var<private> volume_params : VolumeParams;
 var<private> volume_owner : u32;
-@group(0) @binding(4) var<uniform> volume_view : VolumeView;
+@group(0) @binding(4) var<uniform> volume_view : View;
 @group(0) @binding(5) var froxel_sampler : sampler;
 @group(0) @binding(6) var density : texture_3d<f32>;
 @group(0) @binding(7) var density_sampler : sampler;
@@ -63,6 +51,8 @@ var<private> volume_owner : u32;
 @group(0) @binding(21) var density4 : texture_3d<f32>;
 @group(0) @binding(22) var density5 : texture_3d<f32>;
 @group(0) @binding(23) var density6 : texture_3d<f32>;
+@group(0) @binding(25) var atmosphere_transmittance : texture_2d<f32>;
+@group(0) @binding(26) var atmosphere_sampler : sampler;
 @group(0) @binding(24) var density7 : texture_3d<f32>;
 
 fn sample_density(coordinate : vec3<f32>) -> f32 {
@@ -210,8 +200,14 @@ fn volume_spot_shadow_intensity() -> f32 {
 fn volume_light_radiance(world_position : vec3<f32>) -> vec3<f32> {
   let mode = u32(round(volume_params.optics.z));
   if (mode == 0u) {
+    var solar=vec3<f32>(1.0);
+    if volume_view.atmosphereControl.w>0.5 {
+      // The atmospheric sun is irradiance; cancel the legacy FOUR_PI phase
+      // convention exactly once for this physical directional source.
+      solar=atmosphere_solar_transmittance(volume_view.atmosphere,atmosphere_position(volume_view.atmosphere,world_position),normalize(-volume_view.lightDir),atmosphere_transmittance,atmosphere_sampler) / FOUR_PI;
+    }
     return cloud_apply_direct_solar(
-    volume_params.light_color.xyz,
+    volume_params.light_color.xyz*solar,
     world_position,
     volume_view.cloudShadowOrigin.xyz,
     volume_view.cloudShadowRight.xyz,

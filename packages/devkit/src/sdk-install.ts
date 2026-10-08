@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import { execFileCommand } from './child-process.js';
 import { commandError } from './project.js';
@@ -75,12 +75,10 @@ export async function sdkInstallCommand(
     const carrier = resolve(download, 'node_modules', '@forgeax', 'engine-sdk', 'sdk');
     const manifest = JSON.parse(await readFile(resolve(carrier, 'sdk-manifest.json'), 'utf8'));
     if (manifest.sdkVersion !== version) throw new Error('sdk-carrier-version-mismatch');
+    // Download and staging are private siblings on the target filesystem.
+    // Adopt the extracted bytes without another full SDK copy or link rewrite.
     for (const name of await readdir(carrier)) {
-      await cp(resolve(carrier, name), resolve(staging, name), {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-      });
+      await rename(resolve(carrier, name), resolve(staging, name));
     }
     if (!targetExists) {
       await rename(staging, root);

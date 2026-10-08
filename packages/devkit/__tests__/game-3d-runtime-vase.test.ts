@@ -1,11 +1,11 @@
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import type { ExecutionReport } from '@forgeax/engine-app';
-import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { devCommand } from '../src/commands.js';
 import { disposeDevKitHosts } from '../src/host.js';
+import { createBrowserCapture, type BrowserCaptureSession } from '../src/software-capture.js';
 // @ts-expect-error The template's shared browser probe is native JavaScript.
 import { probeRuntimeVase } from '../../../templates/game-3d/scripts/runtime-vase-probe.mjs';
 
@@ -15,12 +15,18 @@ declare const __forgeaxGameInspection: {
   renderer(): { state: string; frameId: number; execution: ExecutionReport };
 };
 
+declare global {
+  var __forgeaxVaseReadiness:
+    | { observedAtMs: number; latestCompleted?: unknown; readyCount: number; firstReadyAtMs?: number; loadingWaitStartedAtMs?: number }
+    | undefined;
+}
+
 it.for([false, true])('game-3d generates through its UI with Engine Worker=%s', { timeout: 420000 }, async (worker, { signal, onTestFinished }) => {
   const repository = resolve(import.meta.dirname, '../../..');
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-game3d-vase-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-game3d-vase-')));
   const evidence = resolve(repository, 'artifacts/runtime-pack-worker', `game-3d-${worker ? 'worker' : 'main'}`);
   const previousWorkers = process.env.FORGEAX_EXECUTION_WORKERS;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let browser: BrowserCaptureSession | undefined;
   const errors: string[] = [];
   const progress: unknown[] = [];
   const closeBrowser = () => browser?.close();
@@ -41,6 +47,14 @@ it.for([false, true])('game-3d generates through its UI with Engine Worker=%s', 
     await rm(evidence, { recursive: true, force: true });
     await mkdir(evidence, { recursive: true });
     await cp(resolve(repository, 'templates/game-3d/assets'), resolve(root, 'assets'), { recursive: true });
+    if (process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1') {
+      // Keep all three cascades and the UI/Worker lifecycle; bound the
+      // software-GPU shadow workload in this disposable test project.
+      const scenePath = resolve(root, 'assets/scene.pack.ts');
+      const scene = await readFile(scenePath, 'utf8');
+      expect(scene).toContain('mapSize: 2048,');
+      await writeFile(scenePath, scene.replace('mapSize: 2048,', 'mapSize: 256,'));
+    }
     await cp(resolve(repository, 'templates/game-3d/forge.json'), resolve(root, 'forge.json'));
     await writeFile(resolve(root, 'package.json'), JSON.stringify({ name: 'game-3d-runtime-vase', type: 'module', dependencies: { '@forgeax/engine': '*' } }));
     await mkdir(resolve(root, 'node_modules/@forgeax'), { recursive: true });
@@ -50,18 +64,32 @@ it.for([false, true])('game-3d generates through its UI with Engine Worker=%s', 
     expect(started.ok, JSON.stringify(started)).toBe(true);
     if (!started.ok) throw started.error;
     const url = (started.value as { urls: { local: string[] } }).urls.local[0]!;
-    browser = await chromium.launch({
-      executablePath: process.env.FORGEAX_BROWSER_EXECUTABLE ?? '/opt/google/chrome-beta/chrome',
+    browser = await createBrowserCapture(root).open({
+      serverUrl: url,
+      backend: process.platform === 'darwin' ? 'hardware' : 'software',
+      ...(process.env.FORGEAX_BROWSER_EXECUTABLE ? { browser: process.env.FORGEAX_BROWSER_EXECUTABLE } : {}),
       headless: false,
-      args: ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-        '--use-angle=swiftshader', '--use-vulkan=swiftshader', '--enable-unsafe-swiftshader', '--disable-vulkan-surface', '--ignore-gpu-blocklist'],
+      width: 1200,
+      height: 800,
     });
-    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    const page = browser.page;
+    await page.evaluate(() => {
+      globalThis.__forgeaxVaseReadiness = { observedAtMs: performance.now(), readyCount: 0 };
+      window.addEventListener('forgeax:frame-completed', event => {
+        const detail = (event as CustomEvent).detail;
+        const state = globalThis.__forgeaxVaseReadiness;
+        if (!state) return;
+        state.latestCompleted = { atMs: performance.now(), detail };
+        if (detail?.presentation === 'ready') {
+          state.readyCount++;
+          state.firstReadyAtMs ??= performance.now();
+        }
+      }, true);
+    });
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     page.on('requestfailed', request => errors.push(`${request.url()} ${request.failure()?.errorText}`));
     page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
-    await page.goto(url);
     await expect.poll(() => inspectWithinDeadline(page.evaluate(async () => {
       const inspect = typeof __forgeaxGameInspection === 'undefined' ? undefined : __forgeaxGameInspection;
       return inspect && (await inspect.list())?.reads?.includes('game-3d.runtime-vase');
@@ -97,6 +125,8 @@ it.for([false, true])('game-3d generates through its UI with Engine Worker=%s', 
       expect(current.execution.render?.epoch).toBe(rendererBefore.execution.render?.epoch);
       if (current.execution.render) expect(current.execution.render.state).toBe('alive');
       expect(errors).toEqual([]);
+      expect(browser?.report().consoleErrors).toEqual([]);
+      expect(browser?.report().pageErrors).toEqual([]);
     };
     const record = async (sample: typeof baseline) => {
       progress.push({ elapsedMs: performance.now() - startedAt, ...sample });
@@ -138,8 +168,19 @@ it.for([false, true])('game-3d generates through its UI with Engine Worker=%s', 
     expect(stable.execution.frame.completed).toBeGreaterThanOrEqual(target);
     await writeFile(resolve(evidence, 'result.json'), JSON.stringify({ worker, ...result, rendererBefore, stable, errors }, null, 2));
   } catch (error) {
+    const startup = browser && await inspectWithinDeadline(browser.page.evaluate(() => {
+      const loading = document.querySelector('#forgeax-loading');
+      return {
+        readiness: globalThis.__forgeaxVaseReadiness,
+        loading: loading && { fading: loading.getAttribute('data-fading'), display: getComputedStyle(loading).display },
+        renderer: typeof __forgeaxGameInspection === 'undefined' ? undefined : __forgeaxGameInspection.renderer(),
+      };
+    })).catch(cause => ({ error: String(cause) }));
+    const vase = browser && await inspectWithinDeadline(browser.page.evaluate(() =>
+      typeof __forgeaxGameInspection === 'undefined' ? undefined : __forgeaxGameInspection.read('game-3d.runtime-vase'),
+    )).catch(cause => ({ error: String(cause) }));
     await mkdir(evidence, { recursive: true });
-    await writeFile(resolve(evidence, 'failure.json'), JSON.stringify({ errors, progress, message: String(error) }, null, 2));
+    await writeFile(resolve(evidence, 'failure.json'), JSON.stringify({ errors, progress, startup, vase, message: String(error) }, null, 2));
     throw error;
   } finally {
     signal.removeEventListener('abort', abortBrowser);

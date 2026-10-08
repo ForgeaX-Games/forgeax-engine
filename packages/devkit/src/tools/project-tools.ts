@@ -3,12 +3,9 @@ import { dirname, resolve } from 'node:path';
 import {
   commandContribution,
   isToolCommandContract,
-  type ToolApi,
   type ToolCommandDeclaration,
   type ToolContribution,
   type ToolRealm,
-  type ToolRunOptions,
-  type ToolTerminal,
 } from '@forgeax/engine-tool-runtime';
 import { createServer } from 'vite';
 import {
@@ -154,13 +151,4 @@ async function readProjectToolContracts(
   } finally {
     if (!options.moduleLoader) await loader?.close();
   }
-}
-/** Execution can only use the actual installed provider; discovery never creates one. */
-export async function runProjectTool(
-  binding: ProjectToolBinding,
-  args: unknown,
-  options: ToolRunOptions,
-  api: ToolApi,
-): Promise<ToolTerminal<unknown>> {
-  return api.run(binding.contribution.descriptor.id, args, options).terminal;
 }

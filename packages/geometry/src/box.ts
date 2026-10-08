@@ -29,7 +29,7 @@ import {
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { computeTangentVec4 } from './tangent';
-import { deriveVertexBufferLayout } from './vertex-attribute-layout';
+import { packInterleavedVertexAttributes } from './vertex-attribute-layout';
 
 /**
  * Floats per vertex for the procedural-geometry interleaved buffer that the
@@ -56,49 +56,6 @@ function interleavedInputError(field: string, value: number, reason: string): As
     hint: ASSET_ERROR_HINTS['asset-parse-failed'],
     detail: { field, value, reason },
   });
-}
-
-/**
- * Build the VertexAttributeMap by binding `position` / `normal` / `uv`
- * Float32Array views over the interleaved `vertices` buffer.
- *
- * AC-15 narrowing anchor: the `for (const [key] of Object.entries(attrs))`
- * loop below sees `key` typed as `'position' | 'normal' | 'uv' | 'tangent' |
- * 'skinIndex' | 'skinWeight' | 'color'` (the VertexAttributeMap key closed
- * set) — no `as` cast anywhere. Any typo (e.g. `'POSITION'`) would be a
- * tsc strict compile-time error (requirements §AC-15 narrowing evidence).
- */
-function buildAttributes(vertices: Float32Array, vertexCount: number): VertexAttributeMap {
-  const positions = new Float32Array(vertexCount * 3);
-  const normals = new Float32Array(vertexCount * 3);
-  const uvs = new Float32Array(vertexCount * 2);
-  const tangents = new Float32Array(vertexCount * 4);
-  for (let i = 0; i < vertexCount; i++) {
-    const base = i * PROCEDURAL_FLOATS_PER_VERTEX;
-    positions[i * 3 + 0] = vertices[base + 0] as number;
-    positions[i * 3 + 1] = vertices[base + 1] as number;
-    positions[i * 3 + 2] = vertices[base + 2] as number;
-    normals[i * 3 + 0] = vertices[base + 3] as number;
-    normals[i * 3 + 1] = vertices[base + 4] as number;
-    normals[i * 3 + 2] = vertices[base + 5] as number;
-    uvs[i * 2 + 0] = vertices[base + 6] as number;
-    uvs[i * 2 + 1] = vertices[base + 7] as number;
-    tangents[i * 4 + 0] = vertices[base + 8] as number;
-    tangents[i * 4 + 1] = vertices[base + 9] as number;
-    tangents[i * 4 + 2] = vertices[base + 10] as number;
-    tangents[i * 4 + 3] = vertices[base + 11] as number;
-  }
-  const attrs: VertexAttributeMap = {
-    position: positions,
-    normal: normals,
-    uv: uvs,
-    tangent: tangents,
-  };
-  // AC-15 narrowing evidence: deriveVertexBufferLayout is the SSOT
-  // for the VertexAttributeMap -> GPU vertex layout translation.
-  // The call validates that attrs conforms to the closed key set.
-  deriveVertexBufferLayout(attrs);
-  return attrs;
 }
 
 /**
@@ -164,28 +121,19 @@ export function meshFromInterleaved(
   const tangentResult = computeTangentVec4(positions, normals, uvs, indices);
   if (!tangentResult.ok) return tangentResult;
   const tangents = tangentResult.value;
-  const expanded = new Float32Array(vertexCount * PROCEDURAL_FLOATS_PER_VERTEX);
-  for (let i = 0; i < vertexCount; i++) {
-    const dst = i * PROCEDURAL_FLOATS_PER_VERTEX;
-    const src = i * FACTORY_FLOATS_PER_VERTEX;
-    expanded[dst + 0] = vertices[src + 0] as number;
-    expanded[dst + 1] = vertices[src + 1] as number;
-    expanded[dst + 2] = vertices[src + 2] as number;
-    expanded[dst + 3] = vertices[src + 3] as number;
-    expanded[dst + 4] = vertices[src + 4] as number;
-    expanded[dst + 5] = vertices[src + 5] as number;
-    expanded[dst + 6] = vertices[src + 6] as number;
-    expanded[dst + 7] = vertices[src + 7] as number;
-    expanded[dst + 8] = tangents[i * 4] as number;
-    expanded[dst + 9] = tangents[i * 4 + 1] as number;
-    expanded[dst + 10] = tangents[i * 4 + 2] as number;
-    expanded[dst + 11] = tangents[i * 4 + 3] as number;
-  }
+  const attributes: VertexAttributeMap = {
+    position: positions,
+    normal: normals,
+    uv: uvs,
+    tangent: tangents,
+  };
+  const packed = packInterleavedVertexAttributes(attributes, vertexCount);
+  if (!packed.ok) return packed;
   return ok({
     kind: 'mesh',
-    vertices: expanded,
+    vertices: packed.value.vertices,
     indices,
-    attributes: buildAttributes(expanded, vertexCount),
+    attributes,
     submeshes: [
       {
         indexOffset: 0,

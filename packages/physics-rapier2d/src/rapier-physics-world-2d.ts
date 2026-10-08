@@ -15,9 +15,15 @@ import { componentDefinition, FixedTime, FixedUpdate } from '@forgeax/engine-ecs
 import type { Component, EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem } from '@forgeax/engine-ecs';
 import { mat4, quat, type Vec2, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
-import type { PhysicsWorld2D, RaycastHit2D } from '@forgeax/engine-physics';
+import type {
+  ColliderData,
+  ColliderSnapshot,
+  PhysicsWorld2D,
+  RaycastHit2D,
+} from '@forgeax/engine-physics';
 import {
   CharacterController,
+  type CharacterControllerData,
   Collider,
   CollidingEntities,
   colliderShapeFromF32,
@@ -28,6 +34,7 @@ import {
   RigidBody,
   registerPhysicsComponents,
   rigidBodyTypeFromF32,
+  snapshotCollider,
 } from '@forgeax/engine-physics';
 import type { Rapier2DModule } from './wasm-loader';
 
@@ -46,19 +53,6 @@ interface PhysicsTransform2D {
   readonly scale: { readonly x: number; readonly y: number };
 }
 
-interface PhysicsCollider2D {
-  readonly shape: number;
-  readonly halfExtents: readonly [number, number, number];
-  readonly radius: number;
-  readonly halfHeight: number;
-  readonly friction: number;
-  readonly restitution: number;
-  readonly density: number;
-  readonly isSensor: number;
-  readonly collisionGroups: number;
-  readonly solverGroups: number;
-}
-
 export interface Rapier2DCollisionEvent {
   readonly type: 'started' | 'stopped';
   readonly entityA: number;
@@ -72,16 +66,6 @@ type RapierEventQueue = any;
 // biome-ignore lint/suspicious/noExplicitAny: Rapier types from dynamically loaded module
 type RapierRigidBody2D = any;
 
-/** CharacterController tuning fields read per moveAndSlide call (degrees + world units). */
-interface CharacterControllerTuning {
-  offset: number;
-  maxSlopeClimbDeg: number;
-  minSlopeSlideDeg: number;
-  autoStepMaxHeight: number;
-  autoStepMinWidth: number;
-  snapToGroundDist: number;
-}
-
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
@@ -92,7 +76,7 @@ const DEG_TO_RAD = Math.PI / 180;
  * auto-step / snap calls `disable*()` rather than `enable*(0)`.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Rapier KinematicCharacterController from dynamic module
-function applyKccTuning(ctrl: any, cc: CharacterControllerTuning): void {
+function applyKccTuning(ctrl: any, cc: CharacterControllerData): void {
   ctrl.setMaxSlopeClimbAngle(cc.maxSlopeClimbDeg * DEG_TO_RAD);
   ctrl.setMinSlopeSlideAngle(cc.minSlopeSlideDeg * DEG_TO_RAD);
   ctrl.setSlideEnabled(true);
@@ -170,9 +154,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    * error paths fire before these are read, so direct `pw.moveAndSlide()` calls
    * in error tests need no World.
    */
-  private moveContext:
-    | { world: World; transform: Component; characterController: Component }
-    | undefined;
+  private moveContext: { world: World; transform: Component } | undefined;
 
   constructor(rapier: Rapier2DModule) {
     this.rapierModule = rapier;
@@ -371,8 +353,8 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    * `moveAndSlide` to read tuning and write back pose + grounded. Called once by
    * `registerPhysicsSystems2D` (plan-strategy D-1/D-7).
    */
-  setMoveContext(world: World, transform: Component, characterController: Component): void {
-    this.moveContext = { world, transform, characterController };
+  setMoveContext(world: World, transform: Component): void {
+    this.moveContext = { world, transform };
   }
 
   moveAndSlide(entity: number, desiredDelta: Vec2): Vec2 {
@@ -477,7 +459,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       ctx.world.set(entity as EntityHandle, ctx.transform, {
         pos: [next.x, next.y, readTransformPosZ(ctx.world, entity as EntityHandle, ctx.transform)],
       });
-      ctx.world.set(entity as EntityHandle, ctx.characterController, { grounded });
+      ctx.world.set(entity as EntityHandle, CharacterController, { grounded });
     }
 
     return vec2.create(movement.x, movement.y);
@@ -488,26 +470,12 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
    * falling back to schema defaults when the World is not wired (defensive;
    * the kinematic check upstream means a valid character always has the World).
    */
-  private readCharacterController(entity: number): CharacterControllerTuning {
-    const ctx = this.moveContext;
-    if (ctx) {
-      const r = ctx.world.get(entity as EntityHandle, ctx.characterController);
-      if (r.ok) {
-        const v = r.value as Record<string, number>;
-        return {
-          offset: v.offset as number,
-          maxSlopeClimbDeg: v.maxSlopeClimbDeg as number,
-          minSlopeSlideDeg: v.minSlopeSlideDeg as number,
-          autoStepMaxHeight: v.autoStepMaxHeight as number,
-          autoStepMinWidth: v.autoStepMinWidth as number,
-          snapToGroundDist: v.snapToGroundDist as number,
-        };
-      }
-    }
+  private readCharacterController(entity: number): CharacterControllerData {
+    const r = this.moveContext?.world.get(entity as EntityHandle, CharacterController);
+    if (r?.ok) return r.value;
     // The ECS token owns the defaults; keep the defensive no-context path on
     // that projection so 2D cannot drift from the shared CharacterController schema.
-    return componentDefinition(CharacterController)
-      .defaults as unknown as CharacterControllerTuning;
+    return componentDefinition(CharacterController).defaults as unknown as CharacterControllerData;
   }
 
   /**
@@ -559,9 +527,16 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
       gravityScale: number;
       ccdEnabled: number;
     },
-    collider: PhysicsCollider2D,
+    collider: ColliderSnapshot,
   ): void {
     if (this.entityMap.has(entity)) return;
+    if (collider.shape > 2)
+      throw new PhysicsError({
+        code: 'invalid-body-config',
+        expected: 'a 2D collider shape',
+        hint: 'Use rapier-3d for 3D collision shapes.',
+        detail: { code: 'invalid-body-config', field: 'shape', value: collider.shape },
+      });
 
     const RAPIER = this.rapierModule;
 
@@ -621,6 +596,16 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     const scaleY = Math.abs(transform.scale.y);
     const cShape = colliderShapeFromF32(collider.shape);
     switch (cShape) {
+      case 'cylinder':
+      case 'cone':
+      case 'convexHull':
+      case 'trimesh':
+        throw new PhysicsError({
+          code: 'invalid-body-config',
+          expected: 'Rapier2D Collider uses cuboid, sphere or capsule',
+          hint: 'Use rapier-3d for 3D collision shapes.',
+          detail: { code: 'invalid-body-config', field: 'shape', value: collider.shape },
+        });
       case 'cuboid': {
         // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
         const desc = (RAPIER as any).ColliderDesc.cuboid(
@@ -673,7 +658,7 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
   syncAuthoredPose(
     entity: number,
     transform: PhysicsTransform2D,
-    collider: PhysicsCollider2D,
+    collider: ColliderSnapshot,
     bodyType: 'static' | 'kinematic',
   ): void {
     const record = this.entityMap.get(entity);
@@ -695,6 +680,16 @@ export class RapierPhysicsWorld2D implements PhysicsWorld2D {
     const scaleX = Math.abs(transform.scale.x);
     const scaleY = Math.abs(transform.scale.y);
     switch (colliderShapeFromF32(collider.shape)) {
+      case 'cylinder':
+      case 'cone':
+      case 'convexHull':
+      case 'trimesh':
+        throw new PhysicsError({
+          code: 'invalid-body-config',
+          expected: 'Rapier2D Collider uses cuboid, sphere or capsule',
+          hint: 'Use rapier-3d for 3D collision shapes.',
+          detail: { code: 'invalid-body-config', field: 'shape', value: collider.shape },
+        });
       case 'cuboid':
         rapierCollider.setHalfExtents({
           x: collider.halfExtents[0] * scaleX,
@@ -950,18 +945,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         has(component: Component): boolean;
         get(component: Component): Record<string, unknown>;
       };
-      const colliderData = rowView.get(Collider) as unknown as {
-        shape: number;
-        halfExtents: Float32Array;
-        radius: number;
-        halfHeight: number;
-        friction: number;
-        restitution: number;
-        density: number;
-        isSensor: number;
-        collisionGroups: number;
-        solverGroups: number;
-      };
+      const colliderData = rowView.get(Collider) as unknown as ColliderData;
       const transformData = rowView.get(transformComponent) as unknown as {
         pos: Float32Array;
         quat: Float32Array;
@@ -993,16 +977,6 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
         rigidBodyData === undefined ? undefined : new Float32Array([rigidBodyData.gravityScale]);
       const rbCcd =
         rigidBodyData === undefined ? undefined : new Uint32Array([rigidBodyData.ccdEnabled]);
-      const cShape = new Uint32Array([colliderData.shape]);
-      const cHalfExtents = colliderData.halfExtents;
-      const cRadius = new Float32Array([colliderData.radius]);
-      const cHalfH = new Float32Array([colliderData.halfHeight]);
-      const cFric = new Float32Array([colliderData.friction]);
-      const cRest = new Float32Array([colliderData.restitution]);
-      const cDens = new Float32Array([colliderData.density]);
-      const cSensor = new Uint32Array([colliderData.isSensor]);
-      const cCGroups = new Uint32Array([colliderData.collisionGroups]);
-      const cSGroups = new Uint32Array([colliderData.solverGroups]);
       const tfPos = transformData.pos;
       const tfQuat = transformData.quat;
       const tfScale = transformData.scale;
@@ -1011,22 +985,8 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
       // rb* views are intentionally NOT guarded here: a bare-Collider archetype
       // has no RigidBody column, so they are legitimately undefined and the
       // per-row rigidBody below falls back to a static default. Only the
-      // Collider + Transform columns are required.
-      if (
-        !cShape ||
-        !cHalfExtents ||
-        !cRadius ||
-        !cHalfH ||
-        !cFric ||
-        !cRest ||
-        !cDens ||
-        !cSensor ||
-        !cCGroups ||
-        !cSGroups ||
-        !tfPos ||
-        !tfQuat ||
-        !tfScale
-      ) {
+      // Transform columns are required; Collider is a required query term.
+      if (!tfPos || !tfQuat || !tfScale) {
         continue;
       }
 
@@ -1096,33 +1056,7 @@ export const PhysicsSyncBackend2D: SystemHandle<readonly []> = defineSystem({
               ccdEnabled: 0,
             };
 
-        const collider: {
-          shape: number;
-          halfExtents: readonly [number, number, number];
-          radius: number;
-          halfHeight: number;
-          friction: number;
-          restitution: number;
-          density: number;
-          isSensor: number;
-          collisionGroups: number;
-          solverGroups: number;
-        } = {
-          shape: cShape[row] as number,
-          halfExtents: [
-            cHalfExtents[row * 3] as number,
-            cHalfExtents[row * 3 + 1] as number,
-            cHalfExtents[row * 3 + 2] as number,
-          ],
-          radius: cRadius[row] as number,
-          halfHeight: cHalfH[row] as number,
-          friction: cFric[row] as number,
-          restitution: cRest[row] as number,
-          density: cDens[row] as number,
-          isSensor: cSensor[row] as number,
-          collisionGroups: cCGroups[row] as number,
-          solverGroups: cSGroups[row] as number,
-        };
+        const collider = snapshotCollider(colliderData);
 
         pw.ensureBody(entity, transform, rigidBody, collider);
 
@@ -1256,7 +1190,7 @@ export function registerPhysicsSystems2D(world: World): () => void {
   try {
     const pw = world.getResource<RapierPhysicsWorld2D>('PhysicsWorld');
     if (transformComponent !== undefined) {
-      pw.setMoveContext(world, transformComponent, CharacterController);
+      pw.setMoveContext(world, transformComponent);
     }
   } catch {
     // PhysicsWorld resource not yet inserted — moveAndSlide falls back to

@@ -5,8 +5,8 @@ import {
   ChildOf,
   Children,
   worldDespawnScene,
+  worldGetSceneInstanceState,
   worldRemoveSceneOverride,
-  worldResolveSceneInstanceStatePayload,
   worldSetSceneOverride,
 } from '@forgeax/engine-scene';
 import type { Asset, SceneAsset } from '@forgeax/engine-types';
@@ -237,13 +237,13 @@ describe('AssetRegistry.instantiate', () => {
     const root = defined(roots[0]);
     const nested =
       mode === 'anchor'
-        ? defined(worldResolveSceneInstanceStatePayload(world, root).unwrap().mountRoots[0])
+        ? defined(worldGetSceneInstanceState(world, root).unwrap().mountRoots[0])
         : defined(
             [root, ...world.iterDescendants(root)].find((entity) =>
               world.hasComponent(entity, SceneInstance),
             ),
           );
-    const state = worldResolveSceneInstanceStatePayload(world, nested).unwrap();
+    const state = worldGetSceneInstanceState(world, nested).unwrap();
     const member = defined(
       [...state.entityToLocalId.keys()].find((entity) =>
         world.hasComponent(entity, T709MaterialCarrier),

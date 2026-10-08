@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   composeSingleLayerMediumColor,
   integrateSingleLayerMedium,
-  isBelowSingleLayerMediumPlane,
   resolveSingleLayerMediumBackground,
 } from '../single-layer-medium.js';
 
@@ -91,21 +90,6 @@ describe('single-layer medium optics', () => {
         coverage: 0,
       }),
     ).toEqual([0, 0, 0]);
-  });
-
-  it('keeps endpoint admission on the undisturbed plane under a strongly tilted ripple', () => {
-    const surfacePosition = [0, 0, 0] as const;
-    const endpoint = [1, -0.1, 0] as const;
-    expect(
-      isBelowSingleLayerMediumPlane({
-        surfacePosition,
-        geometricNormal: [0, 1, 0],
-        endpoint,
-      }),
-    ).toBe(true);
-    // This shading normal would classify the same endpoint above water. It is
-    // deliberately excluded from the geometric-plane API and WGSL callsite.
-    expect(endpoint[0] * 0.995 + endpoint[1] * 0.1).toBeGreaterThan(0);
   });
 
   it('keeps refracted color and depth paired and reports conservative fallbacks', () => {

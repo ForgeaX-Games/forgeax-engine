@@ -25,9 +25,14 @@ export interface RasterRayInputs {
   readonly rays: Buffer;
 }
 
-/** Unit-Lambert receiver rays produce D = E/pi independently of receiver albedo.
+/** Unit-Lambert receiver rays produce D = E/pi independently of receiver albedo;
+ * `generateReflectionRays` produces the Lite reflection lobe from the same receivers.
  * A record operation only: the caller owns graph resources, passes and submission. */
-export function createRasterRayGenerator(device: RhiDevice, module: ShaderModule) {
+export function createRasterRayGenerator(
+  device: RhiDevice,
+  module: ShaderModule,
+  entryPoint: 'generateRasterRays' | 'generateReflectionRays' = 'generateRasterRays',
+) {
   const layout = device.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: 4, texture: { sampleType: 'depth' } },
@@ -46,9 +51,9 @@ export function createRasterRayGenerator(device: RhiDevice, module: ShaderModule
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout.value] });
   if (!pipelineLayout.ok) return pipelineLayout;
   const pipeline = device.createComputePipeline({
-    label: 'ray-raster.generate',
+    label: `ray-raster.${entryPoint}`,
     layout: pipelineLayout.value,
-    compute: { module, entryPoint: 'generateRasterRays' },
+    compute: { module, entryPoint },
   });
   if (!pipeline.ok) return pipeline;
   return ok({

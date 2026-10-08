@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as root from '../src/index';
 
 describe('Rapier 3D root surface', () => {
-  it('does not project unused vector bridges', async () => {
-    const root = (await import('../src/index')) as Record<string, unknown>;
+  it('does not project unused vector bridges', () => {
     expect(root).not.toHaveProperty('toRapierVec3');
     expect(root).not.toHaveProperty('fromRapierVec3');
     expect(root).not.toHaveProperty('toRapierQuat');

@@ -1,0 +1,36 @@
+
+ RUN  v4.1.11 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/input
+
+ ❯ |@forgeax/engine-input| src/__tests__/gamepad-feedback.test.ts (11 tests | 1 failed) 50ms
+     × retains lifecycle reject evidence when authored command capacity is full 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@forgeax/engine-input| src/__tests__/gamepad-feedback.test.ts > bounded feedback contract and native ownership (test double, no physical evidence) > retains lifecycle reject evidence when authored command capacity is full
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/__tests__/gamepad-feedback.test.ts:218:81
+    216|     const observed = port.readResults();
+    217|     expect(observed.length).toBeLessThanOrEqual(64);
+    218|     expect(observed.some(result => result.detail?.includes('reset deni…
+       |                                                                                 ^
+    219|     expect(observed.some(result => result.status === 'result-overflow'…
+    220|     port.dispose();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 10 passed (11)
+   Start at  18:31:10
+   Duration  563ms (transform 67ms, setup 0ms, import 87ms, tests 50ms, environment 0ms)
+
+undefined
+/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/input:
+[ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL] Command failed with exit code 1: vitest run src/__tests__/gamepad-feedback.test.ts '--maxWorkers=1' '--typecheck.enabled=false'

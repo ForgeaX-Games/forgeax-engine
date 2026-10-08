@@ -357,7 +357,6 @@
                   "type": "object",
                   "required": [
                     "directEntry",
-                    "sceneIndexEntry",
                     "materialRow",
                     "resourceSlots",
                     "uvSets",
@@ -454,46 +453,151 @@
                   "additionalProperties": false
                 },
                 "context": {
-                  "type": "object",
-                  "required": [
-                    "backend",
-                    "capability",
-                    "pipeline",
-                    "geometry",
-                    "pass",
-                    "profile",
-                    "toolchain",
-                    "instrumentation"
-                  ],
-                  "properties": {
-                    "backend": {
-                      "enum": ["webgpu", "webgl2", "wgpu-native"]
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "backend",
+                        "capability",
+                        "pipeline",
+                        "geometry",
+                        "pass",
+                        "profile",
+                        "toolchain",
+                        "instrumentation"
+                      ],
+                      "properties": {
+                        "backend": {
+                          "enum": ["webgpu", "webgl2", "wgpu-native"]
+                        },
+                        "capability": {
+                          "enum": [
+                            "storage-buffer",
+                            "storage-buffer-atmosphere",
+                            "uniform-fallback"
+                          ]
+                        },
+                        "pipeline": {
+                          "enum": ["forward", "deferred"]
+                        },
+                        "geometry": {
+                          "enum": ["mesh", "skinned", "sprite", "sprite-instances"]
+                        },
+                        "pass": {
+                          "enum": ["forward", "shadow", "depth"]
+                        },
+                        "profile": {
+                          "enum": ["forgeax-material-wgsl-v1"]
+                        },
+                        "toolchain": {
+                          "enum": ["naga-oil"]
+                        },
+                        "instrumentation": {
+                          "enum": ["none", "validation"]
+                        },
+                        "visibleSurface": {
+                          "const": true
+                        }
+                      },
+                      "additionalProperties": false
                     },
-                    "capability": {
-                      "enum": ["storage-buffer", "uniform-fallback"]
-                    },
-                    "pipeline": {
-                      "enum": ["forward", "deferred"]
-                    },
-                    "geometry": {
-                      "enum": ["mesh", "skinned", "sprite"]
-                    },
-                    "pass": {
-                      "enum": ["forward", "shadow", "depth"]
-                    },
-                    "profile": {
-                      "enum": ["forgeax-material-wgsl-v1"]
-                    },
-                    "toolchain": {
-                      "enum": ["naga-oil"]
-                    },
-                    "instrumentation": {
-                      "enum": ["none", "validation"]
+                    {
+                      "type": "object",
+                      "required": [
+                        "backend",
+                        "capability",
+                        "pipeline",
+                        "geometry",
+                        "pass",
+                        "profile",
+                        "toolchain",
+                        "instrumentation"
+                      ],
+                      "properties": {
+                        "backend": {
+                          "enum": ["webgpu", "wgpu-native"]
+                        },
+                        "capability": {
+                          "enum": ["storage-buffer"]
+                        },
+                        "pipeline": {
+                          "enum": ["ray"]
+                        },
+                        "geometry": {
+                          "enum": ["mesh"]
+                        },
+                        "pass": {
+                          "enum": ["ray-hit", "card-capture"]
+                        },
+                        "profile": {
+                          "enum": ["forgeax-material-ray-v1"]
+                        },
+                        "toolchain": {
+                          "enum": ["naga-oil"]
+                        },
+                        "instrumentation": {
+                          "enum": ["none"]
+                        }
+                      },
+                      "additionalProperties": false
                     }
-                  },
-                  "additionalProperties": false
+                  ]
                 }
               },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "context": {
+                        "properties": {
+                          "pipeline": {
+                            "const": "ray"
+                          }
+                        },
+                        "required": ["pipeline"]
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": ["entry"],
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": ["address"]
+                        },
+                        {
+                          "required": ["abi"]
+                        }
+                      ]
+                    },
+                    "if": {
+                      "properties": {
+                        "context": {
+                          "properties": {
+                            "pass": {
+                              "const": "ray-hit"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "entry": {
+                          "const": "cs_surface"
+                        }
+                      }
+                    },
+                    "else": {
+                      "properties": {
+                        "entry": {
+                          "const": "vs_card"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
               "additionalProperties": false
             }
           }

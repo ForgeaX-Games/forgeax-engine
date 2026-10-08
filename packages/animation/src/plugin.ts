@@ -2,14 +2,19 @@ import type { Component, World } from '@forgeax/engine-ecs';
 import type { Plugin } from '@forgeax/engine-plugin';
 import { AnimationPlayer } from './animation-player';
 import { AnimatedBy, AnimationTargetId, AnimationTargets } from './animation-target';
+import { clearPlaybackIntervals } from './playback-interval';
+import { clearPropertyBindings } from './property-binding';
+import { AnimationRootMotion } from './root-motion';
 import { registerAdvanceAnimationPlayer } from './systems/advance-animation-player';
 import {
   type AnimationPayloadLookup,
   registerEvaluateAnimationGraph,
 } from './systems/evaluate-animation-graph';
+import { clearAnimationEvents } from './timeline';
 
 const ANIMATION_COMPONENTS: readonly Component[] = [
   AnimationPlayer,
+  AnimationRootMotion,
   AnimatedBy,
   AnimationTargetId,
   AnimationTargets,
@@ -20,6 +25,9 @@ function registerAnimationComponents(world: World): () => void {
     world.components.register(component).unwrap(),
   );
   return () => {
+    clearPropertyBindings(world);
+    clearAnimationEvents(world);
+    clearPlaybackIntervals(world);
     for (let index = leases.length - 1; index >= 0; index -= 1) leases[index]?.dispose();
   };
 }

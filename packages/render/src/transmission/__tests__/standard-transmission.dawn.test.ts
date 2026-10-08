@@ -8,7 +8,8 @@ import {
 } from '@forgeax/engine-rhi-webgpu';
 import { Transform } from '@forgeax/engine-scene';
 import type { TextureAsset } from '@forgeax/engine-types';
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { shaderManifestUrl } from '../../../../runtime/src/__tests__/shader-manifest-url.fixture';
 import {
   Camera,
   DirectionalLight,
@@ -40,10 +41,7 @@ const ENGINE_MANIFEST = await (async () => {
   const { buildEngineShaderManifest } = await import('@forgeax/engine-vite-plugin-shader');
   return buildEngineShaderManifest();
 })();
-const ENGINE_MANIFEST_URL = URL.createObjectURL(
-  new Blob([JSON.stringify(ENGINE_MANIFEST)], { type: 'application/json' }),
-);
-afterAll(() => URL.revokeObjectURL(ENGINE_MANIFEST_URL));
+const ENGINE_MANIFEST_URL = shaderManifestUrl(ENGINE_MANIFEST);
 const DAWN_BACKEND: RhiBackendPack = {
   rhi,
   createShaderModule,
@@ -69,6 +67,11 @@ interface TransmissionCase {
   readonly surfaceQuat?: readonly [number, number, number, number];
   readonly directionalLight?: boolean;
   readonly localLight?: boolean;
+  readonly splitBackdrop?: boolean;
+  /** Clamp the device below the dedicated 21-texture transmission layout. */
+  readonly sampledTextureLimit?: number;
+  /** Author a split metallic map, which owns a shared-transmission host pair. */
+  readonly metallicTexture?: boolean;
 }
 
 function textureAsset(value: number): TextureAsset {
@@ -120,6 +123,7 @@ async function renderCase(
   readonly passNames: readonly string[];
   readonly observation: boolean;
   readonly errors: readonly string[];
+  readonly errorEvents: readonly { readonly code: string; readonly detail?: unknown }[];
   readonly framesObserved: number;
 }> {
   let device: GPUDevice | undefined;
@@ -133,7 +137,17 @@ async function renderCase(
     if (adapter === null) return adapter;
     const requestDevice = adapter.requestDevice.bind(adapter);
     adapter.requestDevice = async (descriptor) => {
-      const next = await requestDevice(descriptor);
+      const next = await requestDevice(
+        testCase.sampledTextureLimit === undefined
+          ? descriptor
+          : {
+              ...descriptor,
+              requiredLimits: {
+                ...descriptor?.requiredLimits,
+                maxSampledTexturesPerShaderStage: testCase.sampledTextureLimit,
+              },
+            },
+      );
       device ??= next;
       return next;
     };
@@ -187,7 +201,7 @@ async function renderCase(
   }
 
   const { renderer } = host.value;
-  const errors: { readonly code: string }[] = [];
+  const errors: { readonly code: string; readonly detail?: unknown }[] = [];
   const unsubscribe = renderer.subscribe((event) => {
     if (event.kind === 'error') errors.push(event.error);
   });
@@ -246,6 +260,13 @@ async function renderCase(
       ...(thicknessHandle === undefined
         ? {}
         : { thicknessTexture: { texture: thicknessHandle as never } }),
+      ...(testCase.metallicTexture === true
+        ? {
+            metallicTexture: {
+              texture: world.allocSharedRef('TextureAsset', textureAsset(0)) as never,
+            },
+          }
+        : {}),
     });
     const materialHandle = world.allocSharedRef('MaterialAsset', material);
     const meshEntity = world.spawn(
@@ -278,6 +299,21 @@ async function renderCase(
       );
       expect(overlayEntity.ok, `${testCase.name}: overlay spawn must succeed`).toBe(true);
       if (!overlayEntity.ok) throw overlayEntity.error;
+    }
+    if (testCase.splitBackdrop) {
+      for (const [color, y] of [
+        [[1, 0, 0, 1], 2],
+        [[0, 0, 1, 1], -2],
+      ] as const) {
+        const half = world.allocSharedRef('MaterialAsset', Materials.unlit(color));
+        const halfEntity = world.spawn(
+          { component: Transform, data: { pos: [0, y, -2], scale: [3, 2, 1] } },
+          { component: MeshFilter, data: { assetHandle: mesh } },
+          { component: MeshRenderer, data: { materials: [half] } },
+        );
+        expect(halfEntity.ok, `${testCase.name}: backdrop spawn must succeed`).toBe(true);
+        if (!halfEntity.ok) throw halfEntity.error;
+      }
     }
     const cameraEntity = world.spawn(
       { component: Transform, data: { pos: [0, 0, 3] } },
@@ -338,6 +374,10 @@ async function renderCase(
     await device.queue.onSubmittedWorkDone();
     if (target === undefined) throw new Error('render target was not configured after draw');
     const renderDevice = configuredDevice ?? device;
+    if (testCase.sampledTextureLimit !== undefined)
+      expect(renderDevice.limits.maxSampledTexturesPerShaderStage).toBe(
+        testCase.sampledTextureLimit,
+      );
     const passNames = renderer.inspect().perFramePassNames;
     expect(renderer.inspect().renderScene.projectionRecords).toBeGreaterThanOrEqual(1);
     return {
@@ -345,6 +385,7 @@ async function renderCase(
       passNames,
       observation: observation.ok,
       errors: errors.map((error) => error.code),
+      errorEvents: errors,
       framesObserved: frameCount,
     };
   } finally {
@@ -487,6 +528,34 @@ describe('Standard transmission Dawn ROI', () => {
     );
   }, 120_000);
 
+  it('samples the backdrop where the refracted ray exits, in screen orientation', async () => {
+    // Rotating +Z by +30 deg about X tilts the glass normal down (y < 0). The
+    // ray refracts toward -normal, so its exit point rises and the center pixel
+    // must read the red upper backdrop half; the mirrored tilt reads blue. A
+    // world-space xy offset added to screen UV (V points down) inverts both.
+    const half = Math.PI / 12;
+    const tilted = (sign: 1 | -1) =>
+      renderCase({
+        name: sign > 0 ? 'tilt-down-normal' : 'tilt-up-normal',
+        transmission: 1,
+        ior: 1.5,
+        thickness: 3,
+        roughness: 0,
+        attenuationColor: [1, 1, 1],
+        surfaceQuat: [sign * Math.sin(half), 0, 0, Math.cos(half)],
+        directionalLight: false,
+        splitBackdrop: true,
+      });
+    const up = await tilted(1);
+    const down = await tilted(-1);
+    expect(up.errors).toEqual([]);
+    expect(down.errors).toEqual([]);
+    expect(up.pixel[0], `tilt-down-normal center ${up.pixel}`).toBeGreaterThan(up.pixel[2] + 32);
+    expect(down.pixel[2], `tilt-up-normal center ${down.pixel}`).toBeGreaterThan(
+      down.pixel[0] + 32,
+    );
+  }, 120_000);
+
   it('exercises both Standard render paths and transmission-before-BLEND overlap order', async () => {
     const forward = await renderCase({
       name: 'forward',
@@ -536,6 +605,104 @@ describe('Standard transmission Dawn ROI', () => {
     );
     expect(clustered.observation).toBe(true);
     expect(clustered.errors).toEqual([]);
+  }, 120_000);
+
+  it('refracts through the shared-slot variant at a 16-texture limit', async () => {
+    // The tilted glass reads the red upper backdrop half (see the screen
+    // orientation case). No light keeps every channel below saturation, so the
+    // parity check and both falsifiers compare unclamped transmission output.
+    const half = Math.PI / 12;
+    const glass = (
+      name: string,
+      options: {
+        readonly sign?: 1 | -1;
+        readonly transmissionTexture?: number;
+        readonly sampledTextureLimit?: number;
+      } = {},
+    ): TransmissionCase => ({
+      name,
+      transmission: 1,
+      ior: 1.5,
+      thickness: 3,
+      roughness: 0,
+      attenuationColor: [1, 1, 1],
+      transmissionTexture: options.transmissionTexture ?? 1,
+      thicknessTexture: 1,
+      surfaceQuat: [(options.sign ?? 1) * Math.sin(half), 0, 0, Math.cos(half)],
+      directionalLight: false,
+      splitBackdrop: true,
+      renderPath: 'forward',
+      ...(options.sampledTextureLimit === undefined
+        ? {}
+        : { sampledTextureLimit: options.sampledTextureLimit }),
+    });
+    const full = await renderCase(glass('full-limit'));
+    const shared = await renderCase(glass('shared-slots', { sampledTextureLimit: 16 }));
+    const mirrored = await renderCase(
+      glass('shared-slots-mirrored', { sign: -1, sampledTextureLimit: 16 }),
+    );
+    const masked = await renderCase(
+      glass('shared-slots-zero-map', { transmissionTexture: 0, sampledTextureLimit: 16 }),
+    );
+
+    expect(shared.errors).toEqual([]);
+    expect(shared.observation).toBe(true);
+    expect(shared.passNames).toContain('transmission-forward');
+    expect(shared.pixel[0], `shared center ${shared.pixel}`).toBeGreaterThan(shared.pixel[2] + 32);
+    expect(shared.pixel[0]).toBeLessThan(255);
+    // Only binding numbers move, so the two limits resolve the same pixel.
+    for (let channel = 0; channel < 3; channel += 1)
+      expect(
+        Math.abs((shared.pixel[channel] ?? 0) - (full.pixel[channel] ?? 0)),
+      ).toBeLessThanOrEqual(2);
+    // Falsifiers: the backdrop at binding 22 follows the refracted exit point,
+    // and the transmission map at the shared pair scales the refracted term.
+    expect(mirrored.pixel[2], `mirrored center ${mirrored.pixel}`).toBeGreaterThan(
+      mirrored.pixel[0] + 32,
+    );
+    expect(masked.pixel[0], `zero-map center ${masked.pixel}`).toBeLessThan(shared.pixel[0] - 32);
+  }, 120_000);
+
+  it('reports and falls back when a split scalar map owns a shared slot', async () => {
+    const half = Math.PI / 12;
+    const budgetCase = (
+      name: string,
+      transmission: number,
+      sampledTextureLimit?: number,
+    ): TransmissionCase => ({
+      name,
+      transmission,
+      ior: 1.5,
+      thickness: transmission === 0 ? 0 : 3,
+      roughness: 0,
+      attenuationColor: [1, 1, 1],
+      surfaceQuat: [Math.sin(half), 0, 0, Math.cos(half)],
+      directionalLight: false,
+      splitBackdrop: true,
+      renderPath: 'forward',
+      metallicTexture: true,
+      ...(sampledTextureLimit === undefined ? {} : { sampledTextureLimit }),
+    });
+    const dedicated = await renderCase(budgetCase('budget-dedicated', 1));
+    const exceeded = await renderCase(budgetCase('budget-exceeded', 1, 16), 3);
+    const opaque = await renderCase(budgetCase('budget-opaque', 0, 16));
+
+    expect(dedicated.errors).toEqual([]);
+    expect(exceeded.errors).toEqual(['material-sampled-texture-budget-exceeded']);
+    expect(exceeded.errorEvents[0]?.detail).toMatchObject({
+      limit: 16,
+      required: 21,
+      conflicts: ['metallicTexture'],
+    });
+    expect(opaque.errors).toEqual([]);
+    for (let channel = 0; channel < 3; channel += 1)
+      expect(
+        Math.abs((exceeded.pixel[channel] ?? 0) - (opaque.pixel[channel] ?? 0)),
+      ).toBeLessThanOrEqual(2);
+    // Falsifier: the same material refracts the red backdrop at the full limit.
+    expect(dedicated.pixel[0], `dedicated center ${dedicated.pixel}`).toBeGreaterThan(
+      exceeded.pixel[0] + 32,
+    );
   }, 120_000);
 
   if (ROSTER_SMOKE) {

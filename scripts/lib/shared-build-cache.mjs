@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { hashFiles, hashText, readReceipt, walkFiles, writeReceipt } from '../build-task-cache.mjs';
 
@@ -13,16 +13,30 @@ export function sharedOutputFingerprint(output) {
   );
 }
 
-export function reusableSharedBuild(root, output, inputFingerprint) {
-  try {
-    const receipt = readReceipt(root, SHARED_RECEIPT_KIND, output);
-    return (
-      existsSync(join(output, 'manifest.json')) &&
-      receipt?.inputFingerprint === inputFingerprint &&
-      receipt.outputFingerprint === sharedOutputFingerprint(output)
-    );
-  } catch {
+export function reusableSharedBuild(root, output, inputFingerprint, onMiss) {
+  const miss = (reason) => {
+    onMiss?.(reason);
     return false;
+  };
+  try {
+    if (!existsSync(join(output, 'manifest.json')))
+      return miss(`missing local shader manifest: ${join(output, 'manifest.json')}`);
+    const receipt = readReceipt(root, SHARED_RECEIPT_KIND, output);
+    if (!receipt) return miss(`missing or invalid local shader receipt: ${output}`);
+    if (receipt.inputFingerprint !== inputFingerprint)
+      return miss(
+        `compiler/source/profile identity mismatch: expected=${inputFingerprint} observed=${receipt.inputFingerprint}`,
+      );
+    const observed = sharedOutputFingerprint(output);
+    if (receipt.outputFingerprint !== observed)
+      return miss(
+        `shader payload digest mismatch: expected=${receipt.outputFingerprint} observed=${observed} path=${output}`,
+      );
+    return true;
+  } catch (error) {
+    return miss(
+      `cannot read local shader input ${output}: ${error.code ?? error.name}: ${error.message}`,
+    );
   }
 }
 
@@ -125,7 +139,7 @@ export function reusableSharedShader(root, sharedManifestPath, inputFingerprint,
       );
     const shaderPath = resolve(root, manifest.payload.engineShaderManifest);
     const expectedPath = resolve(dirname(sharedManifestPath), 'shaders/manifest.json');
-    if (shaderPath !== expectedPath)
+    if (realpathSync(shaderPath) !== realpathSync(expectedPath))
       return miss(`shader payload path mismatch: expected=${expectedPath} observed=${shaderPath}`);
     const observed = hashFiles(root, [shaderPath]);
     if (manifest.shaderBuild.outputFingerprint !== observed)

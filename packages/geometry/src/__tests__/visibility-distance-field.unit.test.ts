@@ -5,6 +5,7 @@ import {
   encodeMeshDistanceField,
   validateMeshDistanceField,
 } from '../distance-field-artifact';
+import { distanceFieldTexel } from '../distance-field-bricks';
 import { createTriangleQuery } from '../triangle-query';
 import { buildVisibilityDistanceField } from '../visibility-distance-field';
 
@@ -20,32 +21,21 @@ it('round-trips a field above the previous f32 ceiling within the packed query c
     })
   ).unwrap();
   expect(field.dimensions).toEqual([167, 167, 167]);
-  expect(field.values.length).toBe(4_657_463);
+  expect(field.dimensions.reduce((a, b) => a * b)).toBe(4_657_463);
   // The sheet lies on x=z. These central samples project into its interior.
-  const at = (x: number, y: number, z: number) =>
-    field.values[((z + 83) * 167 + y + 83) * 167 + x + 83];
+  const at = (x: number, y: number, z: number) => distanceFieldTexel(field, x + 83, y + 83, z + 83);
   expect(at(0, 0, 0)).toBe(0);
   expect(at(2, 0, 0)).toBeCloseTo(Math.SQRT2, 6);
   const artifact = (await encodeMeshDistanceField(field)).unwrap();
-  expect(artifact.length).toBeGreaterThan(16 * 1024 * 1024);
+  expect(artifact.length).toBeLessThan(16 * 1024 * 1024);
   expect(Math.ceil(field.values.length / 2) * 4).toBeLessThan(16 * 1024 * 1024);
   const decoded = (await decodeMeshDistanceField(artifact, field.meshDigest)).unwrap();
   expect(decoded.dimensions).toEqual(field.dimensions);
+  expect(decoded.bricks).toEqual(field.bricks);
   expect(decoded.values.length).toBe(field.values.length);
   expect(decoded.values.every((value, index) => value === field.values[index])).toBe(true);
   expect(decoded.policy).toEqual(field.policy);
 }, 30000);
-
-it('refuses grids above thirty-two MiB before allocating or querying their samples', async () => {
-  const result = await buildVisibilityDistanceField(
-    [-100, -100, -100, 100, -100, 100, 0, 100, 0],
-    [0, 1, 2],
-    { voxelSize: 1, triangleSidedness: [1] },
-  );
-  assert(!result.ok);
-  expect(result.error.code).toBe('distance-field-limit');
-  expect(result.error.detail.reason).toContain('8388608 total');
-});
 
 it('round-trips an extended axis and rejects the first oversized axis', async () => {
   const field = (
@@ -118,7 +108,7 @@ it('preserves analytic unsigned magnitudes, per-triangle policy identity and own
           Math.max(Math.abs(p[1] ?? 0) - 1, 0),
           p[2] ?? 0,
         );
-        expect(field.values[(z * ny + y) * nx + x]).toBe(
+        expect(distanceFieldTexel(field, x, y, z)).toBe(
           Math.fround(Math.min(distance, field.policy.distanceBand)),
         );
       }

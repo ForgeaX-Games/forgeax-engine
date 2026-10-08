@@ -49,7 +49,7 @@ export function interleaveSpriteInstanceBuffer(
  */
 export function spriteInstancesCacheHit(
   entry: InstanceBufferCacheEntry | undefined,
-  snapshot: SpriteInstancesSnapshot,
+  snapshot: Pick<SpriteInstancesSnapshot, 'archVersion'>,
   requestedBytes: number,
 ): boolean {
   return (
@@ -75,7 +75,7 @@ export function resolveSpriteInstancesBuffer(
   fallbackBuffer: Buffer,
   fallbackCount: number,
 ): { buffer: Buffer; count: number } {
-  const { runtime, frameState } = c;
+  const { runtime } = c;
   let buffer = fallbackBuffer;
   let count = fallbackCount;
   const spriteInstancesSnap: SpriteInstancesSnapshot | undefined =
@@ -88,68 +88,90 @@ export function resolveSpriteInstancesBuffer(
       spriteInstancesSnap.regions,
       !uniformFallback,
     );
-    const requestedBytes = interleaved.byteLength;
-    const cap = runtime.device.limits.maxStorageBufferBindingSize;
-    if (typeof cap === 'number' && requestedBytes > cap) {
-      runtime.errorRegistry.fire(
-        new RhiError({
-          code: 'limit-exceeded',
-          expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
-          hint: 'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (144 bytes per instance: current mat4 64B + previous mat4 64B + region 16B)',
-          detail: {
-            maxStorageBufferBindingSize: cap,
-            requestedBytes,
-          },
-        }),
-      );
-    } else {
-      const cachedSpriteInst = frameState.instanceBuffers.get(
-        worldEntityKey(spriteEntry.source.worldId, spriteInstancesSnap.cacheKey),
-      );
-      let activeSpriteInst: InstanceBufferCacheEntry | null = null;
-      if (spriteInstancesCacheHit(cachedSpriteInst, spriteInstancesSnap, requestedBytes)) {
-        activeSpriteInst = cachedSpriteInst ?? null;
-      } else if (requestedBytes > 0) {
-        const bufRes = runtime.device.createBuffer({
-          size: requestedBytes,
-          usage:
-            (uniformFallback ? GPU_BUFFER_USAGE_UNIFORM : GPU_BUFFER_USAGE_STORAGE) |
-            GPU_BUFFER_USAGE_COPY_DST,
-          mappedAtCreation: false,
-        });
-        if (!bufRes.ok) {
-          runtime.errorRegistry.fire(bufRes.error);
-        } else {
-          if (cachedSpriteInst !== undefined && !cachedSpriteInst.buffer.isDestroyed) {
-            const r = cachedSpriteInst.buffer.destroy();
-            if (!r.ok) runtime.errorRegistry.fire(r.error);
-          }
-          const newBuf = new GpuBuffer(runtime.device, bufRes.value);
-          activeSpriteInst = {
-            buffer: newBuf,
-            uploadedArchVersion: spriteInstancesSnap.archVersion,
-            uploadedByteLength: requestedBytes,
-          };
-          frameState.instanceBuffers.set(
-            worldEntityKey(spriteEntry.source.worldId, spriteInstancesSnap.cacheKey),
-            activeSpriteInst,
-          );
-        }
-      }
-      if (activeSpriteInst !== null && requestedBytes > 0) {
-        const writeRes = runtime.device.queue.writeBuffer(
-          activeSpriteInst.buffer.handle,
-          0,
-          interleaved,
-        );
-        if (!writeRes.ok) {
-          runtime.errorRegistry.fire(writeRes.error);
-        } else {
-          buffer = activeSpriteInst.buffer.handle;
-          count = spriteInstancesSnap.instanceCount;
-        }
-      }
+    const uploaded = uploadSpriteInstanceBuffer(
+      c,
+      spriteEntry.source.worldId,
+      spriteInstancesSnap,
+      interleaved,
+      (uniformFallback ? GPU_BUFFER_USAGE_UNIFORM : GPU_BUFFER_USAGE_STORAGE) |
+        GPU_BUFFER_USAGE_COPY_DST,
+      'reduce SpriteInstances instance count to fit within device.limits.maxStorageBufferBindingSize (144 bytes per instance: current mat4 64B + previous mat4 64B + region 16B)',
+    );
+    if (uploaded !== null) {
+      buffer = uploaded;
+      count = spriteInstancesSnap.instanceCount;
     }
   }
   return { buffer, count };
+}
+
+/**
+ * Sprite-path per-entity instance upload shared by `Instances` and
+ * `SpriteInstances`: fire `limit-exceeded` over the storage binding cap, reuse
+ * the cached buffer while archVersion and byte length match (otherwise replace
+ * and destroy it), then write the payload. Returns the resident handle, or
+ * null after a structured failure was fired (or for an empty payload).
+ *
+ * @internal
+ */
+export function uploadSpriteInstanceBuffer(
+  c: Pick<_InternalRenderPipelineContext, 'runtime' | 'frameState'>,
+  worldId: number,
+  snapshot: Pick<SpriteInstancesSnapshot, 'archVersion' | 'cacheKey'>,
+  payload: Float32Array,
+  usage: number,
+  limitHint: string,
+): Buffer | null {
+  const { runtime, frameState } = c;
+  const requestedBytes = payload.byteLength;
+  const cap = runtime.device.limits.maxStorageBufferBindingSize;
+  if (typeof cap === 'number' && requestedBytes > cap) {
+    runtime.errorRegistry.fire(
+      new RhiError({
+        code: 'limit-exceeded',
+        expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
+        hint: limitHint,
+        detail: {
+          maxStorageBufferBindingSize: cap,
+          requestedBytes,
+        },
+      }),
+    );
+    return null;
+  }
+  const key = worldEntityKey(worldId, snapshot.cacheKey);
+  const cached = frameState.instanceBuffers.get(key);
+  let active: InstanceBufferCacheEntry | null = null;
+  if (spriteInstancesCacheHit(cached, snapshot, requestedBytes)) {
+    active = cached ?? null;
+  } else if (requestedBytes > 0) {
+    const bufRes = runtime.device.createBuffer({
+      size: requestedBytes,
+      usage,
+      mappedAtCreation: false,
+    });
+    if (!bufRes.ok) {
+      runtime.errorRegistry.fire(bufRes.error);
+      return null;
+    }
+    // feat-20260619 M4 / F12: destroy the old cached buffer before
+    // replacing it with the new one (D-6).
+    if (cached !== undefined && !cached.buffer.isDestroyed) {
+      const r = cached.buffer.destroy();
+      if (!r.ok) runtime.errorRegistry.fire(r.error);
+    }
+    active = {
+      buffer: new GpuBuffer(runtime.device, bufRes.value),
+      uploadedArchVersion: snapshot.archVersion,
+      uploadedByteLength: requestedBytes,
+    };
+    frameState.instanceBuffers.set(key, active);
+  }
+  if (active === null || requestedBytes === 0) return null;
+  const writeRes = runtime.device.queue.writeBuffer(active.buffer.handle, 0, payload);
+  if (!writeRes.ok) {
+    runtime.errorRegistry.fire(writeRes.error);
+    return null;
+  }
+  return active.buffer.handle;
 }

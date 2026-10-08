@@ -30,6 +30,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forgeax/engine-terrain": "workspace:*",
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
@@ -42,12 +43,12 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-ui": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "@forgeax/engine-math": "workspace:*"
   },
   "devDependencies": {
     "@forgeax/engine-skinning": "workspace:*",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "forgeax": {
     "metrics": {

@@ -188,11 +188,14 @@ export interface InternalizedGraph {
    */
   readonly resolvedBuffers: readonly ResolvedBuffer[];
   /**
-   * Resolved TextureViews keyed by resource name.
+   * Resolved physical texture/view pairs keyed once by resource name.
    * Populated by the compile allocation phase for addColorTarget resources.
    * Empty when no color targets were declared.
    */
-  readonly resolvedTextures: ReadonlyMap<string, TextureView>;
+  readonly colorTargets: ReadonlyMap<
+    string,
+    { readonly texture: Texture; readonly view: TextureView }
+  >;
 }
 
 // ── Compile options ──────────────────────────────────────────────
@@ -224,13 +227,13 @@ export interface CompileOptions {
 
 /** Pooled texture entry shared by transient and persistent allocation paths. */
 interface PooledTexture {
-  readonly texture: unknown; // opaque RHI Texture handle
-  readonly view: unknown; // opaque RHI TextureView handle
+  readonly texture: Texture;
+  readonly view: TextureView;
   readonly descriptorKey: string;
 }
 
 interface StagedColorTargetAllocation {
-  readonly resolvedTextures: Map<string, TextureView>;
+  readonly colorTargets: InternalizedGraph['colorTargets'];
   readonly transient: ReadonlyMap<string, PooledTexture>;
   readonly persistent: ReadonlyMap<string, PooledTexture>;
 }
@@ -416,7 +419,7 @@ export class RenderGraph<Ctx = unknown> {
    * or the name was not registered via addColorTarget.
    */
   getColorTargetView(name: string): unknown {
-    return this.compiled?.resolvedTextures.get(name);
+    return this.compiled?.colorTargets.get(name)?.view;
   }
 
   /**
@@ -424,15 +427,15 @@ export class RenderGraph<Ctx = unknown> {
    * Returns the texture after compile, or undefined if not yet compiled.
    */
   getColorTargetTexture(name: string): unknown {
-    return this.compiled?.resolvedTextures.get(`${name}::tex`);
+    return this.compiled?.colorTargets.get(name)?.texture;
   }
 
   getColorTargetDescriptor(name: string): ResolvedColorTargetDescriptor | undefined {
     const meta = this.resources.getColorTargetMeta(name);
-    const texture = this.compiled?.resolvedTextures.get(`${name}::tex`);
+    const texture = this.compiled?.colorTargets.get(name)?.texture;
     if (meta === undefined || texture === undefined) return undefined;
     return {
-      texture: texture as unknown as Texture,
+      texture,
       format: meta.format,
       size: {
         width: this.resolveWidth(meta.size),
@@ -623,7 +626,7 @@ export class RenderGraph<Ctx = unknown> {
     this.compiled = {
       passes: internalizedPasses,
       resolvedBuffers,
-      resolvedTextures: allocatedTextures.value.resolvedTextures,
+      colorTargets: allocatedTextures.value.colorTargets,
     };
     this.compiledWidth = this.swapChainWidth;
     this.compiledHeight = this.swapChainHeight;
@@ -665,7 +668,7 @@ export class RenderGraph<Ctx = unknown> {
     }
     for (const pooled of this.transientPool.values()) {
       try {
-        device.destroyTexture(pooled.texture as Texture);
+        device.destroyTexture(pooled.texture);
       } catch {
         // swallow-and-continue: per-handle destroy failures do not
         // interrupt the drain chain (docstring tolerance contract).
@@ -676,7 +679,7 @@ export class RenderGraph<Ctx = unknown> {
     // items left over (Renderer.dispose() has no in-flight frames).
     for (const pooled of this.pendingDestroy) {
       try {
-        device.destroyTexture(pooled.texture as Texture);
+        device.destroyTexture(pooled.texture);
       } catch {
         // swallow-and-continue: per-handle destroy failures do not
         // interrupt the drain chain (docstring tolerance contract).
@@ -685,7 +688,7 @@ export class RenderGraph<Ctx = unknown> {
     this.pendingDestroy.length = 0;
     for (const pooled of this.persistentTextures.values()) {
       try {
-        device.destroyTexture(pooled.texture as Texture);
+        device.destroyTexture(pooled.texture);
       } catch {
         // swallow-and-continue: per-handle destroy failures do not
         // interrupt the drain chain (docstring tolerance contract).
@@ -830,7 +833,7 @@ export class RenderGraph<Ctx = unknown> {
     // Destroy snapshot items.
     for (const pooled of snapshot) {
       try {
-        device.destroyTexture(pooled.texture as Texture);
+        device.destroyTexture(pooled.texture);
       } catch {
         // swallow-and-continue: per-handle destroy errors are tolerated
         // (docstring contract) — a stale handle does not interrupt the
@@ -869,9 +872,11 @@ export class RenderGraph<Ctx = unknown> {
   execute(ctx: Ctx, runPass?: PassExecuteRunner): void {
     const compiled = this.compiled;
     if (!compiled) return;
-    const resolvedTextures: ReadonlyMap<string, unknown> = compiled.resolvedTextures;
     const resolveCtx: ResolveContext = {
-      resolve: (name: string) => resolvedTextures.get(name),
+      resolve: (name: string) =>
+        name.endsWith('::tex')
+          ? compiled.colorTargets.get(name.slice(0, -5))?.texture
+          : compiled.colorTargets.get(name)?.view,
     };
     const passList = this.passes.list();
     const passByName = new Map<string, PassEntry<Ctx>>(passList.map((p) => [p.name, p]));
@@ -1061,12 +1066,12 @@ export class RenderGraph<Ctx = unknown> {
     device: RhiDevice | undefined,
     invalidateTransientPool = false,
   ): Result<StagedColorTargetAllocation, RenderGraphError> {
-    const result = new Map<string, TextureView>();
+    const result = new Map<string, { readonly texture: Texture; readonly view: TextureView }>();
     if (
       !device ||
       typeof (device as unknown as Record<string, unknown>).createTexture !== 'function'
     )
-      return ok({ resolvedTextures: result, transient: new Map(), persistent: new Map() });
+      return ok({ colorTargets: result, transient: new Map(), persistent: new Map() });
 
     const stagedTransient = new Map<string, PooledTexture>();
     const stagedPersistent = new Map<string, PooledTexture>();
@@ -1074,7 +1079,7 @@ export class RenderGraph<Ctx = unknown> {
     const discardStaged = (): void => {
       for (const pooled of stagedAllocations) {
         try {
-          device.destroyTexture(pooled.texture as Texture);
+          device.destroyTexture(pooled.texture);
         } catch {
           // A cleanup failure must not hide the allocation error.
         }
@@ -1086,36 +1091,34 @@ export class RenderGraph<Ctx = unknown> {
       if (!meta) continue;
 
       // Resolve alias: fold to source physical texture.
-      if (meta.aliasedFrom !== undefined) {
-        const sourceView = result.get(meta.aliasedFrom);
-        const sourceTexture = result.get(`${meta.aliasedFrom}::tex`);
-        if (sourceView === undefined || sourceTexture === undefined) {
+      if (entry.aliasedFrom !== undefined) {
+        const source = result.get(entry.aliasedFrom);
+        if (source === undefined) {
           discardStaged();
           return err(
             new RenderGraphError({
               code: 'alias-source-missing',
-              expected: `alias '${entry.key}' source '${meta.aliasedFrom}' must resolve to a compiled color target`,
-              hint: `register color target '${meta.aliasedFrom}' before compiling alias '${entry.key}'`,
+              expected: `alias '${entry.key}' source '${entry.aliasedFrom}' must resolve to a compiled color target`,
+              hint: `register color target '${entry.aliasedFrom}' before compiling alias '${entry.key}'`,
               detail: {
                 aliasKey: entry.key,
-                sourceKey: meta.aliasedFrom,
+                sourceKey: entry.aliasedFrom,
               } satisfies AliasSourceDetail,
             }),
           );
         }
-        result.set(entry.key, sourceView);
-        result.set(`${entry.key}::tex`, sourceTexture);
+        result.set(entry.key, source);
         continue;
       }
 
       const width = this.resolveWidth(meta.size);
       const height = this.resolveHeight(meta.size);
-      const lifetime = entry.lifetime;
+      const lifetime = entry.descriptor.lifetime;
 
       // feat-20260612-hdrp-ssao M9 scope-amendment (M8 graph barrier):
       // Include the resource name in the transient pool key. Without this,
       // two simultaneously-active transient color targets with identical
-      // descriptors (e.g. ssaoRaw / ssaoBlurred — both r8unorm half-swapchain
+      // descriptors (e.g. two r8unorm half-swapchain color targets with the same usage,
       // RENDER_ATTACHMENT|TEXTURE_BINDING) share the same GPU texture. When
       // one pass writes and the next pass both writes (color attachment) and
       // reads (texture binding from the same view), WebGPU rejects the command
@@ -1131,27 +1134,15 @@ export class RenderGraph<Ctx = unknown> {
       });
       const key = `${entry.key}:${descriptorKey}`;
 
-      if (lifetime === 'transient') {
-        const pooled = invalidateTransientPool ? undefined : this.transientPool.get(key);
-        if (pooled) {
-          result.set(entry.key, pooled.view as TextureView);
-          // w7-fix (round 3): re-publish the GPU Texture handle on every
-          // compile, not only on pool-miss. Without this the second compile
-          // (the recompile-on-resize path) leaves `${entry.key}::tex` empty,
-          // breaking consumers that read `getColorTargetTexture` (shadow
-          // debugReadback, fxaa copyTextureToTexture, MSAA srgb-view creation).
-          // biome-ignore lint/suspicious/noExplicitAny: opaque RHI texture handle
-          result.set(`${entry.key}::tex`, pooled.texture as any);
-          continue;
-        }
-      } else if (lifetime === 'persistent') {
-        const persisted = this.persistentTextures.get(entry.key);
-        if (persisted?.descriptorKey === descriptorKey) {
-          result.set(entry.key, persisted.view as TextureView);
-          // biome-ignore lint/suspicious/noExplicitAny: opaque RHI texture handle
-          result.set(`${entry.key}::tex`, persisted.texture as any);
-          continue;
-        }
+      const candidate =
+        lifetime === 'transient'
+          ? invalidateTransientPool
+            ? undefined
+            : this.transientPool.get(key)
+          : this.persistentTextures.get(entry.key);
+      if (candidate?.descriptorKey === descriptorKey) {
+        result.set(entry.key, candidate);
+        continue;
       }
 
       // Pool miss or persistent fresh allocation: create new texture.
@@ -1215,13 +1206,11 @@ export class RenderGraph<Ctx = unknown> {
         stagedPersistent.set(entry.key, pooled);
       }
 
-      result.set(entry.key, viewResult.value);
-      // biome-ignore lint/suspicious/noExplicitAny: store Texture alongside TextureView
-      result.set(`${entry.key}::tex`, texResult.value as any);
+      result.set(entry.key, pooled);
     }
 
     return ok({
-      resolvedTextures: result,
+      colorTargets: result,
       transient: stagedTransient,
       persistent: stagedPersistent,
     });

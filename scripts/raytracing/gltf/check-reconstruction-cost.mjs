@@ -48,6 +48,7 @@ try {
     const result = await page.evaluate(async (mode) => {
       const host = window.__sponzaRaster;
       await host.setDiffuseGi({
+        gather: 'exact',
         maxBounces: 1,
         maxDistance: 100,
         seed: 47,

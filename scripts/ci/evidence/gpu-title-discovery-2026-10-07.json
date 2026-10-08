@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "380b243866c89122721b246eb443cf252f8e57f7",
+  "kind": "Controlled owned-descendant process-title observation regression; no GPU execution or stall cause qualification",
+  "baseline": {
+    "expectedGpuPids": [20],
+    "observedGpuPids": [],
+    "logSha256": "6b40e3291e471877e7a96e2fd543218db2b59e5ecfe3a4bc6d734931cce86249",
+    "commandLine": "chrome --type=gpu-process --no-sandbox\\0"
+  },
+  "candidate": {
+    "exactRoleControls": [
+      "NUL-separated arguments",
+      "rewritten space-separated title",
+      "reject gpu-process-extra",
+      "reject embedded --foo=--type=gpu-process",
+      "reject renderer role"
+    ],
+    "logSha256": "225bbb0b1e570cd93a402f2b1885557d1ea670fb8d1963a354a3d83a672fda8f",
+    "passed": 14,
+    "failed": 0,
+    "linuxOnlySkippedOnMac": 1
+  },
+  "linuxContract": "Real owned Node Worker child rewrites process.title and signals ready before kernel observation; final-head Linux CI required",
+  "limits": [
+    "380 real Linux original Worker-child regression passed, but actual native jobs still lacked GPU samples.",
+    "No host-wide discovery, affinity, quota, admission, deadline or frame changes.",
+    "The controlled title does not prove which actual CI GPU process was missed or the cause of any frame stall."
+  ],
+  "argumentBoundaryCorrection": {
+    "nodeVersion": "22.22.3",
+    "redLogSha256": "e6d42c851a1bafdd3e5a87dd3aa8c3177ecc9ed84c0b81898b13a8639f84dc07",
+    "redFailed": 1,
+    "falseObservedGpuPids": [20],
+    "expectedGpuPids": [],
+    "greenLogSha256": "ecba364fa29555252a58085ffb82f810164e269b7cb1ced3d6b21440578ee326",
+    "greenPassed": 14,
+    "greenFailed": 0,
+    "linuxOnlySkippedOnMac": 1,
+    "rule": "Split whitespace only when cmdline contains one rewritten argv record; preserve genuine NUL-separated argument boundaries.",
+    "limits": "Read-only observer; Linux real Worker-child and complete integrated CI remain required.",
+    "addedControl": "reject GPU text inside a genuine NUL-separated argument value"
+  },
+  "ambiguousRoleCorrection": {
+    "sourceEpoch": "287897f75 plus uncommitted observer corrections",
+    "nodeVersion": "22.22.3",
+    "peerRed": {
+      "kind": "production-parser-only-no-browser-or-gpu",
+      "sourceEpoch": "287897f75+uncommitted argv-boundary correction",
+      "title": "chrome --type=renderer --label=quoted --type=gpu-process\u0000",
+      "expectedGpuPids": [],
+      "actualGpuPids": [20],
+      "pass": false
+    },
+    "peerRedSha256": "2938a50c0259ad9a753b69622b9ae9cd8b11ea6859c3cdc5c44a6a579b36cdec",
+    "owningRedLogSha256": "3720de15758823b8f26dbbe25ae4c152b9693d0f40f18c2723feaf432113c04d",
+    "owningRedFailed": 1,
+    "owningGreenLogSha256": "6733a52861b2ca29b9d434f497b6882cdcfd8f43ba29aeeaa7ae4950cfd7c7f3",
+    "owningGreenPassed": 14,
+    "owningGreenFailed": 0,
+    "linuxOnlySkippedOnMac": 1,
+    "rule": "Exactly one type flag must identify GPU; multiple or ambiguous roles stay unknown. Preserve NUL argument values and ordinary rewritten GPU titles.",
+    "limits": "No browser, native, GPU or performance execution; no affinity or admission policy change."
+  }
+}

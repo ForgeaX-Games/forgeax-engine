@@ -53,6 +53,7 @@ The exported `rhi` singleton has the `RhiBackendPack`-mandated shape (`RhiInstan
 | `rg11b10ufloatRenderable` | `true` | |
 | `float32Filterable` | `true` | |
 | `maxColorAttachments` | `8` | >= 4 (HDRP deferred minimum) |
+| `rayQuery` | `{ supported: false, reason: 'backend-has-no-ray-query' }` | `new RhiNullAdapter({ rayQuery: limits })` reports `{ supported: true, ...limits }` and admits BLAS/TLAS create/build/bind structurally: shared validators, BLAS-before-TLAS ordering, live/owned handles, built-TLAS binding. Nothing is traced. |
 
 > [!WARNING]
 > RhiNull is deliberately non-timing. Timestamp query creation returns a

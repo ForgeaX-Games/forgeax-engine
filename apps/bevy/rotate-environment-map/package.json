@@ -20,11 +20,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-rotate-environment-map smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },
-      "fps": { "enabled": false, "reason": "demo-specific fps evidence belongs to its completed reproduction" },
-      "bench": { "enabled": false, "reason": "demo-specific benchmarks belong to its completed reproduction" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-rotate-environment-map smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; Bevy example reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "demo-specific fps evidence belongs to its completed reproduction"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "demo-specific benchmarks belong to its completed reproduction"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-rotate-environment-map smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy example reproduction"
+      }
     }
   },
   "dependencies": {
@@ -45,8 +60,8 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

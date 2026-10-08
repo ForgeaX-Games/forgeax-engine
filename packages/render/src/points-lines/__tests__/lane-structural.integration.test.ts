@@ -38,7 +38,7 @@ function snapshot(component: 'Points' | 'Lines' | undefined) {
       component === 'Points'
         ? { kind: 'points', sizePx: 16, shape: 'circle' }
         : component === 'Lines'
-          ? { kind: 'lines', widthPx: 4 }
+          ? { kind: 'lines', width: 4 }
           : undefined,
     layer: 0,
     visible: true,

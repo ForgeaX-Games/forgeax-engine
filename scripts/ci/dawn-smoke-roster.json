@@ -549,6 +549,29 @@
       ]
     },
     {
+      "package": "@forgeax/hello-gi",
+      "path": "apps/hello/gi/package.json",
+      "classification": "run",
+      "gates": [
+        {
+          "gateId": "hello-gi/smoke",
+          "commandId": "smoke",
+          "executionClass": "independent",
+          "commandSource": "manifest-smokeInvocation",
+          "commands": [
+            {
+              "commandId": "smoke",
+              "source": "manifest-smokeInvocation"
+            }
+          ],
+          "oracle": {
+            "kind": "frameReceipt",
+            "parserId": "forgeax-smoke-receipt-v1"
+          }
+        }
+      ]
+    },
+    {
       "package": "@forgeax/hello-gltf-instancing",
       "path": "apps/hello/gltf-instancing/package.json",
       "classification": "run",
@@ -869,6 +892,29 @@
           ],
           "oracle": {
             "kind": "assertion"
+          }
+        }
+      ]
+    },
+    {
+      "package": "@forgeax/hello-material-projection",
+      "path": "apps/hello/material-projection/package.json",
+      "classification": "run",
+      "gates": [
+        {
+          "gateId": "hello-material-projection/smoke",
+          "commandId": "smoke",
+          "executionClass": "independent",
+          "commandSource": "manifest-smokeInvocation",
+          "commands": [
+            {
+              "commandId": "smoke",
+              "source": "manifest-smokeInvocation"
+            }
+          ],
+          "oracle": {
+            "kind": "frameReceipt",
+            "parserId": "forgeax-smoke-receipt-v1"
           }
         }
       ]
@@ -1265,6 +1311,29 @@
       "gates": [
         {
           "gateId": "hello-taa/smoke",
+          "commandId": "smoke",
+          "executionClass": "independent",
+          "commandSource": "manifest-smokeInvocation",
+          "commands": [
+            {
+              "commandId": "smoke",
+              "source": "manifest-smokeInvocation"
+            }
+          ],
+          "oracle": {
+            "kind": "frameReceipt",
+            "parserId": "forgeax-smoke-receipt-v1"
+          }
+        }
+      ]
+    },
+    {
+      "package": "@forgeax/hello-terrain",
+      "path": "apps/hello/terrain/package.json",
+      "classification": "run",
+      "gates": [
+        {
+          "gateId": "hello-terrain/smoke",
           "commandId": "smoke",
           "executionClass": "independent",
           "commandSource": "manifest-smokeInvocation",
@@ -2397,20 +2466,53 @@
       "classification": "run",
       "gates": [
         {
-          "gateId": "app-learn-render-6-pbr-4-transmission-refraction/smoke",
-          "commandId": "smoke",
+          "gateId": "app-learn-render-6-pbr-4-transmission-refraction/features-a",
+          "commandId": "smoke:features-a",
           "executionClass": "sharded",
-          "commandSource": "manifest-smokeInvocation",
+          "commandSource": "package-script",
           "commands": [
             {
-              "commandId": "smoke",
-              "source": "manifest-smokeInvocation"
+              "commandId": "smoke:features-a",
+              "script": "smoke:features-a"
+            }
+          ],
+          "oracle": {
+            "kind": "assertion"
+          },
+          "script": "smoke:features-a"
+        },
+        {
+          "gateId": "app-learn-render-6-pbr-4-transmission-refraction/features-b",
+          "commandId": "smoke:features-b",
+          "executionClass": "sharded",
+          "commandSource": "package-script",
+          "commands": [
+            {
+              "commandId": "smoke:features-b",
+              "script": "smoke:features-b"
+            }
+          ],
+          "oracle": {
+            "kind": "assertion"
+          },
+          "script": "smoke:features-b"
+        },
+        {
+          "gateId": "app-learn-render-6-pbr-4-transmission-refraction/frames",
+          "commandId": "smoke:frames",
+          "executionClass": "sharded",
+          "commandSource": "package-script",
+          "commands": [
+            {
+              "commandId": "smoke:frames",
+              "script": "smoke:frames"
             }
           ],
           "oracle": {
             "kind": "frameReceipt",
             "parserId": "forgeax-smoke-receipt-v1"
-          }
+          },
+          "script": "smoke:frames"
         }
       ]
     },
@@ -2531,6 +2633,46 @@
             "parserId": "forgeax-smoke-receipt-v1"
           },
           "script": "smoke"
+        }
+      ]
+    },
+    {
+      "package": "@forgeax/hello-transform-gizmo",
+      "path": "apps/hello/transform-gizmo/package.json",
+      "classification": "run",
+      "gates": [
+        {
+          "gateId": "hello-transform-gizmo/smoke",
+          "commandId": "smoke",
+          "executionClass": "sharded",
+          "commandSource": "manifest-smokeInvocation",
+          "commands": [
+            {
+              "commandId": "smoke",
+              "source": "manifest-smokeInvocation"
+            }
+          ],
+          "oracle": {
+            "kind": "frameReceipt",
+            "parserId": "forgeax-smoke-receipt-v1"
+          }
+        },
+        {
+          "gateId": "hello-transform-gizmo/browser",
+          "commandId": "smoke:browser",
+          "executionClass": "sharded",
+          "commandSource": "package-script",
+          "script": "smoke:browser",
+          "commands": [
+            {
+              "commandId": "smoke:browser",
+              "script": "smoke:browser"
+            }
+          ],
+          "oracle": {
+            "kind": "frameReceipt",
+            "parserId": "forgeax-smoke-receipt-v1"
+          }
         }
       ]
     }

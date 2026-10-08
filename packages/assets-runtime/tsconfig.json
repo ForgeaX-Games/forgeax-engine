@@ -23,6 +23,7 @@
     { "path": "../shader" },
     { "path": "../scene" },
     { "path": "../skinning" },
-    { "path": "../types" }
+    { "path": "../types" },
+    {"path": "../terrain"}
   ]
 }

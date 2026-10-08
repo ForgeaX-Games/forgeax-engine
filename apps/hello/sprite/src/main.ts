@@ -349,8 +349,8 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
 
   function applyScene(target: SceneId): void {
     // Despawn the entire previous scene before reinstalling the new
-    // sort config. The order matters because transparentSortEntries
-    // reads the world resource at extract time; flipping the mode
+    // sort config. The order matters because TransparentSortCache
+    // reads the world resource at render time; flipping the mode
     // mid-frame would otherwise sort the previous scene's entries
     // against the new formula for one tick.
     for (const r of activeEntities) {

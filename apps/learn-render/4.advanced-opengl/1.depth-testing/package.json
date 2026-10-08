@@ -60,7 +60,7 @@
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^20.14.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "playwright": "^1.50.0",
     "vite": "8.0.16"
   }

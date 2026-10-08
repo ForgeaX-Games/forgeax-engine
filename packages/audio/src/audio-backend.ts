@@ -1,38 +1,54 @@
-// @forgeax/engine-audio -- AudioBackend protocol interface (feat-20260527-audio-system M1 / w8)
-//
-// Decision anchors:
-// - plan-strategy D-1 (dual-package split: interface in engine-audio, impl in engine-audio-webaudio)
-// - plan-strategy D-5 (fixed two-bus topology: SFX + Music -> Master; bus name literal union)
-// - requirements S-5 (dual bus mixing hierarchy) + S-9 (AudioEngine Resource)
-// - requirements S-7 (entity despawn cleanup: stop + disconnect)
-// - charter P4 (consistent abstraction: structurally parallel to InputBackend)
+// Realm-neutral controls and observations; native playback belongs to the Host.
 
 import type { AudioClipAsset, AudioError } from '@forgeax/engine-types';
 
-export type BusName = 'sfx' | 'music';
+import type { AudioBus } from './audio-buses';
+
+export type BusName = string;
 
 export const AUDIO_ENGINE_RESOURCE_KEY = 'AudioEngine' as const;
 
 export interface AudioPlayOptions {
+  /** Initial decoded clip seconds; finite and non-negative. Defaults to zero. */
+  readonly fromPosition?: number;
+  /** Positive sample advance multiplier; pitch changes with speed. */
+  readonly playbackRate?: number;
+  readonly paused?: boolean;
   readonly loop: boolean;
   readonly volume: number;
   readonly spatialBlend: number;
   readonly bus: BusName;
+  /** World position and normalized local -Z forward; origin/-Z when omitted. */
+  readonly sourcePose?: AudioSourcePose;
+  /** Degrees; configured when playback starts, omnidirectional by default. */
+  readonly coneInnerAngle?: number;
+  readonly coneOuterAngle?: number;
+  readonly coneOuterGain?: number;
 }
 
-export interface AudioListenerPose {
+export interface AudioSourcePose {
   readonly positionX: number;
   readonly positionY: number;
   readonly positionZ: number;
   readonly forwardX: number;
   readonly forwardY: number;
   readonly forwardZ: number;
+}
+
+export interface AudioListenerPose extends AudioSourcePose {
   readonly upX: number;
   readonly upY: number;
   readonly upZ: number;
 }
 
 export interface AudioState {
+  readonly streaming?: {
+    readonly encodedBytes: number;
+    readonly pcmBytes: number;
+    readonly pendingBytes: number;
+    readonly pendingReads: number;
+    readonly underruns: number;
+  };
   readonly contextState: 'running' | 'suspended' | 'closed';
   readonly activeSourceCount: number;
   readonly lastError: AudioError | null;
@@ -42,8 +58,15 @@ export interface AudioBackend {
   play(entityId: number, clip: AudioClipAsset, opts: AudioPlayOptions): void;
   stop(entityId: number): void;
   setVolume(entityId: number, volume: number): void;
+  setPlaybackRate(entityId: number, playbackRate: number): void;
+  setPaused(entityId: number, paused: boolean): void;
+  /** Seek an admitted or decoding source; does not start a stopped source. */
+  seek(entityId: number, position: number): void;
+  configureBuses(buses: readonly AudioBus[]): void;
+  setBus(entityId: number, bus: BusName): void;
   setBusVolume(busName: BusName, volume: number): void;
   setBusMute(busName: BusName, muted: boolean): void;
+  setSourcePose(entityId: number, pose: AudioSourcePose): void;
   setListenerPose(pose: AudioListenerPose): void;
   getState(): AudioState;
   getActiveSourceCount(): number;

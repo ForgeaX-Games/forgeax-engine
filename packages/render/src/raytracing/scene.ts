@@ -83,7 +83,7 @@ const uint = (value: number, max = 0xffffffff) =>
   Number.isInteger(value) && value >= 0 && value <= max;
 const finite32 = (value: number) => Number.isFinite(value) && Number.isFinite(Math.fround(value));
 
-/** Builds a deterministic, stackless median BVH. Never borrows caller arrays. */
+/** Builds a deterministic binned-SAH BVH in depth-first order. Never borrows caller arrays. */
 export function buildRayReferenceScene(
   instances: readonly RayMeshInstance[],
 ): Result<RayReferenceScene, RayReferenceError> {
@@ -172,41 +172,8 @@ export function buildRayReferenceScene(
       rows.push([...row, instanceId, geometryId, primitive, materialId, activeMask, 0, 0, 0]);
     }
   }
-  const nodes: { min: number[]; max: number[]; escape: number; first: number; count: number }[] =
-    [];
-  const ordered: number[][] = [];
-  const visit = (items: number[][]): void => {
-    const min = [Infinity, Infinity, Infinity],
-      max = [-Infinity, -Infinity, -Infinity];
-    for (const row of items)
-      for (let axis = 0; axis < 3; axis++)
-        for (const v of [0, 4, 8]) {
-          min[axis] = Math.min(item(min, axis), item(row, v + axis));
-          max[axis] = Math.max(item(max, axis), item(row, v + axis));
-        }
-    const node = { min, max, escape: 0, first: ordered.length, count: 0 };
-    nodes.push(node);
-    if (items.length <= 4) {
-      node.count = items.length;
-      ordered.push(...items);
-    } else {
-      const axis = [0, 1, 2].sort(
-        (a, b) => item(max, b) - item(min, b) - (item(max, a) - item(min, a)),
-      )[0] as number;
-      items.sort(
-        (a, b) =>
-          item(a, axis) +
-          item(a, axis + 4) +
-          item(a, axis + 8) -
-          (item(b, axis) + item(b, axis + 4) + item(b, axis + 8)),
-      );
-      const middle = Math.floor(items.length / 2);
-      visit(items.slice(0, middle));
-      visit(items.slice(middle));
-    }
-    node.escape = nodes.length;
-  };
-  if (rows.length) visit(rows);
+  const { nodes, order } = buildBinnedBvh(rows);
+  const ordered = Array.from(order, (index) => item(rows, index));
   // One unreachable dummy element keeps WebGPU runtime arrays bindable for an empty scene.
   const triangles = new Uint8Array(Math.max(1, rows.length) * RAY_TRIANGLE_STRIDE);
   const tv = new DataView(triangles.buffer);
@@ -226,6 +193,8 @@ export function buildRayReferenceScene(
     nv.setUint32(i * 48 + 12, n.escape, true);
     nv.setUint32(i * 48 + 28, n.first, true);
     nv.setUint32(i * 48 + 32, n.count, true);
+    nv.setUint32(i * 48 + 36, n.right, true);
+    nv.setUint32(i * 48 + 40, n.axis, true);
   });
   return ok({ triangles, nodes: nodeBytes, triangleCount: rows.length });
 }
@@ -326,4 +295,163 @@ function item<T>(values: ArrayLike<T>, index: number): T {
   if (value === undefined)
     throw new RangeError(`reference kernel index ${index} is outside its validated span`);
   return value;
+}
+
+interface BvhNode {
+  readonly min: number[];
+  readonly max: number[];
+  /** Index after this subtree; for an inner node's left child it is the right child. */
+  escape: number;
+  readonly first: number;
+  count: number;
+  right: number;
+  axis: number;
+}
+
+const BVH_LEAF_SIZE = 4;
+const BVH_BINS = 16;
+// Ordered traversal keeps a fixed private stack; the median fallback bounds depth
+// to SAH_DEPTH + log2(RAY_REFERENCE_TRIANGLE_LIMIT / BVH_LEAF_SIZE) < 64.
+const BVH_SAH_DEPTH = 40;
+
+/** Binned surface-area-heuristic split by centroid; median split when SAH has no choice. */
+function buildBinnedBvh(rows: readonly number[][]): { nodes: BvhNode[]; order: Uint32Array } {
+  const count = rows.length;
+  const lo = new Float64Array(count * 3);
+  const hi = new Float64Array(count * 3);
+  const center = new Float64Array(count * 3);
+  for (let t = 0; t < count; t++) {
+    const row = item(rows, t);
+    for (let axis = 0; axis < 3; axis++) {
+      const a = item(row, axis),
+        b = item(row, 4 + axis),
+        c = item(row, 8 + axis);
+      lo[t * 3 + axis] = Math.min(a, b, c);
+      hi[t * 3 + axis] = Math.max(a, b, c);
+      center[t * 3 + axis] = (a + b + c) / 3;
+    }
+  }
+  const order = Uint32Array.from({ length: count }, (_, t) => t);
+  const nodes: BvhNode[] = [];
+  const area = (min: ArrayLike<number>, max: ArrayLike<number>) => {
+    const x = Math.max(0, item(max, 0) - item(min, 0)),
+      y = Math.max(0, item(max, 1) - item(min, 1)),
+      z = Math.max(0, item(max, 2) - item(min, 2));
+    return x * y + y * z + z * x;
+  };
+  const binLo = new Float64Array(BVH_BINS * 3);
+  const binHi = new Float64Array(BVH_BINS * 3);
+  const binCount = new Uint32Array(BVH_BINS);
+  const rightArea = new Float64Array(BVH_BINS);
+  const visit = (start: number, end: number, depth: number): void => {
+    const min = [Infinity, Infinity, Infinity],
+      max = [-Infinity, -Infinity, -Infinity];
+    const cmin = [Infinity, Infinity, Infinity],
+      cmax = [-Infinity, -Infinity, -Infinity];
+    for (let k = start; k < end; k++) {
+      const t = item(order, k);
+      for (let axis = 0; axis < 3; axis++) {
+        min[axis] = Math.min(item(min, axis), item(lo, t * 3 + axis));
+        max[axis] = Math.max(item(max, axis), item(hi, t * 3 + axis));
+        cmin[axis] = Math.min(item(cmin, axis), item(center, t * 3 + axis));
+        cmax[axis] = Math.max(item(cmax, axis), item(center, t * 3 + axis));
+      }
+    }
+    const node: BvhNode = { min, max, escape: 0, first: start, count: 0, right: 0, axis: 0 };
+    nodes.push(node);
+    const n = end - start;
+    if (n <= BVH_LEAF_SIZE) {
+      node.count = n;
+      node.escape = nodes.length;
+      return;
+    }
+    let bestAxis = -1,
+      bestBin = 0,
+      bestCost = Infinity;
+    for (let axis = 0; depth < BVH_SAH_DEPTH && axis < 3; axis++) {
+      const extent = item(cmax, axis) - item(cmin, axis);
+      if (!(extent > 0)) continue;
+      binLo.fill(Infinity);
+      binHi.fill(-Infinity);
+      binCount.fill(0);
+      const scale = BVH_BINS / extent;
+      for (let k = start; k < end; k++) {
+        const t = item(order, k);
+        const bin = Math.min(
+          BVH_BINS - 1,
+          Math.floor((item(center, t * 3 + axis) - item(cmin, axis)) * scale),
+        );
+        binCount[bin] = item(binCount, bin) + 1;
+        for (let c = 0; c < 3; c++) {
+          binLo[bin * 3 + c] = Math.min(item(binLo, bin * 3 + c), item(lo, t * 3 + c));
+          binHi[bin * 3 + c] = Math.max(item(binHi, bin * 3 + c), item(hi, t * 3 + c));
+        }
+      }
+      const accLo = [Infinity, Infinity, Infinity],
+        accHi = [-Infinity, -Infinity, -Infinity];
+      for (let bin = BVH_BINS - 1; bin > 0; bin--) {
+        for (let c = 0; c < 3; c++) {
+          accLo[c] = Math.min(item(accLo, c), item(binLo, bin * 3 + c));
+          accHi[c] = Math.max(item(accHi, c), item(binHi, bin * 3 + c));
+        }
+        rightArea[bin] = area(accLo, accHi);
+      }
+      accLo.fill(Infinity);
+      accHi.fill(-Infinity);
+      let left = 0;
+      for (let bin = 0; bin < BVH_BINS - 1; bin++) {
+        left += item(binCount, bin);
+        for (let c = 0; c < 3; c++) {
+          accLo[c] = Math.min(item(accLo, c), item(binLo, bin * 3 + c));
+          accHi[c] = Math.max(item(accHi, c), item(binHi, bin * 3 + c));
+        }
+        if (left === 0 || left === n) continue;
+        const cost = area(accLo, accHi) * left + item(rightArea, bin + 1) * (n - left);
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestAxis = axis;
+          bestBin = bin;
+        }
+      }
+    }
+    let middle: number;
+    if (bestAxis >= 0) {
+      const axis = bestAxis;
+      const scale = BVH_BINS / (item(cmax, axis) - item(cmin, axis));
+      const isLeft = (t: number) =>
+        Math.min(
+          BVH_BINS - 1,
+          Math.floor((item(center, t * 3 + axis) - item(cmin, axis)) * scale),
+        ) <= bestBin;
+      let i = start,
+        j = end - 1;
+      while (i <= j) {
+        if (isLeft(item(order, i))) i++;
+        else {
+          const swap = item(order, i);
+          order[i] = item(order, j);
+          order[j] = swap;
+          j--;
+        }
+      }
+      middle = i;
+      node.axis = axis;
+    } else {
+      const axis = [0, 1, 2].sort(
+        (a, b) => item(max, b) - item(min, b) - (item(max, a) - item(min, a)) || a - b,
+      )[0] as number;
+      const span = Array.from(order.subarray(start, end)).sort(
+        (a, b) => item(center, a * 3 + axis) - item(center, b * 3 + axis) || a - b,
+      );
+      order.set(span, start);
+      middle = start + Math.floor(n / 2);
+      node.axis = axis;
+    }
+    visit(start, middle, depth + 1);
+    node.right = nodes.length;
+    visit(middle, end, depth + 1);
+    node.escape = nodes.length;
+  };
+  if (count) visit(0, count, 0);
+  return { nodes, order };
 }

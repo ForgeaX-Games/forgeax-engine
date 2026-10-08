@@ -46,7 +46,7 @@ import {
   RUSTED_IRON_MATERIAL_GUID,
 } from '../../../../templates/game-3d/assets/shared/asset-refs';
 import type { RhiBackendInstrumentation } from '../../../render/src/assembly/backend-contract';
-import { extractCameraSnapshots } from '../../../render/src/extract/camera';
+import { extractCameraSnapshots } from '../../../render/src/render-system-extract';
 import {
   compareSurfaceAppLifecycleRois,
   createSurfaceAppLifecycleCoverageMask,
@@ -3065,7 +3065,15 @@ export async function runSurfaceMsaaEdgeOracle(
             dynamicInput,
             sampleCount,
             cameraOffsetX,
-            warmupFrames: index === 0 ? 16 : 2,
+            // Pixel witnesses below independently admit every 1x/4x pair. CI
+            // halves only repeated static warmup; movement and resize stay full.
+            warmupFrames:
+              index === 0
+                ? (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env
+                    ?.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1'
+                  ? 8
+                  : 16
+                : 2,
           }),
         );
       }

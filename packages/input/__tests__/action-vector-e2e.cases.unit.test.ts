@@ -183,7 +183,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       gamepads: overrides?.gamepads ?? [],
     };
     const actionStates = deriveActionStates(sample, map);
-    return snapshotFromSample(sample, actionStates, map);
+    return snapshotFromSample(sample, actionStates);
   }
 
   describe('snap.getVector() end-to-end (m2t3)', () => {

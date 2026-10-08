@@ -41,7 +41,7 @@ const pipeline: RenderPipeline = {
   },
 };
 
-it('a custom pipeline output transform captures the armed final-srgb observation', async () => {
+it('a custom pipeline output transform captures the armed final-display observation', async () => {
   const renderer = await createRenderer(
     { width: 32, height: 32, getContext: () => null },
     { rhi, pipeline },
@@ -63,12 +63,12 @@ it('a custom pipeline output transform captures the armed final-srgb observation
     expect(renderer.draw(input).ok).toBe(true);
     if (renderer.requestObservation === undefined)
       throw new Error('missing observation capability');
-    const requested = renderer.requestObservation(['final-srgb']);
+    const requested = renderer.requestObservation(['final-display']);
     if (!requested.ok) throw requested.error;
     world.update(1 / 60).unwrap();
     const drawn = renderer.draw(input);
     if (!drawn.ok) throw drawn.error;
-    expect(renderer.inspect().perFramePassNames).toContain('final-srgb-observation');
+    expect(renderer.inspect().perFramePassNames).toContain('final-display-observation');
   } finally {
     await renderer.dispose();
   }

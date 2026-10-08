@@ -20,7 +20,7 @@ publication.
 
 | Step | Input | Stable result | Next coordinate |
 |:--|:--|:--|:--|
-| Capture | one bounded frame | `EncodedTape { bytes, digest }` | retain the same digest and bytes |
+| Capture | one bounded frame | `EncodedTape` (`TapeArtifact`: `byteLength`, `chunks(n)`, lazy `digest`/`bytes`) | stream it with `uploadTape`, or keep digest and bytes |
 | Decode | `.rhitape` bytes | `V7Tape` or `tape-*` error | `buildFrameModel(tape)` |
 | Project | `V7Tape` | JSON-safe `FrameModel` arrays | choose `works[n].workIndex` |
 | Inspect | same tape + fresh `ReplaySession` | pipeline, bindings, resources, or error | pass `workIndex` to panels |
@@ -29,7 +29,10 @@ publication.
 
 `FrameModel.works[].bindings` rows report each binding's static `bufferOffset` and
 the `dynamicOffset` applied by the draw's latest `setBindGroup` (in layout binding
-order; `null` for a static binding), so the effective slot is their sum.
+order; `null` for a static binding), so the effective slot is their sum. Each row's
+`access` (`'read' | 'write' | 'read-write' | 'unknown'`) comes from the explicit
+bind group layout entry, else from the pipeline's WGSL declaration (`auto`
+layouts); `write`/`read-write` rows are the work's storage outputs.
 
 The artifact identity is the digest of the one `.rhitape` byte sequence.
 `FrameModel` is a plain-data projection safe for `JSON.stringify`. `ReplaySession`
@@ -47,7 +50,7 @@ capability or incomplete shader facts.
 
 | Concept | Owner | Contract |
 |:--|:--|:--|
-| `.rhitape` | [`protocol/codec.ts`](src/protocol/codec.ts) | One canonical v7 envelope containing events, blobs, capabilities, and digest. |
+| `.rhitape` | [`protocol/codec.ts`](src/protocol/codec.ts) | One canonical v7 container: preamble, JSON index (events, capabilities, blob table with per-blob SHA-256), then blob payloads. |
 | `EventSemantics` | [`protocol/event-semantics.ts`](src/protocol/event-semantics.ts) | Maps each RHI method to its event kind, handle effects, and lifecycle rules. |
 | `TapeIndex` | [`protocol/tape-index.ts`](src/protocol/tape-index.ts) | Derives event, resource, and work lookup from the decoded tape. |
 | `FrameModel` | [`frame-model.ts`](src/frame-model.ts) | Derives one `workIndex` sequence for the Viewer and inspection clients. |
@@ -65,7 +68,17 @@ Consumers receive derived views and never reconstruct event or resource state.
 Captured buffer and texture descriptors retain their producer labels, including
 bootstrap resources. Inspect them through `FrameModel.resources[].descriptor.desc.label`;
 labels aid navigation while `resourceId` and `workIndex` remain the actual keys.
+Render and compute pipelines keep their producer labels the same way, at
+`FrameModel.works[].pipeline.descriptor.desc.label`, so a draw or dispatch maps back to
+the producer that named it (for example one Card capture draw per instance/index range/material).
 `buildResourceLifecycle(tape)` joins bootstrap ownership with recorded destruction.
+`counts.peakLive`, `bytes.knownPeak`, and `bytes.unavailablePeak` update at each
+observed creation/destruction boundary, including retained bootstrap resources.
+They distinguish a candidate overlapping its previous allocation from steady
+live payload and total bytes ever created. A short-lived allocation contributes
+to the peak even when it is destroyed before the next work item. These peaks
+cover only the captured resource closure; API destruction does not establish
+driver retirement, and unknown descriptor/driver bytes remain unavailable.
 Bootstrap rows have `createdEventIndex: null`; frame event indices are never shifted.
 Counts and descriptor byte estimates describe the captured resource closure, not
 allocations created during this frame or driver memory. Locate indirect consumers
@@ -111,6 +124,8 @@ during replay.
 forgeax debug rhi capture --json
 forgeax debug rhi summary --artifact frame.rhitape --json
 forgeax debug rhi inspect --artifact frame.rhitape --work-index 22 --fields '["pipeline","bindings","pixels"]' --json
+forgeax debug rhi read --artifact frame.rhitape --reads '[{"binding":{"group":1,"binding":3},"workIndex":22,"image":{"format":"rgba16float","width":512,"height":512,"tile":{"tileWidth":8,"tileHeight":8,"index":40,"border":1},"tonemap":"reinhard","png":"probe40.png"}}]' --json
+forgeax debug rhi timing --artifact frame.rhitape --json
 ```
 
 The CLI derives the artifact digest from the file. An optional `--digest
@@ -132,6 +147,46 @@ callers without requiring a GPU.
 > not establish pixel fidelity. An empty list establishes only that no entire
 > bootstrap buffer/texture seed is absent, not equivalence to the live image.
 
+## Streaming large captures
+
+A GI frame can carry close to a gigabyte of seeds. The capture path never holds
+a second container-sized copy:
+
+- `encodeTapeParts(tape)` returns the container as ordered parts: the
+  preamble+index head, then each blob payload **borrowed** from the blob pool.
+  `encodeTape` is the same bytes concatenated once.
+- A captured `EncodedTape` is a `TapeArtifact`: `byteLength`, `chunks(n)`
+  (container windows; views where a window lies inside one part), and lazy
+  `digest` / `bytes`. The digest is SHA-256 of the whole container and is
+  computed only on first access; `bytes` materializes one contiguous copy.
+- `uploadTape(artifact, { endpoint, runId, chunkBytes?, chunkAttempts? })` from
+  `@forgeax/engine-rhi-debug/browser` streams 16 MiB chunks as `Blob` bodies
+  with two requests in flight. Each `PUT` carries `x-forgeax-chunk-digest`; the
+  server holds verified chunks per `runId`, a `GET` lists them, and a retried or
+  resumed upload sends only the missing ones. The final `POST .../commit`
+  verifies the whole container and publishes it atomically. Transient 5xx
+  answers are retried per chunk; failures report `stage: 'status' | 'chunk' |
+  'commit'` with the server code.
+- `decodeTapeContainerIndex(prefix, byteLength)` validates the index without
+  touching payloads, so a server or tool can verify blob ranges and digests
+  while streaming a file.
+
+Identical payloads are stored once: recorder blobs are keyed by their SHA-256
+content hash, so repeated uploads and identical resources share one blob, and
+encoding reuses that hash as the blob digest instead of hashing again.
+
+`CaptureFrameOptions.seed.maxResourceBytes` scopes initial contents. A resource
+whose snapshot exceeds the bound is not read back; its bootstrap entry keeps the
+descriptor with `seed: 'omitted'` and `FrameModel.unseededResources[]` reports
+it with `omitted: true`. Replay starts it at zero, so only works whose evidence
+does not depend on its initial bytes remain faithful. Use it to cut a huge
+capture down to the passes under investigation, then recapture without the
+bound when an omitted resource turns out to matter.
+
+`node packages/rhi-debug/scripts/measure-large-capture.mjs` captures a synthetic
+832 MiB frame in local headless Chromium and records renderer/GPU/driver memory
+and per-stage time for the upload path.
+
 ## v7 tape rules
 
 The decoder accepts only the current single-file format:
@@ -147,6 +202,13 @@ The decoder accepts only the current single-file format:
 Invalid cardinality, non-canonical JSON, digest mismatch, unknown event data,
 or an invalid lifecycle transition returns a closed protocol error before
 replay starts.
+
+`header.rhiCaps` records the presentation surface as `canvasFormat` plus
+`canvasColorSpace: 'srgb' | 'display-p3'`. Both are taken from the context's
+`getConfiguration()` after `configure()`, so a requested space the surface did
+not honour is recorded as `'srgb'`. Replay renders into offscreen textures, so
+compare replay bytes with a live observation that has the same colour space
+(the Render `final-display` observation carries it).
 
 ## One work index
 
@@ -164,7 +226,24 @@ generations fail closed. Session disposal releases replay resources; the
 supplied backend remains owned by its caller.
 
 `inspectWork(..., ['pixels'])` reads the first color attachment's resolve target
-when present, after finishing the selected work's pass. Direct reads of an
+when present, after finishing the selected work's pass. A work without color
+reads its depth attachment instead (one subresource of the attached view, so a
+shadow-array layer view reads that layer), and a compute dispatch reads its first
+writable storage texture. Only a work with none of these returns
+`readback-unsupported`.
+
+`inspectWork(..., ['outputs'])` reads every resource the work wrote, after the
+work: `color<N>` (the resolve target when the slot resolves; a 3D slice for a
+`depthSlice` attachment), `depth`, and `@group(G)@binding(B)` for each writable
+storage buffer or texture. `workOutputs(work)` lists the same names and requests
+without a GPU. Each `WorkOutputRead` keeps its own `Result`, so one unsupported
+format does not hide the others.
+
+`depthImage(image, projection?)` maps a decoded depth plane to grey: without a
+projection the raw `[0, 1]` value, with `{ near, far, reverseZ?, orthographic? }`
+the view distance (`far: Infinity` is the infinite reversed-Z projection). Pair
+it with `toRgba8(image, { range: 'auto' })`, which stretches the finite RGB
+range, to make a shadow map legible. Direct reads of an
 unresolved multisampled texture return `readback-unsupported` before any copy.
 `works[].attachments.colorResolveViewHandleIds` lists each color attachment's
 resolve view in attachment order (`null` for a single-sample attachment), so a
@@ -195,6 +274,85 @@ seeded; their producing work must be included in the capture.
 selected work before reading, including compute storage outputs. Its
 `provenance.selectedWorkIndex` identifies that post-work state. Use this form
 when checking what a dispatch produced; initial bytes are not output evidence.
+
+The single-buffer and single-texture helpers use the same staging, submission,
+mapping and cleanup lifecycle as batch readback. Buffer failures remain structured
+`readback-failed` results; the texture helper rejects with the cause after cleanup.
+Queue and map promise rejection release staging as well as ordinary RHI failures.
+
+### Batch readback
+
+`session.readAtWorks(requests)` answers many `{ resourceId, workIndex?, subresource? }`
+reads with one result per request, in request order; a failed read never fails
+the batch. Requests at the same work share one replay. Works that can be split
+share a single forward replay: at each requested work the open pass ends with its
+attachments stored, queue uploads recorded before that submission are applied,
+the reads run, and a fresh encoder resumes the pass with `loadOp: 'load'` and
+the recorded pass state. A work that cannot be split without reordering GPU work
+(active occlusion query, multi-buffer or intervening submits, or a later closure
+copy into a requested resource) replays standalone, exactly as
+`readResourceAtWork`. Bytes always equal the per-work reads. Omitting
+`workIndex` reads the bootstrap state.
+
+`bindingReadRequest(work, group, binding)` turns what a `FrameModel` work bound
+at a slot into a request: the bound buffer window (static plus dynamic offset,
+bound size) or the bound texture view. Use it instead of copying ids from
+`inspectWork` bindings. An omitted static buffer offset means zero; it does not
+discard an explicit bound size or dynamic offset.
+
+Replay retains immutable objects (pipelines, shaders, layouts, samplers, and
+resources no recorded event writes) across resets, so repeated reads on one
+session re-create only mutable state. Measured costs live in
+[`artifacts/replay-perf.json`](artifacts/replay-perf.json)
+(`node scripts/measure-replay.mjs`).
+
+### Images, atlases and HDR texels
+
+GI data (probe irradiance atlases, card atlases, SDF slices) often lives in
+storage buffers or HDR textures. `readbackImage(read, layout?)` decodes a
+readback into a raw float RGBA `FloatImage`: textures default to their own
+format and extent (depth planes as `r32float`, stencil as `r8uint`); a buffer
+names `format`, `width`, `height` and optional `offset`/`bytesPerRow`.
+`decodeImage(bytes, layout)` is the same decode over plain bytes. Every
+uncompressed color format with a host texel reader decodes, including
+`rgba16float`, `rgba32float`, `rg11b10ufloat`, `rgb9e5ufloat` and integer formats
+(values stay raw, not normalized). Compressed formats return `readback-failed`.
+
+- `extractTile(image, { tileWidth, tileHeight, index, border?, columns? })`
+  crops one row-major atlas tile, e.g. one octahedral probe without its border.
+- `imageStats(image)` returns per-channel `min`/`max`/`mean` over finite
+  texels plus the `nonFinite` texel count, so NaN propagation is visible.
+- `toRgba8(image, { exposure, range, tonemap })` maps HDR for display, and
+  `encodePng(width, height, rgba)` writes a deterministic PNG without a canvas.
+
+`rhi.read` / `forgeax debug rhi read` composes these: up to 64 reads, each by
+`resourceId`, by `binding` plus `workIndex`, or by `output` (a `workOutputs`
+name such as `depth`) plus `workIndex`, optionally with `records`
+(typed struct rows) and `image` (layout, `depth: true | { near, far, reverseZ?,
+orthographic? }`, `tile`, display mapping with `range: [min, max] | 'auto'`, and
+a `png` output path). `rhi.inspect` with `fields: ["outputs"]` summarizes each
+output by provenance, byte length and digest instead of returning raw bytes. Each result reports provenance, `byteLength`, a content `digest`,
+records and image `stats`; per-read failures (`read-request-invalid`,
+`readback-failed`, `replay-position-invalid`, `artifact-write-failed`) stay in
+their slot.
+
+### Per-pass GPU timing
+
+`session.timePasses()` replays the whole frame once with replay-owned
+begin/end timestamps on every closed render and compute pass and returns
+`FrameTiming { passes: PassTiming[], totalGpuNanoseconds }`. Each
+`PassTiming` carries `passIndex`, `kind`, `label`, its `workIndices` and
+`gpuNanoseconds` (null when the pass never wrote both timestamps). Recorded
+pass timestamps are replaced for that replay only, and later reads in the same
+session are unaffected. `replayDeviceRequest` enables `timestamp-query`
+whenever the adapter has it; a device without it returns
+`replay-capability-mismatch`. `rhi.timing` / `forgeax debug rhi timing` is the
+CLI form.
+
+Times come from the replay device, not the capture device: use them to rank
+passes and find the dominant GI stage. A software adapter such as lavapipe
+emulates the GPU on the CPU, so its absolute numbers are not frame budgets.
+`scripts/measure-replay.mjs --timing` records the slowest passes into JSON.
 
 ## Structured errors
 
@@ -305,7 +463,8 @@ so the fresh device enables that optional feature before recreating resources.
 `inspectBufferRecords(session, resourceId, workIndex, layout, { first, count })`
 replays the selected work and decodes only the requested buffer range. A layout
 contains a byte `stride` and named fields with byte `offset`, scalar `type`
-(`u32`, `i32`, or `f32`) and `components` (1–4). Calls accept at most 4,096 records,
+(`u32`, `i32`, `f32`, or `f16`) and `components` (1–4); `f16` fields need
+2-byte alignment, so packed half irradiance sits beside 32-bit ids. Calls accept at most 4,096 records,
 64 fields, and 16 MiB. Invalid layouts/ranges return `readback-failed`; replay
 and resource failures retain their existing codes.
 
@@ -317,14 +476,66 @@ RHI Debug does not infer material/BSDF or ray semantics from buffer labels.
 
 The existing `rhi.inspect` operation and `forgeax debug rhi inspect` command accept
 an optional `buffer` object containing `resourceId`, `layout`, `first`, and `count`;
-the response adds `bufferRecords`. Use `rhi.summary` / binding inspection to select
+the response adds `bufferRecords`. For several buffers or works at once, use
+`rhi.read` with `records`; it replays once. A read's `records` window is relative to
+the selected bytes: rows `stride * [first, first + count)` inside a binding's bound
+range or an explicit buffer `subresource` (`{offset, size}`), so a binding read
+decodes any row range without restating the binding offset. Rows past that window, or
+`records` on a texture subresource, return `read-request-invalid`. A mappable (`MAP_READ` /
+`MAP_WRITE`) staging buffer cannot be a copy source, so reading one returns
+`readback-unsupported`; read the buffer it was copied from.
+
+`rhi.inspect` / `rhi.read` replay on Dawn by default. Dawn has no acceleration
+structures, so a tape that builds them returns `replay-backend-unavailable`
+(`detail.stage: 'provider'`) naming the native route: rerun with
+`FORGEAX_WEBGPU_NODE=wgpu-native` from an Engine contributor checkout where
+`@forgeax/engine-rhi-wgpu-native` is built, and replay uses its native wgpu device. Use `rhi.summary` / binding inspection to select
 the resource and work, then pass `--buffer '{...}'`. The same v7 tape remains the
 only capture artifact. See [ray-query verification](../../scripts/raytracing/README.md).
 
-> [!NOTE]
-> Portable compute traversal is captured and replayed. Native hardware verification
-> currently rebuilds acceleration structures from the captured world-space input;
-> it is **scene re-execution**, not capture/replay of native BLAS/TLAS commands.
+### Acceleration structures
+
+On a device whose `caps.rayQuery.supported` is true, BLAS/TLAS creation, destruction,
+`buildAccelerationStructures` and `accelerationStructure` bind-group entries are
+recorded on the same v7 tape; there is no refusal path and no second artifact.
+
+- BLAS/TLAS are bootstrap resources of kind `acceleration-structure`. Their create
+  record carries the last build completed before the capture (`build.geometries` /
+  `build.instances`, as buffer and BLAS handle ids plus the 3x4 transform). Replay
+  recreates each one and re-encodes that build on the fresh device in topological
+  order: geometry buffers are seeded first, then BLAS, then TLAS.
+- An in-frame build is a `buildAccelerationStructures` command event replayed in
+  order. It becomes bootstrap build state for the next capture only, so the current
+  tape keeps its capture-start state.
+- A bind group that binds a TLAS after an in-frame build stays in the frame stream
+  instead of being hoisted into bootstrap, so it never binds a TLAS ahead of its build.
+- Binding inspection (`inspectWork(i, ['bindings'])`, `FrameModel.works[i].bindings`)
+  adds `accelerationStructure` to an AS entry: `tlasHandleId`, `label`,
+  `status: 'built' | 'unbuilt'`, last-build `instanceCount` and the deduplicated
+  `blasHandleIds`, evaluated at that work's position in the event stream.
+- Replaying an AS tape on a device without ray query fails before any resource is
+  created with `replay-capability-mismatch` (`detail.stage: 'replay'`, `cause` names
+  the unsupported `caps.rayQuery` reason). `replayDeviceRequest` therefore requires
+  `RAY_QUERY_FEATURE` (`'wgpu-ray-query'`) for any tape with BLAS/TLAS, without
+  filtering on adapter support, so a WebGPU-shaped native wgpu replay device gets
+  `caps.rayQuery` and an unsupported adapter fails admission.
+- Each bootstrap BLAS/TLAS rebuild is submitted and settled
+  (`queue.onSubmittedWorkDone`) before the next bootstrap resource and the frame. On
+  Metal, wgpu-hal places no acceleration-structure barrier and TLAS instances reference
+  their BLAS indirectly (untracked by Metal hazard tracking), so an unsettled rebuild can
+  race the first traversal: the replay then misses every ray (an all-miss trace that
+  diverged from the live frame by max 25-48/255). The live frame never sees this because
+  it built its structures frames before the capture. With the settle, native wgpu replays
+  GI ray-query tapes bit-exactly against the live frame on both lavapipe and Metal (no
+  diverging buffer or texture in the following frame's bootstrap, final draw max 0).
+- Replay reproduces the recorded build inputs, not the driver's BVH layout. An in-frame
+  build replays in its recorded command position, so a traversal recorded in the same
+  submission keeps whatever ordering the live backend gave it.
+
+Limits: a bootstrap rebuild reads the geometry buffers' capture-start contents, so
+vertex data rewritten (or a buffer destroyed) between the pre-capture build and the
+capture diverges from the live structure. The browser WebGPU backend has no ray query,
+so AS tapes replay on ray-query-capable RHI backends only.
 
 
 ### Capture memory and retry
@@ -346,8 +557,9 @@ staging allocations. A larger individual resource runs alone, so the staging bou
 `max(32 MiB, largest resource staging size)`. Full seed bytes and the encoded tape
 still need CPU residency. Internal readback bytes transfer into the blob pool without
 another copy; caller-owned queue uploads are copied, including the exact typed-array
-view. Uncompressed encoding borrows those immutable bytes only until it fills the
-final independent container.
+view. Uncompressed encoding borrows those immutable bytes as container parts; the
+recorder hands them to the captured artifact when it releases its pool, so the
+upload streams the seeds themselves (see [Streaming large captures](#streaming-large-captures)).
 
 Snapshot blobs use asynchronous native SHA-256 with the same content keys as
 synchronous queue uploads. Hash completion rechecks capture generation before
@@ -360,3 +572,11 @@ supports retry after budget refusal or cancellation. The real Browser/Dawn regre
 and replays two draws after producer disposal, including a changed subarray upload.
 It also holds a real native digest across cancellation and rearming, then verifies
 that only the new generation can populate the blob pool.
+
+## Engine source viewer
+
+The optional integrated tool page lives in `tools/view-plugins/rhi-debug`. It reuses the
+existing RHI viewer's work/resource inspection and replay operations. Generic View supplies
+only the page and panel hosts; this package owns capture, model and replay semantics.
+The page is an artifact page and can inspect a `.rhitape` without opening a game.
+WebGPU capability and replay failures remain explicit; loading a tape does not prove replay.

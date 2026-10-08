@@ -39,11 +39,11 @@ import { readShaderManifestPublication } from '../../../shader/src/manifest-publ
 import { loadEngineImportsMap } from '../engine-imports-map.js';
 import { loadEngineShaderEntries } from '../engine-inputs/load-engine-shader-entries.js';
 import { buildEngineShaderManifest, forgeaxShader } from '../index.js';
+import * as manifestPublication from '../manifest-publication.js';
 import { publishShaderManifest } from '../manifest-publication.js';
 import {
   loadPackagedEngineShaderInputs,
   loadSharedEngineShaderManifest,
-  mergeSharedEngineShaderEntries,
   projectOptionalEngineEntries,
   projectShaderManifestEntries,
 } from '../shared-engine-inputs.js';
@@ -77,11 +77,15 @@ const ENGINE_SHADER_DEFAULT_DEFINES: Record<string, boolean> = {
 };
 
 const STANDARD_NON_CLUSTER_VARIANT_KEY =
-  'CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
+  'ATMOSPHERE_AVAILABLE=false+CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
 const STANDARD_EXTENDED_LIGHTING_OFF_VARIANT_KEY =
-  'CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=false+REFLECTION_FALLBACK_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=false+VISIBLE_SURFACE_AVAILABLE=false';
+  'ATMOSPHERE_AVAILABLE=false+CLUSTER_FORWARD_AVAILABLE=false+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=false+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=false+PROBE_BLEND_AVAILABLE=false+PROJECTOR_AVAILABLE=false+REFLECTION_FALLBACK_AVAILABLE=false+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=false+VISIBLE_SURFACE_AVAILABLE=false';
+const STANDARD_SHARED_TRANSMISSION_VARIANT_KEY = STANDARD_EXTENDED_LIGHTING_OFF_VARIANT_KEY.replace(
+  'TRANSMISSION_AVAILABLE=false',
+  'TRANSMISSION_AVAILABLE=true',
+);
 const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
-  'CLUSTER_FORWARD_AVAILABLE=true+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=true+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
+  'ATMOSPHERE_AVAILABLE=false+CLUSTER_FORWARD_AVAILABLE=true+COVERAGE_ONLY=false+DIRECTIONAL_PCSS_AVAILABLE=true+EXTENDED_LIGHTING_AVAILABLE=true+GPU_DRIVEN_SCENE_INDEX_AVAILABLE=true+PROBE_BLEND_AVAILABLE=true+PROJECTOR_AVAILABLE=true+REFLECTION_FALLBACK_AVAILABLE=true+STORAGE_BUFFER_AVAILABLE=true+TRANSMISSION_AVAILABLE=false+VERTEX_COLOR_AVAILABLE=true+VISIBLE_SURFACE_AVAILABLE=false';
 
 {
   describe('shared-engine-inputs.test.ts', () => {
@@ -109,18 +113,6 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
       expect(projectOptionalEngineEntries(entries, true)).toEqual(entries);
       expect(projectOptionalEngineEntries(entries, false)).toEqual([entries[0], entries[2]]);
       expect(entries).toHaveLength(3);
-    });
-
-    it('merges producer engine entries without consuming them for a custom-only app', () => {
-      const custom = new Map([
-        ['app/custom.wgsl', { hash: 'custom', wgsl: 'custom', bindings: '[]' }],
-      ]);
-      const engine = [{ hash: 'engine', wgsl: 'engine', bindings: '[]' }];
-
-      expect(
-        [...mergeSharedEngineShaderEntries(custom, engine).values()].map((entry) => entry.hash),
-      ).toEqual(['engine', 'custom']);
-      expect([...mergeSharedEngineShaderEntries(custom).values()]).toEqual([...custom.values()]);
     });
 
     it('keeps the required glsl placeholder after manifest JSON serialization', () => {
@@ -397,6 +389,161 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
   }
 
   describe('configureServer: dev-path manifest middleware (D-P2 / II-A)', () => {
+    it('reuses an unchanged HTTP publication and replaces it only after committed state changes', async () => {
+      const publish = vi.spyOn(manifestPublication, 'publishShaderManifest');
+      const plugin = forgeaxShader({ engineEntries: false });
+      const context = createMockPluginContext();
+      const server = createMockServer({ inputEntries: {} });
+      plugin.configureServer(server as never);
+      const middleware = findManifestMiddleware(server);
+      const request = async (): Promise<string> => {
+        const response = createMockResponse();
+        await middleware({ url: '/shaders/manifest.json' }, response, vi.fn());
+        expect(response.bodyChunks).toHaveLength(1);
+        return response.bodyChunks[0] as string;
+      };
+      try {
+        await plugin.transform.call(context, VALID_WGSL, '/publication.wgsl');
+        const original = await request();
+        expect(await Promise.all([request(), request()])).toEqual([original, original]);
+        expect(publish).toHaveBeenCalledTimes(1);
+
+        const repairedSource = VALID_WGSL.replace('1.0, 0.0, 0.0, 1.0', '0.5, 0.0, 0.0, 1.0');
+        await plugin.transform.call(context, repairedSource, '/publication.wgsl');
+        const changed = await request();
+        expect(changed).not.toBe(original);
+        expect(await request()).toBe(changed);
+        expect(publish).toHaveBeenCalledTimes(2);
+
+        await expect(
+          plugin.transform.call(context, 'invalid WGSL', '/publication.wgsl'),
+        ).rejects.toBeDefined();
+        // Failed author edits retain the existing last-known-good state.
+        expect(await request()).toBe(changed);
+        expect(publish).toHaveBeenCalledTimes(2);
+
+        await plugin.transform.call(context, VALID_WGSL, '/publication.wgsl');
+        expect(await request()).toBe(original);
+        expect(publish).toHaveBeenCalledTimes(3);
+
+        await plugin.closeBundle();
+        const closed = JSON.parse(await request());
+        expect(closed.entries).toEqual([]);
+        expect(closed.materialShaders).toEqual([]);
+        expect(publish).toHaveBeenCalledTimes(4);
+        await plugin.buildStart.call(context);
+        await plugin.transform.call(context, VALID_WGSL, '/publication.wgsl');
+        expect(await request()).toBe(original);
+        expect(publish).toHaveBeenCalledTimes(5);
+      } finally {
+        await plugin.closeBundle();
+        publish.mockRestore();
+      }
+    });
+
+    it('retains the published generation when a compiled material fails its binding gate', async () => {
+      const plugin = forgeaxShader({ engineEntries: false });
+      const context = createMockPluginContext();
+      const server = createMockServer({ inputEntries: {} });
+      plugin.configureServer(server as never);
+      const middleware = findManifestMiddleware(server);
+      const source = (groups: number, increment: number) =>
+        [
+          '#define_import_path publication::binding_gate',
+          ...Array.from(
+            { length: groups },
+            (_, index) =>
+              `@group(${index}) @binding(0) var<storage, read_write> value${index}: f32;`,
+          ),
+          `@compute @workgroup_size(1) fn main() { value0 = ${Array.from({ length: groups }, (_, index) => `value${index}`).join(' + ')} + ${increment}.0; }`,
+        ].join('\n');
+      const request = async (): Promise<string> => {
+        const response = createMockResponse();
+        await middleware({ url: '/shaders/manifest.json' }, response, vi.fn());
+        return response.bodyChunks[0] as string;
+      };
+      try {
+        await plugin.transform.call(context, source(1, 1), '/binding-gate.wgsl');
+        const original = await request();
+        await expect(
+          plugin.transform.call(context, source(5, 1), '/binding-gate.wgsl'),
+        ).rejects.toMatchObject({ code: 'material-schema-mismatch' });
+        expect(await request()).toBe(original);
+        await plugin.transform.call(context, source(1, 2), '/binding-gate.wgsl');
+        const repaired = await request();
+        expect(repaired).not.toBe(original);
+        expect(await request()).toBe(repaired);
+      } finally {
+        await plugin.closeBundle();
+      }
+    });
+
+    it('retries failed publication without retaining an incomplete response', async () => {
+      const plugin = forgeaxShader({ engineEntries: false });
+      const server = createMockServer({ inputEntries: {} });
+      plugin.configureServer(server as never);
+      const middleware = findManifestMiddleware(server);
+      const sentinel = new Error('publication failed');
+      const publish = vi.spyOn(manifestPublication, 'publishShaderManifest');
+      try {
+        publish.mockImplementationOnce(() => {
+          throw sentinel;
+        });
+        const failed = createMockResponse();
+        await expect(middleware({ url: '/shaders/manifest.json' }, failed, vi.fn())).rejects.toBe(
+          sentinel,
+        );
+        expect(failed.bodyChunks).toEqual([]);
+        const repaired = createMockResponse();
+        await middleware({ url: '/shaders/manifest.json' }, repaired, vi.fn());
+        expect(JSON.parse(repaired.bodyChunks[0] as string).entries).toEqual([]);
+        expect(publish).toHaveBeenCalledTimes(2);
+      } finally {
+        publish.mockRestore();
+        await plugin.closeBundle();
+      }
+    });
+
+    it('removes cached material rows when the active package provider becomes empty', async () => {
+      const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+      let activePackages = [
+        resolve(
+          repoRoot,
+          'apps/learn-render/4.advanced-opengl/3.blending/src/alpha-test.pack.json',
+        ),
+      ];
+      const plugin = forgeaxShader({
+        engineEntries: false,
+        materialPackagesProvider: () => activePackages,
+      });
+      const server = createMockServer({ inputEntries: {} });
+      plugin.configureServer(server as never);
+      const middleware = findManifestMiddleware(server);
+      const request = async () => {
+        const response = createMockResponse();
+        await middleware({ url: '/shaders/manifest.json' }, response, vi.fn());
+        return (await readShaderManifestPublication(
+          JSON.parse(response.bodyChunks[0] as string),
+        )) as {
+          readonly entries: readonly unknown[];
+          readonly materialShaders: readonly unknown[];
+        };
+      };
+      try {
+        const original = await request();
+        expect(original.materialShaders).toHaveLength(1);
+        expect(await request()).toEqual(original);
+        activePackages = [];
+        const removed = await Promise.all([request(), request()]);
+        for (const publication of removed) {
+          expect(publication.materialShaders).toEqual([]);
+          expect(publication.entries).toEqual([]);
+        }
+      } finally {
+        await plugin.closeBundle();
+      }
+    });
+
     it('releases retired shader payloads and repopulates a restarted plugin', async () => {
       const plugin = forgeaxShader({ engineEntries: false });
       const context = createMockPluginContext();
@@ -1291,7 +1438,7 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
 
   describe('materialShaders[] manifest (w9)', () => {
     // biome-ignore format: keep the long manifest test call compact
-    it('(a) buildStart + generateBundle produces manifest with 23 materialShaders and correct paramSchema', async () => {
+    it('(a) buildStart + generateBundle produces manifest with 26 materialShaders and correct paramSchema', async () => {
       const manifest = await sourceEngineManifest();
 
       expect(Array.isArray(manifest.materialShaders)).toBe(true);
@@ -1312,8 +1459,8 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
       // engine identifier needed now that shadow_caster is a material shader).
       expect(
         manifest.materialShaders.length,
-        'materialShaders[] must contain exactly 23 named engine shader entries',
-      ).toBe(23);
+        'materialShaders[] must contain exactly 26 named engine shader entries',
+      ).toBe(26);
 
       const standardPbr = manifest.materialShaders.find(
         (entry) => entry.identifier === 'forgeax::default-standard-pbr',
@@ -1367,6 +1514,29 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
       expect(extendedLightingOffWgsl).not.toContain('@group(0) @binding(11)');
       expect(extendedLightingOffWgsl).not.toContain('@group(0) @binding(15)');
 
+      // The low-limit transmission variant reuses the fixed 16-texture layout:
+      // transmission, thickness and the backdrop take the split scalar-map pairs.
+      const sharedTransmissionWgsl =
+        standardPbr?.variants?.find(
+          (variant) => variant.definesKey === STANDARD_SHARED_TRANSMISSION_VARIANT_KEY,
+        )?.composedWgsl ?? '';
+      const group1 = new Map(
+        [
+          ...sharedTransmissionWgsl.matchAll(
+            /@group\(1\)\s*@binding\((\d+)\)\s*var(?:<[^>]+>)?\s+([A-Za-z_]\w*)/g,
+          ),
+        ].map((match) => [match[2], Number(match[1])]),
+      );
+      expect(group1.get('transmissionSampler')).toBe(17);
+      expect(group1.get('transmissionTexture')).toBe(18);
+      expect(group1.get('thicknessSampler')).toBe(19);
+      expect(group1.get('thicknessTexture')).toBe(20);
+      expect(group1.get('transmissionBackdropTexture')).toBe(22);
+      expect(group1.has('metallicTexture')).toBe(false);
+      expect(group1.has('roughnessTexture')).toBe(false);
+      expect(group1.has('alphaTexture')).toBe(false);
+      expect([...group1.values()].filter((binding) => [12, 14, 32].includes(binding))).toEqual([]);
+
       expect(
         manifest.materialShaders
           .find((entry) => entry.identifier === 'forgeax::default-standard-pbr')
@@ -1402,6 +1572,9 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
       const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
       expect(ids).toEqual([
         'forgeax::analytic-fog',
+          'forgeax::cloud-atmosphere-resolve',
+          'forgeax::cloud-atmosphere-transport',
+          'forgeax::cloud-atmosphere-transport-analytic',
         'forgeax::default-shadow-caster',
         'forgeax::default-standard-pbr',
         'forgeax::default-unlit',
@@ -1531,6 +1704,9 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
         const ids = manifest.materialShaders.map((ms) => ms.identifier).sort();
         expect(ids).toEqual([
           'forgeax::analytic-fog',
+          'forgeax::cloud-atmosphere-resolve',
+          'forgeax::cloud-atmosphere-transport',
+          'forgeax::cloud-atmosphere-transport-analytic',
           'forgeax::default-shadow-caster',
           'forgeax::default-standard-pbr',
           'forgeax::default-unlit',
@@ -1650,7 +1826,7 @@ const STANDARD_CLUSTER_POINT_SHADOW_VARIANT_KEY =
         expect(taaResolveEntries, 'manifest must publish the TAA resolve entry').toHaveLength(1);
         expect(motionBlurEntries[0]?.wgsl).toContain('unpackSceneTemporalV1');
         expect(taaResolveEntries[0]?.wgsl).toContain('closestCurrentTemporal');
-        expect(taaResolveEntries[0]?.wgsl).toContain('textureLoad(currentTemporal');
+        expect(taaResolveEntries[0]?.wgsl).toContain('textureLoad(currentOutputTemporal');
         expect(
           manifest.materialShaders.some((shader) => shader.identifier.includes('motion-blur')),
           'motion blur must remain a utility entry, not a material shader',
@@ -2205,61 +2381,13 @@ ${MINIMAL_WGSL.trim()}
     };
     compileShader = mod.compileShader;
 
-    const COMMON = readSrc('common.wgsl');
-    const SCENE_TEMPORAL = readSrc('scene-temporal.wgsl');
-    const BRDF = readSrc('brdf.wgsl');
-    const PBR_TEMPORAL = readSrc('pbr-temporal.wgsl');
-    const TBN = readSrc('tbn.wgsl');
-    const LIGHTING_DIRECTIONAL = readSrc('lighting-directional.wgsl');
-    const LIGHTING_PUNCTUAL = readSrc('lighting-punctual.wgsl');
-    const LIGHTING_ATTENUATION = readSrc('lighting-attenuation.wgsl');
-    const IBL_SAMPLING = readSrc('ibl-sampling.wgsl');
-    const IBL_SHARED = readSrc('ibl-shared.wgsl');
-
-    const SHADOW_PCF = readSrc('shadow-pcf.wgsl');
-    const STANDARD_CLUSTER = readSrc('standard-cluster.wgsl');
-    const DEFAULT_SURFACE = readSrc('default_standard_surface.wgsl');
-    const SURFACE_SLOT = DEFAULT_SURFACE.replace(
-      /^\s*#define_import_path\s+[^\n]+/m,
-      '#define_import_path forgeax_material::slot::surface',
-    );
-
+    const entries = await loadEngineShaderEntries();
     IMPORTS = {
-      'forgeax_clipping::planes': readSrc('clipping.wgsl'),
-      'forgeax_view::common': COMMON,
-      forgeax_scene_temporal: SCENE_TEMPORAL,
-      'forgeax_view::fog': readSrc('fog.wgsl'),
-      'forgeax_pbr::brdf': BRDF,
-      'forgeax_pbr::specular_aa': readSrc('specular-aa.wgsl'),
-      'forgeax_material::alpha_hash': readSrc('alpha-hash.wgsl'),
-      'forgeax_material::oit': readSrc('oit.wgsl'),
-      'forgeax_material::displacement': readSrc('standard-displacement.wgsl'),
-      'forgeax_shadow::surface': readSrc('shadow-surface.wgsl'),
-      'forgeax_pbr::temporal': PBR_TEMPORAL,
-      'forgeax_pbr::ibl_shared': IBL_SHARED,
-      'forgeax_pbr::ibl_sampling': IBL_SAMPLING,
-      'forgeax_pbr::lighting_probe': readSrc('lighting-probe.wgsl'),
-      'forgeax_pbr::standard_lighting': readSrc('standard-lighting.wgsl'),
-      'forgeax_pbr::gbuffer': readSrc('standard-gbuffer.wgsl'),
-      'forgeax_pbr::gbuffer_output': readSrc('standard-gbuffer-output.wgsl'),
-      'forgeax_pbr::tbn': TBN,
-      'forgeax_pbr::lighting_directional': LIGHTING_DIRECTIONAL,
-      'forgeax_pbr::lighting_punctual': LIGHTING_PUNCTUAL,
-      'forgeax_pbr::lighting_spot_modifiers': readSrc('lighting-spot-modifiers.wgsl'),
-      'forgeax_pbr::lighting_rect_area': readSrc('lighting-rect-area.wgsl'),
-      'forgeax_pbr::lighting_attenuation': LIGHTING_ATTENUATION,
-      'forgeax_pbr::lighting_spot_projector': readSrc('lighting-spot-projector.wgsl'),
-      'forgeax_cloud::layer': readSrc('cloud.wgsl'),
-      'forgeax_standard::cluster': STANDARD_CLUSTER,
-      'forgeax_pbr::shadow_pcf': SHADOW_PCF,
-      'forgeax_pbr::clearcoat': readSrc('material/physical/clearcoat.wgsl'),
-      'forgeax_pbr::anisotropy': readSrc('material/physical/anisotropy.wgsl'),
-      'forgeax_pbr::sheen': readSrc('material/physical/sheen.wgsl'),
-      'forgeax_pbr::iridescence': readSrc('material/physical/iridescence.wgsl'),
-      'forgeax_material::surface_v1': readSrc('surface_v1.wgsl'),
-      'forgeax_material::surface_sampling': readSrc('surface-sampling.wgsl'),
-      'forgeax_material::default_standard_surface': DEFAULT_SURFACE,
-      'forgeax_material::slot::surface': SURFACE_SLOT,
+      ...entries.imports,
+      'forgeax_material::slot::surface': readSrc('default_standard_surface.wgsl').replace(
+        /^\s*#define_import_path\s+[^\n]+/m,
+        '#define_import_path forgeax_material::slot::surface',
+      ),
     };
   });
 

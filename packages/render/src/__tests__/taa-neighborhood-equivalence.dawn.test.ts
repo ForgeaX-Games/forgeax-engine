@@ -57,6 +57,8 @@ type ResolveParams = {
 
 type ResolveCase = {
   readonly name: string;
+  readonly internalSize?: number;
+  readonly currentCoverage?: Uint16Array;
   readonly currentColor: Uint16Array;
   readonly historyColor: Uint16Array;
   readonly currentTemporal: Uint16Array;
@@ -347,6 +349,7 @@ async function runPair(
   productionSource: string,
   testCase: ResolveCase,
 ): Promise<Pair> {
+  const internalSize = testCase.internalSize ?? WIDTH;
   const sourceUsage = GPU_TEXTURE_USAGE_COPY_DST | GPU_TEXTURE_USAGE_TEXTURE_BINDING;
   const outputUsage = GPU_TEXTURE_USAGE_COPY_SRC | GPU_TEXTURE_USAGE_RENDER_ATTACHMENT;
   const colorSampler = device
@@ -369,8 +372,8 @@ async function runPair(
   const currentColor = createSurface(
     device,
     'taa-equivalence-current-color',
-    WIDTH,
-    HEIGHT,
+    internalSize,
+    internalSize,
     'rgba16float',
     sourceUsage,
   );
@@ -393,6 +396,14 @@ async function runPair(
   const currentTemporal = createSurface(
     device,
     'taa-equivalence-current-temporal',
+    internalSize,
+    internalSize,
+    'rgba16float',
+    sourceUsage,
+  );
+  const currentCoverage = createSurface(
+    device,
+    'taa-equivalence-current-coverage',
     WIDTH,
     HEIGHT,
     'rgba16float',
@@ -471,6 +482,7 @@ async function runPair(
     historyColor,
     historyTemporal,
     currentTemporal,
+    currentCoverage,
     historyStability,
     secondaryReactivity,
     ...baselineOutputs,
@@ -492,11 +504,33 @@ async function runPair(
     .unwrap();
 
   try {
-    upload(device, currentColor, WIDTH, HEIGHT, testCase.currentColor, WIDTH * 8);
+    upload(
+      device,
+      currentColor,
+      internalSize,
+      internalSize,
+      testCase.currentColor,
+      internalSize * 8,
+    );
     upload(device, historyColor, WIDTH, HEIGHT, testCase.historyColor, WIDTH * 8);
     upload(device, historyTemporal, WIDTH, HEIGHT, testCase.historyTemporal, WIDTH * 8);
-    upload(device, currentTemporal, WIDTH, HEIGHT, testCase.currentTemporal, WIDTH * 8);
+    upload(
+      device,
+      currentTemporal,
+      internalSize,
+      internalSize,
+      testCase.currentTemporal,
+      internalSize * 8,
+    );
     upload(device, historyStability, WIDTH, HEIGHT, testCase.historyStability, WIDTH);
+    upload(
+      device,
+      currentCoverage,
+      WIDTH,
+      HEIGHT,
+      testCase.currentCoverage ?? testCase.historyTemporal,
+      WIDTH * 8,
+    );
     upload(
       device,
       secondaryReactivity,
@@ -511,6 +545,7 @@ async function runPair(
     words[2] = Number(testCase.params.historyValid);
     words[3] = testCase.params.frameIndex;
     words[4] = Number(testCase.params.hasSecondary);
+    words[5] = Number(testCase.currentCoverage !== undefined);
     device.queue.writeBuffer(params, 0, new Uint8Array(payload)).unwrap();
 
     const inputLayout = device
@@ -589,7 +624,16 @@ async function runPair(
           // Ordinary TAA does not allocate an output-domain coverage target.
           // The production resolve still declares the stable binding and uses
           // this current-temporal fallback while hasCurrentCoverage is zero.
-          { binding: 11, resource: { kind: 'textureView', value: currentTemporal.view } },
+          {
+            binding: 11,
+            resource: {
+              kind: 'textureView',
+              value:
+                testCase.currentCoverage === undefined
+                  ? currentTemporal.view
+                  : currentCoverage.view,
+            },
+          },
         ],
       })
       .unwrap();
@@ -651,7 +695,278 @@ async function runPair(
 
 describe('TAA neighborhood equivalence on Dawn', () => {
   it.skipIf(!dawnReady)(
-    'matches the pinned pre-optimization shader byte-for-byte on all three MRT attachments',
+    'preserves all MRT bytes with Renderer-selected native and reduced geometry',
+    async () => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const selected = replaceRequired(
+        source,
+        `  // The Renderer binds output geometry or current internal geometry here once.
+  return textureLoad(currentOutputTemporal, pixel, 0);`,
+        `  if (params.hasOutputTemporal != 0u) {
+    return textureLoad(currentOutputTemporal, pixel, 0);
+  }
+  return textureLoad(currentTemporal, pixel, 0);`,
+        'original per-sample texture selection',
+      );
+      const branched = replaceRequired(
+        selected,
+        'let temporalDimensions = vec2<i32>(textureDimensions(currentOutputTemporal));',
+        'let temporalDimensions = select(vec2<i32>(textureDimensions(currentTemporal)), vec2<i32>(textureDimensions(currentOutputTemporal)), params.hasOutputTemporal != 0u);',
+        'original geometry dimensions',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[3];
+      if (testCase === undefined) throw new Error('missing stationary case');
+      const coverage = temporalGrid((x, y) => {
+        if ((x === 1 && y === 1) || (x === 3 && y === 3))
+          return [H.negMotion, H.motion, H.half, H.eighth];
+        if ((x === 7 && y === 7) || (x === 5 && y === 5))
+          return [H.motion, H.negMotion, H.half, H.quarter];
+        if (x === 0 || y === HEIGHT - 1) return [H.zero, H.zero, H.one, H.zero];
+        return [H.zero, H.zero, H.negOne, H.one];
+      });
+      for (const internalSize of [4, 6, 7]) {
+        for (const age of [64, 128]) {
+          const pair = await runPair(device, branched, source, {
+            ...testCase,
+            internalSize,
+            currentCoverage: coverage,
+            currentColor: Uint16Array.from({ length: internalSize * internalSize * 4 }, (_, i) =>
+              i % 4 === 3 ? H.one : i % 3 === 0 ? H.quarter : H.threeQuarter,
+            ),
+            currentTemporal: Uint16Array.from(
+              { length: internalSize * internalSize * 4 },
+              (_, i) => (i % 4 === 2 ? H.negOne : H.zero),
+            ),
+            historyStability: byteGrid(age),
+            secondaryReactivity: secondaryGrid(),
+            params: { ...testCase.params, hasSecondary: false },
+          });
+          for (const attachment of ['color', 'temporal', 'stability'] as const)
+            expect(
+              Array.from(pair.production[attachment]),
+              `${internalSize}/${age}/${attachment}`,
+            ).toEqual(Array.from(pair.baseline[attachment]));
+        }
+      }
+    },
+  );
+  it.skipIf(!dawnReady).each(['initial', 'background', 'disocclusion'] as const)(
+    'preserves all three attachments when skipping rejected history work (%s)',
+    async (reason) => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const start = source.indexOf('  // Rejected history contributes neither');
+      const end = source.indexOf('  let history = textureSampleLevel', start);
+      if (start < 0 || end < 0) throw new Error('missing rejected-history fast path');
+      const fullWork = source.slice(0, start) + source.slice(end);
+      const testCase = makeCases()[0];
+      if (!testCase) throw new Error('missing rejection case');
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      for (const internalSize of [4, WIDTH]) {
+        const pair = await runPair(device, fullWork, source, {
+          ...testCase,
+          internalSize,
+          currentColor: new Uint16Array(internalSize * internalSize * 4).fill(H.one),
+          currentTemporal: new Uint16Array(internalSize * internalSize * 4).fill(H.one),
+          currentCoverage: constantTemporal([
+            H.zero,
+            H.zero,
+            reason === 'background' ? H.negOne : H.one,
+            H.zero,
+          ]),
+          historyTemporal: constantTemporal([
+            H.zero,
+            H.zero,
+            reason === 'disocclusion' ? H.negOne : H.one,
+            H.zero,
+          ]),
+          historyStability: byteGrid(170),
+          secondaryReactivity: secondaryGrid(),
+          params: {
+            ...testCase.params,
+            historyValid: reason !== 'initial',
+            hasSecondary: false,
+            jitterX: 0,
+            jitterY: 0,
+          },
+        });
+        for (const attachment of ['color', 'temporal', 'stability'] as const)
+          expect(Array.from(pair.production[attachment])).toEqual(
+            Array.from(pair.baseline[attachment]),
+          );
+        expect(Array.from(pair.production.stability)).toEqual(Array(WIDTH * HEIGHT).fill(0));
+      }
+    },
+  );
+  it.skipIf(!dawnReady).each([H.zero, H.motion])(
+    'uses local stationary age to rebuild reduced radiance after a late stop (prior motion=%s)',
+    async (priorMotion) => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[0];
+      if (!testCase) throw new Error('missing stationary case');
+      const prefixStart = source.indexOf(
+        '  if (params.hasOutputTemporal != 0u && length(temporal.xy)',
+      );
+      const prefixEnd = source.indexOf('  // Depth is a disocclusion gate', prefixStart);
+      if (prefixStart < 0 || prefixEnd < 0) throw new Error('missing local-age recovery');
+      const legacy = source.slice(0, prefixStart) + source.slice(prefixEnd);
+      const pair = await runPair(device, legacy, source, {
+        ...testCase,
+        internalSize: 4,
+        currentColor: Uint16Array.from({ length: 4 * 4 * 4 }, (_, i) =>
+          i % 4 === 3 || Math.floor(i / 4) % 4 === 1 ? H.one : H.zero,
+        ),
+        currentCoverage: constantTemporal([H.zero, H.zero, H.one, H.zero]),
+        historyColor: constantColor([H.half, H.half, H.half, H.one]),
+        historyTemporal: constantTemporal([priorMotion, H.zero, H.one, H.zero]),
+        historyStability: byteGrid(0),
+        params: {
+          ...testCase.params,
+          frameIndex: 200,
+          jitterX: 0,
+          jitterY: 0,
+          historyValid: true,
+          hasSecondary: false,
+        },
+      });
+      // Independent Karis recurrence: current 0, history .5, local sample count
+      // one gives weight .5 and result .2. Global frame 200 must not give .95.
+      const value = pixelHalfQuad(pair.production.color, 4, 4)[0];
+      expect(value).toBeGreaterThanOrEqual(0x3265);
+      expect(value).toBeLessThanOrEqual(0x3267);
+      expect(pixelHalfQuad(pair.baseline.color, 4, 4)[0]).toBeGreaterThan(0x3700);
+    },
+  );
+
+  it.skipIf(!dawnReady)(
+    'integrates the actual reduced jitter sample without pre-spreading its footprint',
+    async () => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const bilinear = replaceRequired(
+        source,
+        'let current = textureLoad(currentColor, sourcePixel, 0);',
+        'let current = textureSampleLevel(currentColor, currentSampler, currentUv, 0.0);',
+        'TAAU pre-spread falsifier',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[3];
+      if (!testCase) throw new Error('missing stationary case');
+      const currentColor = Uint16Array.from({ length: 4 * 4 * 4 }, (_, i) =>
+        i % 4 === 3 || (i % 4 === 0 && Math.floor(i / 4) % 4 >= 2) ? H.one : H.zero,
+      );
+      const pair = await runPair(device, bilinear, source, {
+        ...testCase,
+        internalSize: 4,
+        currentColor,
+        currentCoverage: constantTemporal([H.zero, H.zero, H.one, H.zero]),
+        currentTemporal: new Uint16Array(4 * 4 * 4),
+        params: { ...testCase.params, historyValid: false, hasSecondary: false },
+      });
+      expect(pixelHalfQuad(pair.production.color, 4, 4)).toEqual([H.one, H.zero, H.zero, H.one]);
+      expect(pixelHalfQuad(pair.baseline.color, 4, 4)).toEqual([H.half, H.zero, H.zero, H.one]);
+    },
+  );
+  it.skipIf(!dawnReady)(
+    'does not prefilter native textured current before integration',
+    async () => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const filtered = replaceRequired(
+        source,
+        'let current = textureLoad(currentColor, sourcePixel, 0);',
+        'let current = textureSampleLevel(currentColor, currentSampler, currentUv, 0.0);',
+        'native texture prefilter falsifier',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[0];
+      if (!testCase) throw Error('missing native case');
+      const pair = await runPair(device, filtered, source, {
+        ...testCase,
+        currentColor: rgbaGrid((x) => [x >= 5 ? H.one : H.zero, H.zero, H.zero, H.one]),
+        params: {
+          ...testCase.params,
+          historyValid: false,
+          hasSecondary: false,
+          jitterX: 0.25 / WIDTH,
+          jitterY: 0,
+        },
+      });
+      expect(pixelHalfQuad(pair.production.color, 4, 4)).toEqual([H.zero, H.zero, H.zero, H.one]);
+      expect(pixelHalfQuad(pair.baseline.color, 4, 4)).toEqual([H.quarter, H.zero, H.zero, H.one]);
+    },
+  );
+  it.skipIf(!dawnReady)(
+    'retains thin-line history inside reconstruction support and rejects absent coverage',
+    async () => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[3];
+      if (testCase === undefined) throw new Error('missing stationary case');
+      const coverage = temporalGrid((x, y) =>
+        x === 5 && y === 4 ? [H.zero, H.zero, H.one, H.zero] : [H.zero, H.zero, H.negOne, H.one],
+      );
+      const pair = await runPair(device, source, source, {
+        ...testCase,
+        internalSize: 4,
+        currentCoverage: coverage,
+        currentColor: new Uint16Array(4 * 4 * 4).fill(H.one),
+        currentTemporal: Uint16Array.from({ length: 4 * 4 * 4 }, (_, i) =>
+          i % 4 === 2 ? H.negOne : H.zero,
+        ),
+        historyStability: byteGrid(64),
+        secondaryReactivity: secondaryGrid(),
+        params: { ...testCase.params, hasSecondary: false },
+      });
+      expect(pair.production.stability[4 * WIDTH + 4]).toBe(65);
+      expect(pair.production.stability[0]).toBe(0);
+      expect(pair.production.stability[4 * WIDTH + 1]).toBe(0);
+    },
+  );
+  it.skipIf(!dawnReady).each([4, 6, 7])(
+    'reads spatially varying output-domain stability with a %s/9 internal lattice',
+    async (internalSize) => {
+      const source = readFileSync(
+        resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
+        'utf8',
+      );
+      const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+      const testCase = makeCases()[3];
+      if (testCase === undefined) throw new Error('missing stationary case');
+      const ages = Uint8Array.from({ length: WIDTH * HEIGHT }, (_, i) => i);
+      const pair = await runPair(device, source, source, {
+        ...testCase,
+        internalSize,
+        historyStability: ages,
+        secondaryReactivity: secondaryGrid(),
+        params: { ...testCase.params, hasSecondary: false },
+      });
+      expect(
+        Array.from(pair.production.stability),
+        'each output pixel must advance its own reprojected age',
+      ).toEqual(Array.from(ages, (age) => age + 1));
+    },
+  );
+
+  it.skipIf(!dawnReady)(
+    'matches pinned pre-optimization bounds with identical current reconstruction on all three MRT attachments',
     async () => {
       const productionSource = readFileSync(
         resolve(import.meta.dirname, '../../../shader/src/taa-resolve.wgsl'),
@@ -662,6 +977,16 @@ describe('TAA neighborhood equivalence on Dawn', () => {
         'utf8',
       );
       const baselineBody = baselineSource.split('\n').slice(4).join('\n');
+      // The native reconstruction intentionally changes. Isolate the bounds
+      // optimization with the same current sample on both sides, while still
+      // verifying the immutable pre-optimization source hash below.
+      const pairedBaseline = replaceRequired(
+        baselineSource,
+        'let current = textureSampleLevel(currentColor, currentSampler, currentUv, 0.0);',
+        'let sourcePixel = clamp(vec2<i32>(currentUv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - vec2<i32>(1));\n  let current = textureLoad(currentColor, sourcePixel, 0);',
+        'shared point reconstruction',
+      );
+
       expect(createHash('sha256').update(baselineBody).digest('hex')).toBe(PINNED_BASELINE_SHA256);
       const deviceResult = await rhi.requestAdapter();
       expect(deviceResult.ok).toBe(true);
@@ -671,7 +996,7 @@ describe('TAA neighborhood equivalence on Dawn', () => {
       if (!deviceResultValue.ok) return;
       const device = deviceResultValue.value;
       for (const testCase of makeCases()) {
-        const pair = await runPair(device, baselineSource, productionSource, testCase);
+        const pair = await runPair(device, pairedBaseline, productionSource, testCase);
         for (const attachment of ['color', 'temporal', 'stability'] as const) {
           expect(
             Array.from(pair.production[attachment]),

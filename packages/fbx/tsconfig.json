@@ -20,6 +20,7 @@
     { "path": "../import" },
     { "path": "../runtime" },
     { "path": "../picking" },
-    { "path": "../skinning" }
+    { "path": "../skinning" },
+    { "path": "../geometry" }
   ]
 }

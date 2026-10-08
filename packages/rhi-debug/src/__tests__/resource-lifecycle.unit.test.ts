@@ -34,6 +34,27 @@ function makeTape(tapeEvents: readonly RhiCallEvent[] = events): Tape {
 }
 
 describe('resource lifecycle attribution', () => {
+  it('records replacement peaks at create boundaries, including retained bootstrap payloads', () => {
+    const report = buildResourceLifecycle({
+      ...makeTape([
+        { kind: 'createBuffer', handleId: 'candidate', desc: { size: 96, usage: 4 } },
+        { kind: 'destroyBuffer', handleId: 'active' },
+        { kind: 'destroyBuffer', handleId: 'candidate' },
+        { kind: 'createBuffer', handleId: 'later', desc: { size: 8, usage: 4 } },
+      ]),
+      bootstrap: [
+        {
+          handleId: 'active',
+          kind: 'buffer',
+          initialData: [],
+          create: { kind: 'createBuffer', handleId: 'active', desc: { size: 64, usage: 4 } },
+        },
+      ],
+    });
+    expect(report.bytes).toMatchObject({ knownLive: 8, knownCreated: 168, knownPeak: 160 });
+    expect(report.counts).toMatchObject({ live: 1, peakLive: 2 });
+  });
+
   it('joins v7 bootstrap ownership to destruction without shifting frame event indices', () => {
     const tape: Tape = {
       ...makeTape([
@@ -80,6 +101,7 @@ describe('resource lifecycle attribution', () => {
       created: 4,
       destroyed: 1,
       live: 3,
+      peakLive: 4,
       destroyEvents: 1,
       unknownDestroyEvents: 0,
     });
@@ -87,9 +109,11 @@ describe('resource lifecycle attribution', () => {
       knownCreated: 384,
       knownDestroyed: 64,
       knownLive: 320,
+      knownPeak: 384,
       unavailableCreated: 2,
       unavailableDestroyed: 0,
       unavailableLive: 2,
+      unavailablePeak: 2,
     });
     expect(report.availability).toEqual({
       destroy: 'observed-buffer-texture',

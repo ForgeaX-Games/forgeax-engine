@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { summarizeIntervalSet } from './smoke-performance-sequence-aggregation.mjs';
+import { abbaIncrement, projectTimingFrame, summarizeIntervalSet } from './smoke-performance-sequence-aggregation.mjs';
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const rootDir = resolve(appDir, '../../..');
@@ -119,11 +119,15 @@ function summarizeRows(rows) {
   return {
     frameCount: rows.length,
     frameIds: rows.map((row) => row.frameId),
-    cpu: summarize('cpuFrameMs'),
-    allGpu: summarize('allGpuMs'),
-    ssrGpu: summarize('ssrGpuMs'),
-    compose: summarize('composeGpuMs'),
-    nonComposeSsr: summarize('nonComposeSsrGpuMs'),
+    cpuSubmission: summarize('cpuFrameMs'),
+    completionWait: summarize('completionWaitMs'),
+    endToEnd: summarize('endToEndMs'),
+    gpuEnvelope: summarize('gpuEnvelopeMs'),
+    gpuUnion: summarize('gpuUnionMs'),
+    allPassSum: summarize('allPassSumMs'),
+    ssrPassSum: summarize('ssrPassSumMs'),
+    composeInterval: summarize('composeIntervalMs'),
+    nonComposeSsrPassSum: summarize('nonComposeSsrPassSumMs'),
     passStats,
     intervalAudit: {
       invalidFrameCount: rows.filter((row) => row.intervalAudit.valid !== true).length,
@@ -152,10 +156,10 @@ function summarizeFrames(report) {
     if (!Array.isArray(frame.passes)) {
       return { valid: false, reason: `timing frame ${frame.frameId} has no pass list`, frames: [] };
     }
-    let allGpuMs = 0;
-    let ssrGpuMs = 0;
-    let composeGpuMs = 0;
-    let nonComposeSsrGpuMs = 0;
+    let allPassSumMs = 0;
+    let ssrPassSumMs = 0;
+    let composeIntervalMs = 0;
+    let nonComposeSsrPassSumMs = 0;
     const passNames = [];
     const passDurationsMs = {};
     for (const pass of frame.passes) {
@@ -166,22 +170,28 @@ function summarizeFrames(report) {
         return { valid: false, reason: `invalid duration in frame ${frame.frameId}`, frames: [] };
       }
       passDurationsMs[pass.passName] = durationMs;
-      allGpuMs += durationMs;
+      allPassSumMs += durationMs;
       if (!pass.passName.startsWith('ssr-')) continue;
-      ssrGpuMs += durationMs;
-      if (pass.passName === 'ssr-compose') composeGpuMs += durationMs;
-      else nonComposeSsrGpuMs += durationMs;
+      ssrPassSumMs += durationMs;
+      if (pass.passName === 'ssr-compose') composeIntervalMs += durationMs;
+      else nonComposeSsrPassSumMs += durationMs;
     }
+    const coverage = projectTimingFrame(frame);
     rows.push({
       ordinal: frameIndex + 1,
       frameId: frame.frameId,
       deviceGeneration: frame.deviceGeneration,
       graphGeneration: frame.graphGeneration,
       drawCpuMs: frame.drawCpuMs ?? null,
-      allGpuMs,
-      ssrGpuMs,
-      composeGpuMs,
-      nonComposeSsrGpuMs,
+      coverage,
+      gpuEnvelopeMs: coverage.coverage?.all.envelopeNanoseconds / 1e6,
+      gpuUnionMs: coverage.coverage?.all.unionNanoseconds / 1e6,
+      completionWaitMs: report.performanceTiming.cpu.completionWaitSamples?.[frameIndex] ?? null,
+      endToEndMs: report.performanceTiming.cpu.endToEndSamples?.[frameIndex] ?? null,
+      allPassSumMs,
+      ssrPassSumMs,
+      composeIntervalMs,
+      nonComposeSsrPassSumMs,
       passNames,
       passDurationsMs,
       cpuFrameMs: Array.isArray(cpuSamples) ? cpuSamples[frameIndex] ?? null : null,
@@ -190,7 +200,7 @@ function summarizeFrames(report) {
   }
   const summary = summarizeRows(rows);
   return {
-    valid: rows.length >= totalFrameCount,
+    valid: rows.length >= totalFrameCount && rows.every((row) => row.coverage.status === 'complete'),
     reason: rows.length < totalFrameCount ? `timing frame count=${rows.length} < ${totalFrameCount}` : undefined,
     frames: rows,
     ...summary,
@@ -221,11 +231,14 @@ for (let orderIndex = 0; orderIndex < sequence.length; orderIndex += 1) {
   const startedAt = new Date().toISOString();
   const env = {
     ...process.env,
+    FORGEAX_SHARED_APP_INPUTS_MANIFEST: process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST === undefined
+      ? undefined : resolve(rootDir, process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST),
     FORGEAX_SKIP_HARNESS_SYNC: '1',
     SMOKE_MIN_FRAMES: String(totalFrameCount),
     SMOKE_PERF_TIMING: '1',
-    SMOKE_WIDTH: '1920',
-    SMOKE_HEIGHT: '1080',
+    SMOKE_WIDTH: process.env.SMOKE_WIDTH ?? '1920',
+    SMOKE_HEIGHT: process.env.SMOKE_HEIGHT ?? '1080',
+    SMOKE_WAIT_DRAW_COMPLETION: '1',
     SMOKE_REPORT_FILE: reportPath,
     SMOKE_QUIET: '1',
     SMOKE_RUN_ID: runId,
@@ -287,9 +300,9 @@ for (let orderIndex = 0; orderIndex < sequence.length; orderIndex += 1) {
     childStatus: child.status,
     frames: timing.frames.length,
     windows: windows.map((window) => ({ label: window.label, frameCount: window.actualFrameCount })),
-    allGpuP50Ms: timing.allGpu?.p50Ms ?? null,
-    ssrGpuP50Ms: timing.ssrGpu?.p50Ms ?? null,
-    composeP50Ms: timing.compose?.p50Ms ?? null,
+    allGpuP50Ms: timing.allPassSum?.p50Ms ?? null,
+    ssrGpuP50Ms: timing.ssrPassSum?.p50Ms ?? null,
+    composeP50Ms: timing.composeInterval?.p50Ms ?? null,
   })}`);
 }
 
@@ -301,6 +314,7 @@ const sameAdapter = adapters.length > 0 && adapters.every((value) => JSON.string
 const sameHost = hosts.length > 0 && hosts.every((value) => JSON.stringify(value) === JSON.stringify(hosts[0]));
 if (!sameIdentity || !sameAdapter || !sameHost) failed = true;
 
+const steadyWindows = runs.map((run) => run.windows.find((window) => window.label === DIAGNOSTIC_WINDOW.label)?.summary);
 const artifact = {
   schemaVersion: 'hello-ssr-performance-sequence/1',
   featureId: 'feat-20260831-ssr-probe-environment-fallback',
@@ -317,16 +331,25 @@ const artifact = {
     hosts: sameHost ? hosts[0] : hosts,
   },
   runs,
+  measurement: { status: failed ? 'fail' : 'pass' },
+  budget: { status: 'not-evaluated', reason: 'diagnostic sequence; use smoke:performance for the unchanged numeric budgets' },
+  abba: failed ? null : {
+    gpuEnvelope: abbaIncrement(steadyWindows, 'gpuEnvelope'),
+    cpuSubmission: abbaIncrement(steadyWindows, 'cpuSubmission'),
+  },
+  nativeOuterQuery: { status: 'unavailable', reason: 'RHI supplies pass boundaries only' },
   interpretation: {
     semantics: 'diagnostic-sequence-only',
     order: 'O-S-S-O',
     allRunsRetained: true,
     ordinalBasis: 'successful submitted frame order within each process; frameId is retained as an observed identity and is not assumed to start at one',
     startupWindow: 'observational projection of ordinals 1-60; it does not rerun or replace the existing smoke:performance gate',
-    diagnosticWindow: 'observational projection of ordinals 121-420 after the fixed 120-frame startup interval',
+    diagnosticWindow: 'observational projection of ordinals 121-180 after the fixed 120-frame startup interval',
     overlappingOrdinals: 'none; startup and post-warmup windows contain disjoint frame ordinals',
     percentileIndependence: 'each run is summarized separately; adjacent frames are not independent experiments',
     thresholdVerdict: 'not-evaluated',
+    gpuSemantics: 'sum is repeated coverage; union includes copy marker overhead; envelope includes gaps; none is exclusive cost or FPS',
+    attribution: 'ABBA measures the change in full graph pass envelope, not a native outer query',
   },
 };
 const outputPath = resolve(artifactDir, 'sequence.json');

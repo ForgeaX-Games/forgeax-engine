@@ -60,7 +60,12 @@ function texture(data: number[]): TextureAsset {
   };
 }
 
-export async function verifyDecals(renderer: Renderer, recorder: RecorderAttachment, save: Save) {
+export async function verifyDecals(
+  renderer: Renderer,
+  recorder: RecorderAttachment,
+  save: Save,
+  settleFrames = 60,
+) {
   const world = new World();
   const errors: unknown[] = [];
   const report: unknown[] = [];
@@ -69,7 +74,6 @@ export async function verifyDecals(renderer: Renderer, recorder: RecorderAttachm
     renderer.setProfile({
       ...originalProfile,
       renderPath: 'deferred',
-      shadows: 'off',
       ssao: false,
     }),
   );
@@ -171,7 +175,7 @@ export async function verifyDecals(renderer: Renderer, recorder: RecorderAttachm
     const off = await observe('off');
     expect(renderer.inspect().perFramePassNames.filter((p) => p.startsWith('decal-'))).toEqual([]);
     world.set(decal, ProjectedDecal, { opacity: 1 }).unwrap();
-    for (let i = 0; i < 60; i++) await draw();
+    for (let i = 0; i < settleFrames; i++) await draw();
     const initialCapture = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const on = await observe('gpu-red');
@@ -393,7 +397,7 @@ export async function verifyDecals(renderer: Renderer, recorder: RecorderAttachm
         { component: MeshRenderer, data: { materials: [meshMaterial] } },
       )
       .unwrap();
-    for (let i = 0; i < 60; i++) await draw();
+    for (let i = 0; i < settleFrames; i++) await draw();
     const meshCapture = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const meshPixels = await observe('mesh-texture');

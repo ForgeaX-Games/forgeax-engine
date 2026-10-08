@@ -1,40 +1,20 @@
-// @forgeax/engine-shader/errors — ShaderError + factories (physically isolated from the
-// same-named class in @forgeax/engine-shader-compiler, but shape-aligned 1:1 / charter
-// proposition 5: consistent abstraction).
+// @forgeax/engine-shader/errors — the single ShaderError class + runtime factories.
 //
 // Shape rules (plan-strategy §S-7 / D-R7 / OQ-2 close):
 // - ShaderError extends Error, with the 5-field top-level projection
 //   {code, lineNum, linePos, message, hint} (MVP-2.3) + 3 internal fields
 //   {expected, detail, name}.
-// - ShaderErrorCode is a closed 4-member union imported from @forgeax/engine-types
-//   (SSOT single-source policy).
+// - ShaderErrorCode / ShaderErrorDetail are the closed unions owned by
+//   @forgeax/engine-types; `.detail` narrows by its own `code`.
 //
-// Physical isolation — this file does **not** import from
-// @forgeax/engine-shader-compiler; the type / factories are 1:1 mirrored but
-// independently implemented (guarded by the AC-06 triple-grep gate; charter
-// proposition 1: progressive disclosure).
+// This runtime package owns the class so build-time producers
+// (@forgeax/engine-naga, @forgeax/engine-shader-compiler) construct the same
+// class and `instanceof ShaderError` holds on every path. Dependency direction
+// stays build-time -> runtime; this file imports no build-core package.
 
-import type { ShaderErrorCode } from '@forgeax/engine-types';
+import type { ShaderErrorCode, ShaderErrorDetail } from '@forgeax/engine-types';
 
-export type { ShaderErrorCode };
-
-/**
- * Path-specific `detail` shape for `manifest-malformed` / `shader-not-found`.
- * `reason` is supplemental prose (it does not replace `hint`).
- */
-export interface ShaderErrorDetail {
-  readonly reason?: string | undefined;
-  /**
-   * Machine-consumable list of currently-registered material-shader identifiers.
-   * Populated by `materialShaderNotFound()` factory so AI users can enumerate
-   * available shaders via `err.detail.registeredShaderIds` for autocomplete /
-   * fuzzy-match recovery without parsing the human-formatted `err.expected`
-   * string (charter P3 structured failure). `err.expected` still carries the
-   * pre-formatted `"ShaderRegistry has registered identifiers: [...]"` message
-   * for human-readable log output — the two channels are complementary.
-   */
-  readonly registeredShaderIds?: readonly string[] | undefined;
-}
+export type { ShaderErrorCode, ShaderErrorDetail };
 
 interface ShaderErrorInit {
   readonly code: ShaderErrorCode;
@@ -47,27 +27,24 @@ interface ShaderErrorInit {
 }
 
 /**
- * Structured shader error (runtime path, aligned with build-time
- * `@forgeax/engine-shader-compiler.ShaderError`).
+ * Structured shader error, shared by runtime lookup and build-time compilation.
  *
  * **5 surface fields** (MVP-2.3 top-level projection, AI-user consumption path):
- * - `.code` — member of the closed `ShaderErrorCode` union (4 variants)
+ * - `.code` — member of the closed `ShaderErrorCode` union
  * - `.message` — display text (`Error` base-class field, populated at construction)
  * - `.hint` — actionable recovery guidance (charter proposition 3:
  *   machine-readable hint > prose)
  * - `.lineNum` / `.linePos` — error source location (undefined on the runtime
- *   path; only populated by the build-time compile-failed path; the field is
- *   retained here for shape alignment).
+ *   path; only populated by the build-time compile-failed path).
  *
  * **3 internal fields**:
  * - `.name` = `'ShaderError'` (debug label)
  * - `.expected` — expected-state description (symmetric with RhiError)
- * - `.detail` — path-specific extras (`reason` prose)
+ * - `.detail` — path-specific extras, discriminated by `detail.code`
  *
- * **Do not `new` this directly** — construct via the 2 factory helpers
- * (`manifestMalformed` / `shaderNotFound`); the runtime path of this loop does
- * not trigger compile-failed / init-failed (those two paths belong to the
- * build-time `ShaderError` shape in `@forgeax/engine-shader-compiler`).
+ * **Do not `new` this directly** — construct via the factory helpers here
+ * (`manifestMalformed` / `shaderNotFound` / `materialShaderNotFound`) or the
+ * build-time ones in `@forgeax/engine-naga` (`compileFailed` / `initFailed`).
  */
 export class ShaderError extends Error {
   override readonly name: 'ShaderError' = 'ShaderError';
@@ -102,7 +79,10 @@ export function manifestMalformed(args: {
     expected: 'manifest.json parses + every entry has {hash, wgsl, glsl, bindings}',
     message: args.message,
     hint: args.hint,
-    ...(args.reason !== undefined ? { detail: { reason: args.reason } } : {}),
+    detail: {
+      code: 'manifest-malformed',
+      ...(args.reason !== undefined ? { reason: args.reason } : {}),
+    },
   });
 }
 
@@ -146,7 +126,11 @@ export function materialShaderNotFound(args: {
     expected: `ShaderRegistry has registered identifiers: [${args.expected.join(', ')}]`,
     message: `ShaderRegistry: material shader identifier '${args.identifier}' not registered`,
     hint: args.hint,
-    detail: { reason: `identifier=${args.identifier}`, registeredShaderIds: args.expected },
+    detail: {
+      code: 'material-shader-not-found',
+      identifier: args.identifier,
+      registeredShaderIds: args.expected,
+    },
   });
 }
 

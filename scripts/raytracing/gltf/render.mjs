@@ -42,7 +42,7 @@ export async function renderGltf(
             {
               kind: 'directional',
               direction: new Float32Array([0.45, -1, -0.2]),
-              color: new Float32Array([1, 0.95, 0.85]),
+              color: new Float32Array([4 * light, 0.95 * 4 * light, 0.85 * 4 * light]),
               intensity: 4 * light,
             },
           ],

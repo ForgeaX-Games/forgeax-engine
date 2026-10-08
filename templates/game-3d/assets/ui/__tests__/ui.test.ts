@@ -2,15 +2,20 @@ import { Context } from '@forgeax/engine/plugin';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ui as uiPlugin } from '../ui.pack.ts';
 
-const { dispose, mountUi, label, toggle } = vi.hoisted(() => {
+const { dispose, mountUi, label, toggle, signal } = vi.hoisted(() => {
+  const signal = new AbortController().signal;
   const dispose = vi.fn();
   const toggle = vi.fn();
   const label = { textContent: '' };
-  return { dispose, toggle, label, mountUi: vi.fn(() => ({ ok: true, value: {
-    dispose, host: { classList: { toggle }, shadowRoot: { querySelector: () => label } },
+  return { dispose, toggle, label, signal, mountUi: vi.fn(() => ({ ok: true, value: {
+    dispose, signal, host: { classList: { toggle }, shadowRoot: { querySelector: (selector: string) => selector == '[data-ui-slot="lock"]' ? label : null } },
   } })) };
 });
 vi.mock('@forgeax/engine/ui', () => ({ mountUi, createUiLoader: () => ({ load: () => ({ ok: true, value: {} }) }) }));
+vi.mock('@forgeax/engine/ui/localization', () => ({
+  createUiLocalization: async () => ({ ok: true, value: { t: (key: string) => key === 'lock' ? 'Camera locked' : 'Click to lock camera' } }),
+  bindUiLocalization: (_ui: unknown, _i18n: unknown, render: () => void) => render(),
+}));
 vi.mock('../../shared/guid.ts', () => ({
   authoredGuid: () => ({ ok: true, value: new Uint8Array(16) }),
 }));

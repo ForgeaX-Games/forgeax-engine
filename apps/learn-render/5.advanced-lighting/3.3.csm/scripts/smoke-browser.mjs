@@ -2,7 +2,7 @@
 // learn-render 5.x csm (3.3.csm). Delegates to the shared harness; supplies
 // demo identity + live-pixel hook (window.__captureCsm, installed by
 // src/main.ts).
-// Local-only gate (no Chrome+WebGPU on CI runners).
+// Real Browser capture; CI software backends and native-device evidence remain distinct.
 
 import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -288,7 +288,7 @@ function assertCsmCascadeLayers(cascades) {
 function assertCsmLayerSamplerFormula(shaderCode) {
   let gated = shaderCode;
   if (process.env.FALSIFY === 'force-csm-sampler-layer-formula') {
-    gated = gated.replace(/let\s+shadowLayer(_\d+)?\s*=\s*i32\(layer[^;]*;/, 'let shadowLayer$1 = 0i;');
+    gated = gated.replace(/let\s+shadowLayer(_\d+)?\s*=\s*i32\([^;]*\blayer(?:_\d+)?\b[^;]*;/, 'let shadowLayer$1 = 0i;');
     console.log('[csm] FALSIFY=force-csm-sampler-layer-formula -- pinned sampler to layer 0');
   }
   const compact = gated.replace(/\s+/g, '');
@@ -305,7 +305,7 @@ function assertCsmLayerSamplerFormula(shaderCode) {
   const required = [
     // Naga folds the `tileUv`/`uv` alias pair into one local.
     [/let(?:tileUv|uv)(?:_\d+)?=vec2<f32>\([^;]*projCoords(?:_\d+)?\.x[^;]*projCoords(?:_\d+)?\.y[^;]*\);/, sample],
-    [/letshadowLayer(?:_\d+)?=i32\(layer(?:_\d+)?\);/, sample],
+    [/letshadowLayer(?:_\d+)?=i32\(\(layer(?:_\d+)?\+layerBase(?:_\d+)?\)\);/, sample],
     [/lettileLo(?:_\d+)?=vec2<f32>\(\(1f\/texelDims[^;]*\);/, sample],
     [/lettileHi(?:_\d+)?=\(vec2\(1f\)-tileLo(?:_\d+)?\);/, sample],
     [/letoffsetUv(?:_\d+)?=clamp\([^;]*,tileLo(?:_\d+)?,tileHi(?:_\d+)?\);/, sample],
@@ -317,7 +317,7 @@ function assertCsmLayerSamplerFormula(shaderCode) {
   if (missing >= 0) {
     throw new Error(`CSM layer sampler formula is missing source term ${missing}`);
   }
-  console.log('[csm] sampler lineage layer->arrayLayer->inLayerPcf=accepted');
+  console.log('[csm] sampler lineage logicalLayer+familyBase->arrayLayer->inLayerPcf=accepted');
 }
 
 /** @param {{ pixels: Uint8Array, width: number, height: number }} input */

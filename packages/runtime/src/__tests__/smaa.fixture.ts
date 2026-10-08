@@ -48,6 +48,7 @@ export async function verifySmaa(
   recorder: RecorderAttachment,
   canvas: { width: number; height: number },
   save: Save,
+  settleFrames = 60,
 ) {
   const world = new World();
   const errors: unknown[] = [];
@@ -106,13 +107,13 @@ export async function verifySmaa(
   const observe = async (name: string) => {
     if (renderer.requestObservation === undefined)
       throw new Error('missing observation capability');
-    value(renderer.requestObservation(['linear-ldr', 'final-srgb']));
+    value(renderer.requestObservation(['linear-ldr', 'final-display']));
     const receipt = await draw();
     const result = value(
-      await renderer.observe(receipt, { include: ['linear-ldr', 'final-srgb'] }),
+      await renderer.observe(receipt, { include: ['linear-ldr', 'final-display'] }),
     );
     const linear = result.observations?.find((o) => o.domain === 'linear-ldr');
-    const final = result.observations?.find((o) => o.domain === 'final-srgb');
+    const final = result.observations?.find((o) => o.domain === 'final-display');
     if (linear === undefined || final === undefined) throw new Error('missing SMAA observation');
     const { width, height, bytesPerRow } = linear.metadata;
     const rgba = new Uint8Array(width * height * 4);
@@ -133,7 +134,7 @@ export async function verifySmaa(
     for (let i = 0; i < 3; i++) await draw();
     const none = await observe('none');
     world.set(camera, Camera, { antialias: ANTIALIAS_SMAA }).unwrap();
-    for (let i = 0; i < 60; i++) await draw();
+    for (let i = 0; i < settleFrames; i++) await draw();
     const initialCapture = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const smaa = await observe('smaa');

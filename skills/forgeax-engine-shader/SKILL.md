@@ -46,6 +46,18 @@ if (!result.ok) {
 const materialHandle = world.allocSharedRef('MaterialAsset', result.value);
 ```
 
+## External (video) textures
+
+A parameter `{ name: 'videoTexture', type: 'texture_external' }` reflects to a
+WGSL `texture_external` binding plus its `videoTexture_sampler`, and derives an
+`externalTexture` layout entry. Import both from
+`forgeax_material::parameters` and sample with
+`textureSampleBaseClampToEdge(videoTexture, videoTexture_sampler, uv)` (no
+mips, no `textureSample`). The same slot accepts a zero-copy video
+frame, a copied frame when `caps.externalTexture` is false, or an imported
+`GPUTexture`, so one shader serves every backend. The frame keeps source
+orientation: `uv.y = 0` is the image top (no flip).
+
 ## Blended custom materials and fog
 
 A custom WGSL material drawn with a blend state imports

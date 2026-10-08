@@ -14,7 +14,7 @@ const HEIGHT = 160;
 const SPRITE_SIZE = 32;
 const here = dirname(fileURLToPath(import.meta.url));
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });
 const gpu = create([]);

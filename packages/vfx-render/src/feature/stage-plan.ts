@@ -21,19 +21,6 @@ const STAGE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const ENTRY_POINT = /^forgeax_vfx_stage_[a-z][a-z0-9-]{0,31}_main$/;
 const MAX_ITERATIONS = 64;
 
-export interface VfxValidatedStage {
-  readonly id: string;
-  readonly entry: string;
-  readonly entryPoint: string;
-  readonly domain: 'particle';
-  readonly resources: readonly {
-    readonly name: string;
-    readonly access: VfxGpuStageReflection['resources'][number]['access'];
-  }[];
-  readonly dependsOn: readonly string[];
-  readonly iterationBudget: number;
-}
-
 export interface VfxStageReadiness {
   readonly id: string;
   readonly state: 'ready' | 'candidate-rejected' | 'stale' | 'rebuilding';
@@ -53,7 +40,7 @@ export interface VfxStagePlanObservation {
 }
 
 export interface VfxValidatedStagePlan {
-  readonly stages: readonly VfxValidatedStage[];
+  readonly stages: readonly VfxGpuStageReflection[];
   readonly fingerprint: string;
   readonly generation: number;
 }
@@ -81,7 +68,7 @@ function failure(
   return { ok: false, error: { code, stageId, hint } };
 }
 
-function stableStage(stage: VfxGpuStageReflection): VfxValidatedStage {
+function stableStage(stage: VfxGpuStageReflection): VfxGpuStageReflection {
   return {
     id: stage.id,
     entry: stage.entry,
@@ -104,7 +91,7 @@ export function validatedStagePlan(
   | { readonly ok: false; readonly error: VfxStagePlanError } {
   const source = reflection ?? [];
   const ids = new Set<string>();
-  const stages: VfxValidatedStage[] = [];
+  const stages: VfxGpuStageReflection[] = [];
   for (const stage of source) {
     if (!STAGE_ID.test(stage.id) || ids.has(stage.id)) {
       return failure(
@@ -161,8 +148,8 @@ export function validatedStagePlan(
   const byId = new Map(stages.map((stage) => [stage.id, stage]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const ordered: VfxValidatedStage[] = [];
-  const visit = (stage: VfxValidatedStage): VfxStagePlanError | undefined => {
+  const ordered: VfxGpuStageReflection[] = [];
+  const visit = (stage: VfxGpuStageReflection): VfxStagePlanError | undefined => {
     if (visited.has(stage.id)) return undefined;
     if (visiting.has(stage.id))
       return {

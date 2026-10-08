@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from 'node:fs/promises';
-import { create as createDawn, globals as dawnGlobals } from 'webgpu';
+import { create as createDawn, globals as dawnGlobals } from '@forgeax/engine-dawn-node';
 import { PNG } from 'pngjs';
 import { buildFrameModel, decodeTape, openReplay, replayDeviceRequest } from '@forgeax/engine-rhi-debug';
 import {

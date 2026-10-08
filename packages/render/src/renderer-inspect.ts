@@ -32,35 +32,3 @@ export interface TemporalInspectionInput {
   readonly format?: TextureFormat;
   readonly limits?: Readonly<Record<string, number>>;
 }
-
-export function inspectTemporalFrame(input: TemporalInspectionInput): TemporalInspection {
-  const frame = input.frame;
-  const status: TemporalInspectionStatus = !input.authored
-    ? 'authored-off'
-    : input.capability === 'unavailable'
-      ? 'capability-unavailable'
-      : input.degraded === true
-        ? 'temporal-degraded'
-        : 'available';
-  return Object.freeze({
-    status,
-    resetReason: frame?.resetReason ?? 'none',
-    historyEpoch: frame?.historyEpoch ?? 0,
-    deviceEpoch: frame?.deviceEpoch ?? 0,
-    backend: input.backend,
-    format: input.format,
-    limits: Object.freeze({
-      ...(typeof input.limits?.maxTextureDimension2D === 'number'
-        ? { maxTextureDimension2D: input.limits.maxTextureDimension2D }
-        : {}),
-      ...(typeof input.limits?.maxTextureDimension3D === 'number'
-        ? { maxTextureDimension3D: input.limits.maxTextureDimension3D }
-        : {}),
-      ...(typeof input.limits?.maxTextureArrayLayers === 'number'
-        ? { maxTextureArrayLayers: input.limits.maxTextureArrayLayers }
-        : {}),
-    }),
-    compute: input.capability === 'available' ? 'available' : 'unavailable',
-    storage: input.capability === 'available' ? 'available' : 'unavailable',
-  });
-}

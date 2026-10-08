@@ -1,6 +1,7 @@
 import type { Buffer, Result, RhiDevice } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import { createStandardPbrArtifactReceipt } from '@forgeax/engine-shader';
+import { LIGHTING_CHANNELS_DEFAULT } from './components/lighting-channels';
 import { GpuDirtyRanges } from './gpu-dirty-ranges';
 import {
   type GpuSceneChangedBounds,
@@ -728,6 +729,11 @@ export class GpuScene {
       bounds?.[2] ?? 0,
       0,
     ]);
+    primitive.setUint32(
+      offset(PRIMITIVE, 'lightingChannels'),
+      record.snapshot.lightingChannels ?? LIGHTING_CHANNELS_DEFAULT,
+      true,
+    );
     writeVec4(primitive, offset(PRIMITIVE, 'localBoundsMax'), [
       bounds?.[3] ?? 0,
       bounds?.[4] ?? 0,

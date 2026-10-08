@@ -15,11 +15,26 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-rect-light-texture smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "demo bundle is downstream of engine packages already tracked at package level" },
-      "fps": { "enabled": false, "reason": "the Dawn smoke reports textured/uniform frame-time ratio; no per-app fps sampling" },
-      "bench": { "enabled": false, "reason": "no benchmark workload; source-texture cost is one extra filtered array fetch per rect light" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/hello-rect-light-texture smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; this is the RectAreaLight sourceTexture exemplar" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle is downstream of engine packages already tracked at package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "the Dawn smoke reports textured/uniform frame-time ratio; no per-app fps sampling"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no benchmark workload; source-texture cost is one extra filtered array fetch per rect light"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-rect-light-texture smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; this is the RectAreaLight sourceTexture exemplar"
+      }
     }
   },
   "dependencies": {
@@ -36,8 +51,8 @@
     "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

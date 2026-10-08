@@ -1,6 +1,7 @@
 import type {
   AssetAuthoringCapability,
   AssetPublicationEnvelope,
+  AssetPublicationTuple,
   AssetRelation,
   CatalogDiagnostic,
   CatalogEntryV2,
@@ -15,12 +16,13 @@ import type {
   SourceOverrideDescriptor,
 } from '@forgeax/engine-types';
 import { authoringCapabilityForAssetKind, catalogOperationsFor } from '@forgeax/engine-types';
+import { isRuntimePublicationTuple } from './runtime-projection.js';
 import { isScriptablePackAssetKind } from './scriptable-pack.js';
 
 export function catalogProjectionFor(
-  subject: 'internal-asset' | 'imported-output',
-  execution: 'direct' | 'cooked',
-  lifecycle: 'missing' | 'cooking' | 'current' | 'stale' | 'failed',
+  subject: CatalogSubject,
+  execution: CookExecution,
+  lifecycle: CatalogLifecycle,
 ) {
   return {
     subject,
@@ -30,17 +32,14 @@ export function catalogProjectionFor(
   } as const;
 }
 
-export function currentProjectionFor(
-  subject: 'internal-asset' | 'imported-output',
-  execution: 'direct' | 'cooked',
-) {
+export function currentProjectionFor(subject: CatalogSubject, execution: CookExecution) {
   return catalogRowProjectionFor(subject, execution, 'current');
 }
 
 function catalogRowProjectionFor(
-  subject: 'internal-asset' | 'imported-output',
-  execution: 'direct' | 'cooked',
-  lifecycle: 'missing' | 'cooking' | 'current' | 'stale' | 'failed',
+  subject: CatalogSubject,
+  execution: CookExecution,
+  lifecycle: CatalogLifecycle,
 ) {
   const projection = catalogProjectionFor(subject, execution, lifecycle);
   return { ...projection, projection } as const;
@@ -145,16 +144,17 @@ export function projectExternalCatalogEntries(
   outputs: readonly CatalogOutputDeclaration[],
   nameFor?: (output: CatalogOutputDeclaration, index: number) => string | undefined,
 ): PackIndexEntry[] {
-  return outputs.map((output, index) => ({
-    guid: output.guid,
-    packageUrl,
-    kind: output.kind,
-    sourcePath,
-    ...producerFields(producer, output),
-    ...((nameFor?.(output, index) ?? output.name) === undefined
-      ? {}
-      : { name: nameFor?.(output, index) ?? output.name }),
-  }));
+  return outputs.map((output, index) => {
+    const name = nameFor?.(output, index) ?? output.name;
+    return {
+      guid: output.guid,
+      packageUrl,
+      kind: output.kind,
+      sourcePath,
+      ...producerFields(producer, output),
+      ...(name === undefined ? {} : { name }),
+    };
+  });
 }
 
 /** Return the first declaration that would shadow an engine-owned Pack kind. */
@@ -164,25 +164,11 @@ export function findReservedAssetKindConflict(
   return outputs.find((output) => isScriptablePackAssetKind(output.kind));
 }
 
-export interface PackageCatalogInput {
-  readonly guid: string;
-  readonly kind: string;
-  readonly sourcePath: string;
-  readonly name?: string;
-  readonly refs?: readonly string[];
-  readonly authoring?: AssetAuthoringCapability;
-  readonly execution?: 'direct' | 'cooked';
-  readonly packageId?: string;
-  readonly provenance?: ProviderProvenance;
-  readonly revision?: ResourceRevision;
-  readonly sourceKey?: string;
-  readonly sourceIndex?: number;
-  readonly sourceOverrides?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-  readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
-  readonly relations?: PackIndexEntry['relations'];
-  readonly diagnostics?: readonly CatalogDiagnostic[];
-  readonly cookReceiptUrl?: string;
-}
+/** A self-contained Pack row before package placement and runtime projection axes. */
+export type PackageCatalogInput = Omit<
+  PackIndexEntry,
+  'packageUrl' | 'subject' | 'lifecycle' | 'projection' | 'publication'
+>;
 
 /** Project self-contained Pack rows into the same Catalog contract as producer output. */
 export function projectPackageCatalog(
@@ -252,11 +238,7 @@ export function projectCookedPackageEntry(
   };
 }
 
-export interface RuntimeCatalogRowInput {
-  readonly scopeId: string;
-  readonly generation: number;
-  readonly digest: string;
-  readonly outputSetDigest: string;
+export interface RuntimeCatalogRowInput extends AssetPublicationTuple {
   readonly guid: string;
   readonly kind: string;
   readonly packageUrl: string;
@@ -289,11 +271,7 @@ function projectRuntimeCatalogRowValue(
     input.guid.length === 0 ||
     input.kind.length === 0 ||
     input.packageUrl.length === 0 ||
-    input.scopeId.length === 0 ||
-    !Number.isInteger(input.generation) ||
-    input.generation < 1 ||
-    input.digest.length === 0 ||
-    input.outputSetDigest.length === 0
+    !isRuntimePublicationTuple(input)
   ) {
     return runtimeCatalogRowError(
       input.guid,
@@ -318,12 +296,7 @@ function projectRuntimeCatalogRowValue(
       subject,
       execution,
       lifecycle,
-      projection: {
-        subject,
-        execution,
-        lifecycle,
-        operations: catalogOperationsFor({ subject, execution, lifecycle }),
-      },
+      projection: catalogProjectionFor(subject, execution, lifecycle),
     },
   };
 }

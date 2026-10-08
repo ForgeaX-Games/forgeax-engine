@@ -4,6 +4,7 @@ import type { RhiDevice } from '@forgeax/engine-rhi';
 import { rhi } from '@forgeax/engine-rhi-null';
 import { ok } from '@forgeax/engine-types';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { CLOUD_LAYER_FEATURE_IDENTITY } from '../cloud/feature';
 import { createRenderSurfaceError, type RenderSurfaceExpectedError } from '../errors/render';
 import { BARREL_DISTORTION_POST_PROCESS_ID } from '../features/barrel-distortion';
 import { prepareStandardLighting } from '../pipeline/standard-lighting/prepare';
@@ -128,6 +129,7 @@ async function build(
   overrides?: TopologyOverrides,
   observationCaptureDomains?: readonly FrameObservationDomain[],
   lateOcclusion = false,
+  cloudShadowResolution?: number,
 ) {
   const graph = new RenderGraphBuilder<RenderPipelineFrame>();
   const resolvedTopology = topology(profile, overrides);
@@ -215,6 +217,7 @@ async function build(
           lateOcclusion
             ? {
                 accesses: [],
+                hasWork: () => false,
                 encode: () => undefined,
                 addLateOcclusion: (pyramid) => {
                   const late = graph.addComputePass('test-late-cull', {
@@ -226,13 +229,40 @@ async function build(
               }
             : undefined,
         ),
+      ...(cloudShadowResolution === undefined
+        ? {}
+        : {
+            cloudShadowResolution,
+            hasFeatureRasterWork: (identity: string) => identity === CLOUD_LAYER_FEATURE_IDENTITY,
+          }),
       contributeFeatures: (
         _targets,
         _semanticTargets,
         namedTargets = {},
         _standardSurfaceAccesses,
         featureSelection,
+        passNames,
       ) => {
+        // Stand-in CloudLayer producers: the shadow before opaque receivers and
+        // the composite into the lane's cloud scene target.
+        const cloudOutput = passNames?.includes('cloud-layer-shadow')
+          ? namedTargets['cloud-shadow']
+          : passNames?.includes('cloud-layer-resolve')
+            ? namedTargets['motion-output']
+            : undefined;
+        if (cloudOutput !== undefined) {
+          const cloudInput = namedTargets['motion-input'];
+          return graph.addRasterPass(`test-${passNames?.[passNames.length - 1]}`, {
+            accesses: [
+              { resource: cloudOutput.view, usage: 'color-attachment' },
+              ...(cloudInput === undefined
+                ? []
+                : [{ resource: cloudInput.view, usage: 'sampled-read' as const }]),
+            ],
+            colorAttachments: [{ view: cloudOutput.view, loadOp: 'clear', storeOp: 'store' }],
+            encode: () => undefined,
+          });
+        }
         if (
           typeof featureSelection !== 'object' ||
           featureSelection?.include?.includes(BARREL_DISTORTION_POST_PROCESS_ID) !== true
@@ -300,12 +330,12 @@ describe('visible-surface graph admission', () => {
     compute: true,
     storageBuffer: true,
     multisample: false,
-    maxColorAttachments: 6,
+    maxColorAttachments: 7,
     primitiveIndex: true,
     maxColorAttachmentBytesPerSample: 48,
   } as const;
 
-  it('owns the sixth attachment and shares one motion producer without TAA history', async () => {
+  it('owns the seventh attachment and shares one motion producer without TAA history', async () => {
     const result = await build(profile, { lane, camera: { antialias: 'none', bloom: 'off' } });
     expect(result.ok, result.ok ? '' : JSON.stringify(result.error)).toBe(true);
     if (!result.ok) return;
@@ -333,11 +363,38 @@ describe('visible-surface graph admission', () => {
 
   it.each([
     { primitiveIndex: false },
-    { maxColorAttachments: 5 },
+    { maxColorAttachments: 6 },
     { maxColorAttachmentBytesPerSample: 32 },
   ])('rejects an unqualified device before graph allocation: %j', async (missing) => {
     const result = await build(profile, { lane: { ...lane, ...missing } });
     expect(result).toMatchObject({ ok: false, error: { code: 'resource-descriptor-invalid' } });
+  });
+
+  it.each([
+    [7, 48, false],
+    [8, 48, false],
+    [8, 52, false],
+    [8, 56, true],
+  ] as const)('shares visible-surface temporal only within %i targets / %i bytes', async (targets, bytes, merged) => {
+    const result = await buildTaa(profile, {
+      camera: { antialias: 'taa', bloom: 'off' },
+      lane: { ...lane, maxColorAttachments: targets, maxColorAttachmentBytesPerSample: bytes },
+    });
+    expect(result.ok, result.ok ? '' : JSON.stringify(result.error)).toBe(true);
+    if (!result.ok) return;
+    try {
+      const info = result.value.inspect();
+      const gbuffer = info.passes.find((pass) => pass.name === 'g-buffer');
+      expect(
+        gbuffer?.accesses.some((access) => access.resource === 'standard-scene-temporal'),
+      ).toBe(merged);
+      expect(gbuffer?.accesses).toContainEqual({
+        resource: 'visible-surface',
+        usage: 'color-attachment',
+      });
+    } finally {
+      (await result.value.retire()).unwrap();
+    }
   });
 
   it('captures receiver identity after both occlusion raster phases', async () => {
@@ -390,6 +447,42 @@ async function buildTaa(profile: StandardProfile, overrides?: TopologyOverrides)
 }
 
 describe('forgeax::standard graph', () => {
+  it.each([
+    [6, 32, false],
+    [7, 32, false],
+    [7, 36, false],
+    [7, 40, true],
+    [8, 48, true],
+  ] as const)('shares temporal-v1 with GBuffer only within %i targets / %i bytes', async (targets, bytes, merged) => {
+    const result = await buildTaa(
+      { ...DEFAULT_STANDARD_PROFILE, renderPath: 'deferred' },
+      {
+        camera: { antialias: 'taa', bloom: 'off' },
+        lane: {
+          compute: true,
+          storageBuffer: true,
+          multisample: false,
+          maxColorAttachments: targets,
+          maxColorAttachmentBytesPerSample: bytes,
+        },
+      },
+    );
+    expect(result.ok, result.ok ? '' : JSON.stringify(result.error)).toBe(true);
+    if (!result.ok) return;
+    try {
+      const info = result.value.inspect();
+      const gbuffer = info.passes.find((pass) => pass.name === 'g-buffer');
+      expect(
+        gbuffer?.accesses.some((access) => access.resource === 'standard-scene-temporal'),
+      ).toBe(merged);
+      expect(
+        info.resources.filter((resource) => resource.label === 'standard-scene-temporal'),
+      ).toHaveLength(1);
+      expect(info.passes.find((pass) => pass.name === 'standard-scene-data')).toBeDefined();
+    } finally {
+      (await result.value.retire()).unwrap();
+    }
+  });
   it('builds auto exposure and positive LUT with prepared live producers', async () => {
     const result = await build(DEFAULT_STANDARD_PROFILE, {
       output: {
@@ -438,8 +531,11 @@ describe('forgeax::standard graph', () => {
     if (!unobserved.ok) throw unobserved.error;
     const unobservedNames = unobserved.value.inspect().passes.map((pass) => pass.name);
     expect(unobservedNames).not.toContain('linear-ldr-observation');
-    expect(unobservedNames).not.toContain('final-srgb-observation');
-    const result = await build(DEFAULT_STANDARD_PROFILE, overrides, ['linear-ldr', 'final-srgb']);
+    expect(unobservedNames).not.toContain('final-display-observation');
+    const result = await build(DEFAULT_STANDARD_PROFILE, overrides, [
+      'linear-ldr',
+      'final-display',
+    ]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const info = result.value.inspect();
@@ -454,7 +550,7 @@ describe('forgeax::standard graph', () => {
       expect.arrayContaining([
         'linear-hdr-observation',
         'linear-ldr-observation',
-        'final-srgb-observation',
+        'final-display-observation',
       ]),
     );
     expect(info.resources).toEqual(
@@ -614,10 +710,24 @@ describe('forgeax::standard graph', () => {
     ).toBe(false);
   });
 
-  it('projects the admitted SSR spatial chain into the deferred Standard graph', async () => {
+  it.each([1024, 672, 512])('projects SSR onto the %i-pixel internal extent', async (internal) => {
     const result = await build(
       { ...DEFAULT_STANDARD_PROFILE, renderPath: 'deferred' },
       {
+        surface: {
+          width: 1024,
+          height: 1024,
+          storageFormat: 'bgra8unorm',
+          viewFormat: 'bgra8unorm-srgb',
+        },
+        extent: {
+          outputWidth: 1024,
+          outputHeight: 1024,
+          internalWidth: internal,
+          internalHeight: internal,
+          scale: internal / 1024,
+          generation: 0,
+        },
         reflectionFallback: { enabled: true },
         ssr: admitSsrSpatial({
           camera: {
@@ -660,6 +770,12 @@ describe('forgeax::standard graph', () => {
     expect(result.value.inspect().resources.map((resource) => resource.label)).toEqual(
       expect.arrayContaining(['depth-pyramid', 'ssr-trace', 'reflection-fallback-linear-hdr']),
     );
+    for (const label of ['ssr-trace', 'ssr-hit-reactivity', 'depth-pyramid']) {
+      expect(
+        result.value.inspect().resources.find((resource) => resource.label === label),
+      ).toMatchObject({ descriptor: { size: { width: internal / 2, height: internal / 2 } } });
+    }
+    (await result.value.retire()).unwrap();
   });
 
   it('resolves deferred lighting from sampled depth without replaying geometry', async () => {
@@ -1100,6 +1216,42 @@ describe('forgeax::standard graph', () => {
       );
       expect(names.indexOf('transmission-forward')).toBeLessThan(names.indexOf('transparent'));
       expect(names.indexOf('transparent')).toBeLessThan(names.indexOf('temporal'));
+    }
+  });
+
+  it('binds the cloud shadow to every forward-lit receiver pass on both render paths', async () => {
+    for (const renderPath of ['forward', 'deferred'] as const) {
+      const result = await build(
+        { ...DEFAULT_STANDARD_PROFILE, renderPath },
+        {
+          surface: {
+            width: 8,
+            height: 4,
+            storageFormat: 'bgra8unorm',
+            viewFormat: 'bgra8unorm-srgb',
+          },
+          transmissionDemand: { activeCount: 1, needsRoughMips: false },
+        } as Partial<RenderPipelineTopology>,
+        undefined,
+        false,
+        16,
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const passes = result.value.inspect().passes;
+      const receivers = [
+        renderPath === 'forward' ? 'main' : 'forward',
+        'transmission-forward',
+        'transparent',
+      ];
+      for (const name of receivers) {
+        const pass = passes.find((candidate) => candidate.name === name);
+        expect(pass, `${renderPath}/${name}`).toBeDefined();
+        expect(pass?.accesses, `${renderPath}/${name}`).toContainEqual({
+          resource: 'cloud-layer-shadow',
+          usage: 'sampled-read',
+        });
+      }
     }
   });
 

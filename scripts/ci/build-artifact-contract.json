@@ -230,6 +230,17 @@
     "publish-basis-wasm-release": {
       "description": "Publish the codec WASM payload from core-build on a main push",
       "requiredArtifactClasses": ["wasm-codec"]
+    },
+    "view-integration-shards": {
+      "description": "Pinned View consumer of the exact Engine core build.",
+      "requiredArtifactClasses": [
+        "engine-dist",
+        "wasm-runtime",
+        "wasm-fbx",
+        "wasm-codec",
+        "shared-engine-shaders",
+        "shared-asset-pack"
+      ]
     }
   },
   "timingRoster": [
@@ -339,7 +350,6 @@
       "allowedNonArtifactPrerequisites": [
         "shared-app-inputs",
         "post-merge-gate",
-        "smoke-fleet",
         "bevy-smoke-fleet"
       ],
       "consumer": "metrics-validate-runtime"
@@ -349,7 +359,6 @@
       "artifactProvider": "core-build",
       "allowedNonArtifactPrerequisites": [
         "post-merge-gate",
-        "smoke-fleet",
         "metrics-validate-browser",
         "metrics-validate-runtime",
         "shared-app-inputs"
@@ -445,7 +454,8 @@
       "shared-inputs-browser",
       "metrics-validate",
       "metrics-validate-browser",
-      "metrics-validate-runtime"
+      "metrics-validate-runtime",
+      "view-integration-shards"
     ]
   },
   "requiredCIJobRoster": [
@@ -471,7 +481,8 @@
     "publish-fbx-wasm-release",
     "publish-wgpu-wasm-release",
     "publish-basis-wasm-release",
-    "sticky-comment"
+    "sticky-comment",
+    "view-integration"
   ],
   "shardFamilies": [
     {

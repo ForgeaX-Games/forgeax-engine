@@ -3,14 +3,17 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isStandardRootModule } from '@forgeax/engine-pack';
-import type { MaterialCookWasmProvenance } from '@forgeax/engine-pack/material-cook';
+import {
+  type MaterialCookWasmProvenance,
+  materialProgramContextKey,
+} from '@forgeax/engine-pack/material-cook';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import { admitRayMaterial } from '@forgeax/engine-shader';
 import type { MaterialAsset, MaterialPass, MaterialTable } from '@forgeax/engine-types';
 import { cookMaterialAsset } from './cook.js';
 import { createMaterialProgramCompiler } from './program-compiler.js';
 import { cookedRecord, materialPrograms, rayMaterialProgram } from './publication.js';
-import { cookRayMaterial } from './ray-material.js';
+import { type CookedRayMaterial, cookRayMaterial } from './ray-material.js';
 import { resolveMaterialAsset } from './resolve.js';
 import { buildMaterialSourceCatalog } from './source-catalog.js';
 import { DEFAULT_MATERIAL_VARIANT_CONTEXT } from './variant-context.js';
@@ -47,6 +50,7 @@ const ENGINE_MODULE_ALIASES: Readonly<Record<string, string>> = {
   'forgeax_material::sprite': 'forgeax::sprite',
   'forgeax_material::sprite-lit': 'forgeax::sprite-lit',
 };
+const UNLIT_ROOT_MODULES = new Set(['forgeax_material::unlit', 'forgeax::default-unlit']);
 const SPRITE_ROOT_MODULES = new Set([
   'forgeax_material::sprite',
   'forgeax::sprite',
@@ -78,18 +82,17 @@ async function collectWgslFiles(root: string): Promise<readonly string[]> {
 }
 
 function packagedShaderRoots(): readonly string[] {
-  const roots = [
-    resolve(process.cwd(), 'packages/shader/src'),
-    resolve(process.cwd(), 'packages/vfx-render/src/shaders'),
-  ];
-  for (const [packageName, relativePath] of [
-    ['@forgeax/engine-shader', 'src'],
-    ['@forgeax/engine-vfx-render', 'src/shaders'],
+  const roots: string[] = [];
+  for (const [packageName, relativePath, workspacePath] of [
+    ['@forgeax/engine-shader', 'src', 'packages/shader/src'],
+    ['@forgeax/engine-vfx-render', 'src/shaders', 'packages/vfx-render/src/shaders'],
   ] as const) {
     try {
       roots.push(resolve(dirname(require.resolve(`${packageName}/package.json`)), relativePath));
     } catch {
-      // Published SDKs may omit source roots that are not needed by a project.
+      // Contributor-only packages may not be installed beside the compiler.
+      // A resolved package is authoritative even when the SDK cwd has a copy.
+      roots.push(resolve(process.cwd(), workspacePath));
     }
   }
   return [...new Set(roots)];
@@ -326,13 +329,19 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
       // wrapper. A Ready publication must match the geometry the Renderer asks for.
       const context = {
         ...DEFAULT_MATERIAL_VARIANT_CONTEXT,
-        geometry: resolved.value.asset.passes?.some(
-          (pass) =>
-            pass.program.module === 'forgeax::pbr-skin' ||
-            pass.program.module === 'forgeax_material::pbr-skin',
+        geometry: resolved.value.asset.passes?.some((pass) =>
+          ['forgeax_material::terrain_surface', 'forgeax_material::terrain_id_surface'].includes(
+            pass.program.moduleSlots?.surface ?? '',
+          ),
         )
-          ? ('skinned' as const)
-          : ('mesh' as const),
+          ? ('terrain' as const)
+          : resolved.value.asset.passes?.some(
+                (pass) =>
+                  pass.program.module === 'forgeax::pbr-skin' ||
+                  pass.program.module === 'forgeax_material::pbr-skin',
+              )
+            ? ('skinned' as const)
+            : ('mesh' as const),
       };
       const cooked = await cookMaterialAsset(
         {
@@ -356,10 +365,25 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
       // A material may be shared by ordinary sprites and SpriteInstances.
       // Publish both buffer layouts; the component selects the exact program.
       const passes = [...cooked.value.passes];
+      const resolvedAsset = cooked.value.resolved.asset;
+
+      if (resolvedAsset.passes?.some((pass) => UNLIT_ROOT_MODULES.has(pass.program.module))) {
+        const skinned = await cookMaterialAsset(
+          {
+            material: normalizedInput.guid,
+            table,
+            sources: catalog.value,
+            context: { ...context, geometry: 'skinned' },
+          },
+          compile,
+        );
+        if (!skinned.ok) throw skinned.error;
+        passes.push(...skinned.value.passes);
+      }
       // Visible-surface capture is another Standard deferred output contract.
       // Publish it with the same authored Surface and parameter schema so a
       // renderer never rewrites WGSL or substitutes a diagnostic material.
-      const resolvedAsset = cooked.value.resolved.asset;
+
       if (resolvedAsset.parent !== undefined)
         throw new Error('material resolution retained a parent');
       const visiblePasses = resolvedAsset.passes?.filter((pass) =>
@@ -382,6 +406,22 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
         );
         if (!visible.ok) throw visible.error;
         passes.push(...visible.value.passes.filter((pass) => pass.context.visibleSurface === true));
+        // A Ready Standard publication survives device/backend recovery without
+        // a runtime compiler. Publish its real uniform programs for both RHI
+        // backends; storage-only addresses and View extensions stay separate.
+        for (const backend of ['webgpu', 'webgl2'] as const) {
+          const fallback = await cookMaterialAsset(
+            {
+              material: normalizedInput.guid,
+              table,
+              sources: catalog.value,
+              context: { ...context, backend, capability: 'uniform-fallback' },
+            },
+            compile,
+          );
+          if (!fallback.ok) throw fallback.error;
+          passes.push(...fallback.value.passes);
+        }
       }
       if (
         cooked.value.resolved.asset.passes?.some((pass) =>
@@ -400,21 +440,107 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
         if (!instanced.ok) throw instanced.error;
         passes.push(...instanced.value.passes);
       }
+      // Publish the extended View ABI as an immutable artifact. Selection is
+      // device-owned; authors do not toggle compiler axes.
+      const atmosphericContexts = new Map(
+        passes.map((pass) => [
+          `${pass.context.geometry}:${pass.context.visibleSurface === true}`,
+          {
+            geometry: pass.context.geometry,
+            ...(pass.context.visibleSurface === true ? { visibleSurface: true as const } : {}),
+          },
+        ]),
+      );
+      for (const projection of atmosphericContexts.values()) {
+        const atmospheric = await cookMaterialAsset(
+          {
+            material: normalizedInput.guid,
+            table: { ...(input.table ?? {}), [normalizedInput.guid]: normalizedInput.source },
+            sources: catalog.value,
+            context: { ...context, ...projection, capability: 'storage-buffer-atmosphere' },
+          },
+          compile,
+        );
+        if (!atmospheric.ok) throw atmospheric.error;
+        passes.push(
+          ...atmospheric.value.passes.filter(
+            (pass) => projection.visibleSurface !== true || pass.context.visibleSurface === true,
+          ),
+        );
+      }
+      // A raster context publishes the vertex-colour ABI beside the colorless
+      // one only when its Surface reads SurfaceInput.vertexColor. Mesh COLOR_0
+      // alone never selects that program: a Surface that does not read it
+      // would pay the extra fetch and interpolants for a constant 1. Unlit roots
+      // have no Surface slot and keep their colour ABI.
+      const colorContexts = new Map(
+        passes
+          .filter(
+            (pass) =>
+              pass.abi !== undefined &&
+              (isStandardRootModule(pass.module) || UNLIT_ROOT_MODULES.has(pass.module)) &&
+              pass.readsVertexColor !== false,
+          )
+          .map((pass) => [
+            JSON.stringify([
+              pass.context.backend,
+              pass.context.geometry,
+              pass.context.capability,
+              pass.context.visibleSurface === true,
+            ]),
+            pass.context,
+          ]),
+      );
+      for (const colorContext of colorContexts.values()) {
+        const colored = await cookMaterialAsset(
+          {
+            material: normalizedInput.guid,
+            table,
+            sources: catalog.value,
+            context: { ...colorContext, pipeline: context.pipeline, pass: context.pass },
+            vertexColorAvailable: true,
+          },
+          compile,
+        );
+        if (!colored.ok) throw colored.error;
+        passes.push(
+          ...colored.value.passes.filter(
+            (pass) =>
+              pass.abi?.vertexInputs.some((input) => input.semantic === 'color') &&
+              !passes.some(
+                (existing) =>
+                  existing.pass === pass.pass &&
+                  materialProgramContextKey(existing.context) ===
+                    materialProgramContextKey(pass.context) &&
+                  existing.abi?.vertexInputs.some((input) => input.semantic === 'color'),
+              ),
+          ),
+        );
+      }
       const programs = [...materialPrograms(passes, normalizedInput)];
-      const ray = admitRayMaterial(resolvedAsset, normalizedInput.guid).ok
-        ? await cookRayMaterial({
+      const derivatives: CookedRayMaterial[] = [];
+      for (const rayContext of context.geometry === 'terrain'
+        ? []
+        : (['ray-hit', 'card-capture'] as const)) {
+        // Context eligibility is independent: a custom Surface can retain its
+        // raster/ray publication without qualifying for camera-independent Cards.
+        if (!admitRayMaterial(resolvedAsset, normalizedInput.guid, rayContext).ok) continue;
+        const cooked = await cookRayMaterial(
+          {
             material: normalizedInput.guid,
             table: { [normalizedInput.guid]: resolvedAsset },
             sources: catalog.value,
-          })
-        : undefined;
-      if (ray !== undefined && !ray.ok) throw ray.error;
-      const rayCooked = ray?.value;
-      if (rayCooked !== undefined) {
+            context: rayContext,
+          },
+          compile,
+        );
+        // Optional ray qualification must not reject an already cooked raster Surface.
+        if (!cooked.ok && cooked.error.code === 'ray-material-unsupported') continue;
+        if (!cooked.ok) throw cooked.error;
         const pass = resolvedAsset.passes?.find((pass) => pass.name.toLowerCase() === 'forward');
-        if (pass === undefined)
-          throw new Error('admitted ray material lost its authored forward pass');
-        programs.push(rayMaterialProgram(rayCooked.program, pass.name, normalizedInput));
+        if (pass === undefined) throw new Error('admitted Surface lost its authored forward pass');
+        derivatives.push(cooked.value);
+        programs.push(rayMaterialProgram(cooked.value.program, pass.name, normalizedInput));
       }
       const sourceClosure = unique([
         ...(normalizedInput.sourcePath === undefined ? [] : [resolve(normalizedInput.sourcePath)]),
@@ -422,12 +548,12 @@ export function createMaterialPackCooker(roots: readonly string[] = []): NativeC
           ? []
           : [resolve(dirname(resolve(normalizedInput.sourcePath)), normalizedInput.sourceKey)]),
         ...passes.flatMap((pass) => pass.sourceClosure),
-        ...(rayCooked?.sourceClosure ?? []),
+        ...derivatives.flatMap((cooked) => cooked.sourceClosure),
       ]);
       const passClosureDigests = [
         ...new Set([
           ...passes.map((pass) => pass.sourceClosureDigest),
-          ...(rayCooked === undefined ? [] : [rayCooked.program.sourceClosureDigest]),
+          ...derivatives.map((cooked) => cooked.program.sourceClosureDigest),
         ]),
       ].sort();
       const fingerprint =

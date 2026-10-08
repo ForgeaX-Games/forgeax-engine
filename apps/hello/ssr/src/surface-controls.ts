@@ -21,7 +21,7 @@ export function installSurfaceControls(parent: HTMLElement, world: World, render
   let atmosphere: EntityHandle | undefined;
   const skyColor = skylight === undefined ? undefined : Array.from(world.get(skylight, Skylight).unwrap().color);
   sky.addEventListener('change', () => {
-    if (sky.checked) atmosphere = world.spawn({ component: Atmosphere, data: { turbidity: Number(haze.value) } }).unwrap();
+    if (sky.checked) atmosphere = world.spawn({ component: Atmosphere, data: { mieScattering: Number(haze.value) * 2e-6 } }).unwrap();
     else if (atmosphere !== undefined) {
       world.despawn(atmosphere).unwrap();
       atmosphere = undefined;
@@ -30,7 +30,7 @@ export function installSurfaceControls(parent: HTMLElement, world: World, render
     haze.disabled = !sky.checked;
   });
   haze.addEventListener('input', () => {
-    if (atmosphere !== undefined) world.set(atmosphere, Atmosphere, { turbidity: Number(haze.value) }).unwrap();
+    if (atmosphere !== undefined) world.set(atmosphere, Atmosphere, { mieScattering: Number(haze.value) * 2e-6 }).unwrap();
   });
   if (object !== undefined) {
     const origin = Array.from(world.get(object, Transform).unwrap().pos);

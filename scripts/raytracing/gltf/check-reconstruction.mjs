@@ -103,7 +103,13 @@ try {
         'Previously measured raw streams; every new reconstructed raw frame must match in compare-reconstruction.mjs',
     });
   }
-  const settings = { maxBounces: 1, maxDistance: 100, environment: [0.25, 0.3, 0.4], seed: 47 };
+  const settings = {
+    gather: 'exact',
+    maxBounces: 1,
+    maxDistance: 100,
+    environment: [0.25, 0.3, 0.4],
+    seed: 47,
+  };
   // Independent raw reference streams never share the four trial seeds.
   const sequences = moving
     ? [{ mode: 'combined', seed: 47, frames: 64 }]

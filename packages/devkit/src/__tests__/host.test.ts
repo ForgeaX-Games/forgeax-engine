@@ -9,6 +9,7 @@ import {
   createAssetRegistry,
   createCatalogSource,
 } from '@forgeax/engine-assets-runtime';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { BUILTIN_MESH_ASSETS } from '@forgeax/engine-pack/builtin';
 import { Context } from '@forgeax/engine-plugin';
 import { ShaderRegistry } from '@forgeax/engine-shader';
@@ -54,6 +55,48 @@ function hasPluginNamed(plugins: readonly unknown[] | undefined, name: string): 
 
 describe('standalone host', () => {
   afterEach(() => vi.unstubAllEnvs());
+
+  it('changes the generated SSR input identity when same-path WGSL bytes change', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'forgeax-ssr-source-identity-'));
+    try {
+      await mkdir(resolve(root, 'assets'));
+      await writeFile(resolve(root, 'package.json'), '{"name":"ssr-input-fixture"}\n');
+      await writeFile(
+        resolve(root, 'forge.json'),
+        JSON.stringify({
+          id: 'ssr-input-fixture',
+          name: 'SSR input fixture',
+          schemaVersion: '3.0.0',
+          roots: {},
+        }),
+      );
+      const shader = resolve(root, 'assets/custom.wgsl');
+      await writeFile(shader, '#define_import_path fixture::custom\nconst value = 1.0;\n');
+      const facts = await readProjectFacts(root);
+      if (!facts.ok) throw facts.error;
+      const readIdentity = async (config: Awaited<ReturnType<typeof createViteConfig>>) => {
+        const source = await readFile(resolve(config.root ?? '', 'execution-bootstrap.ts'), 'utf8');
+        const json = /ssrIdentity: (\{[^\n]+\}),/.exec(source)?.[1];
+        if (json === undefined) throw new Error('generated SSR identity missing');
+        return JSON.parse(json) as import('@forgeax/engine-render').SsrAdmissionIdentity;
+      };
+      const beforeConfig = await createViteConfig(facts.value, 'build');
+      const before = await readIdentity(beforeConfig);
+      expect(before.sourceHead).toBe('project:ssr-input-fixture');
+      for (const field of ['sourceTree', 'lockSha256', 'buildSha256'] as const)
+        expect(before[field]).toMatch(/^sha256:[a-f0-9]{64}$/);
+      const page = await readFile(resolve(beforeConfig.root ?? '', 'main.ts'), 'utf8');
+      expect(page).toContain(`ssrIdentity: ${JSON.stringify(before)},`);
+      await writeFile(shader, '#define_import_path fixture::custom\nconst value = 2.0;\n');
+      const after = await readIdentity(await createViteConfig(facts.value, 'build'));
+      expect(after.sourceHead).toBe(before.sourceHead);
+      expect(after.lockSha256).toBe(before.lockSha256);
+      expect(after.sourceTree).not.toBe(before.sourceTree);
+      expect(after.buildSha256).not.toBe(before.buildSha256);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('pins the generated host mode to the DevKit command', async () => {
     const root = await mkdtemp(resolve(tmpdir(), 'forgeax-devkit-host-mode-'));
@@ -161,6 +204,173 @@ describe('standalone host', () => {
 
       const debugBuild = await createViteConfig(facts.value, 'build');
       expect(hasPluginNamed(debugBuild.plugins, 'forgeax:rhi-debug')).toBe(false);
+      vi.stubEnv('FORGEAX_PREVIEW_RHI_WINDOW', '1');
+      const automatic = await createViteConfig(facts.value, 'serve');
+      const automaticSource = await readFile(resolve(automatic.root ?? '', 'main.ts'), 'utf8');
+      expect(automaticSource).not.toContain('async function previewRhiDiagnostic');
+      vi.stubEnv('FORGEAX_ENGINE_RHI_DEBUG', '0');
+      const windowConfig = await createViteConfig(facts.value, 'serve');
+      expect(hasPluginNamed(windowConfig.plugins, 'forgeax:rhi-debug')).toBe(true);
+      const plugin = windowConfig.plugins?.find(
+        (value) =>
+          value &&
+          typeof value === 'object' &&
+          'name' in value &&
+          value.name === 'forgeax:rhi-debug',
+      );
+      if (
+        !plugin ||
+        typeof plugin !== 'object' ||
+        !('config' in plugin) ||
+        typeof plugin.config !== 'function'
+      )
+        throw new Error('RHI transport config missing');
+      const configured = await Reflect.apply(plugin.config, {}, [
+        {},
+        { command: 'serve', mode: 'test' },
+      ]);
+      expect(configured?.define?.['import.meta.env.FORGEAX_ENGINE_RHI_DEBUG']).toBe('"0"');
+      const windowSource = await readFile(resolve(windowConfig.root ?? '', 'main.ts'), 'utf8');
+      const start = windowSource.indexOf('async function previewRhiDiagnostic');
+      const end = windowSource.indexOf('const previewVfxHosts', start);
+      expect(start).toBeGreaterThan(0);
+      const source = windowSource
+        .slice(start, end)
+        .replaceAll("import('@forgeax/engine/rhi-webgpu')", 'Promise.resolve(testBackend)')
+        .replaceAll("import('@forgeax/engine/rhi-wgpu')", 'Promise.resolve(testBackend)');
+      const callbackStart = windowSource.indexOf(
+        'async ({ context, canvas: previewCanvas, asset, targetId }) => {',
+      );
+      const callbackEnd = windowSource.indexOf('} } : {}),', callbackStart);
+      const calls: string[] = [];
+      const arm = vi.fn(async (world: string) => {
+        calls.push(`arm:${world}`);
+      });
+      const diagnosticFactory = vi.fn(
+        async (_context: unknown, _canvas: unknown, _targetId: string) => ({
+          options: { rhi: 'own-recorder' },
+          arm,
+        }),
+      );
+      const createApp = vi.fn(async (_canvas: unknown, _options: unknown) => {
+        calls.push('create');
+        return { ok: true, value: { world: { identity: 'own-world' } } };
+      });
+      const callback = runInNewContext(
+        `(${windowSource.slice(callbackStart, callbackEnd + 1).replaceAll('import.meta.env.DEV', 'true')})`,
+        {
+          app: { pluginContext: { get: () => undefined } },
+          assetCatalog: {},
+          runtimeScopeBinding: {},
+          physicsComponentsPlugin: () => ({}),
+          previewRhiDiagnostic: diagnosticFactory,
+          createApp,
+          bundler: {},
+        },
+      );
+      const context = {};
+      const meshCanvas = {};
+      await callback({
+        context,
+        canvas: meshCanvas,
+        asset: { kind: 'mesh' },
+        targetId: 'actual-child',
+      });
+      expect(diagnosticFactory).toHaveBeenCalledWith(context, meshCanvas, 'actual-child');
+      expect(createApp.mock.calls[0]?.[1]).toMatchObject({ rhi: 'own-recorder' });
+      expect(calls).toEqual(['create', 'arm:own-world']);
+      await callback({ context, canvas: {}, asset: { kind: 'scene' }, targetId: 'scene-child' });
+      expect(diagnosticFactory).toHaveBeenCalledOnce();
+      expect(createApp.mock.calls[1]?.[1]).not.toHaveProperty('rhi');
+      for (const hasGpu of [true, false]) {
+        const cleanup: (() => Promise<void>)[] = [];
+        let listener: (event: unknown) => void = () => {};
+        let resolveCapture: (result: unknown) => void = () => {};
+        const attachment = {
+          backend: {
+            rhi: {},
+            unwrapDeviceForSurface: (device: unknown) => ({ ok: true, value: device }),
+          },
+          captureFrames: vi.fn(
+            (
+              _frames: number,
+              _options: { seed: { maxResourceBytes: number }; signal: AbortSignal },
+            ) =>
+              new Promise((resolve) => {
+                resolveCapture = resolve;
+              }),
+          ),
+          frameBoundary: vi.fn(async () => ({ ok: true })),
+          dispose: vi.fn(async () => ({ ok: true })),
+          deviceLost: vi.fn(),
+        };
+        const ensureReady = vi.fn(async () => {});
+        const remove = vi.fn();
+        const uploadTape = vi.fn(async () => ({
+          ok: true,
+          value: { kind: 'rhi-tape', path: '/evidence/own.rhitape' },
+        }));
+        const canvas = { dataset: {} as Record<string, string> };
+        const subscribe = vi.fn((_canvas: unknown, callback: (event: unknown) => void) => {
+          listener = callback;
+          return remove;
+        });
+        const create = runInNewContext(`${source} previewRhiDiagnostic`, {
+          navigator: hasGpu ? { gpu: {} } : {},
+          AbortController,
+          testBackend: { ...(hasGpu ? {} : { ensureReady }) },
+          attachRecorder: () => ({ ok: true, value: attachment }),
+          subscribeBrowserFrameSubmitted: subscribe,
+          uploadTape,
+        });
+        const diagnostic = await create(
+          { effect: (effect: () => () => Promise<void>) => cleanup.push(effect()) },
+          canvas,
+          'actual-child',
+        );
+        await diagnostic.arm('world-4');
+        expect(attachment.captureFrames).toHaveBeenCalledWith(4, {
+          seed: { maxResourceBytes: 0 },
+          signal: expect.any(AbortSignal),
+        });
+        expect(attachment.frameBoundary).toHaveBeenCalledOnce();
+        expect(subscribe.mock.calls[0]?.[0]).toBe(canvas);
+        expect(ensureReady).toHaveBeenCalledTimes(hasGpu ? 0 : 1);
+        for (let frameId = 1; frameId <= 4; frameId++)
+          listener({
+            frameId,
+            deviceGeneration: 0,
+            worldIdentity: !hasGpu && frameId === 4 ? 'another-world' : 'world-4',
+            receipt: {
+              frameId,
+              deviceGeneration: 0,
+              presentation: 'pending',
+              completed: new Promise(() => {}),
+            },
+          });
+        const state = JSON.parse(canvas.dataset.forgeaxPreviewRhiWindow ?? '{}');
+        expect(state).toMatchObject({
+          targetId: 'actual-child',
+          worldIdentity: 'world-4',
+          mapping: hasGpu ? 'complete' : 'partial',
+          seed: 'omitted',
+          evidence: 'commands-and-bindings',
+        });
+        expect(state.frames.map((row: { tapeFrameIndex: number }) => row.tapeFrameIndex)).toEqual([
+          0, 1, 2, 3,
+        ]);
+        resolveCapture({ ok: true, value: { byteLength: 0 } });
+        await vi.waitFor(() => expect(uploadTape).toHaveBeenCalledOnce());
+        await vi.waitFor(() =>
+          expect(JSON.parse(canvas.dataset.forgeaxPreviewRhiWindow ?? '{}').status).toBe(
+            'uploaded',
+          ),
+        );
+        await cleanup[0]?.();
+        expect(remove).toHaveBeenCalledOnce();
+        expect(attachment.dispose).toHaveBeenCalledOnce();
+        expect(attachment.captureFrames.mock.calls[0]?.[1].signal.aborted).toBe(true);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -197,7 +407,7 @@ describe('standalone host', () => {
       expect(generated).not.toContain('executeWorkspaceCommand');
       expect(generated).not.toContain('cancelledWorkspaceCommands');
       const previewStart = generated.indexOf(
-        'async ({ context, canvas: previewCanvas, asset }) => {',
+        'async ({ context, canvas: previewCanvas, asset, targetId }) => {',
       );
       const previewEnd = generated.indexOf('} } : {}),', previewStart);
       expect(previewStart).toBeGreaterThan(0);
@@ -518,6 +728,22 @@ describe('standalone host', () => {
     expect(notice.textContent).toContain('detail.webgpuError: RhiError adapter-unavailable');
     expect(notice.textContent).toContain('detail.wgpuError: RhiError rhi-not-available');
     expect(notice.textContent).toContain('supports browser WebGPU and a wgpu/WebGL2 fallback');
+    let reason: unknown = {
+      code: 'asset-package-invalid',
+      detail: { component: 'CustomSceneTag' },
+    };
+    for (let index = 0; index < 8; index++)
+      reason = { code: 'plugin-startup-failed', cause: reason };
+    listeners.get('unhandledrejection')?.({ reason });
+    expect(notice.textContent).toContain('asset-package-invalid');
+    expect(notice.textContent).toContain('CustomSceneTag');
+    const circular: { cause?: unknown } = {};
+    circular.cause = circular;
+    listeners.get('unhandledrejection')?.({ reason: circular });
+    expect(notice.textContent).toContain('[circular]');
+    for (let index = 0; index < 80; index++) reason = { cause: reason };
+    listeners.get('unhandledrejection')?.({ reason });
+    expect(notice.textContent).toContain('[diagnostic node limit]');
   });
 
   it('exercises the generated startup lifecycle through its inline page fixture', async () => {
@@ -547,6 +773,7 @@ describe('standalone host', () => {
     if (inlineScript === undefined) return;
 
     class FixtureElement {
+      capture?: (type: string, event: Record<string, unknown>) => void;
       textContent = '';
       readonly style = { display: '' };
       readonly attributes = new Map<string, string>();
@@ -568,12 +795,13 @@ describe('standalone host', () => {
       }
 
       dispatch(type: string, event: Record<string, unknown> = {}): void {
-        for (const listener of this.listeners.get(type) ?? []) {
-          listener({ target: this, ...event });
-        }
+        const observed = { target: this, ...event };
+        this.capture?.(type, observed);
+        for (const listener of this.listeners.get(type) ?? []) listener(observed);
       }
 
       contains(target: unknown): boolean {
+        if (!(target instanceof FixtureElement)) throw new TypeError('Expected Node');
         return target === this;
       }
 
@@ -645,6 +873,7 @@ describe('standalone host', () => {
         throw new Error('startup fixture elements are incomplete');
       }
       const window = new FixtureWindow();
+      canvas.capture = (type, event) => window.dispatch(type, event);
       const timers = new Map<number, () => void>();
       const history: {
         readonly id: number;
@@ -661,6 +890,7 @@ describe('standalone host', () => {
       const context = {
         document,
         HTMLElement: FixtureElement,
+        Node: FixtureElement,
         URLSearchParams,
         location,
         window,
@@ -718,6 +948,7 @@ describe('standalone host', () => {
     };
 
     const page = execute('');
+    expect(() => page.window.dispatch('keydown', { target: page.window })).not.toThrow();
     const inputStates: boolean[] = [];
     page.startup.bindInput((enabled) => inputStates.push(enabled));
     page.startup.bindSession('session-a');
@@ -991,16 +1222,38 @@ describe('standalone host', () => {
       const executionReport = {
         frame: { submitted: 3, completed: 2, inFlight: 1, highWater: 2, throttledTicks: 4 },
       };
+      const lastError = {
+        code: 'rhi-not-available',
+        expected: 'an admitted frame',
+        hint: 'inspect the owning renderer',
+      };
+      const rendererFrame = {
+        frameId: 3,
+        deviceGeneration: 1,
+        pendingCompletionCount: 1,
+        pendingCompletions: [
+          {
+            frameId: 3,
+            deviceGeneration: 1,
+            presentation: 'ready',
+            queue: 'pending',
+            reflection: 'pending',
+          },
+        ],
+      };
       const inspected = runInNewContext(
         `${generated.slice(inspectionStart, inspectionEnd)}\nexposeGameInspection(app); globalThis.__forgeaxGameInspection.renderer();`,
         {
           app: {
-            renderer: { inspect: () => ({ state: 'alive', frame: { frameId: 3 } }) },
+            renderer: { inspect: () => ({ state: 'alive', frame: rendererFrame }) },
             execution: { report: () => executionReport },
+            lastError,
           },
         },
       );
+      expect(inspected.frame).toBe(rendererFrame);
       expect(inspected.execution).toBe(executionReport);
+      expect(inspected.lastError).toBe(lastError);
       const installLine = generated
         .split('\n')
         .find((line) => line.includes('exposeGameInspection(app as App)'));
@@ -1360,7 +1613,9 @@ export default definePack({
           },
         });
         await pack.closeBundle();
-        const index = JSON.parse(String(emitted.get('pack-index.json'))) as readonly {
+        const index = decodeCatalogWire(
+          JSON.parse(String(emitted.get('pack-index.json'))),
+        ).unwrap() as readonly {
           readonly guid: string;
           readonly kind: string;
           readonly lifecycle?: string;

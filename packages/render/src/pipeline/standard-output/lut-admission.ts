@@ -39,10 +39,6 @@ export function createStandardLutSamplerDescriptor(): SamplerDescriptor {
   };
 }
 
-export function lutTexelCenter(index: number, size: number): number {
-  return (index + 0.5) / size;
-}
-
 function failure(
   code: StandardLutAdmissionErrorCode,
   expected: string,

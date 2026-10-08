@@ -19,6 +19,8 @@ import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { pluginPack } from '@forgeax/engine-vite-plugin-pack';
 import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { build } from 'vite';
+import { verifyProvenance } from '../../packages/wgpu-wasm/scripts/provenance.mjs';
+import { runnerResources } from '../lib/runner-resources.mjs';
 import { sharedShaderInputFingerprint, sharedShaderReceipt } from '../lib/shared-build-cache.mjs';
 
 const HELP = `Build the shared app-neutral LearnOpenGL inputs for CI app shards.
@@ -112,6 +114,15 @@ if (realpathSync(shaderRoot) !== realpathSync(engineShaderRoot)) {
 // read that path after clearing it or substitute a packaged shader profile.
 delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
 process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
+// Use the repository producer's cgroup CPU bound without raising the shader
+// plugin's existing sixteen-worker ceiling on larger hosts.
+const resources = runnerResources();
+process.env.FORGEAX_SHADER_COMPILE_WORKERS ??= String(
+  Math.max(1, Math.min(16, resources.cpus - 1)),
+);
+console.log(
+  `[shared-build] shader workers=${process.env.FORGEAX_SHADER_COMPILE_WORKERS} cpus=${resources.cpus} containerized=${resources.containerized}`,
+);
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
@@ -162,8 +173,15 @@ if (!catalogOnly) {
   cpSync(assetRoot, join(payloadRoot, assetRootRelative), { recursive: true });
   cpSync(join(staging, 'assets'), join(payloadRoot, 'assets'), { recursive: true });
 }
-cpSync(join(staging, 'shaders'), join(output, 'shaders'), { recursive: true });
+// The self-contained manifest is the entire shared shader consumer closure.
+cpSync(shaderManifestPath, join(output, 'shaders/manifest.json'));
 rmSync(staging, { recursive: true, force: true });
+
+// Transfer the exact verified compiler substrate alongside its shader output.
+// Two source-valid Rust builds can differ bytewise; consumers must use this
+// producer's bytes before checking the unchanged shader input fingerprint.
+await verifyProvenance();
+cpSync(join(root, 'packages/wgpu-wasm/pkg'), join(output, 'compiler'), { recursive: true });
 
 const inventory = files(output)
   .map((path) => relative(root, path).replaceAll('\\', '/'))
@@ -197,6 +215,7 @@ if (projectionOutput !== null) {
   mkdirSync(join(projectionOutput, 'assets'), { recursive: true });
   cpSync(join(output, 'assets', 'catalog.json'), join(projectionOutput, 'assets', 'catalog.json'));
   cpSync(join(output, 'shaders'), join(projectionOutput, 'shaders'), { recursive: true });
+  cpSync(join(output, 'compiler'), join(projectionOutput, 'compiler'), { recursive: true });
   writeFileSync(
     join(projectionOutput, 'manifest.json'),
     `${JSON.stringify(

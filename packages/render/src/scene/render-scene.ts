@@ -38,14 +38,13 @@ import type { PointsLinesInspection } from '../points-lines/inspection';
 import type { PointsLinesRetainedSnapshot } from '../points-lines/snapshot';
 import type { RenderPublicationIdentity } from '../publication/contract';
 import type { PreparedRenderPublication } from '../publication/receiver';
-import type { RenderResourceScope } from '../publication/resource-scope';
+import type { PublishedRenderResources, RenderResourceScope } from '../publication/resource-scope';
 import { worldEntityKey } from '../record/frame-snapshot';
 import {
   type ReflectionProbeFact,
   ReflectionProbeProjection,
   type ReflectionProbeSelectionResult,
 } from '../reflection/projection';
-import type { CameraSnapshot } from '../render-contract';
 import type {
   DispatchEntry,
   ExtractedFrame,
@@ -57,6 +56,7 @@ import type {
   RenderableTemporalSnapshot,
 } from '../render-system-extract';
 import { standardSceneTemporalDemand } from '../temporal/standard-scene-data';
+import { projectTerrainView, terrainSectionKey } from '../terrain/view.js';
 import {
   PersistentTransmissionDemandProjection,
   type TransmissionDemand,
@@ -85,16 +85,6 @@ import {
   RENDERABLE_SOURCE_COMPONENTS,
 } from './render-source';
 import { buildShadowFrusta } from './shadow-visibility';
-import { createVisibilityBudget, type VisibilityBudget } from './visibility/budget';
-import {
-  primitiveKey,
-  primitiveKeyId,
-  VisibilityFacetStore,
-  viewKey,
-  viewKeyId,
-} from './visibility/facet';
-import { decideVisibility } from './visibility/occlusion-confidence';
-import type { PrimitiveKey, ViewKey, VisibilityCandidate } from './visibility/types';
 
 export type {
   RenderSceneApplyResult,
@@ -217,6 +207,13 @@ export interface RenderSceneSubmissionDelta {
  * submission frame. The persistent scene owns this sequence; record consumes
  * it for the CPU residual lane without rebuilding a second scene projection.
  */
+/** Receiver-local authority; never transported as an ECS lease or packet field. */
+export interface ShadowPublicationSource {
+  readonly resources: PublishedRenderResources;
+  readonly revision: number;
+  readonly isCurrent: () => boolean;
+}
+
 export interface PersistentShadowCasterProjection {
   /**
    * Caster content evidence: unchanged owner and revisions prove every
@@ -227,6 +224,9 @@ export interface PersistentShadowCasterProjection {
     readonly owner: object;
     readonly sceneRevision: number;
     readonly dispatchRevision: number;
+    readonly publicationSource?: ShadowPublicationSource;
+    /** Actual view-derived surfaces; root scene revisions do not encode their LOD. */
+    readonly terrainSections?: readonly RenderableSnapshot[];
   };
   readonly worldBoundsOf: (source: RenderableSnapshot) => RenderSceneBounds | undefined;
   readonly renderables: readonly RenderableSnapshot[];
@@ -1096,11 +1096,25 @@ export class RenderScene {
     ) {
       reasons.push('material-revision');
     }
+    // Runtime texture bytes may change without a material revision. The
+    // current displaced local position cannot stand in for its unknown prior
+    // shape; expose invalid motion and reject color history through the same
+    // submitted-scene authority used by rigid, instance and skin consumers.
+    if (
+      slot.snapshot.materials.some(
+        (material) =>
+          (material.paramSnapshot?.displacementScale ?? 0) !== 0 &&
+          (material.textureSources?.has('displacementTexture') === true ||
+            material.videoTextureFields?.has('displacementTexture') === true),
+      )
+    )
+      reasons.push('displacement-source');
     const seedCurrent =
       !sameGeneration ||
       !wasVisible ||
       reasons.includes('geometry-revision') ||
-      reasons.includes('material-revision');
+      reasons.includes('material-revision') ||
+      reasons.includes('displacement-source');
     const previous = seedCurrent || submitted === undefined ? slot.snapshot : submitted.snapshot;
     const previousWorld = this.previousWorldBySlot[slot.slot];
     const currentInstances = slot.snapshot.instances;
@@ -1219,12 +1233,21 @@ export interface PersistentRenderSceneOptions {
   readonly getDevice?: (() => RhiDevice) | undefined;
   readonly onGpuError?: ((error: RhiError) => void) | undefined;
   readonly onRuntimeAssetChange?: ((worldId: number, handle: number) => void) | undefined;
-  readonly configuredQueryBudget?: number | undefined;
   /** Instance projection accepted by the same World source update flow. */
   readonly instanceCollections?: InstanceProjectionStore | undefined;
 }
 
 export interface PersistentGpuDrivenState {
+  /** Present only for the complete retained composition, never a filtered view. */
+  readonly retained?: {
+    readonly identity: object;
+    readonly revision: number;
+    readonly worlds: readonly RenderResourceScope[];
+    readonly slots: readonly RenderSceneSlot[];
+    isCurrent(): boolean;
+    /** The current source still matches the versions consumed by extraction. */
+    isSourceCurrent(): boolean;
+  };
   readonly scene: GpuScene;
   readonly plan: SubmissionPlan;
   readonly slots: readonly RenderSceneSlot[];
@@ -1242,25 +1265,12 @@ export interface PersistentGpuDrivenState {
   readonly probeBlend?: ProbeBlendBufferProjection;
 }
 
-export interface CpuDirectViewInput {
-  readonly view: ViewKey;
-  readonly primitives: readonly PrimitiveKey[];
-}
-
-export interface CpuDirectCandidate {
-  readonly view: ViewKey;
-  readonly primitive: PrimitiveKey;
-  readonly candidate: VisibilityCandidate;
-}
-
 /**
  * The one renderer-owned submission projection for a display view.
  *
- * Occlusion completion updates the facet asynchronously, so extraction must
- * retain every query candidate while record/prepare consume this projection.
- * Keeping the dispatch reindex here prevents CPU direct and GPU indirect
- * lanes from rebuilding a second visibility map with different identity
- * semantics.
+ * Record and prepare consume the same renderables, dispatch and stable active
+ * identity, so CPU direct and GPU indirect lanes never rebuild a second
+ * visibility map with different identity semantics.
  */
 export interface PersistentVisibilityProjection {
   readonly renderables: readonly RenderableSnapshot[];
@@ -1268,22 +1278,6 @@ export interface PersistentVisibilityProjection {
   readonly activeEntityKeys: ReadonlySet<number>;
   /** Monotonic owner revision for exactly this active-key projection. */
   readonly activeEntityRevision: number;
-  readonly suppressed: number;
-}
-
-/** Project one selected candidate per view and primitive from the facet owner. */
-export function projectCpuDirectCandidates(
-  facets: VisibilityFacetStore,
-  views: readonly CpuDirectViewInput[],
-): readonly CpuDirectCandidate[] {
-  const candidates: CpuDirectCandidate[] = [];
-  for (const { view, primitives } of views) {
-    for (const primitive of primitives) {
-      const candidate = facets.getCandidate(view, primitive);
-      if (candidate !== undefined) candidates.push({ view, primitive, candidate });
-    }
-  }
-  return candidates;
 }
 
 /** Detached GPU scene prepared from the retained CPU composition. */
@@ -1295,12 +1289,6 @@ export interface PersistentGpuDrivenCandidate {
   discard(): void;
   /** Release the candidate scene even after it has crossed publication. */
   release(): void;
-}
-
-export interface RenderSceneRecoveryRoot {
-  readonly generation: number;
-  readonly revision: number;
-  readonly visibleSlots: number;
 }
 
 type PersistentGpuSceneInspection = PersistentRenderSceneInspection['gpu'];
@@ -1315,7 +1303,8 @@ interface PersistentCompositionEntry {
   /** Stable renderer-local World keys; unlike RenderableSnapshot.worldId they survive reorder. */
   readonly worldKeys: readonly number[];
   readonly readVersions: RenderReadVersion[];
-  readonly leaseIdentities: readonly string[];
+  readLeases: readonly RenderReadLease[];
+  publicationRevision: number | undefined;
   readonly transformQueries: readonly GlobalTransformChangeQuery[];
   readonly sourceStates: readonly {
     projection: StateProjection;
@@ -1729,8 +1718,6 @@ function attachProbeRecords(
 
 /** Persistent scene projection used by the renderer's multi-World composition path. */
 export class PersistentRenderScene {
-  private readonly visibilityBudget: VisibilityBudget;
-  private readonly visibilityFacets: VisibilityFacetStore;
   /** World identity is the author/runtime identity; array position is only a frame routing detail. */
   private readonly visibilityWorldKeys = new Map<string, number>();
   private nextVisibilityWorldKey = 0;
@@ -1757,6 +1744,8 @@ export class PersistentRenderScene {
   private gpuDevice: RhiDevice | undefined;
   private gpuStatus: 'inactive' | 'unsupported' | 'resident' | 'rebuild-pending' | 'error' =
     'inactive';
+  private terrainCandidate: readonly RenderableSnapshot[] = [];
+  private terrainAccepted = new Map<string, RenderableSnapshot>();
   private temporalCapture:
     | { readonly projection: RenderScene; readonly capture: RenderSceneSubmissionCapture }
     | undefined;
@@ -1780,38 +1769,23 @@ export class PersistentRenderScene {
   private readonly temporalCounters: FrameCacheTally = { hits: 0, misses: 0 };
   private visibilityProjectionHits = 0;
   private visibilityProjectionMisses = 0;
-  /** Monotonic token for camera/dynamic frame facts consumed by visibility caches. */
-  private frameEpoch = 0;
-  private visibilityFacetFrame:
-    | {
-        readonly frameEpoch: number;
-        readonly viewId: string;
-        readonly renderables: readonly RenderableSnapshot[];
-      }
-    | undefined;
   private visibilityProjectionCache:
     | {
         readonly stableSlotRevision: number;
         readonly worlds: readonly RenderResourceScope[];
-        readonly drawRevision: number;
-        readonly viewId: string;
         readonly renderables: readonly RenderableSnapshot[];
         readonly dispatch: readonly DispatchEntry[];
         readonly projection: PersistentVisibilityProjection;
       }
     | undefined;
   private visibilityProjectionRevision = 0;
-  private projectedIndexScratch = new Int32Array(0);
   private lastActiveEntityKeys: ReadonlySet<number> | undefined;
   /** Stable renderer-world/entity lookup; rebuilt only with composition topology. */
   private readonly stableSlotByEntity = new Map<number, RenderSceneSlot>();
   private pointsLinesInspections: readonly PointsLinesInspection[] = [];
   private readonly reflectionProbes = new ReflectionProbeProjection();
 
-  constructor(private readonly options: PersistentRenderSceneOptions = {}) {
-    this.visibilityBudget = createVisibilityBudget(options.configuredQueryBudget);
-    this.visibilityFacets = new VisibilityFacetStore(this.visibilityBudget);
-  }
+  constructor(private readonly options: PersistentRenderSceneOptions = {}) {}
 
   /** RenderScene owns the per-World material fact cache used during extraction. */
   materialSnapshotCacheStore(context?: MaterialCookRasterContext): MaterialSnapshotCachesByWorld {
@@ -1826,15 +1800,6 @@ export class PersistentRenderScene {
       }
     }
     return this.materialSnapshotCaches;
-  }
-
-  /** The sole renderer-owned ViewKey x PrimitiveKey visibility state. */
-  visibilityFacetStore(): VisibilityFacetStore {
-    return this.visibilityFacets;
-  }
-
-  visibilityBudgetValue(): VisibilityBudget {
-    return this.visibilityBudget;
   }
 
   private visibilityWorldKey(world: RenderResourceScope | undefined, fallback: number): number {
@@ -1865,16 +1830,11 @@ export class PersistentRenderScene {
     return this.composition?.projection.slot(worldId, entityKey);
   }
 
-  /** The same retained world bounds used by CPU instance visibility. */
-  compositionCullingWorldBounds(slot: RenderSceneSlot): RenderSceneBounds | undefined {
-    return this.composition?.projection.cullingWorldBoundsAt(slot);
-  }
-
   shadowCasterProjection(): PersistentShadowCasterProjection | undefined {
     return this.shadowProjection;
   }
 
-  /** Stable renderer-world/entity lookup shared by query and final projection paths. */
+  /** Stable renderer-world/entity lookup shared by inspection and final projection paths. */
   compositionSlotByStableEntity(): ReadonlyMap<number, RenderSceneSlot> {
     return this.stableSlotByEntity;
   }
@@ -1886,111 +1846,22 @@ export class PersistentRenderScene {
     return worldEntityKey(this.worldKeyAt(worlds, renderable.worldId), renderable.entityKey);
   }
 
-  /** Feed the facet from extracted renderables using persistent slot identity. */
-  updateVisibilityFacet(
-    worlds: readonly RenderResourceScope[],
-    camera: CameraSnapshot | undefined,
-    renderables: readonly RenderableSnapshot[],
-  ): void {
-    const world = worlds[camera?.worldId ?? 0];
-    if (world === undefined || camera === undefined) return;
-    const view = viewKey({
-      attachmentId: world.identity,
-      cameraEntity: camera.entityKey ?? 0,
-      viewRole: 'main',
-      viewGeneration: camera.historyVersion ?? 0,
-    });
-    const viewId = viewKeyId(view);
-    const previous = this.visibilityFacetFrame;
-    if (
-      previous?.frameEpoch === this.frameEpoch &&
-      previous.viewId === viewId &&
-      previous.renderables === renderables
-    ) {
-      return;
-    }
-    this.visibilityFacets.activateView(view);
-    const activePrimitiveIds = new Set<string>();
-    for (const renderable of renderables) {
-      const bounds = renderable.localAabb;
-      if (
-        renderable.lods === undefined ||
-        renderable.lods.length === 0 ||
-        bounds === undefined ||
-        bounds.length < 6 ||
-        !bounds.every(Number.isFinite)
-      ) {
-        continue;
-      }
-      const slot = this.stableSlotByEntity.get(this.stableEntityKey(worlds, renderable));
-      if (slot === undefined) continue;
-      const primitive = primitiveKey({
-        attachmentId: world.identity,
-        worldGeneration: this.worldKeyAt(worlds, renderable.worldId),
-        primitiveSlot: slot.slot,
-        slotGeneration: slot.generation,
-      });
-      activePrimitiveIds.add(primitiveKeyId(primitive));
-      this.visibilityFacets.setCandidate(view, primitive, { level: 0, confidence: 1 });
-    }
-    this.visibilityFacets.pruneCandidates(view, activePrimitiveIds);
-    this.visibilityFacetFrame = { frameEpoch: this.frameEpoch, viewId, renderables };
-  }
-
   /**
-   * Project the current facet into the final primary-raster submission.
+   * Project extracted renderables into the final primary-raster submission.
    *
-   * Only renderables carrying authored lower-detail levels are queryable. A
-   * plain mesh therefore remains on the ordinary visibility path, while an
-   * LOD candidate with two accepted zero-sample results is suppressed until
-   * the confidence scheduler requests its bounded re-test. Unknown identity,
-   * invalid bounds, and non-queryable confidence all remain conservatively
-   * visible through `decideVisibility`.
+   * Occlusion belongs to the GPU two-phase HZB, so this projection passes every
+   * renderable through and owns only the stable active-entity identity that
+   * production-raster admission caches key on.
    */
   projectVisibility(
     worlds: readonly RenderResourceScope[],
-    camera: CameraSnapshot | undefined,
     renderables: readonly RenderableSnapshot[],
     dispatch: readonly DispatchEntry[],
   ): PersistentVisibilityProjection {
-    if (camera === undefined) {
-      const activeEntityKeys = new Set(
-        renderables.map((renderable) => this.stableEntityKey(worlds, renderable)),
-      );
-      return {
-        renderables,
-        dispatch,
-        activeEntityKeys,
-        activeEntityRevision: this.activeEntityRevision(activeEntityKeys),
-        suppressed: 0,
-      };
-    }
-    const cameraWorld = worlds[camera.worldId ?? 0];
-    if (cameraWorld === undefined) {
-      const activeEntityKeys = new Set(
-        renderables.map((renderable) => this.stableEntityKey(worlds, renderable)),
-      );
-      return {
-        renderables,
-        dispatch,
-        activeEntityKeys,
-        activeEntityRevision: this.activeEntityRevision(activeEntityKeys),
-        suppressed: 0,
-      };
-    }
-    const view = viewKey({
-      attachmentId: cameraWorld.identity,
-      cameraEntity: camera.entityKey ?? 0,
-      viewRole: 'main',
-      viewGeneration: camera.historyVersion ?? 0,
-    });
-    const viewId = viewKeyId(view);
     const cached = this.visibilityProjectionCache;
     if (
       cached?.stableSlotRevision === this.stableSlotRevision &&
       sameWorldSequence(cached.worlds, worlds) &&
-      cached.drawRevision === this.visibilityFacets.drawRevisionValue &&
-      cached.viewId === viewId &&
       cached.renderables === renderables &&
       cached.dispatch === dispatch
     ) {
@@ -1998,67 +1869,19 @@ export class PersistentRenderScene {
       return cached.projection;
     }
     this.visibilityProjectionMisses += 1;
-    if (this.projectedIndexScratch.length < renderables.length) {
-      this.projectedIndexScratch = new Int32Array(renderables.length);
-    }
-    const projectedIndex = this.projectedIndexScratch;
-    projectedIndex.fill(-1, 0, renderables.length);
-    const projected: RenderableSnapshot[] = [];
     const activeEntityKeys = new Set<number>();
-    let suppressed = 0;
-    for (let index = 0; index < renderables.length; index += 1) {
-      const renderable = renderables[index];
-      if (renderable === undefined) continue;
-      const stableEntity = this.stableEntityKey(worlds, renderable);
-      const slot = this.stableSlotByEntity.get(stableEntity);
-      let draw = true;
-      if (slot !== undefined && (renderable.lods?.length ?? 0) > 0) {
-        const primitive = primitiveKey({
-          attachmentId: cameraWorld.identity,
-          worldGeneration: this.worldKeyAt(worlds, renderable.worldId),
-          primitiveSlot: slot.slot,
-          slotGeneration: slot.generation,
-        });
-        const bounds = renderable.localAabb;
-        const validBounds =
-          bounds !== undefined && bounds.length >= 6 && bounds.every(Number.isFinite);
-        draw = decideVisibility({
-          authorVisible: renderable.authorVisible !== false,
-          validBounds,
-          frustumVisible: true,
-          lodReady: true,
-          occlusion: this.visibilityFacets.getConfidence(view, primitive),
-          lane: 'gpu',
-        }).draw;
-      }
-      if (!draw) {
-        suppressed += 1;
-        continue;
-      }
-      projectedIndex[index] = projected.length;
-      projected.push(renderable);
-      activeEntityKeys.add(stableEntity);
-    }
-    const projectedDispatch: DispatchEntry[] = [];
-    for (const entry of dispatch) {
-      const renderableIndex = projectedIndex[entry.renderableIndex];
-      if (renderableIndex === undefined || renderableIndex < 0) continue;
-      projectedDispatch.push(
-        renderableIndex === entry.renderableIndex ? entry : { ...entry, renderableIndex },
-      );
+    for (const renderable of renderables) {
+      activeEntityKeys.add(this.stableEntityKey(worlds, renderable));
     }
     const projection = {
-      renderables: Object.freeze(projected),
-      dispatch: Object.freeze(projectedDispatch),
+      renderables,
+      dispatch,
       activeEntityKeys,
       activeEntityRevision: this.activeEntityRevision(activeEntityKeys),
-      suppressed,
     };
     this.visibilityProjectionCache = {
       stableSlotRevision: this.stableSlotRevision,
       worlds: [...worlds],
-      drawRevision: this.visibilityFacets.drawRevisionValue,
-      viewId,
       renderables,
       dispatch,
       projection,
@@ -2141,7 +1964,8 @@ export class PersistentRenderScene {
         hiddenEntityReports: [],
         worldKeys: this.visibilityWorldKeysFor([resources]),
         readVersions: [],
-        leaseIdentities: [],
+        readLeases: [],
+        publicationRevision: packet.revision,
         transformQueries: [],
         sourceStates: [],
         dispatchBySlot: new Map(),
@@ -2180,7 +2004,6 @@ export class PersistentRenderScene {
     if (frame.renderables.length || packet.removed.length) {
       entry.dispatchRevision++;
       entry.dispatchCache = undefined;
-      this.visibilityFacets.clear();
       this.invalidateActiveEntityRevision();
     }
     for (const slot of [...delta.createdSlots, ...delta.updatedSlots, ...delta.recreatedSlots]) {
@@ -2200,6 +2023,7 @@ export class PersistentRenderScene {
     if (input.operations.length) this.deltaFrames++;
     else this.noChangeFrames++;
     this.transformUpdates += delta.updated;
+    entry.publicationRevision = packet.revision;
     return this.deriveFramePlan(entry, frame);
   }
 
@@ -2225,10 +2049,8 @@ export class PersistentRenderScene {
       entry !== undefined &&
       leases !== undefined &&
       leases.length === worlds.length &&
-      entry.leaseIdentities.length === leases.length &&
-      entry.leaseIdentities.every((identity) =>
-        leases.some((lease) => lease.worldIdentity === identity),
-      );
+      entry.readLeases.length === leases.length &&
+      entry.readLeases.every((lease) => leases.includes(lease));
     const preserveVisibilityOnReorder =
       entry !== undefined &&
       worldOrderChanged &&
@@ -2284,7 +2106,6 @@ export class PersistentRenderScene {
       const content = contentChangedByWorld[worldId];
       if (changed === undefined || content === undefined) continue;
       if (version.structureEpoch !== read.version.structureEpoch) {
-        this.visibilityFacets.clear();
         this.invalidateActiveEntityRevision();
       }
       const batch = source.projection.read();
@@ -2655,6 +2476,7 @@ export class PersistentRenderScene {
       }
     }
     entry.catalogEpoch = catalogEpoch;
+    entry.readLeases = [...leases];
     for (let worldId = 0; worldId < nextReadVersions.length; worldId += 1) {
       const version = nextReadVersions[worldId];
       if (version !== undefined) entry.readVersions[worldId] = version;
@@ -2666,9 +2488,9 @@ export class PersistentRenderScene {
     this.composition = undefined;
     this.shadowProjection = undefined;
     this.temporalCapture = undefined;
-    this.visibilityFacets.clear();
+    this.terrainCandidate = [];
+    this.terrainAccepted.clear();
     this.invalidateActiveEntityRevision();
-    this.visibilityFacetFrame = undefined;
     this.visibilityProjectionCache = undefined;
     this.stableSlotByEntity.clear();
     this.lastResyncReason = 'explicit-invalidate';
@@ -2718,7 +2540,6 @@ export class PersistentRenderScene {
   }
 
   detach(world: World): void {
-    this.visibilityFacets.detachAttachment(world.identity);
     this.materialSnapshotCaches.delete(world);
     const detachedComposition = this.composition?.worlds.includes(world)
       ? this.composition
@@ -2729,11 +2550,9 @@ export class PersistentRenderScene {
     }
     if (detachedComposition !== undefined) this.temporalCapture = undefined;
     if (detachedComposition !== undefined) {
-      this.visibilityFacets.clear();
       this.invalidateActiveEntityRevision();
     }
     if (detachedComposition !== undefined) {
-      this.visibilityFacetFrame = undefined;
       this.visibilityProjectionCache = undefined;
       this.stableSlotByEntity.clear();
     }
@@ -2887,9 +2706,9 @@ export class PersistentRenderScene {
     this.composition = undefined;
     this.shadowProjection = undefined;
     this.temporalCapture = undefined;
-    this.visibilityFacets.clear();
+    this.terrainCandidate = [];
+    this.terrainAccepted.clear();
     this.invalidateActiveEntityRevision();
-    this.visibilityFacetFrame = undefined;
     this.visibilityProjectionCache = undefined;
     this.stableSlotByEntity.clear();
     this.pointsLinesInspections = [];
@@ -2984,10 +2803,46 @@ export class PersistentRenderScene {
     if (entry === undefined || this.gpuOwner !== entry.token || this.gpuScene === undefined) {
       return undefined;
     }
+    const revision = entry.projection.contentRevision;
+    const slots = entry.projection.slotsSnapshot();
+    const sourceVersions = entry.readVersions.map((version) => ({ ...version }));
+    const sourceLeases = [...entry.readLeases];
+    const publicationRevision = entry.publicationRevision;
     return {
+      retained: {
+        identity: entry.token,
+        revision,
+        worlds: entry.worlds,
+        slots,
+        isCurrent: () =>
+          this.composition === entry && entry.projection.contentRevision === revision,
+        isSourceCurrent: () => {
+          if (this.composition !== entry) return false;
+          try {
+            return entry.worlds.every((world, index) => {
+              if ('resolveAsset' in world) return world.revision === publicationRevision;
+              const lease = sourceLeases[index],
+                version = sourceVersions[index];
+              if (
+                lease === undefined ||
+                version === undefined ||
+                lease.worldIdentity !== world.identity
+              )
+                return false;
+              const current = lease.captureVersion();
+              return (
+                current.mutationEpoch === version.mutationEpoch &&
+                current.structureEpoch === version.structureEpoch
+              );
+            });
+          } catch {
+            return false;
+          }
+        },
+      },
       scene: this.gpuScene,
       plan: entry.topology.plan(),
-      slots: entry.projection.slotsSnapshot(),
+      slots,
       slotAt: entry.projection.slotAt,
       worldKeys: entry.worldKeys,
       worldIdentities: entry.worlds.map((world) => world.identity),
@@ -3001,7 +2856,7 @@ export class PersistentRenderScene {
   }
 
   /** Publish renderer-owned previous transforms after queue submission. */
-  commitTemporalFrame(): Result<void, RhiError> {
+  commitTemporalFrame(terrainReady = true): Result<void, RhiError> {
     // Previous transforms are consumed only by TAA and motion blur. Ordinary
     // frames must not copy and upload the complete GPU transform table.
     const gpuCommit = this.gpuScene?.commitTemporalFrame(this.temporalCapture !== undefined);
@@ -3026,11 +2881,21 @@ export class PersistentRenderScene {
       }
       this.temporalCapture = undefined;
     }
+    if (terrainReady)
+      this.terrainAccepted = new Map(
+        this.terrainCandidate.flatMap((source) =>
+          source.terrainSection === undefined
+            ? []
+            : [[terrainSectionKey(source, source.terrainSection.index), source] as const],
+        ),
+      );
+    this.terrainCandidate = [];
     return ok(undefined);
   }
 
   /** Drop a staged temporal capture when the owning frame did not submit. */
   discardTemporalFrame(): void {
+    this.terrainCandidate = [];
     this.temporalCapture = undefined;
   }
 
@@ -3080,7 +2945,6 @@ export class PersistentRenderScene {
     this.worldEntitiesScanned = candidateFrame.renderables.length;
     const worldKeys = this.visibilityWorldKeysFor(worlds);
     if (!preserveVisibilityOnReorder) {
-      this.visibilityFacets.clear();
       this.invalidateActiveEntityRevision();
     } else if (previousEntry !== undefined) {
       const previousKeys = new Set(
@@ -3099,7 +2963,6 @@ export class PersistentRenderScene {
         previousKeys.size !== currentKeys.size ||
         [...previousKeys].some((key) => !currentKeys.has(key))
       ) {
-        this.visibilityFacets.clear();
         this.invalidateActiveEntityRevision();
       }
     }
@@ -3170,14 +3033,12 @@ export class PersistentRenderScene {
       transmissionDemand,
       hiddenEntityReports: stableCandidateFrame.hiddenEntityReports,
       worldKeys,
+      readLeases: leases === undefined ? [] : [...leases],
+      publicationRevision: undefined,
       readVersions:
         leases === undefined || leases.length !== worlds.length
           ? []
           : leases.map((lease) => lease.captureVersion()),
-      leaseIdentities:
-        leases === undefined || leases.length !== worlds.length
-          ? []
-          : leases.map((lease) => lease.worldIdentity),
       transformQueries:
         leases === undefined || leases.length !== worlds.length
           ? []
@@ -3220,26 +3081,34 @@ export class PersistentRenderScene {
       entry.probeProjection,
       this.probeAttachMemo,
     );
-    const slots = projection.slotsSnapshot();
-    const ownedFrame = this.projectShadowOwnership(frameWithProbes);
+    const terrainFrame = projectTerrainView(frameWithProbes, this.terrainAccepted);
+    const ownedFrame = this.projectShadowOwnership(terrainFrame);
     this.shadowProjection = {
       content: {
         owner: entry,
         sceneRevision: projection.revisionValue(),
         dispatchRevision: entry.dispatchRevision,
+        terrainSections: ownedFrame.renderables.filter(
+          (source) => source.terrainSection !== undefined,
+        ),
       },
       renderables: ownedFrame.renderables,
       dispatch: ownedFrame.dispatch,
       worldBoundsOf: (source) => {
         const slot = projection.slot(source.worldId, source.entityKey);
-        return slot === undefined ? undefined : projection.cullingWorldBoundsAt(slot);
+        return source.terrainSection !== undefined
+          ? worldBounds(source)
+          : slot === undefined
+            ? undefined
+            : projection.cullingWorldBoundsAt(slot);
       },
     };
     const result = cullPersistentFrame(
       ownedFrame,
       ownedFrame.renderables,
-      (snapshot, index) => {
-        const slot = slots[index];
+      (snapshot) => {
+        const slot = entry.projection.slot(snapshot.worldId, snapshot.entityKey);
+        if (snapshot.terrainSection !== undefined) return worldBounds(snapshot);
         return slot === undefined
           ? projection.cullingWorldBounds(snapshot)
           : projection.cullingWorldBoundsAt(slot);
@@ -3248,8 +3117,9 @@ export class PersistentRenderScene {
       this.gpuCullBypass(token),
     );
     for (const source of sourceStates) source.batch.accept();
-    this.frameEpoch += 1;
-    this.visibilityFacetFrame = undefined;
+    this.terrainCandidate = result.renderables.filter(
+      (source) => source.terrainSection !== undefined,
+    );
     return result;
   }
 
@@ -3315,26 +3185,57 @@ export class PersistentRenderScene {
       entry.probeProjection,
       this.probeAttachMemo,
     );
-    const slots = entry.projection.slotsSnapshot();
-    const ownedFrame = this.projectShadowOwnership(frameWithProbes);
+    const terrainFrame = projectTerrainView(frameWithProbes, this.terrainAccepted);
+    const ownedFrame = this.projectShadowOwnership(terrainFrame);
+    const resource = entry.worlds[0];
+    const publicationRevision = entry.publicationRevision;
+    const sceneRevision = entry.projection.revisionValue();
+    const dispatchRevision = entry.dispatchRevision;
+    const publicationSource: ShadowPublicationSource | undefined =
+      resourceFrame.lights.directionalCsmConfig?.staggerCascades !== true ||
+      publicationRevision === undefined ||
+      resource === undefined ||
+      !('resolveAsset' in resource)
+        ? undefined
+        : {
+            resources: resource,
+            revision: publicationRevision,
+            isCurrent: () =>
+              this.composition === entry &&
+              entry.worlds.length === 1 &&
+              entry.worlds[0] === resource &&
+              entry.publicationRevision === publicationRevision &&
+              resource.revision === publicationRevision &&
+              entry.projection.revisionValue() === sceneRevision &&
+              entry.dispatchRevision === dispatchRevision,
+          };
     this.shadowProjection = {
       content: {
         owner: entry,
         sceneRevision: entry.projection.revisionValue(),
         dispatchRevision: entry.dispatchRevision,
+        ...(publicationSource === undefined ? {} : { publicationSource }),
+        terrainSections: ownedFrame.renderables.filter(
+          (source) => source.terrainSection !== undefined,
+        ),
       },
       renderables: ownedFrame.renderables,
       dispatch: ownedFrame.dispatch,
       worldBoundsOf: (source) => {
         const slot = entry.projection.slot(source.worldId, source.entityKey);
-        return slot === undefined ? undefined : entry.projection.cullingWorldBoundsAt(slot);
+        return source.terrainSection !== undefined
+          ? worldBounds(source)
+          : slot === undefined
+            ? undefined
+            : entry.projection.cullingWorldBoundsAt(slot);
       },
     };
     const result = cullPersistentFrame(
       ownedFrame,
       ownedFrame.renderables,
-      (snapshot, index) => {
-        const slot = slots[index];
+      (snapshot) => {
+        const slot = entry.projection.slot(snapshot.worldId, snapshot.entityKey);
+        if (snapshot.terrainSection !== undefined) return worldBounds(snapshot);
         return slot === undefined
           ? entry.projection.cullingWorldBounds(snapshot)
           : entry.projection.cullingWorldBoundsAt(slot);
@@ -3342,8 +3243,9 @@ export class PersistentRenderScene {
       this.cullMemo,
       this.gpuCullBypass(entry.token),
     );
-    this.frameEpoch += 1;
-    this.visibilityFacetFrame = undefined;
+    this.terrainCandidate = result.renderables.filter(
+      (source) => source.terrainSection !== undefined,
+    );
     return result;
   }
 
@@ -3431,28 +3333,25 @@ export class PersistentRenderScene {
       this.sceneTableUploadBytes = acquired.uploadBytes;
       return;
     }
-    const result =
-      delta === undefined
-        ? acquired.scene.sync({
-            created: 0,
-            updated: 0,
-            removed: 0,
-            recreated: 0,
-            ignoredLateUpdates: 0,
-            createdSlots: [],
-            updatedSlots: [],
-            contentUpdatedSlots: [],
-            instanceUpdatedSlots: [],
-            removedSlots: [],
-            recreatedSlots: [],
-            resynced: 0,
-          })
-        : acquired.scene.sync(
-            delta,
-            (slot) => projection.temporalSnapshotBySlot(slot.slot),
-            (slot) => projection.cullingWorldBoundsAt(slot),
-            (slot) => projection.instanceRowBoxesAt(slot),
-          );
+    const result = acquired.scene.sync(
+      delta ?? {
+        created: 0,
+        updated: 0,
+        removed: 0,
+        recreated: 0,
+        ignoredLateUpdates: 0,
+        createdSlots: [],
+        updatedSlots: [],
+        contentUpdatedSlots: [],
+        instanceUpdatedSlots: [],
+        removedSlots: [],
+        recreatedSlots: [],
+        resynced: 0,
+      },
+      (slot) => projection.temporalSnapshotBySlot(slot.slot),
+      (slot) => projection.cullingWorldBoundsAt(slot),
+      (slot) => projection.instanceRowBoxesAt(slot),
+    );
     if (!result.ok) {
       this.sceneTableUploadBytes = 0;
       this.failGpu(result.error);

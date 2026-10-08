@@ -66,7 +66,7 @@ function fail(message) {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   fail(`dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
 }

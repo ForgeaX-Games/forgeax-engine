@@ -637,16 +637,13 @@ export function flushCommands(buffer: CommandBufferImpl, world: WorldForCommands
         error,
       );
     }
-    if (world.execution.health === 'healthy') {
-      const poison = world[worldInternal].poisonExecution;
-      poison({
-        code: 'shared-kernel-failed',
-        kernelName: 'CommandBuffer.flush',
-        cause: error,
-        partialWrite: true,
-        retryable: false,
-      });
-    }
+    world[worldInternal].poisonExecution({
+      code: 'shared-kernel-failed',
+      kernelName: 'CommandBuffer.flush',
+      cause: error,
+      partialWrite: true,
+      retryable: false,
+    });
     throw new SystemFailedError(
       buffer._systemName,
       buffer._scheduleName,

@@ -331,7 +331,10 @@ describe('real ECS flat Transform propagation benchmark', () => {
       ),
     ).toBe(true);
 
-    const source = readFileSync('packages/scene/src/systems/propagate-transforms.ts', 'utf8');
+    const source = readFileSync(
+      new URL('../systems/propagate-transforms.ts', import.meta.url),
+      'utf8',
+    );
     expect(source.slice(0, source.indexOf('function walkChildren('))).not.toMatch(
       /new (Map|Set)|\\b(Map|Set)</,
     );

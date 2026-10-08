@@ -1,5 +1,6 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { TemporalFrameSubmitError } from '../errors/render';
+import type { RenderFrameState } from '../record/frame-snapshot';
 
 export type TemporalResetReason =
   | 'none'
@@ -158,4 +159,16 @@ export function createTemporalFrameTransaction(options: {
       lastFailure = undefined;
     },
   };
+}
+
+/** Drop accepted, staged and pending temporal history at a producer or device generation cut. */
+export function resetTemporalHistory(
+  frameState: RenderFrameState,
+  reason: Extract<TemporalResetReason, 'signature-change' | 'device-recovery'>,
+): void {
+  frameState.temporalFrameTransaction.reset(reason);
+  frameState.temporalFrame = undefined;
+  frameState.lastSuccessfulTemporalView = undefined;
+  frameState.successfulTemporalFrameIndex = 0;
+  frameState.pendingTemporalCommit = { kind: 'none' };
 }

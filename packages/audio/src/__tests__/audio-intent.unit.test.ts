@@ -9,6 +9,45 @@ const PLAY_OPTIONS = {
 };
 
 describe('AudioIntent producer', () => {
+  it('rejects oversized graph and stream publications before serialization or Worker transport', () => {
+    const emit = vi.fn();
+    const backend = createAudioIntentBackend({ emit });
+    backend.configureBuses(
+      Array.from({ length: 65 }, (_, id) => ({ id: String(id), parent: null })),
+    );
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'failure' }));
+    const serialize = vi.fn(() => {
+      throw new Error('must not serialize rejected metadata');
+    });
+    backend.play(
+      1,
+      {
+        kind: 'audio',
+        sourceKey: 'oversized-index',
+        mediaType: 'audio/wav',
+        stream: {
+          format: 'wav-pcm16/1',
+          sampleRate: 48000,
+          channels: 1,
+          frames: 48000,
+          dataOffset: 44,
+          chunkFrames: 48000,
+          hashes: new Array(16385).fill('a'.repeat(64)),
+          url: 'https://example.test/audio.wav',
+          toJSON: serialize,
+        },
+      } as Parameters<typeof backend.play>[1],
+      PLAY_OPTIONS,
+    );
+    expect(serialize).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: 'failure',
+        error: expect.objectContaining({ code: 'stream-failed' }),
+      }),
+    );
+    expect(emit.mock.calls.every(([intent]) => intent.kind === 'failure')).toBe(true);
+  });
   it('publishes source bytes once and reuses sourceKey afterwards', () => {
     const emit = vi.fn();
     const backend = createAudioIntentBackend({ emit });

@@ -68,6 +68,95 @@ test('failed CI runs retain producer artifacts for failed-job reruns', () => {
     cleanup,
     /if: >-\n\s+!cancelled\(\) && !contains\(needs\.\*\.result, 'failure'\) &&\n\s+!contains\(needs\.\*\.result, 'cancelled'\)/,
   );
+  const report = section(ci, '  sticky-comment:\n', '    if:');
+  const reportNeeds = report
+    .match(/\n {4}needs: \[([^\]]+)\]/)[1]
+    .split(',')
+    .map((id) => id.trim());
+  const cleanupNeeds = new Set(
+    cleanup
+      .match(/\n {4}needs:\n((?: {6}- [^\n]+\n)+)/)[1]
+      .trim()
+      .split('\n')
+      .map((line) => line.trim().slice(2)),
+  );
+  assert.deepEqual(
+    reportNeeds.filter((id) => !cleanupNeeds.has(id)),
+    [],
+    'a successful report must not mask a failed or cancelled prerequisite',
+  );
+});
+
+test('View failure and the final Collectathon consumer block transient cleanup', () => {
+  const job = section(
+    ci,
+    '  cleanup-transient-artifacts:\n',
+    '  auto-exposure-feature-evidence:\n',
+  );
+  const needs = new Set(
+    job
+      .match(/\n {4}needs:\n((?: {6}- [^\n]+\n)+)/)[1]
+      .trim()
+      .split('\n')
+      .map((line) => line.trim().slice(2)),
+  );
+  assert.ok(needs.has('view-integration'), 'a failed View aggregate must retain its capture');
+  assert.ok(needs.has('collectathon-boot-e2e'), 'never delete inputs while this consumer runs');
+  const view = section(ci, '  view-integration-shards:\n', '  primary-pnpm:\n');
+  assert.match(
+    view,
+    /failure-view-integration-evidence|failure-' \|\| '' \}\}view-integration-evidence/,
+  );
+  assert.match(view, /failure-preview-rhi-window/);
+});
+
+test('View evidence retries transport once while preserving required hidden captures', () => {
+  const view = section(ci, '  view-integration-shards:\n', '  view-integration:\n');
+  const uploads = view
+    .split(/\n(?= {6}- (?:name|uses):)/)
+    .filter((step) =>
+      /name: .*view-integration-evidence|name: failure-preview-rhi-window/.test(step),
+    );
+  assert.equal(uploads.length, 2);
+  for (const step of uploads) {
+    assert.match(step, /uses: \.\/\.github\/actions\/upload-artifact-with-retry/);
+    assert.match(step, /required: 'true'/);
+    assert.doesNotMatch(step, /continue-on-error: true/);
+    assert.match(step, /retention-days: 3/);
+  }
+  assert.match(
+    uploads.find((step) => step.includes('failure-preview-rhi-window')),
+    /include-hidden-files: true/,
+  );
+  assert.match(upload, /include-hidden-files:\n\s+description:[^\n]+\n\s+default: 'false'/);
+  assert.equal(
+    (upload.match(/include-hidden-files: \$\{\{ inputs\.include-hidden-files \}\}/g) ?? []).length,
+    2,
+  );
+});
+
+test('failed Lens Effects keeps only current-owner capture bytes through cleanup', () => {
+  const browser = section(ci, '  vitest-browser-shard:\n', '  vitest-browser:\n');
+  const clear = browser.indexOf('      - name: Clear previous Lens Effects evidence');
+  const gate = browser.indexOf('      - name: Vitest browser project');
+  const retain = browser.indexOf('      - name: Preserve failed Lens Effects evidence');
+  assert.ok(clear >= 0 && clear < gate && retain > gate);
+  assert.match(browser.slice(clear, gate), /rm -rf -- artifacts\/lens-effects\/browser/);
+  const step = browser.slice(retain).split(/\n(?= {6}- (?:name|uses):)/)[0];
+  assert.match(step, /if: failure\(\)/);
+  assert.match(step, /uses: \.\/\.github\/actions\/upload-optional-artifact/);
+  assert.match(step, /name: failure-lens-effects-browser-/);
+  assert.match(
+    step,
+    /path: \|\n\s+artifacts\/lens-effects\/browser\/\n\s+packages\/runtime\/src\/__tests__\/__screenshots__\/lens-effects\.browser\.test\.ts\//,
+  );
+  assert.equal(
+    step.match(/^\s+if: ([^\n]+)$/m)?.[1],
+    "failure() && (hashFiles('artifacts/lens-effects/browser/**') != '' || hashFiles('packages/runtime/src/__tests__/__screenshots__/lens-effects.browser.test.ts/**') != '')",
+  );
+  assert.equal((browser.match(/name: failure-lens-effects-browser-/g) ?? []).length, 1);
+  assert.match(step, /retention-days: 3/);
+  assert.match(step, /if-no-files-found: warn/);
 });
 
 test('SDK candidate keeps one payload plus small seal metadata until promotion', () => {
@@ -118,7 +207,7 @@ test('SDK candidate keeps one payload plus small seal metadata until promotion',
   assert.match(promotion, /--run-id "\$CANDIDATE_RUN_ID"/);
 });
 
-test('workflow_run backstop cleans cancelled source runs without touching a valid seal', () => {
+test('workflow_run backstop cleans successful source runs without touching a valid seal', () => {
   assert.match(cleanup, /workflow_run:/);
   assert.match(cleanup, /- CI\n\s+- emscripten-no-xz-evidence\n\s+- SDK Release Candidate/);
   assert.match(cleanup, /SOURCE_RUN_ID: \$\{\{ github\.event\.workflow_run\.id \}\}/);
@@ -146,10 +235,10 @@ test('diagnostic-only native evidence cannot fail a passing gate when quota is f
   );
 });
 
-test('completion cleanup preserves failed-run inputs and diagnostics until bounded expiry', () => {
+test('completion cleanup preserves failed and cancelled CI inputs until bounded expiry', () => {
   assert.match(
     cleanup,
-    /if: github.event.workflow_run.conclusion == 'success' \|\| github.event.workflow_run.conclusion == 'cancelled'/,
+    /if: >-\n\s+github.event.workflow_run.conclusion == 'success' \|\|\n\s+\(github.event.workflow_run.name != 'CI' && github.event.workflow_run.conclusion == 'cancelled'\)/,
   );
   assert.match(upload, /inputs.required == 'true'/);
 });
@@ -237,5 +326,60 @@ test('AC-08 permits optional diagnostics but rejects test, job and required-uplo
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('transient cleanup overlaps at most four deletions and drains failures while preserving named inputs', () => {
+  const root = mkdtempSync(join(tmpdir(), 'artifact-cleanup-'));
+  try {
+    const events = join(root, 'events.jsonl');
+    writeFileSync(
+      join(root, 'gh'),
+      String.raw`#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+if (!args.includes('DELETE')) {
+  for (let id = 1; id <= 10; id++) console.log(id + '\t' + (id === 9 ? 'keep' : 'transient-' + id));
+} else {
+  const id = Number(args.at(-1).split('/').at(-1));
+  const record = (phase) => fs.appendFileSync(process.env.GH_FAKE_EVENTS, JSON.stringify({ id, phase }) + '\n');
+  record('start');
+  setTimeout(() => { record('end'); process.exit(id === 3 ? 1 : 0); }, 200);
+}
+`,
+      { mode: 0o755 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      ['scripts/ci/delete-workflow-artifacts.mjs', '--run-id', '123', '--preserve-name', 'keep'],
+      {
+        encoding: 'utf8',
+        timeout: 20_000,
+        env: {
+          ...process.env,
+          PATH: root,
+          GITHUB_REPOSITORY: 'fixture/repo',
+          GH_FAKE_EVENTS: events,
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /deleted: 8; preserved: 1; failed deletions: 1/);
+    let active = 0;
+    let peak = 0;
+    const started = [];
+    for (const event of readFileSync(events, 'utf8').trim().split('\n').map(JSON.parse)) {
+      active += event.phase === 'start' ? 1 : -1;
+      peak = Math.max(peak, active);
+      if (event.phase === 'start') started.push(event.id);
+    }
+    assert.equal(active, 0, 'all deletion processes drain');
+    assert.ok(peak > 1 && peak <= 4, 'overlap uses at most four API processes');
+    assert.deepEqual(
+      started.sort((a, b) => a - b),
+      [1, 2, 3, 4, 5, 6, 7, 8, 10],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

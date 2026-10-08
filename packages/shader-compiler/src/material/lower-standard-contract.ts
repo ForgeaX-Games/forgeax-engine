@@ -1,8 +1,12 @@
 import { isStandardRootModule } from '@forgeax/engine-pack';
 import {
+  STANDARD_OBJECT_SPACE_NORMAL_BIT,
   STANDARD_PHYSICAL_BINDING_START,
   STANDARD_SAMPLE_REUSE,
+  STANDARD_SHARED_TRANSMISSION_DEFINE,
+  STANDARD_SHARED_TRANSMISSION_SLOTS,
   STANDARD_TEXTURE_MASK_OVERRIDE,
+  STANDARD_TRIPLANAR_PROJECTION_BIT,
   standardTextureMask,
 } from '@forgeax/engine-shader';
 import type {
@@ -20,6 +24,7 @@ import {
   isMaterialPhysicalContractError,
   type MaterialError,
   ok,
+  projectMaterialParameterSchema,
   STANDARD_MATERIAL_PARAM_SCHEMA,
   STANDARD_PHYSICAL_TEXTURE_FIELDS,
   STANDARD_TRANSMISSION_PARAMETER_NAMES,
@@ -38,60 +43,6 @@ function usesStandardTemplate(passes: readonly MaterialPass[] | undefined): bool
   return passes?.some((pass) => isStandardRootModule(pass.program.module)) ?? false;
 }
 
-function materialTypeToSchema(parameter: MaterialParameter): ParamSchemaEntry {
-  switch (parameter.type) {
-    case 'bool':
-      throw new Error(
-        `material-parameter-type-unsupported: boolean parameter ${parameter.name} must be rejected before schema lowering`,
-      );
-    case 'f32':
-    case 'i32':
-    case 'u32':
-    case 'vec2':
-    case 'vec3':
-    case 'vec4':
-    case 'color': {
-      const value = parameter.default;
-      const defaultValue =
-        typeof value === 'number' || Array.isArray(value) ? { default: value } : {};
-      return {
-        name: parameter.name,
-        type: parameter.type,
-        ...(parameter.colorSpace === undefined ? {} : { colorSpace: parameter.colorSpace }),
-        ...defaultValue,
-      } as ParamSchemaEntry;
-    }
-    case 'texture':
-    case 'texture_cube':
-      return {
-        name: parameter.name,
-        type: parameter.type === 'texture' ? 'texture2d' : 'texture_cube',
-        ...(parameter.sampleType === undefined ? {} : { sampleType: parameter.sampleType }),
-      };
-  }
-}
-
-/** Lower authored MaterialParameter values to the generic ParamSchema ABI. */
-export function projectStandardParameterSchema(
-  parameters: readonly MaterialParameter[],
-  material = '<anonymous>',
-): Result<readonly ParamSchemaEntry[], MaterialError> {
-  const unsupported = parameters.find((parameter) => parameter.type === 'bool');
-  if (unsupported !== undefined) {
-    return err(
-      createMaterialError('material-parameter-type-unsupported', {
-        code: 'material-parameter-type-unsupported',
-        stage: 'cook',
-        material,
-        parameter: unsupported.name,
-        type: unsupported.type,
-        action: 'use-supported-type',
-      }),
-    );
-  }
-  return ok(parameters.map(materialTypeToSchema));
-}
-
 function hasTransmission(names: ReadonlySet<string>): boolean {
   return [...names].some(
     (name) => STANDARD_TRANSMISSION_PARAMETER_NAMES.has(name) && name !== 'ior',
@@ -105,6 +56,10 @@ export function standardMaterialDefines(
   const defines: Record<string, boolean> = {};
   if (schema.some((parameter) => parameter.name === 'alphaHash'))
     defines.ALPHA_HASH_AVAILABLE = true;
+  if (schema.some((parameter) => parameter.name === 'triplanarSpace'))
+    defines.TRIPLANAR_PROJECTION_AVAILABLE = true;
+  if (schema.some((parameter) => parameter.name === 'normalMapSpace'))
+    defines.OBJECT_SPACE_NORMAL_AVAILABLE = true;
   for (const parameter of schema) {
     if (parameter.type === 'texture2d') {
       const name = parameter.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
@@ -154,7 +109,7 @@ export function lowerStandardContract(
     }
     throw error;
   }
-  const schema = projectStandardParameterSchema(parameters, material);
+  const schema = projectMaterialParameterSchema(parameters, material, 'cook');
   if (!schema.ok) return schema;
   const defines = {
     ...(standard ? defineStandardFeatures(schema.value, layerPlan) : {}),
@@ -180,6 +135,7 @@ export function lowerStandardPhysicalBindings(
   source: string,
   schema: readonly ParamSchemaEntry[],
   specializeTextures = false,
+  defines: Readonly<Record<string, boolean>> = {},
 ): string {
   const fields = standardPhysicalTextureFields(schema);
   const names = new Set(schema.map((entry) => entry.name));
@@ -232,6 +188,18 @@ export function lowerStandardPhysicalBindings(
     bindingByName.set('transmissionBackdropSampler', nonPhysical.userRegionBindingEnd + 6);
     bindingByName.set('transmissionBackdropTexture', nonPhysical.userRegionBindingEnd + 7);
   }
+  // The low-limit transmission variant declares no split scalar maps; its
+  // transmission resources take over those exact pairs of the fixed layout.
+  if (defines[STANDARD_SHARED_TRANSMISSION_DEFINE] === true) {
+    for (const slot of STANDARD_SHARED_TRANSMISSION_SLOTS) {
+      const texture = bindingByName.get(slot.host);
+      const sampler = bindingByName.get(`${slot.host}_sampler`);
+      if (texture === undefined || sampler === undefined)
+        throw new Error(`shared transmission host ${slot.host} is absent from the Standard ABI`);
+      bindingByName.set(slot.resource, texture);
+      if ('sampler' in slot) bindingByName.set(slot.sampler, sampler);
+    }
+  }
   for (const [index, field] of STANDARD_PHYSICAL_TEXTURE_FIELDS.entries()) {
     if (!fields.includes(field)) continue;
     bindingByName.set(`${field}_sampler`, STANDARD_PHYSICAL_BINDING_START + index * 2);
@@ -281,11 +249,22 @@ export function lowerStandardPhysicalBindings(
       return `fn standardReuses${targetName}From${sourceName}() -> bool { return ${value}; }`;
     }),
   ).join('\n');
+  // Projection selectors change which slots sample and how; an unspecialized
+  // entry keeps the UV/tangent path so no per-row value can alter control flow.
+  const projectionFunctions = [
+    ['TriplanarProjection', STANDARD_TRIPLANAR_PROJECTION_BIT],
+    ['ObjectSpaceNormal', STANDARD_OBJECT_SPACE_NORMAL_BIT],
+  ]
+    .map(
+      ([name, bit]) =>
+        `fn standardUses${name}() -> bool { return ${specializeTextures ? `(standardTextureMask & ${bit}u) != 0u` : 'false'}; }`,
+    )
+    .join('\n');
   const textureOverride = specializeTextures
     ? `@id(${STANDARD_TEXTURE_MASK_OVERRIDE}) override standardTextureMask: u32 = ${standardTextureMask(STANDARD_MATERIAL_PARAM_SCHEMA)}u;\n`
     : '';
   // Keep the import prelude at the entry head. naga_oil resolves imports in
   // declaration order; prepending generated helper functions would make a
   // composable Surface import disappear before its inlined body is lowered.
-  return `${lowered}\n${textureOverride}${textureFunctions}\n${sampleReuseFunctions}`;
+  return `${lowered}\n${textureOverride}${textureFunctions}\n${sampleReuseFunctions}\n${projectionFunctions}`;
 }

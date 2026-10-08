@@ -44,7 +44,7 @@ const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
   encoding: 'utf8',
 }).trim();
 const req = createRequire(`${root}/package.json`);
-const { create, globals } = req('webgpu');
+const { create, globals } = req('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 const { patchDawnAdapterPrototype } = await import(
   pathToFileURL(`${root}/scripts/ci/normalize-dawn-device-limits.mjs`)

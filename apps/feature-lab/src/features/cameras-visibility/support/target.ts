@@ -31,7 +31,7 @@ export async function readTarget(
 ): Promise<Uint8Array | string> {
   const ticket = app.renderer.requestTargetReadback(
     target,
-    face === undefined ? { mipLevel: 0 } : { mipLevel: 0, face },
+    face === undefined ? { mipLevel: 0 } : { mipLevel: 0, layer: face },
   );
   if (!ticket.ok) return `requestTargetReadback: ${ticket.error.code}`;
   const observed = await app.renderer.observe(await nextReceipt(app), {

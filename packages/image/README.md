@@ -195,7 +195,7 @@ if (!r.ok) {
 }
 
 // 2. translate decoded bytes + meta to AssetPack (sidecar JSON shape)
-const pack = toAssetPack(r.value.decoded, r.value.meta);
+const pack = toAssetPack(r.value.meta);
 
 // 3. write byte-stable JSON to disk; second `forgeax asset
 //    import` produces a byte-identical file (AC-16 idempotent reimport)
@@ -235,3 +235,5 @@ function's documented result path.
 - [`@forgeax/engine-types`](../types) -- `ImageErrorCode` / `ImageErrorDetail` / `IMAGE_ERROR_HINTS` / `ImageMeta` / `DecodedImage` POD SSOT (math-free)
 - [`@forgeax/engine-pack`](../pack) -- `AssetGuid.random()` UUIDv7 生成 + `external-asset-package` schema + scanner 6-step fail-fast (本包不修改 scanner 行为)
 - [`@forgeax/engine-runtime`](../runtime) -- `AssetRegistry.uploadTexture(handle, decoded)` GPU 上传入口 (M3 落地，本包 M2 仅 producer)
+
+The image sidecar producer emits one texture. `toAssetPack(meta)` depends only on sidecar facts, and `reimportReuseMeta(existing)` depends only on persisted identity. Neither operation requires decoded pixel bytes. Reuse preserves the first matching source key or unnamed legacy texture at source index zero.

@@ -45,7 +45,7 @@ world.spawn(
 world.spawn(
   { component: MeshFilter, data: { assetHandle: lineMeshHandle } },
   { component: MeshRenderer, data: { materials: [materialHandle] } },
-  { component: Lines, data: { widthPx: 4 } },
+  { component: Lines, data: { width: 4 } },
 );
 ```
 

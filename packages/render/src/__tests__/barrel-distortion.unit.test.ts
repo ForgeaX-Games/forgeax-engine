@@ -349,7 +349,7 @@ describe('bounded barrel distortion mapping', () => {
       lastSuccessfulBarrelDistortion: mapping,
       frameNumber: 12,
       graphGeneration: 4,
-      compiledFrameGraph: { inspect: () => ({ generation: 5 }) },
+      compiledFrameGraph: { graph: { inspect: () => ({ generation: 5 }) } },
       barrelDistortionGraphResolution: 'retained',
     } as unknown as RenderFrameState;
     expect(inspectBarrelDistortionState(state, 1)).toMatchObject({

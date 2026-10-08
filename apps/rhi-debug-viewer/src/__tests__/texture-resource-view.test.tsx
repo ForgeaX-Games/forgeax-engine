@@ -156,6 +156,7 @@ function model(): ViewerModel {
             bufferOffset: null,
             bufferSize: null,
             dynamicOffset: null,
+            access: 'read',
           },
           {
             groupIndex: 0,
@@ -166,6 +167,7 @@ function model(): ViewerModel {
             bufferOffset: 0,
             bufferSize: 256,
             dynamicOffset: null,
+            access: 'read',
           },
         ],
         vertexBuffers: [],
@@ -173,6 +175,7 @@ function model(): ViewerModel {
         attachments: {
           colorViewHandleIds: ['view:array'],
           colorResolveViewHandleIds: [null],
+          colorDepthSlices: [null],
           depthStencilViewHandleId: 'view:depth',
         },
       },
@@ -187,6 +190,7 @@ function model(): ViewerModel {
         commandIndices: [0],
         colorAttachmentViewHandleIds: ['view:array'],
         colorAttachmentResolveViewHandleIds: [null],
+        colorAttachmentDepthSlices: [null],
         depthStencilViewHandleId: 'view:depth',
       },
     ],

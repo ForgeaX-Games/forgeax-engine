@@ -26,6 +26,7 @@
 // pipeline tag.
 
 import { defineComponent } from '@forgeax/engine-ecs';
+import { LIGHTING_CHANNELS_DEFAULT } from './lighting-channels';
 
 /**
  * Mesh renderer (ECS component, multi-material array).
@@ -57,5 +58,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *   world.spawn({ component: MeshRenderer, data: { materials: [matHandle] } });
  */
 export const MeshRenderer = defineComponent('MeshRenderer', {
+  // f64 preserves invalid author inputs until render validation (no u32 wrapping).
+  lightingChannels: { type: 'f64', default: LIGHTING_CHANNELS_DEFAULT },
   materials: { type: 'array<shared<MaterialAsset>>', default: [] },
 });

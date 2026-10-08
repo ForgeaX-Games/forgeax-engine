@@ -51,23 +51,68 @@ export {
 export { createRayDisplay, type RayDisplayMode } from './raytracing/display';
 export {
   createGlobalSdfCardLookup,
+  createGlobalSdfCardLookupRecorder,
   GLOBAL_CARD_CANDIDATE_STRIDE,
+  GLOBAL_SDF_CARD_LOOKUP_WGSL,
   GlobalCardCandidateFlags,
   type GlobalSdfCardLookup,
+  type GlobalSdfCardLookupInputs,
 } from './raytracing/global-card-lookup';
 export {
   createGlobalSdfComposition,
+  createGlobalSdfCompositionRecorder,
+  GLOBAL_SDF_COMPOSE_WGSL,
   GLOBAL_SDF_VOXEL_STRIDE,
   type GlobalSdfComposition,
+  type GlobalSdfCompositionInputs,
   type GlobalSdfGrid,
   GlobalSdfVoxelStatus,
 } from './raytracing/global-sdf';
 export {
   createGlobalSdfQuery,
+  createGlobalSdfQueryRecorder,
   GLOBAL_SDF_HIT_STRIDE,
+  GLOBAL_SDF_QUERY_WGSL,
   type GlobalSdfQuery,
+  type GlobalSdfQueryInputs,
+  type GlobalSdfQueryOptions,
   GlobalSdfQueryStatus,
 } from './raytracing/global-sdf-query';
+export {
+  bakeIrradianceVolume,
+  createIrradianceVolumeCooker,
+  type IrradianceBakeInput,
+  type IrradianceBakeResult,
+  type IrradianceBakeSettings,
+  type IrradianceVolumeCookInput,
+  type IrradianceVolumeCookPayload,
+  irradianceBakeFingerprint,
+} from './raytracing/irradiance-bake';
+export {
+  IRRADIANCE_FIELD_COVERAGE_BYTES,
+  IRRADIANCE_FIELD_COVERAGE_WGSL,
+} from './raytracing/irradiance-field';
+export {
+  decodeIrradianceVolume,
+  encodeIrradianceVolume,
+  IRRADIANCE_VOLUME_ARTIFACT,
+  IRRADIANCE_VOLUME_FORMAT,
+  IRRADIANCE_VOLUME_KIND,
+  IRRADIANCE_VOLUME_MEDIA_TYPE,
+  type IrradianceProbeRays,
+  type IrradianceVolume,
+  type IrradianceVolumeContent,
+  type IrradianceVolumeError,
+  type IrradianceVolumeErrorCode,
+  type IrradianceVolumeLattice,
+  integrateIrradianceProbes,
+  irradianceProbePosition,
+  irradianceVolumeDigest,
+  irradianceVolumePackLoader,
+  irradianceVolumeProbeBlocks,
+  sphericalFibonacci,
+  validateIrradianceLattice,
+} from './raytracing/irradiance-volume';
 export {
   createRayPathTracer,
   createSubmittedRayPathTracer,
@@ -77,6 +122,16 @@ export {
   type RayPathSettings,
   type RayPathTracer,
 } from './raytracing/path-tracer';
+export {
+  createRasterProbePlacement,
+  type RasterProbePlacementInputs,
+} from './raytracing/probe-placement';
+export {
+  createProbeRayRecorder,
+  PROBE_RAYS_WGSL,
+  type ProbeRayInputs,
+  ProbeRayStatus,
+} from './raytracing/probe-rays';
 export { createRayReferenceQuery, type RayReferenceQuery } from './raytracing/query';
 export { createRasterRayGenerator, type RasterRayInputs } from './raytracing/raster-source';
 export {
@@ -96,6 +151,7 @@ export {
   type SdfQueryOptions,
   SdfQueryStatus,
 } from './raytracing/sdf-query';
+export { createSoftwareSdfQuery, type SoftwareSdfQuery } from './raytracing/software-sdf-query';
 export {
   CARD_PLANES,
   createSurfaceCapture,
@@ -107,6 +163,10 @@ export {
   validateGraphTargetCaptureReadback,
 } from './record/frame-snapshot';
 export {
+  type GpuPassTimingIntervalSummary,
+  summarizeGpuPassTimingIntervals,
+} from './record/gpu-pass-timing/parser';
+export {
   buildRectAreaWorldFrame,
   rectAreaFacesPoint,
 } from './render-system-extract';
@@ -116,14 +176,6 @@ export {
   PROBE_MAX_CONTRIBUTORS,
   scaledProbeWeight,
 } from './scene/probe-blend';
-export {
-  createVisibilityBudget,
-  type VisibilityBudget,
-} from './scene/visibility/budget';
-export {
-  type OcclusionRuntimeTestHooks,
-  setOcclusionRuntimeTestHooks,
-} from './scene/visibility/occlusion-runtime';
 export {
   createSsrHistoryOwner,
   SSR_HISTORY_FORMAT,

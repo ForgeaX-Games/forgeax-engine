@@ -12,15 +12,13 @@ import { createRayDiffuseComposite } from '../../raytracing/diffuse-composite';
 import { createRayPathTracer, type RayPathTracer } from '../../raytracing/path-tracer';
 import { createRasterRayGenerator } from '../../raytracing/raster-source';
 import { VIEW_UNIFORM_BYTES } from '../../record/view-ubo';
-import type { RayPathFixture } from './path-tracer.commands';
 import { readBuffer } from './path-tracer.fixture';
 import type { RasterRayFixture } from './raster-source.commands';
 import { retainedTransportPlane } from './scene-projection.fixture';
 
 /** Real raster attachments -> GPU receiver rays, including producer diagnostics and replay. */
 export async function verifyRasterRaySource(
-  fixture: RasterRayFixture,
-  pathFixture: RayPathFixture,
+  fixture: RasterRayFixture & { readonly kernel: string; readonly transportKernel: string },
   compositeKernel: string,
 ) {
   const recorder = attachRecorder(gpu).unwrap();
@@ -108,11 +106,10 @@ export async function verifyRasterRaySource(
       sample,
       rays,
     };
-    const material = pathFixture.materials.find((entry) => entry.name === 'emission');
-    assert(material);
+    const material = fixture.material;
     tracer = (
       await createRayPathTracer(device, recorder.backend.createShaderModule, {
-        kernel: pathFixture.kernel,
+        kernel: fixture.transportKernel,
         scene: retainedTransportPlane(material.asset).project().scene,
         materials: [{ id: 0, ...material }],
         lights: [],

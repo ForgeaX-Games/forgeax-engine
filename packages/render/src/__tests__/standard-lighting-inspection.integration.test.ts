@@ -54,7 +54,7 @@ describe('Standard lighting inspection provenance', () => {
       occupied: selected.value.occupiedClusterCount,
       clusterGridBytes: preparedFrame.layout.clusterGridU32Length * 4,
       lightIndexListBytes: preparedFrame.membershipEntryCount * 4,
-      lightDataBytes: 33 * 80,
+      lightDataBytes: 33 * 96,
       lightBoundsBytes: preparedFrame.lightBounds.byteLength,
       grid: preparedFrame.layout.grid,
     });

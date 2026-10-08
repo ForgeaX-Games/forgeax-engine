@@ -1,3 +1,4 @@
+import { isStripTopology } from '@forgeax/engine-types';
 // PipelineSpec 4-axis SSOT — single-file type + derive-fn + entrypoint + error model.
 //
 // feat-20260615-pipeline-spec-ssot M1: Establish PipelineSpec 4-axis type SSOT.
@@ -48,15 +49,11 @@ export { KNOWN_PASS_KINDS };
 /**
  * The engine-owned deferred material target layout. `fs_gbuffer` returns
  * SceneColor (emissive/opacity), then packed normal/roughness, F0/AO,
- * albedo/metallic, and lighting context. Material data costs 16 bytes/pixel.
+ * albedo/metallic, lighting context, and receiver geometry/channels. Surface data costs 24 bytes/pixel.
  */
-export const DEFERRED_COLOR_FORMATS = [
-  'rgba16float',
-  'r32uint',
-  'r32uint',
-  'r32uint',
-  'r32uint',
-] as const satisfies readonly GPUTextureFormat[];
+import { DEFERRED_COLOR_FORMATS } from './standard-attachments';
+
+export { DEFERRED_COLOR_FORMATS } from './standard-attachments';
 
 /** Derive the color attachment shape for a material pass kind. */
 export function colorFormatsForPassKind(
@@ -217,8 +214,7 @@ export function cacheKeyOf(spec: PipelineSpec): string {
   const { shader, attachments, geometry, renderState } = spec;
   const topoSegment = geometry.topology;
   const stripSegment =
-    (topoSegment === 'line-strip' || topoSegment === 'triangle-strip') &&
-    geometry.stripIndexFormat !== undefined
+    isStripTopology(topoSegment) && geometry.stripIndexFormat !== undefined
       ? `:${geometry.stripIndexFormat}`
       : '';
 
@@ -534,6 +530,25 @@ export interface PassKindAttachmentPolicy {
   readonly defaultDepthOps: AttachmentDepthOps | undefined;
 }
 
+const OPAQUE_BLACK: GPUColor = { r: 0, g: 0, b: 0, a: 1 };
+/** Reverse-Z depth: every depth-writing passKind clears to the far plane (0). */
+const REVERSE_Z_DEPTH_OPS: AttachmentDepthOps = {
+  loadOp: 'clear',
+  storeOp: 'store',
+  clearValue: 0,
+};
+/** Fullscreen color-only passKinds overwrite their target: clear/store opaque black. */
+const FULLSCREEN_COLOR_POLICY: PassKindAttachmentPolicy = {
+  shape: 'color-only',
+  defaultColorOps: { loadOp: 'clear', storeOp: 'store', clearValue: OPAQUE_BLACK },
+  defaultDepthOps: undefined,
+};
+const DEPTH_ONLY_POLICY: PassKindAttachmentPolicy = {
+  shape: 'depth-only',
+  defaultColorOps: undefined,
+  defaultDepthOps: REVERSE_Z_DEPTH_OPS,
+};
+
 /**
  * Closed map of passKind → attachment policy. Covers the 10 attachment shapes
  * the runtime ships (per plan-strategy M4):
@@ -562,104 +577,32 @@ export interface PassKindAttachmentPolicy {
 export const passKindPolicyTable: Readonly<Record<string, PassKindAttachmentPolicy>> = {
   forward: {
     shape: 'color-and-depth',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
+    defaultColorOps: { loadOp: 'clear', storeOp: 'store', clearValue: OPAQUE_BLACK },
+    defaultDepthOps: REVERSE_Z_DEPTH_OPS,
   },
   deferred: {
     shape: 'color-and-depth',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 0 },
-    },
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
+    defaultColorOps: { loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } },
+    defaultDepthOps: REVERSE_Z_DEPTH_OPS,
   },
   temporal: {
     shape: 'color-and-depth',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: -1, a: 1 },
-    },
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
+    defaultColorOps: { loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: -1, a: 1 } },
+    defaultDepthOps: REVERSE_Z_DEPTH_OPS,
   },
-  'shadow-caster': {
-    shape: 'depth-only',
-    defaultColorOps: undefined,
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
-  },
-  'point-shadow-caster': {
-    shape: 'depth-only',
-    defaultColorOps: undefined,
-    defaultDepthOps: { loadOp: 'clear', storeOp: 'store', clearValue: 0 },
-  },
-  skybox: {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
-  tonemap: {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
-  'bloom-downsample': {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
-  'bloom-upsample': {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
+  'shadow-caster': DEPTH_ONLY_POLICY,
+  'point-shadow-caster': DEPTH_ONLY_POLICY,
+  skybox: FULLSCREEN_COLOR_POLICY,
+  tonemap: FULLSCREEN_COLOR_POLICY,
+  'bloom-downsample': FULLSCREEN_COLOR_POLICY,
+  'bloom-upsample': FULLSCREEN_COLOR_POLICY,
   'bloom-composite': {
     shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'load',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
+    defaultColorOps: { loadOp: 'load', storeOp: 'store', clearValue: OPAQUE_BLACK },
     defaultDepthOps: undefined,
   },
-  fxaa: {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
-  'post-process': {
-    shape: 'color-only',
-    defaultColorOps: {
-      loadOp: 'clear',
-      storeOp: 'store',
-      clearValue: { r: 0, g: 0, b: 0, a: 1 },
-    },
-    defaultDepthOps: undefined,
-  },
+  fxaa: FULLSCREEN_COLOR_POLICY,
+  'post-process': FULLSCREEN_COLOR_POLICY,
 };
 
 /**

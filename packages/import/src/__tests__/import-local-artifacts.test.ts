@@ -26,6 +26,37 @@ function registryFor(value: unknown): ImporterRegistry {
 }
 
 describe('asset-local ImportProduct contract', () => {
+  it('digests the published JSON values consistently before and after typed-array transport', async () => {
+    const declaration = meta.subAssets[0];
+    if (declaration === undefined) throw new Error('expected a mesh declaration');
+    const source = {
+      kind: 'mesh',
+      vertices: new Float32Array([0, 0.1, 2]),
+      indices: new Uint16Array([0, 1, 2]),
+      attributes: {},
+    };
+    const run = async (payload: unknown) => {
+      const result = await runImport(
+        { ...meta, subAssets: [declaration] },
+        registryFor({
+          assets: [{ guid: MESH_GUID, kind: 'mesh', payload, refs: [], artifacts: {} }],
+          sourceDependencies: [],
+        }),
+        { readSource: async () => ({ ok: true as const, value: new Uint8Array([0]) }) },
+      );
+      if (!result.ok || 'skipped' in result.value) throw new Error('expected imported product');
+      return result.value;
+    };
+    const native = await run(source);
+    const published = JSON.parse(JSON.stringify(native.pack.assets[0]?.payload));
+    const transported = await run(published);
+    expect(transported.pack).toEqual(native.pack);
+    expect(transported.cookProducts[0]?.digest).toBe(native.cookProducts[0]?.digest);
+    published.vertices[1] = 0.2;
+    expect((await run(published)).cookProducts[0]?.digest).not.toBe(native.cookProducts[0]?.digest);
+    expect(source.vertices).toEqual(new Float32Array([0, 0.1, 2]));
+  });
+
   it('keeps artifact ownership on each asset and preserves same keys across assets', async () => {
     const value = {
       assets: [

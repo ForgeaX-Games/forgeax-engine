@@ -1,4 +1,5 @@
 import { Time, Update } from '@forgeax/engine-ecs';
+import { sampleChannel } from '../sample-channel';
 // @forgeax/engine-animation — advanceAnimationPlayer system (variable N-way blend).
 //
 // Per-tick: scans the variable-length SoA columns on each AnimationPlayer; for
@@ -53,16 +54,36 @@ import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, defineSystemSet, ENTITY_NULL_RAW } from '@forgeax/engine-ecs';
 import { createStateProjection, type StateProjection } from '@forgeax/engine-ecs/projection';
 import { MorphWeights, Transform } from '@forgeax/engine-scene';
-import type { AnimationChannel, AnimationClip, AnimationSampler } from '@forgeax/engine-types';
+import type { AnimationChannel, AnimationClip } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import {
   emitAnimationDiagnostic,
   isAnimationDevMode,
   _resetAnimationWarnsForTests as resetAnimationDiagnosticsForTests,
 } from '../animation-diagnostic';
+import {
+  animationMaskWeight,
+  type CompiledAnimationMask,
+  resolveAnimationMask,
+} from '../animation-mask';
 import { AnimationPlayer } from '../animation-player';
 import { AnimatedBy, AnimationTargetId, AnimationTargets } from '../animation-target';
+import { AnimationBlendError } from '../blend-errors';
+import {
+  type PlaybackInterval,
+  playbackInterval,
+  sampleTime,
+  takeGraphIntervals,
+} from '../playback-interval';
 import { AnimationPlayerSlotLengthMismatchError } from '../player-errors';
+import {
+  accumulateProperty,
+  type PropertyAccumulator,
+  reportPropertyFailure,
+  writeProperties,
+} from '../property-binding';
+import { AnimationRootMotion, prepareRootMotion, rootMotionPose } from '../root-motion';
+import { clearAnimationEvents, collectTimelineEvents, publishTimelineEvents } from '../timeline';
 
 /**
  * System name used when `registerAdvanceAnimationPlayer` installs the system
@@ -88,6 +109,7 @@ export function _resetAnimationWarnsForTests(world: World): void {
  * be a compile error against the reader shape).
  */
 export function advanceAnimationPlayer(world: World, dt: number): void {
+  clearAnimationEvents(world);
   refreshTargetMaps(world);
   const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
@@ -108,11 +130,13 @@ export function advanceAnimationPlayer(world: World, dt: number): void {
  */
 interface PlayerColumns {
   readonly clips: Uint32Array;
-  readonly times: Float32Array;
+  readonly times: Float64Array;
   readonly weights: Float32Array;
   readonly speeds: Float32Array;
+  readonly masks: Uint32Array;
   readonly paused: boolean;
   readonly looping: boolean;
+  readonly graph: number;
 }
 
 /**
@@ -142,18 +166,54 @@ function advanceOnePlayer(world: World, entityRaw: number, dt: number): void {
       speeds: ap.speeds.length,
     });
   }
-  if (count === 0) return;
+  if (ap.masks.length !== 0 && ap.masks.length !== count) {
+    throw new AnimationBlendError('animation-player-mask-length-mismatch', {
+      entity: entityRaw,
+      field: 'masks',
+      expectedLength: count,
+      actualLength: ap.masks.length,
+    });
+  }
 
-  const newTimes = new Float32Array(ap.times);
-  const activeSlots = collectActiveSlotsAndAdvanceTimes(world, ap, newTimes, dt);
+  const newTimes = new Float64Array(ap.times);
+  const activeSlots = collectActiveSlotsAndAdvanceTimes(
+    world,
+    ap,
+    newTimes,
+    dt,
+    takeGraphIntervals(world, entity),
+  );
+
+  const events = collectTimelineEvents(
+    entity,
+    activeSlots.map((slot) => slot.interval),
+  );
+  const root = world.hasComponent(entity, AnimationRootMotion)
+    ? world.get(entity, AnimationRootMotion)
+    : undefined;
+  const commitRoot = root?.ok
+    ? prepareRootMotion(
+        world,
+        entity,
+        activeSlots
+          .map((slot) => ({
+            interval: slot.interval,
+            weight:
+              slot.weight *
+              (root?.ok && slot.mask ? animationMaskWeight(slot.mask, root.value.targetId) : 1),
+          }))
+          .filter((slot) => slot.weight > 0),
+      )
+    : undefined;
 
   // Persist the advanced times column (D-7: weights are never written back —
   // negative-weight clamping is read-time only). Only `times` is set, so the
   // clips / weights / speeds slots are left untouched.
   world.set(entity, AnimationPlayer, { times: newTimes });
 
-  if (activeSlots.length === 0) return;
-  tickEntityTargets(world, entity, entityRaw, activeSlots);
+  if (activeSlots.length > 0) tickEntityTargets(world, entity, entityRaw, activeSlots);
+  commitRoot?.();
+  publishTimelineEvents(world, entity, events);
 }
 
 /**
@@ -170,8 +230,9 @@ function advanceOnePlayer(world: World, entityRaw: number, dt: number): void {
 function collectActiveSlotsAndAdvanceTimes(
   world: World,
   ap: PlayerColumns,
-  newTimes: Float32Array,
+  newTimes: Float64Array,
   dt: number,
+  graphIntervals: readonly PlaybackInterval[],
 ): ActiveSlot[] {
   const paused = ap.paused;
   const looping = ap.looping;
@@ -186,27 +247,29 @@ function collectActiveSlotsAndAdvanceTimes(
     );
     if (!clipLookup.ok) throw clipLookup.error;
     const clip = clipLookup.value;
+    const mask = resolveAnimationMask(world, ap.masks[i] ?? 0);
 
     const speed = ap.speeds[i] ?? 0;
-    let newTime = paused ? (ap.times[i] ?? 0) : (ap.times[i] ?? 0) + speed * dt;
-    const duration = clip.duration;
-    if (duration > 0) {
-      if (looping) {
-        newTime = newTime % duration;
-        if (newTime < 0) newTime += duration;
-      } else if (newTime > duration) {
-        newTime = duration;
-      } else if (newTime < 0) {
-        newTime = 0;
-      }
-    }
+    const interval =
+      ap.graph !== 0
+        ? ((graphIntervals[i]?.clipHandle === clipHandleRaw ? graphIntervals[i] : undefined) ??
+          playbackInterval(clip, clipHandleRaw, i, ap.times[i] ?? 0, 0, looping))
+        : playbackInterval(
+            clip,
+            clipHandleRaw,
+            i,
+            ap.times[i] ?? 0,
+            paused ? 0 : speed * dt,
+            looping,
+          );
+    const newTime = sampleTime(interval.to, clip.duration, looping);
     newTimes[i] = newTime;
 
     const wRaw = ap.weights[i] ?? 0;
     const w = wRaw > 0 ? wRaw : 0;
     if (w === 0) continue;
 
-    activeSlots.push({ clip, clipHandleRaw, weight: w, time: newTime, slotIdx: i });
+    activeSlots.push({ clip, clipHandleRaw, weight: w, time: newTime, slotIdx: i, mask, interval });
   }
 
   return activeSlots;
@@ -228,9 +291,11 @@ function collectActiveSlotsAndAdvanceTimes(
  *     normalize covers the runtime gap regardless.
  */
 interface TargetMap {
-  readonly entities: ReadonlyMap<string, EntityHandle>;
-  readonly missingTransforms: ReadonlyMap<string, EntityHandle>;
-  readonly duplicateIds: ReadonlySet<string>;
+  /** Null marks an ambiguous ID; each unique ID retains its binding snapshot. */
+  readonly bindings: ReadonlyMap<
+    string,
+    { readonly entity: EntityHandle; readonly transform: boolean } | null
+  >;
   readonly hasStaleTarget: boolean;
   readonly resolvedClips: WeakMap<AnimationClip, readonly (EntityHandle | undefined)[]>;
 }
@@ -317,17 +382,15 @@ function buildTargetMap(world: World, player: EntityHandle): TargetMap {
   const targets = world.get(player, AnimationTargets);
   if (!targets.ok) {
     return {
-      entities: new Map(),
-      missingTransforms: new Map(),
-      duplicateIds: new Set(),
+      bindings: new Map(),
       hasStaleTarget: false,
       resolvedClips: new WeakMap(),
     };
   }
-  const result = new Map<string, EntityHandle>();
-  const missingTransforms = new Map<string, EntityHandle>();
-  const seen = new Set<string>();
-  const ambiguous = new Set<string>();
+  const bindings = new Map<
+    string,
+    { readonly entity: EntityHandle; readonly transform: boolean } | null
+  >();
   let hasStaleTarget = false;
   for (const raw of targets.value.targets) {
     if (raw === ENTITY_NULL_RAW) continue;
@@ -338,21 +401,11 @@ function buildTargetMap(world: World, player: EntityHandle): TargetMap {
       continue;
     }
     const targetId = id.value.value;
-    if (ambiguous.has(targetId)) continue;
-    if (seen.has(targetId)) {
-      result.delete(targetId);
-      missingTransforms.delete(targetId);
-      ambiguous.add(targetId);
-      continue;
-    }
-    seen.add(targetId);
-    if (world.get(target, Transform).ok) result.set(targetId, target);
-    else missingTransforms.set(targetId, target);
+    if (bindings.has(targetId)) bindings.set(targetId, null);
+    else bindings.set(targetId, { entity: target, transform: world.get(target, Transform).ok });
   }
   return {
-    entities: result,
-    missingTransforms,
-    duplicateIds: ambiguous,
+    bindings,
     hasStaleTarget,
     resolvedClips: new WeakMap(),
   };
@@ -365,30 +418,61 @@ function tickEntityTargets(
   activeSlots: ActiveSlot[],
 ): void {
   const targetMap = targetMapForPlayer(world, entity);
+  const root = world.hasComponent(entity, AnimationRootMotion)
+    ? world.get(entity, AnimationRootMotion)
+    : undefined;
 
   // Per-joint accumulator: lazily allocated when first channel writes.
   // A Map keyed by jointIndex keeps the typical case (a few animated
   // joints out of 20+) sparse rather than allocating for every joint.
   const accumulators: Map<number, JointAccumulator> = new Map();
   const morphAccumulators: Map<number, MorphWeightAccumulator> = new Map();
+  const propertyAccumulators = new Map<string, PropertyAccumulator>();
   // Per-slot signature of (joint, channel-kind) coverage — used to detect
   // channel-missing-on-some-slot once at the end of the channel walk. Lazy
   // build only when there are 2+ active slots and dev-mode is on (warn pass
   // is skipped in production by the shared diagnostics mode gate).
-  const slotCoverage: SlotCoverage[] = [];
+  const slotCoverage: SlotCoverage = new Map();
   const wantsCoverage = activeSlots.length >= 2 && isAnimationDevMode();
-  if (wantsCoverage) {
-    for (let i = 0; i < activeSlots.length; i++) slotCoverage.push(new Map());
-  }
 
   for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
     // biome-ignore lint/style/noNonNullAssertion: bounded by activeSlots.length
     const slot = activeSlots[slotIdx]!;
-    const resolvedTargets = resolveClipTargets(world, entityRaw, slot, targetMap);
+    const mask = slot.mask;
+    const resolvedTargets =
+      mask === undefined ? resolveClipTargets(world, entityRaw, slot, targetMap) : undefined;
     for (let chIdx = 0; chIdx < slot.clip.channels.length; chIdx++) {
       // biome-ignore lint/style/noNonNullAssertion: bounded by channels.length
       const channel = slot.clip.channels[chIdx]!;
-      const sampled = sampleChannel(channel.sampler, slot.time, channel.property);
+      const weight =
+        mask === undefined
+          ? slot.weight
+          : slot.weight * animationMaskWeight(mask, channel.targetId);
+      if (weight <= 0) continue;
+      if (channel.property === 'property') {
+        try {
+          accumulateProperty(
+            world,
+            entity,
+            channel,
+            slot.time,
+            weight,
+            propertyAccumulators,
+            slot.clipHandleRaw,
+            chIdx,
+            sampleChannel,
+          );
+        } catch (failure) {
+          reportPropertyFailure(world, entity, channel, slot.clipHandleRaw, chIdx, failure);
+        }
+        continue;
+      }
+      const sampled =
+        root?.ok &&
+        channel.targetId === root.value.targetId &&
+        (channel.property === 'translation' || channel.property === 'rotation')
+          ? rootMotionPose(slot.clip, channel.targetId, channel.property)
+          : sampleChannel(channel.sampler, slot.time, channel.property);
       if (sampled === undefined) continue;
       const target =
         channel.property === 'weights'
@@ -402,7 +486,18 @@ function tickEntityTargets(
               sampled.length,
               targetMap,
             )
-          : resolvedTargets[chIdx];
+          : resolvedTargets === undefined
+            ? resolveChannelTarget(
+                world,
+                entityRaw,
+                slot.clipHandleRaw,
+                chIdx,
+                channel.targetId,
+                channel.property,
+                undefined,
+                targetMap,
+              )
+            : resolvedTargets[chIdx];
       if (target === undefined) continue;
       const targetRaw = target as number;
 
@@ -414,15 +509,11 @@ function tickEntityTargets(
         }
         if (weights.values.length !== sampled.length) continue;
         for (let i = 0; i < sampled.length; i++) {
-          weights.values[i] = (weights.values[i] ?? 0) + slot.weight * (sampled[i] ?? 0);
+          weights.values[i] = (weights.values[i] ?? 0) + weight * (sampled[i] ?? 0);
         }
-        weights.sumW += slot.weight;
-        if (wantsCoverage) {
-          const coverage = slotCoverage[slotIdx];
-          if (coverage !== undefined) {
-            recordSlotCoverage(coverage, channel.targetId, channel.property, chIdx);
-          }
-        }
+        weights.sumW += weight;
+        if (wantsCoverage)
+          recordSlotCoverage(slotCoverage, slotIdx, channel.targetId, channel.property, chIdx);
         continue;
       }
 
@@ -432,11 +523,10 @@ function tickEntityTargets(
         accumulators.set(targetRaw, acc);
       }
 
-      foldChannelIntoAccumulator(acc, channel.property, sampled, slot.weight);
+      foldChannelIntoAccumulator(acc, channel.property, sampled, weight);
 
       if (wantsCoverage) {
-        // biome-ignore lint/style/noNonNullAssertion: parallel to activeSlots
-        recordSlotCoverage(slotCoverage[slotIdx]!, channel.targetId, channel.property, chIdx);
+        recordSlotCoverage(slotCoverage, slotIdx, channel.targetId, channel.property, chIdx);
       }
     }
   }
@@ -445,6 +535,7 @@ function tickEntityTargets(
     emitMissingOnSomeSlotWarns(world, entityRaw, activeSlots, slotCoverage);
   }
 
+  writeProperties(world, entity, propertyAccumulators);
   for (const [targetRaw, acc] of accumulators) {
     const target = targetRaw as EntityHandle;
     const partial = finalizeAccumulator(acc);
@@ -474,7 +565,7 @@ function resolveClipTargets(
   if (cached !== undefined) return cached;
 
   const targets = slot.clip.channels.map((channel, channelIndex) =>
-    channel.property === 'weights'
+    channel.property === 'weights' || channel.property === 'property'
       ? undefined
       : resolveChannelTarget(
           world,
@@ -501,7 +592,8 @@ function resolveChannelTarget(
   expectedWeightCount: number | undefined,
   targetMap: TargetMap,
 ): EntityHandle | undefined {
-  if (targetMap.duplicateIds.has(targetId)) {
+  const binding = targetMap.bindings.get(targetId);
+  if (binding === null) {
     emitTargetDiagnostic(
       world,
       player,
@@ -514,23 +606,21 @@ function resolveChannelTarget(
     );
     return undefined;
   }
-  const target = targetMap.entities.get(targetId);
-  if (target === undefined) {
-    const transformMissingTarget = targetMap.missingTransforms.get(targetId);
-    if (transformMissingTarget !== undefined) {
-      emitTargetDiagnostic(
-        world,
-        player,
-        clip,
-        channel,
-        targetId,
-        'animation-target-transform-missing',
-        'transform-missing',
-        'attach Transform to the bound animation target',
-        transformMissingTarget as number,
-      );
-      return undefined;
-    }
+  if (binding !== undefined && !binding.transform) {
+    emitTargetDiagnostic(
+      world,
+      player,
+      clip,
+      channel,
+      targetId,
+      'animation-target-transform-missing',
+      'transform-missing',
+      'attach Transform to the bound animation target',
+      binding.entity as number,
+    );
+    return undefined;
+  }
+  if (binding === undefined) {
     emitTargetDiagnostic(
       world,
       player,
@@ -545,6 +635,7 @@ function resolveChannelTarget(
     );
     return undefined;
   }
+  const target = binding.entity;
   if (property === 'weights') {
     const weights = world.get(target, MorphWeights);
     if (!weights.ok) {
@@ -601,28 +692,28 @@ function resolveChannelTarget(
   return target;
 }
 
-/**
- * Per-slot (joint -> covered kinds) signature. The `chIdxByKind` field
- * remembers which channel index of the slot's clip first covered the
- * (joint, kind) pair — used as the channelKey when emitting a
- * channel-missing-on-some-slot warn so the user can locate the
- * authoring channel that exposed the asymmetry.
- */
-type ChannelKind = AnimationChannel['property'];
-type SlotCoverage = Map<string, Map<ChannelKind, number>>;
+/** Target/kind coverage retains each slot's first channel as a diagnostic anchor. */
+type ChannelKind = Exclude<AnimationChannel['property'], 'property'>;
+type SlotCoverage = Map<string, Map<ChannelKind, Map<number, number>>>;
 
 function recordSlotCoverage(
   cov: SlotCoverage,
+  slot: number,
   targetId: string,
   kind: ChannelKind,
-  chIdx: number,
+  channel: number,
 ): void {
   let perTarget = cov.get(targetId);
   if (perTarget === undefined) {
     perTarget = new Map();
     cov.set(targetId, perTarget);
   }
-  if (!perTarget.has(kind)) perTarget.set(kind, chIdx);
+  let coveringSlots = perTarget.get(kind);
+  if (coveringSlots === undefined) {
+    coveringSlots = new Map();
+    perTarget.set(kind, coveringSlots);
+  }
+  if (!coveringSlots.has(slot)) coveringSlots.set(slot, channel);
 }
 
 function emitTargetDiagnostic(
@@ -654,65 +745,38 @@ function emitTargetDiagnostic(
   });
 }
 
-/**
- * Reconcile per-slot coverage against the union: for any (joint, kind)
- * tuple covered by ≥ 1 slot but missing on another, emit the warn once per
- * (entityId, the-covering-slot's-clip, that-slot's-chIdx, reason). Each
- * covering slot may emit its own warn pointing at its own channel index —
- * authoring tools can land on any of them.
- */
+/** Emit once at the first covering channel when any active slot lacks that kind. */
 function emitMissingOnSomeSlotWarns(
   world: World,
   entityRaw: number,
   activeSlots: ActiveSlot[],
-  slotCoverage: SlotCoverage[],
+  coverage: SlotCoverage,
 ): void {
-  // Union over all slots: jointIndex -> Set<ChannelKind>.
-  const union: Map<string, Set<ChannelKind>> = new Map();
-  for (const cov of slotCoverage) {
-    for (const [targetId, kindMap] of cov) {
-      let set = union.get(targetId);
-      if (set === undefined) {
-        set = new Set();
-        union.set(targetId, set);
-      }
-      for (const kind of kindMap.keys()) set.add(kind);
-    }
-  }
-
-  for (const [targetId, unionKinds] of union) {
-    for (let slotIdx = 0; slotIdx < activeSlots.length; slotIdx++) {
-      // biome-ignore lint/style/noNonNullAssertion: parallel arrays
-      const cov = slotCoverage[slotIdx]!;
-      const slotKinds = cov.get(targetId);
-      for (const kind of unionKinds) {
-        if (slotKinds?.has(kind)) continue;
-        // This slot is missing `kind` on jointIndex. Find the slot that
-        // does cover (joint, kind) and use ITS chIdx as the warn anchor.
-        for (let coveringIdx = 0; coveringIdx < activeSlots.length; coveringIdx++) {
-          if (coveringIdx === slotIdx) continue;
-          // biome-ignore lint/style/noNonNullAssertion: parallel arrays
-          const coveringCov = slotCoverage[coveringIdx]!;
-          const coveringKinds = coveringCov.get(targetId);
-          if (coveringKinds === undefined) continue;
-          const chIdx = coveringKinds.get(kind);
-          if (chIdx === undefined) continue;
-          // biome-ignore lint/style/noNonNullAssertion: parallel arrays
-          const coveringSlot = activeSlots[coveringIdx]!;
-          emitAnimationDiagnostic(world, {
-            code: 'animation-channel-missing',
-            hint: `author the missing ${kind} channel on the slot whose clip lacks it`,
-            detail: {
-              player: entityRaw,
-              clip: coveringSlot.clipHandleRaw,
-              channel: chIdx,
-              targetId,
-              reason: 'channel-missing',
-              property: kind,
-            },
-          });
-          break;
-        }
+  for (const [targetId, kinds] of coverage) {
+    // Keep diagnostic observation in missing-slot order. The diagnostic owner
+    // deduplicates repeated facts when more than one slot lacks the channel.
+    for (let missingSlot = 0; missingSlot < activeSlots.length; missingSlot++) {
+      const mask = activeSlots[missingSlot]?.mask;
+      if (mask !== undefined && animationMaskWeight(mask, targetId) === 0) continue;
+      for (const [kind, coveringSlots] of kinds) {
+        if (coveringSlots.has(missingSlot)) continue;
+        const anchor = coveringSlots.entries().next().value;
+        if (anchor === undefined) continue;
+        const [slotIndex, channel] = anchor;
+        const slot = activeSlots[slotIndex];
+        if (slot === undefined) continue;
+        emitAnimationDiagnostic(world, {
+          code: 'animation-channel-missing',
+          hint: `author the missing ${kind} channel on the slot whose clip lacks it`,
+          detail: {
+            player: entityRaw,
+            clip: slot.clipHandleRaw,
+            channel,
+            targetId,
+            reason: 'channel-missing',
+            property: kind,
+          },
+        });
       }
     }
   }
@@ -737,7 +801,6 @@ function foldChannelIntoAccumulator(
     acc.posY += weight * (sampled[1] ?? 0);
     acc.posZ += weight * (sampled[2] ?? 0);
     acc.sumWPos += weight;
-    acc.hasPos = true;
     return;
   }
   if (property === 'rotation' && sampled.length >= 4) {
@@ -745,7 +808,7 @@ function foldChannelIntoAccumulator(
     const qy = sampled[1] ?? 0;
     const qz = sampled[2] ?? 0;
     const qw = sampled[3] ?? 1;
-    if (!acc.hasQuat) {
+    if (acc.sumWQuat === 0) {
       acc.refQX = qx;
       acc.refQY = qy;
       acc.refQZ = qz;
@@ -754,7 +817,6 @@ function foldChannelIntoAccumulator(
       acc.quatY = weight * qy;
       acc.quatZ = weight * qz;
       acc.quatW = weight * qw;
-      acc.hasQuat = true;
     } else {
       const dot = acc.refQX * qx + acc.refQY * qy + acc.refQZ * qz + acc.refQW * qw;
       const sign = dot < 0 ? -1 : 1;
@@ -771,7 +833,6 @@ function foldChannelIntoAccumulator(
     acc.scaleY += weight * (sampled[1] ?? 1);
     acc.scaleZ += weight * (sampled[2] ?? 1);
     acc.sumWScale += weight;
-    acc.hasScale = true;
   }
 }
 
@@ -786,10 +847,10 @@ function foldChannelIntoAccumulator(
  */
 function finalizeAccumulator(acc: JointAccumulator): Record<string, number[]> {
   const partial: Record<string, number[]> = {};
-  if (acc.hasPos && acc.sumWPos > 0) {
+  if (acc.sumWPos > 0) {
     partial.pos = [acc.posX / acc.sumWPos, acc.posY / acc.sumWPos, acc.posZ / acc.sumWPos];
   }
-  if (acc.hasQuat && acc.sumWQuat > 0) {
+  if (acc.sumWQuat > 0) {
     const qx = acc.quatX / acc.sumWQuat;
     const qy = acc.quatY / acc.sumWQuat;
     const qz = acc.quatZ / acc.sumWQuat;
@@ -800,7 +861,7 @@ function finalizeAccumulator(acc: JointAccumulator): Record<string, number[]> {
       partial.quat = [qx / len, qy / len, qz / len, qw / len];
     }
   }
-  if (acc.hasScale && acc.sumWScale > 0) {
+  if (acc.sumWScale > 0) {
     partial.scale = [
       acc.scaleX / acc.sumWScale,
       acc.scaleY / acc.sumWScale,
@@ -821,6 +882,8 @@ interface ActiveSlot {
   readonly weight: number;
   readonly time: number;
   readonly slotIdx: number;
+  readonly mask: CompiledAnimationMask | undefined;
+  readonly interval: PlaybackInterval;
 }
 
 interface JointAccumulator {
@@ -828,7 +891,6 @@ interface JointAccumulator {
   posY: number;
   posZ: number;
   sumWPos: number;
-  hasPos: boolean;
   // Quat reference + accumulator. refQ* is the first sampled quat (sign-fixed)
   // so subsequent quats with dot<0 are negated for short-arc nlerp.
   refQX: number;
@@ -840,12 +902,10 @@ interface JointAccumulator {
   quatZ: number;
   quatW: number;
   sumWQuat: number;
-  hasQuat: boolean;
   scaleX: number;
   scaleY: number;
   scaleZ: number;
   sumWScale: number;
-  hasScale: boolean;
 }
 
 interface MorphWeightAccumulator {
@@ -859,7 +919,6 @@ function createAccumulator(): JointAccumulator {
     posY: 0,
     posZ: 0,
     sumWPos: 0,
-    hasPos: false,
     refQX: 0,
     refQY: 0,
     refQZ: 0,
@@ -869,114 +928,11 @@ function createAccumulator(): JointAccumulator {
     quatZ: 0,
     quatW: 0,
     sumWQuat: 0,
-    hasQuat: false,
     scaleX: 0,
     scaleY: 0,
     scaleZ: 0,
     sumWScale: 0,
-    hasScale: false,
   };
-}
-
-/**
- * Sample an animation sampler at the given time.
- *
- * Returns an array of floats whose length matches the property element count:
- *   - translation / scale: 3 floats (vec3)
- *   - rotation: 4 floats (quat)
- */
-function sampleChannel(
-  sampler: AnimationSampler,
-  time: number,
-  property: ChannelKind,
-): number[] | undefined {
-  const { input, output, interpolation } = sampler;
-  if (input.length === 0) return undefined;
-
-  const elementCount = output.length / input.length;
-
-  // Clamp if before first key.
-  if (time <= (input[0] as number)) {
-    return sliceOutput(output, 0, elementCount);
-  }
-
-  // Clamp if after last key.
-  const lastIdx = input.length - 1;
-  if (time >= (input[lastIdx] as number)) {
-    return sliceOutput(output, lastIdx, elementCount);
-  }
-
-  // Binary search for the bracket.
-  let lo = 0;
-  let hi = input.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if ((input[mid] as number) <= time) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  const prev = lo;
-  const next = hi;
-
-  if (interpolation === 'STEP') {
-    return sliceOutput(output, prev, elementCount);
-  }
-
-  // LINEAR interpolation.
-  const t0 = input[prev] as number;
-  const t1 = input[next] as number;
-  const alpha = (time - t0) / (t1 - t0);
-
-  const prevValues = sliceOutput(output, prev, elementCount);
-  const nextValues = sliceOutput(output, next, elementCount);
-
-  if (property === 'rotation') {
-    // Per-sampler quat slerp at the bracket level — multi-slot blending is
-    // a separate stage (nlerp at the entity level, in advanceAnimationPlayer).
-    const px = prevValues[0] ?? 0;
-    const py = prevValues[1] ?? 0;
-    const pz = prevValues[2] ?? 0;
-    const pw = prevValues[3] ?? 1;
-    let nx = nextValues[0] ?? 0;
-    let ny = nextValues[1] ?? 0;
-    let nz = nextValues[2] ?? 0;
-    let nw = nextValues[3] ?? 1;
-    let dot = px * nx + py * ny + pz * nz + pw * nw;
-    if (dot < 0) {
-      nx = -nx;
-      ny = -ny;
-      nz = -nz;
-      nw = -nw;
-      dot = -dot;
-    }
-    if (dot > 0.9995) {
-      // Near-parallel — fall back to nlerp to avoid sin(theta) -> 0 blowup.
-      const lx = px + alpha * (nx - px);
-      const ly = py + alpha * (ny - py);
-      const lz = pz + alpha * (nz - pz);
-      const lw = pw + alpha * (nw - pw);
-      const len = Math.sqrt(lx * lx + ly * ly + lz * lz + lw * lw);
-      return len > 0 ? [lx / len, ly / len, lz / len, lw / len] : [0, 0, 0, 1];
-    }
-    const theta = Math.acos(dot);
-    const sinTheta = Math.sin(theta);
-    const sa = Math.sin((1 - alpha) * theta) / sinTheta;
-    const sb = Math.sin(alpha * theta) / sinTheta;
-    return [px * sa + nx * sb, py * sa + ny * sb, pz * sa + nz * sb, pw * sa + nw * sb];
-  }
-
-  return prevValues.map((value, index) => value + alpha * ((nextValues[index] ?? value) - value));
-}
-
-function sliceOutput(output: Float32Array, index: number, elementCount: number): number[] {
-  const result: number[] = [];
-  const base = index * elementCount;
-  for (let i = 0; i < elementCount; i++) {
-    result.push(output[base + i] as number);
-  }
-  return result;
 }
 
 /**

@@ -58,25 +58,22 @@ describe('FBX BlendShape morph projection', () => {
   });
 
   it('preserves per-element FBX morph weight channels during resampling', () => {
-    const [clip] = parseAnimationClips(
-      {
-        clips: [
-          {
-            duration: 1,
-            channels: [
-              {
-                targetNode: 'Root',
-                property: 'weights',
-                weightCount: 4,
-                keyTimes: [0, 1],
-                keyValues: [0, 0, 0, 0, 1, 2, 3, 4],
-              },
-            ],
-          },
-        ],
-      },
-      1,
-    );
+    const [clip] = parseAnimationClips({
+      clips: [
+        {
+          duration: 1,
+          channels: [
+            {
+              targetNode: 'Root',
+              property: 'weights',
+              weightCount: 4,
+              keyTimes: [0, 1],
+              keyValues: [0, 0, 0, 0, 1, 2, 3, 4],
+            },
+          ],
+        },
+      ],
+    });
     expect(clip?.channels[0]?.property).toBe('weights');
     expect(Array.from(clip?.channels[0]?.sampler.output ?? [])).toEqual([0, 0, 0, 0, 1, 2, 3, 4]);
   });

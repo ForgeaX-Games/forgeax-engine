@@ -186,8 +186,10 @@ export function resolveTemporalReset(
   if (after.cameraCut) return 'camera-cut';
   if (before.historyVersion !== after.historyVersion) return 'history-version';
   if (before.viewIdentity !== after.viewIdentity) return 'view-switch';
+  if (before.deviceGeneration !== after.deviceGeneration) return 'device-recover';
+  // Lighting-only reasons come last: reaching them proves the view geometry is
+  // continuous, so geometry-keyed histories may keep reprojecting.
   if (before.environmentSignature !== after.environmentSignature) return 'environment-change';
   if (before.fogSignature !== after.fogSignature) return 'fog-change';
-  if (before.deviceGeneration !== after.deviceGeneration) return 'device-recover';
   return undefined;
 }

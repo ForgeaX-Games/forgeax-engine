@@ -16,7 +16,7 @@ test('writes exact-head software-deferred runtime evidence without physical GPU 
     runAttempt: '3',
   });
 
-  assert.equal(result.paths.length, 4);
+  assert.equal(result.paths.length, 3);
   for (const relativePath of result.paths) {
     const payload = JSON.parse(readFileSync(join(root, relativePath), 'utf8'));
     assert.equal(payload.headSha ?? payload.identity?.build, HEAD);
@@ -28,7 +28,7 @@ test('writes exact-head software-deferred runtime evidence without physical GPU 
     );
   }
 
-  const lod = JSON.parse(readFileSync(join(root, result.paths[3]), 'utf8'));
+  const lod = JSON.parse(readFileSync(join(root, result.paths[2]), 'utf8'));
   assert.equal(lod.metrics.timestampAvailable, false);
-  assert.equal(lod.falsification.length, 6);
+  assert.equal(lod.falsification.length, 5);
 });

@@ -40,29 +40,6 @@ export function buildSsrTracePlan(): SsrTracePlan {
   });
 }
 
-export interface SsrConfidenceFactors {
-  readonly hit: number;
-  readonly thickness: number;
-  readonly facing: number;
-  readonly edge: number;
-  readonly roughness: number;
-  readonly temporal: number;
-}
-
-/** Compute the bounded product used by the spatial trace result. */
-export function computeSsrConfidence(factors: SsrConfidenceFactors): number {
-  const values = [
-    factors.hit,
-    factors.thickness,
-    factors.facing,
-    factors.edge,
-    factors.roughness,
-    factors.temporal,
-  ];
-  if (!values.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) return 0;
-  return values.reduce((product, value) => product * value, 1);
-}
-
 export interface SsrSpatialGraphInputs {
   readonly admission: SsrSpatialAdmission;
   readonly width: number;
@@ -93,6 +70,8 @@ export interface SsrSpatialGraphProjection {
   readonly passNames: readonly string[];
   readonly resources: SsrSpatialResources | undefined;
   readonly trace: SsrTracePlan | undefined;
+  /** SSR source reactivity reconstructed onto the presentation lattice. */
+  readonly reactivity: GraphTextureView | undefined;
 }
 
 function missingInput(field: string): Result<never, RenderGraphError> {
@@ -144,6 +123,7 @@ export function addSsrSpatialPasses<FrameCtx extends RenderGraphFrame>(
       passNames: Object.freeze([]),
       resources: undefined,
       trace: undefined,
+      reactivity: undefined,
     });
   }
   const depth = input.depth;
@@ -166,6 +146,7 @@ export function addSsrSpatialPasses<FrameCtx extends RenderGraphFrame>(
   });
   if (!resources.ok) return resources;
   const { trace, hitReactivity } = resources.value;
+  const reactivity = temporal?.outputSurface ?? hitReactivity;
   let resolved: SsrSpatialResources['resolved'];
   let radiancePyramid: GraphTextureView | undefined;
   const reflectionLevels: GraphTextureView[] = [];
@@ -608,5 +589,6 @@ export function addSsrSpatialPasses<FrameCtx extends RenderGraphFrame>(
       ...(radiancePyramid === undefined ? {} : { radiancePyramid }),
     },
     trace: buildSsrTracePlan(),
+    reactivity,
   });
 }

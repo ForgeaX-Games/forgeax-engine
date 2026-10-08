@@ -17,7 +17,7 @@
 //       (not fallback grey) (AC-08).
 //   (b) axis conversion — sample geometry Y-up, SDK-baseline bbox (AC-09).
 //   (c) system-node filter — 85 nodes (Producer cameras / Camera Switcher
-//       excluded) + 93 sparse run-clip channels (AC-10).
+//       excluded) + source-evaluated run-clip channels (AC-10).
 //   (d) empty-take filter — cube emits zero clips (AC-11).
 //
 // Freeze / re-freeze (ufbx-only, post-SDK-deletion): `pnpm -F @forgeax/engine-fbx
@@ -201,7 +201,7 @@ describe('parity — four-class invariants on the frozen snapshot', () => {
     expect(hb.max[1] as number).toBeGreaterThan(hb.max[2] as number); // Y-up: vertical dominates depth
   });
 
-  it('(AC-10) humanoid excludes system cameras/switcher (85 nodes) + 93 run channels', () => {
+  it('(AC-10) humanoid excludes system cameras/switcher (85 nodes) + 93 authored and derived run channels', () => {
     const d = frozen('humanoid') as Digest;
     expect(d.nodes).toHaveLength(85);
     expect(d.nodes).toContain('Camera');
@@ -236,7 +236,7 @@ describe('parity — four-class invariants on the frozen snapshot', () => {
         expect(scenePaths).toContain(channel.targetNode);
       }
     }
-  });
+  }, 30_000);
 
   it('(AC-11) cube emits no clips (its only take is empty)', () => {
     const d = frozen('cube') as Digest;

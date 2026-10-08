@@ -33,6 +33,7 @@ export async function verifyLodTransition(
   options: {
     renderPath?: 'forward' | 'deferred';
     taa?: boolean;
+    heldFrames?: number;
     masked?: boolean;
     recorder?: RecorderAttachment;
     save?: (name: string, bytes: Uint8Array) => void;
@@ -212,7 +213,7 @@ export async function verifyLodTransition(
       evidence.push({ height, green: result.green, draws: result.inspection.indirectDrawCount });
     }
     const stable = await sample(0.5, 'stable');
-    for (let i = 0; i < 52; i++) {
+    for (let i = 0; i < (options.heldFrames ?? 52); i++) {
       const held = (await sample(0.5, 'held')).pixels;
       if (!options.taa) expect(held).toEqual(stable.pixels);
       else {
@@ -232,7 +233,7 @@ export async function verifyLodTransition(
         expect(delta).toBeLessThan(0.00001);
       }
     }
-    expect(frames).toBe(60);
+    expect(frames).toBe(8 + (options.heldFrames ?? 52));
     world.set(object, MeshFilter, { assetHandle: rootHandle(0) }).unwrap();
     expect((await sample(0.501, 'hard-near')).green).toBe(0);
     expect((await sample(0.499, 'hard-far')).green).toBe(1);

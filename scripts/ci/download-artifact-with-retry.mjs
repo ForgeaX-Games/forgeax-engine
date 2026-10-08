@@ -9,11 +9,11 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 export const RETRY_DELAYS_SECONDS = [0, 5, 15];
-// A request must leave enough of the shortest 15-minute consumer budget for
-// every declared retry to execute. A stalled signed-URL route is not useful
-// evidence; retrying it changes the proxy/CDN route while successful transfers
-// retain their independent two-minute body-idle allowance below.
-export const ARTIFACT_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+// Bound response-header stalls, not the duration of a progressing archive.
+// Run 37126874789 spent three minutes waiting for a 3435-byte report, then
+// succeeded on a fresh route in two seconds. Keep all three retries and the
+// independent two-minute body-idle allowance for large transfers below.
+export const ARTIFACT_REQUEST_TIMEOUT_MS = 30_000;
 export const REQUEST_TIMEOUT_MS = ARTIFACT_REQUEST_TIMEOUT_MS;
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 120_000;
 export const ARTIFACT_IDLE_TIMEOUT_MS = DOWNLOAD_IDLE_TIMEOUT_MS;

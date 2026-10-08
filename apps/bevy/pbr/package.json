@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Reproduction of Bevy's `pbr` example — 11×5 sphere grid with varying metallic/roughness, DirectionalLight, orthographic camera.",
+  "description": "Reproduction of Bevy's `pbr` example \u2014 11\u00d75 sphere grid with varying metallic/roughness, DirectionalLight, orthographic camera.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -54,8 +54,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

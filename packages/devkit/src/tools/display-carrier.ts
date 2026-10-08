@@ -20,13 +20,9 @@ export interface BrowserCarrierTarget {
   readonly gpu: 'auto' | 'hardware' | 'software';
 }
 
-export interface BrowserCarrierRequest {
-  readonly run: BrowserCarrierRunIdentity;
-  readonly generation: number;
+export interface BrowserCarrierRequest
+  extends Pick<BrowserCarrierTarget, 'run' | 'generation' | 'gpu' | 'width' | 'height'> {
   readonly headless: boolean;
-  readonly gpu: BrowserCarrierTarget['gpu'];
-  readonly width: number;
-  readonly height: number;
   readonly url: string;
 }
 

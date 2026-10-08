@@ -14,15 +14,18 @@ export interface MaterialLoadRequest {
 
 export interface MaterialReady {
   readonly status: 'Ready';
-  readonly guid: string;
-  readonly materialGuid: string;
-  readonly publicationGeneration: number;
-  readonly specializationKey: string;
-  readonly artifactDigest: string;
-  readonly sourceClosure: readonly string[];
-  readonly parameterContract: NonNullable<CookedMaterialRecord['parameterContract']>;
-  readonly record: CookedMaterialRecord;
-  readonly programs: CookedMaterialRecord['programs'];
+  readonly record: CookedMaterialRecord &
+    Required<
+      Pick<
+        CookedMaterialRecord,
+        | 'materialGuid'
+        | 'publicationGeneration'
+        | 'specializationKey'
+        | 'artifactDigest'
+        | 'sourceClosure'
+        | 'parameterContract'
+      >
+    >;
 }
 
 export interface MaterialPublication {
@@ -54,6 +57,7 @@ export interface MaterialLoadErrorDetail {
   readonly context?: MaterialCookProgramContext;
   readonly address?: MaterialProgramAddress;
   readonly matches?: number;
+  readonly vertexColorAvailable?: boolean;
   readonly missing?: readonly string[];
   readonly expected?: string;
   readonly actual?: string;
@@ -125,8 +129,165 @@ function recordError(
   );
 }
 
-function immutableBytes(bytes: Uint8Array): Uint8Array {
+function immutableBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
+}
+
+/** Native hashing is optional; the existing digest remains the correctness fallback. */
+function nativeMaterialArtifactDigest():
+  | ((bytes: Uint8Array<ArrayBuffer>) => Promise<string>)
+  | undefined {
+  try {
+    const subtle = globalThis.crypto?.subtle;
+    const digest = subtle?.digest;
+    if (subtle === undefined || typeof digest !== 'function') return undefined;
+    return async (bytes) => {
+      try {
+        // Keep the SubtleCrypto receiver and the exact private view, including its offset.
+        const hash = await digest.call(subtle, 'SHA-256', bytes);
+        return `sha256:${[...new Uint8Array(hash)]
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('')}`;
+      } catch {
+        return createMaterialArtifactDigest(bytes);
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Plain own data only; descriptor admission never invokes an adapter getter. */
+function materialDataProperties(value: unknown): PropertyDescriptorMap | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const properties = Object.getOwnPropertyDescriptors(value);
+  Object.setPrototypeOf(properties, null);
+  return Reflect.ownKeys(properties).every(
+    (key) =>
+      typeof key === 'string' &&
+      'value' in (properties[key] as PropertyDescriptor) &&
+      (properties[key] as PropertyDescriptor).enumerable === true,
+  )
+    ? properties
+    : undefined;
+}
+
+/** Metadata adapters keep their complete original synchronous behavior. */
+function snapshotMaterialRecord(record: CookedMaterialRecord): CookedMaterialRecord | undefined {
+  try {
+    // The validator owns these views. They are excluded from structuredClone below.
+    const programBytes = new Set(record.programs.map((program) => program.artifact.bytes));
+    const complete = new WeakSet<object>();
+    const active = new WeakSet<object>();
+    const dataOnly = (value: unknown): boolean => {
+      if (value === null || typeof value !== 'object') return typeof value !== 'function';
+      if (programBytes.has(value as Uint8Array)) return true;
+      const prototype = Object.getPrototypeOf(value);
+      const array = Array.isArray(value);
+      if (array ? prototype !== Array.prototype : prototype !== Object.prototype) {
+        return false;
+      }
+      if (active.has(value)) return false;
+      if (complete.has(value)) return true;
+      const properties = Object.getOwnPropertyDescriptors(value);
+      const keys = Reflect.ownKeys(properties);
+      if (
+        !keys.every((key) => {
+          if (typeof key !== 'string') return false;
+          const property = properties[key] as PropertyDescriptor;
+          if (!('value' in property)) return false;
+          return (
+            property.enumerable === true ||
+            (array &&
+              key === 'length' &&
+              property.enumerable === false &&
+              property.configurable === false)
+          );
+        })
+      )
+        return false;
+      const fields = keys.map((key) => properties[key as string] as PropertyDescriptor);
+      active.add(value);
+      const accepted = fields.every((property) => dataOnly(property.value));
+      active.delete(value);
+      if (accepted) complete.add(value);
+      return accepted;
+    };
+    if (!dataOnly(record)) return undefined;
+    const metadata = structuredClone({
+      ...record,
+      programs: record.programs.map((program) => ({
+        ...program,
+        artifact: { ...program.artifact, bytes: undefined },
+      })),
+    });
+    return {
+      ...metadata,
+      programs: metadata.programs.map((program, index) => ({
+        ...program,
+        artifact: {
+          ...program.artifact,
+          bytes: (record.programs[index] as CookedMaterialRecord['programs'][number]).artifact
+            .bytes,
+        },
+      })),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Admit every artifact descriptor before metadata capture or body copies. */
+function materialArtifactData(
+  publication: MaterialPublication,
+  record: CookedMaterialRecord,
+): readonly { readonly bytes: Uint8Array; readonly digest: string | undefined }[] | undefined {
+  try {
+    const publicationFields = materialDataProperties(publication);
+    if (publicationFields === undefined) return undefined;
+    const artifactFields = materialDataProperties(publicationFields.artifacts?.value);
+    if (artifactFields === undefined) return undefined;
+    const captured: { bytes: Uint8Array; digest: string | undefined }[] = [];
+    for (const program of record.programs) {
+      const published = artifactFields[program.artifact.path]?.value;
+      const fields = materialDataProperties(published);
+      if (fields === undefined || fields.bytes === undefined) return undefined;
+      const prototype = Object.getPrototypeOf(published);
+      if (
+        fields.digest === undefined &&
+        prototype !== null &&
+        Object.getOwnPropertyDescriptor(prototype, 'digest') !== undefined
+      )
+        return undefined;
+      const bytes = fields.bytes.value;
+      if (
+        !(bytes instanceof Uint8Array) ||
+        Object.getPrototypeOf(bytes) !== Uint8Array.prototype ||
+        Object.getOwnPropertyDescriptor(bytes, 'buffer') !== undefined ||
+        Object.getPrototypeOf(bytes.buffer) !== ArrayBuffer.prototype
+      )
+        return undefined;
+      captured.push({ bytes, digest: fields.digest?.value });
+    }
+    return captured;
+  } catch {
+    return undefined;
+  }
+}
+
+function copyMaterialArtifacts(
+  artifacts: readonly { readonly bytes: Uint8Array; readonly digest: string | undefined }[],
+):
+  | readonly { readonly bytes: Uint8Array<ArrayBuffer>; readonly digest: string | undefined }[]
+  | undefined {
+  try {
+    return artifacts.map(({ bytes, digest }) => ({ bytes: immutableBytes(bytes), digest }));
+  } catch {
+    // An ordered old-path body error must not preempt an earlier integrity failure.
+    return undefined;
+  }
 }
 
 function immutableParameterContract(
@@ -139,7 +300,14 @@ function immutableParameterContract(
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+  const length = left.byteLength;
+  if (length !== right.byteLength) return false;
+  // Preserve TypedArray.every's detached/out-of-bounds validation without a byte callback.
+  Uint8Array.prototype.values.call(left);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function completeTupleField(record: CookedMaterialRecord): string | undefined {
@@ -228,7 +396,7 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
       }
       const parsed = validateCookedMaterialRecord(publication.record);
       if (!parsed.ok) return recordError(request, parsed.error.detail.field);
-      const record = parsed.value;
+      let record = parsed.value;
       const invalidTupleField = completeTupleField(record);
       if (invalidTupleField !== undefined) return recordError(request, invalidTupleField);
       const publicationGeneration = record.publicationGeneration;
@@ -256,10 +424,39 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
       if (materialGuid.toLowerCase() !== request.guid.toLowerCase())
         return recordError(request, 'materialGuid');
       if (recordSpecializationKey !== request.specializationKey) return missingCook(request);
+      let digest = nativeMaterialArtifactDigest();
+      // Close native mode before snapshot/copy/await for unknown adapter semantics.
+      let artifacts: ReturnType<typeof materialArtifactData>;
+      try {
+        artifacts =
+          digest === undefined || materialDataProperties(request) === undefined
+            ? undefined
+            : materialArtifactData(publication, record);
+      } catch {
+        artifacts = undefined;
+      }
+      const snapshot = artifacts === undefined ? undefined : snapshotMaterialRecord(record);
+      const capturedArtifacts =
+        snapshot === undefined || artifacts === undefined
+          ? undefined
+          : copyMaterialArtifacts(artifacts);
+      if (snapshot === undefined || capturedArtifacts === undefined) digest = undefined;
+      else record = snapshot;
+      const readySourceClosure =
+        digest === undefined
+          ? sourceClosure
+          : (record.sourceClosure as NonNullable<CookedMaterialRecord['sourceClosure']>);
+      const readyParameterContract =
+        digest === undefined
+          ? parameterContract
+          : (record.parameterContract as NonNullable<CookedMaterialRecord['parameterContract']>);
+      // New digest awaits use one already admitted publication and request snapshot.
+      if (digest !== undefined) request = { ...request };
       const programs: CookedMaterialRecord['programs'][number][] = [];
-      for (const program of record.programs) {
+      for (const [programIndex, program] of record.programs.entries()) {
         const artifact = program.artifact;
-        const published = publication.artifacts?.[artifact.path];
+        const captured = digest === undefined ? undefined : capturedArtifacts?.[programIndex];
+        const published = captured ?? publication.artifacts?.[artifact.path];
         if (published === undefined)
           return materialError(
             request,
@@ -269,8 +466,9 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
             { publicationGeneration, field: artifact.path },
             true,
           );
-        const bytes = immutableBytes(published.bytes);
-        const actualDigest = createMaterialArtifactDigest(bytes);
+        const bytes = captured?.bytes ?? immutableBytes(published.bytes);
+        const actualDigest =
+          digest === undefined ? createMaterialArtifactDigest(bytes) : await digest(bytes);
         if (
           actualDigest !== artifact.digest ||
           (published.digest !== undefined && published.digest !== actualDigest)
@@ -333,15 +531,16 @@ export function createMaterialLoader(options: MaterialLoaderOptions) {
       }
       return {
         status: 'Ready',
-        guid: request.guid,
-        materialGuid,
-        publicationGeneration,
-        specializationKey: request.specializationKey,
-        artifactDigest,
-        sourceClosure: Object.freeze([...sourceClosure]),
-        parameterContract: immutableParameterContract(parameterContract),
-        record: { ...record, programs: Object.freeze(programs) },
-        programs: Object.freeze(programs),
+        record: {
+          ...record,
+          materialGuid,
+          publicationGeneration,
+          specializationKey: recordSpecializationKey,
+          artifactDigest,
+          sourceClosure: Object.freeze([...readySourceClosure]),
+          parameterContract: immutableParameterContract(readyParameterContract),
+          programs: Object.freeze(programs),
+        },
       };
     },
   };

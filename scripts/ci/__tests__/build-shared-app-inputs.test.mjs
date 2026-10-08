@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -20,6 +28,8 @@ test('shared inputs preserve raw assets and required engine shader entries', asy
       { encoding: 'utf8' },
     );
     assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readdirSync(join(output, 'shaders')), ['manifest.json']);
+    assert.deepEqual(readdirSync(join(projection, 'shaders')), ['manifest.json']);
     const catalog = JSON.parse(readFileSync(join(output, 'assets', 'catalog.json'), 'utf8'));
     const shaderManifest = await readShaderManifestPublication(
       JSON.parse(readFileSync(join(output, 'shaders', 'manifest.json'), 'utf8')),
@@ -71,6 +81,12 @@ test('catalog-only recovery ignores the inherited consumer manifest and omits se
       assetCatalog: 'shared-app-inputs/assets/catalog.json',
       engineShaderManifest: 'shared-app-inputs/shaders/manifest.json',
     });
+    assert.deepEqual(
+      readFileSync(join(output, 'compiler', 'wgpu_wasm_bg.wasm')),
+      readFileSync(join(repoRoot, 'packages/wgpu-wasm/pkg/wgpu_wasm_bg.wasm')),
+      'shader output carries the exact producer compiler bytes',
+    );
+    assert.ok(existsSync(join(output, 'compiler', 'provenance.json')));
     assert.equal(facts.payloadMode, 'catalog-only');
     assert.equal(facts.payloadEmitCount, 0);
     assert.equal(existsSync(join(output, 'assets', 'payload')), false);

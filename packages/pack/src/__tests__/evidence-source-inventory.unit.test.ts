@@ -3,7 +3,7 @@ import {
   type ProducerSemanticIdentityInput,
   producerRelativeDdcKey,
   producerRelativeLogicalPath,
-} from '../evidence/source-inventory.js';
+} from '../evidence/producer-identity.js';
 
 describe('source inventory DDC cold path contract', () => {
   const input: ProducerSemanticIdentityInput = {

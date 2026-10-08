@@ -43,7 +43,7 @@ function zigzag(y: number, amplitude: number): number[] {
   return out;
 }
 
-const DASHED = { widthPx: 22, dashSize: 0.35, gapSize: 0.35, dashOffset: 0 } as const;
+const DASHED = { width: 22, dashSize: 0.35, gapSize: 0.35, dashOffset: 0 } as const;
 const COLORS = [
   [1, 0.15, 0.1, 1],
   [0.1, 0.9, 0.3, 1],

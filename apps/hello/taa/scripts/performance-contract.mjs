@@ -188,6 +188,12 @@ export function createCorrectnessEvidence(summary, identity) {
     status: 'pass',
     acceptance: 'correctness-only',
     timingAdmission: 'not-admitted',
+    resourceEvidence: {
+      basis: 'active-logical-descriptor',
+      resolutionProjection: 'scaled-estimate',
+      lifecyclePeak: 'not-observed',
+      driverAllocation: 'unavailable',
+    },
     testedRevision: identity.testedRevision,
     sourceRevision: identity.sourceRevision,
     buildDigest: identity.buildDigest,

@@ -111,7 +111,7 @@ describe('auto exposure GPU pass contract', () => {
 
   it('keeps Bradford white balance in the sole linear-HDR consumer and preserves alpha', () => {
     const withCandidate = createAutoExposureApplyWgsl({ temperature: 5000, tint: 0.2 }, true);
-    expect(withCandidate).toContain('@group(0) @binding(2) var<storage, read> candidate');
+    expect(withCandidate).toContain('@group(1) @binding(0) var<storage, read> candidate');
     expect(withCandidate).toContain('mul_bradford');
     expect(withCandidate).toContain('blackbody_white_point');
     expect(withCandidate).toContain('WB_TEMPERATURE: f32 = 5000.00000000');

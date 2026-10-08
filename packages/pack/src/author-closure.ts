@@ -5,12 +5,8 @@ import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { err } from '@forgeax/engine-types';
 import ts from 'typescript';
 import { AssetGuid, PackageId } from './guid.js';
-import {
-  type AnyScriptablePackDefinition,
-  parsePackSourceJson,
-  resolvePackParameterValues,
-} from './pack-authoring.js';
-import { type ScanSourceDeclaration, scanInventory } from './scanner.js';
+import { type AnyScriptablePackDefinition, resolvePackParameterValues } from './pack-authoring.js';
+import { declarationPackageId, type ScanSourceDeclaration, scanInventory } from './scanner.js';
 import { loadScriptablePack } from './scriptable-pack-node.js';
 
 export interface AuthorPackFile {
@@ -89,14 +85,14 @@ export async function collectAuthorPackClosure(
   const outputOrigins = new Map<string, string>();
   for (const row of scanned.value.inventory) {
     identityOwners.set(row.guid.toLowerCase(), row.sourcePath);
-    const packageId = declarations.get(row.sourcePath)?.value.packageId;
+    const packageId = declarationPackageId(declarations.get(row.sourcePath));
     identities.set(row.guid.toLowerCase(), {
       ...(packageId ? { packageId } : {}),
       ...(row.sourceKey ? { sourceKey: row.sourceKey } : {}),
     });
   }
   for (const declaration of declarations.values()) {
-    const namespace = declaration.value.packageId;
+    const namespace = declarationPackageId(declaration);
     if (namespace) identityOwners.set(namespace.toLowerCase(), declaration.sourcePath);
     // scanInventory's rows describe direct Packs. External resources own their
     // identities in Meta, before any importer or cooked catalog exists.
@@ -149,35 +145,14 @@ export async function collectAuthorPackClosure(
     if (declaration.format === 'pack.ts')
       await evaluate(declaration.sourcePath, declaration.sourcePath, declaration.definition);
   }
-  for (const declaration of declarations.values()) {
-    if (declaration.format !== 'pack.json' || declaration.value.schemaVersion !== '3.0.0') continue;
-    const parsed = parsePackSourceJson(declaration.value).unwrap();
-    if (parsed.format !== 'instance') continue;
-    let parentId = PackageId.format(parsed.parent);
-    let values = { ...parsed.values };
-    const visited = new Set<string>();
-    for (;;) {
-      if (visited.has(parentId)) invalid(declaration.sourcePath, 'Pack instance cycle');
-      visited.add(parentId);
-      const parent = declarations.get(identityOwners.get(parentId) ?? '');
-      if (!parent) invalid(declaration.sourcePath, `missing parent ${parentId}`);
-      if (parent.format === 'pack.ts') {
-        await evaluate(
-          declaration.sourcePath,
-          parent.sourcePath,
-          (await loadScriptablePack(parent.sourcePath)).unwrap(),
-          parsed.packageId,
-          values,
-        );
-        break;
-      }
-      if (parent.format !== 'pack.json') invalid(declaration.sourcePath, 'invalid instance parent');
-      const next = parsePackSourceJson(parent.value).unwrap();
-      if (next.format !== 'instance')
-        invalid(declaration.sourcePath, 'expected parameterized parent');
-      values = { ...next.values, ...values };
-      parentId = PackageId.format(next.parent);
-    }
+  for (const [sourcePath, instance] of scanned.value.instances) {
+    await evaluate(
+      sourcePath,
+      instance.root.sourcePath,
+      (await loadScriptablePack(instance.root.sourcePath)).unwrap(),
+      instance.packageId,
+      instance.values,
+    );
   }
   const manifestBytes = await readFile(resolve(root, 'package.json'));
   const manifest = JSON.parse(manifestBytes.toString('utf8')) as {

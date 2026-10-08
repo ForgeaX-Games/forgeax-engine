@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { buildEngineShaderManifest } from '@forgeax/engine-vite-plugin-shader';
 import { it } from 'vitest';
-import { prepareRayPathFixture } from '../../../render/src/__tests__/raytracing/path-tracer.commands';
+import { rayPathCommands } from '../../../render/src/__tests__/raytracing/path-tracer.commands';
 import { verifyRendererDiffuse } from './renderer-diffuse.fixture';
 import { shaderManifestUrl } from './shader-manifest-url.fixture';
 
@@ -12,7 +12,7 @@ for (const reconstruction of [undefined, 'combined'] as const) {
     const directory = `${process.env.FORGEAX_RAY_EVIDENCE ?? 'artifacts/raytracing/iteration-03/renderer-diffuse/dawn'}/${reconstruction ?? 'raw'}`;
     mkdirSync(directory, { recursive: true });
     await verifyRendererDiffuse(
-      await prepareRayPathFixture(),
+      await rayPathCommands.prepareRayPublicationSet(undefined, ['matte', 'emission']),
       (name, bytes) => writeFileSync(`${directory}/${name}`, bytes),
       manifest,
       reconstruction,

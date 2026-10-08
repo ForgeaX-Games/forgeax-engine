@@ -170,3 +170,11 @@ GPU timing capability is present.
 | `createProfileClock()` | Supplies the default monotonic microsecond clock. |
 
 The package root is the only supported import path for these entries. See `schema/profile-capture.schema.json` for the artifact contract and `scripts/bench/profiler-overhead.mjs` for the deterministic D-6 consumer gate. The gate alternates profiler-off/on windows, warms each new capture before sampling, keeps finalization outside the measured window, and uses $median(((p95_{on,i} - p95_{off,i}) / p95_{off,i}) \times 100)$ across paired groups. The owner-mode ceiling is 20%; allocation, overflow, and phase-catalog evidence remain hard-failing.
+
+## Engine source profiler page
+
+`tools/view-plugins/profiler` contributes an optional View artifact page. Its native plugin
+validates `ProfileCapture` and builds the existing `ProfileModel`; React receives that model
+and owns file selection and presentation. This package remains independent of View and React.
+The page displays measured frame durations, phase summaries and completeness, accepts saved
+JSON without a project and rejects invalid captures. It does not create another recorder.

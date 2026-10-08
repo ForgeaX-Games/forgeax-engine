@@ -55,7 +55,10 @@ function parameterTypeMatches(parameter: MaterialParameter, value: MaterialValue
     case 'color':
       return Array.isArray(value) && value.length === 4;
     case 'texture':
+    case 'texture_2d_array':
+    case 'texture_3d':
     case 'texture_cube':
+    case 'texture_external':
       // Runtime asset handles are branded numbers at the type level. The
       // brand is erased before a material reaches the resolver, so numeric
       // handles must remain valid texture values alongside structured

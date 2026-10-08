@@ -280,6 +280,27 @@ describe('box3.transformBox3', () => {
     expect(Array.from(out)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
+  it('negative scales reorder every axis without losing extrema', () => {
+    const box = box3.create(-1, -2, -3, 4, 5, 6);
+    const matrix = mat4.fromScaling(mat4.create(), [-2, 3, -0.5]);
+    expect(Array.from(box3.transformBox3(box, box, matrix))).toEqual([-8, -6, -3, 2, 15, 1.5]);
+  });
+
+  it('divides homogeneous corners before enclosing a projective transform', () => {
+    const box = box3.create(0, 0, 0, 1, 2, 3);
+    const matrix = mat4.identity(mat4.create());
+    matrix[3] = 1;
+    expect(Array.from(box3.transformBox3(box, box, matrix))).toEqual([0, 0, 0, 0.5, 2, 3]);
+  });
+
+  it('preserves undivided coordinates at a zero homogeneous weight', () => {
+    const box = box3.create(0, 0, 0, 1, 2, 3);
+    const matrix = mat4.identity(mat4.create());
+    matrix[3] = 1;
+    matrix[15] = 0;
+    expect(Array.from(box3.transformBox3(box, box, matrix))).toEqual([0, 0, 0, 1, 2, 3]);
+  });
+
   it('out may alias box (aliasing-safe)', () => {
     const box = box3.create(0, 0, 0, 1, 1, 1);
     const m = mat4.fromTranslation(mat4.create(), [2, 0, 0]);

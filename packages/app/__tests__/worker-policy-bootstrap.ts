@@ -35,7 +35,12 @@ const entry: ExecutionBootstrapEntry = async (data) => {
           const moduleUrl =
             data === 'invalid-kernel'
               ? 'data:text/javascript,export default {}'
-              : new URL('./worker-policy-kernel.ts', import.meta.url).href;
+              : new URL(
+                  data === 'delayed-kernel'
+                    ? './worker-policy-delayed-kernel.ts'
+                    : './worker-policy-kernel.ts',
+                  import.meta.url,
+                ).href;
           ctx.world
             .addSystem(
               Update,

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -19,16 +20,31 @@ const here = dirname(fileURLToPath(import.meta.url));
 const lockBytes = readFileSync(join(here, 'local-graphics.lock.json'));
 const lock = JSON.parse(lockBytes);
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const { libraryDirectory, icdPath, libraries } = lock;
+const { libraryDirectory, icdPath } = lock;
+const hostGlibc = () => process.report.getReport().header.glibcVersionRuntime ?? '0.0';
 
-export function bundlePath(env = process.env) {
+// Hosts at the prebuilt Ubuntu closure's glibc floor extract it; older hosts
+// compile the same SHA-256-pinned Mesa release against their own glibc/LLVM.
+export function selectProducer(glibc = hostGlibc()) {
+  const [major, minor] = glibc.split('.').map(Number);
+  const [requiredMajor, requiredMinor] = lock.minimumGlibc.split('.').map(Number);
+  return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor)
+    ? 'prebuilt'
+    : 'source';
+}
+
+const producerLibraries = (producer) =>
+  producer === 'prebuilt' ? lock.libraries : lock.source.libraries;
+
+export function bundlePath(env = process.env, producer = selectProducer()) {
+  const id = producer === 'prebuilt' ? lock.id : `${lock.source.id}-glibc${hostGlibc()}`;
   return resolve(
     env.FORGEAX_CI_GRAPHICS_ROOT ??
       join(
         env.XDG_CACHE_HOME ?? join(homedir(), '.cache'),
         'forgeax',
         'graphics',
-        `${lock.id}-${digest(lockBytes).slice(0, 12)}`,
+        `${id}-${digest(lockBytes).slice(0, 12)}`,
       ),
   );
 }
@@ -53,35 +69,27 @@ export function verifyArchive(bytes, expected) {
 }
 
 function checkHost() {
-  const glibc = process.report.getReport().header.glibcVersionRuntime;
-  const [major, minor] = (glibc ?? '0.0').split('.').map(Number);
-  const [requiredMajor, requiredMinor] = lock.minimumGlibc.split('.').map(Number);
-  if (
-    process.platform !== 'linux' ||
-    process.arch !== 'x64' ||
-    major < requiredMajor ||
-    (major === requiredMajor && minor < requiredMinor)
-  )
+  if (process.platform !== 'linux' || process.arch !== 'x64')
     throw new Error(
-      `graphics-host-unsupported: this bundle requires Linux x64 and glibc >= ${lock.minimumGlibc}; use the host graphics stack instead`,
+      'graphics-host-unsupported: this bundle requires Linux x64; use the host graphics stack instead',
     );
 }
 
-function installedFiles(bundle) {
+function installedFiles(bundle, producer) {
   return Object.fromEntries(
-    [icdPath, ...libraries.map((name) => join(libraryDirectory, name))].map((path) => [
-      path,
-      digest(readFileSync(join(bundle, path))),
-    ]),
+    [icdPath, ...producerLibraries(producer).map((name) => join(libraryDirectory, name))].map(
+      (path) => [path, digest(readFileSync(join(bundle, path)))],
+    ),
   );
 }
 
-export function verifyBundle(bundle) {
+export function verifyBundle(bundle, producer = selectProducer()) {
   try {
     const receipt = JSON.parse(readFileSync(join(bundle, 'receipt.json')));
     if (
       receipt.lock !== digest(lockBytes) ||
-      JSON.stringify(receipt.files) !== JSON.stringify(installedFiles(bundle))
+      receipt.producer !== producer ||
+      JSON.stringify(receipt.files) !== JSON.stringify(installedFiles(bundle, producer))
     )
       throw new Error('receipt mismatch');
   } catch (cause) {
@@ -92,50 +100,104 @@ export function verifyBundle(bundle) {
   }
 }
 
-export async function setupGraphics(bundle = bundlePath()) {
+// curl carries a bounded network lifetime; no system package manager or sudo.
+function download(entry, archive) {
+  console.log(`[graphics-setup] ${entry.url}`);
+  execFileSync(
+    'curl',
+    [
+      '--fail',
+      '--location',
+      '--silent',
+      '--show-error',
+      '--max-time',
+      '180',
+      '--output',
+      archive,
+      entry.url,
+    ],
+    { stdio: 'inherit' },
+  );
+  verifyArchive(readFileSync(archive), entry.sha256);
+}
+
+function extractPrebuilt(staging) {
+  for (const entry of lock.packages) {
+    const archive = join(staging, `${entry.name}.deb`);
+    download(entry, archive);
+    const compressed = execFileSync('ar', ['p', archive, 'data.tar.zst'], {
+      maxBuffer: 128 * 1024 * 1024,
+    });
+    execFileSync('tar', ['--zstd', '-xf', '-', '-C', join(staging, 'root')], {
+      input: compressed,
+    });
+    rmSync(archive);
+  }
+}
+
+function buildFromSource(staging) {
+  const missing = ['meson', 'ninja', 'glslangValidator'].filter(
+    (tool) => spawnSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }).status !== 0,
+  );
+  if (missing.length)
+    throw new Error(
+      `graphics-source-prerequisites: glibc ${hostGlibc()} < ${lock.minimumGlibc} builds Lavapipe from source; missing ${missing.join(', ')} (also needs llvm-config, bison, flex, pkg-config, Python mako/PyYAML)`,
+    );
+  const archive = join(staging, 'mesa.tar.xz');
+  const source = join(staging, 'src');
+  const build = join(staging, 'build');
+  download(lock.source, archive);
+  mkdirSync(source);
+  execFileSync('tar', ['-xJf', archive, '-C', source, '--strip-components=1']);
+  rmSync(archive);
+  const run = (args) => execFileSync('meson', args, { stdio: 'inherit' });
+  run([
+    'setup',
+    build,
+    source,
+    '--prefix=/usr',
+    `--libdir=${libraryDirectory.slice('root/usr/'.length)}`,
+    ...lock.source.mesonOptions,
+  ]);
+  run(['compile', '-C', build]);
+  run(['install', '-C', build, '--no-rebuild', '--destdir', join(staging, 'root')]);
+  rmSync(build, { recursive: true, force: true });
+  rmSync(source, { recursive: true, force: true });
+  // Mesa writes an absolute system library_path; the bundle resolves its own
+  // driver through LD_LIBRARY_PATH, matching the prebuilt Ubuntu manifest.
+  const icdDirectory = dirname(join(staging, icdPath));
+  const installed = readdirSync(icdDirectory).find((name) => /^lvp_icd\..+\.json$/.test(name));
+  if (!installed) throw new Error('graphics-source-build: Mesa installed no Lavapipe ICD manifest');
+  const manifest = JSON.parse(readFileSync(join(icdDirectory, installed)));
+  manifest.ICD.library_path = 'libvulkan_lvp.so';
+  writeFileSync(join(staging, icdPath), `${JSON.stringify(manifest, null, 4)}\n`);
+  rmSync(join(icdDirectory, installed));
+}
+
+export async function setupGraphics(
+  producer = selectProducer(),
+  bundle = bundlePath(process.env, producer),
+) {
   checkHost();
   if (existsSync(bundle)) {
-    verifyBundle(bundle);
+    verifyBundle(bundle, producer);
     return bundle;
   }
   mkdirSync(dirname(bundle), { recursive: true });
   const staging = mkdtempSync(join(dirname(bundle), '.graphics-'));
   try {
     mkdirSync(join(staging, 'root'));
-    for (const entry of lock.packages) {
-      console.log(`[graphics-setup] ${entry.url}`);
-      const archive = join(staging, `${entry.name}.deb`);
-      // curl carries a bounded network lifetime; no system package manager or sudo.
-      execFileSync(
-        'curl',
-        [
-          '--fail',
-          '--location',
-          '--silent',
-          '--show-error',
-          '--max-time',
-          '180',
-          '--output',
-          archive,
-          entry.url,
-        ],
-        { stdio: 'inherit' },
-      );
-      verifyArchive(readFileSync(archive), entry.sha256);
-      const compressed = execFileSync('ar', ['p', archive, 'data.tar.zst'], {
-        maxBuffer: 128 * 1024 * 1024,
-      });
-      execFileSync('tar', ['--zstd', '-xf', '-', '-C', join(staging, 'root')], {
-        input: compressed,
-      });
-      rmSync(archive);
+    if (producer === 'prebuilt') extractPrebuilt(staging);
+    else buildFromSource(staging);
+    const receipt = { lock: digest(lockBytes), producer, files: installedFiles(staging, producer) };
+    writeFileSync(join(staging, 'receipt.json'), `${JSON.stringify(receipt, null, 2)}\n`);
+    try {
+      renameSync(staging, bundle);
+    } catch (error) {
+      // A concurrent setup on a shared cache may publish first; its receipt decides.
+      if (!existsSync(bundle)) throw error;
     }
-    writeFileSync(
-      join(staging, 'receipt.json'),
-      `${JSON.stringify({ lock: digest(lockBytes), files: installedFiles(staging) }, null, 2)}\n`,
-    );
-    renameSync(staging, bundle);
-    verifyBundle(bundle);
+    verifyBundle(bundle, producer);
     return bundle;
   } finally {
     rmSync(staging, { recursive: true, force: true });
@@ -169,7 +231,7 @@ export async function main(argv = process.argv.slice(2)) {
   const bundle = bundlePath();
   checkHost();
   if (options.action === 'setup') {
-    console.log(`[graphics-setup] ready: ${await setupGraphics(bundle)}`);
+    console.log(`[graphics-setup] ready (${selectProducer()}): ${await setupGraphics()}`);
     return 0;
   }
   verifyBundle(bundle);

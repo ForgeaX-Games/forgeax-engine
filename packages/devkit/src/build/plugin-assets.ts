@@ -2,20 +2,30 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { pluginAssetOutputProducer, resolvePluginProgram } from '@forgeax/engine-import';
-import { type ScanInventory, scanInventory } from '@forgeax/engine-pack/scanner';
+import {
+  type ScanInventory,
+  type ScriptablePackSourceDeclaration,
+  scanInventory,
+} from '@forgeax/engine-pack/scanner';
 import {
   type AnyScriptablePackDefinition,
   AssetGuid,
-  PackageId,
+  type PackageId,
   type PackBuildReadContext,
   type PackOutputMap,
   type PluginAssetSource,
-  parsePackSourceJson,
   projectDirectPackJson,
   resolvePackParameterValues,
   validatePluginAssetSource,
 } from '@forgeax/engine-pack/source';
-import { inventoryScriptablePackSource } from '@forgeax/engine-pack/source-node';
+import {
+  createLazyScriptablePackDefinition,
+  createScriptablePackModuleExecutorPool,
+  createScriptablePackSourceSnapshot,
+  inventoryScriptablePackSource,
+  loadScriptablePack,
+  type ScriptablePackSourceSnapshot,
+} from '@forgeax/engine-pack/source-node';
 import { err, type PluginAsset, type PluginAssetDefinition } from '@forgeax/engine-types';
 import type { ProjectFacts } from '../types.js';
 
@@ -113,17 +123,21 @@ async function capturePluginSourceInput(
   inputs.set(path, revision);
 }
 
-/** Runs source declarations only. Project plugins, Cookers and executors are never installed. */
+/** Metadata inventories carry their snapshot; two-argument inventories retain their existing leases. */
 export async function discoverPluginAssets(
   facts: Pick<ProjectFacts, 'root' | 'assetRoots'>,
   scannedInventory?: ScanInventory,
+  sourceSnapshot?: ScriptablePackSourceSnapshot,
 ): Promise<PluginSourceInventory> {
+  const retainedInventory = scannedInventory !== undefined && sourceSnapshot === undefined;
+  const capturedSources = sourceSnapshot ?? createScriptablePackSourceSnapshot();
   let inventory = scannedInventory;
   if (!inventory) {
     const scanned = await scanInventory(
       facts.assetRoots.map((root) => resolve(facts.root, root)),
       {
         ignorePath: (path) => isPluginAssetSourceIgnoredPath(facts.root, path),
+        scriptablePack: { metadataOnly: true, sourceSnapshot: capturedSources },
       },
     );
     if (!scanned.ok) throw scanned.error;
@@ -224,76 +238,59 @@ export async function discoverPluginAssets(
     await add(sourcePath, revision, packageId, result.value);
   }
 
-  for (const declaration of declarations) {
-    if (declaration.format === 'pack.ts') {
-      await evaluate(declaration.sourcePath, declaration.sourceRevision, declaration.definition);
-    } else if (declaration.format === 'pack.json' && declaration.value.schemaVersion === '3.0.0') {
-      const parsed = parsePackSourceJson(declaration.value);
-      if (!parsed.ok) failure(declaration.sourcePath, parsed.error);
-      if (parsed.value.format !== 'direct') continue;
-      const projected = projectDirectPackJson(parsed.value).unwrap();
-      const outputs = Object.fromEntries(
-        projected.assets.map((asset) => [asset.sourceKey, { ...asset.payload, kind: asset.kind }]),
-      ) as PackOutputMap;
-      await add(
-        declaration.sourcePath,
-        declaration.sourceRevision,
-        parsed.value.packageId,
-        outputs,
-      );
-    }
-  }
-  // Instances must execute the original declaring module; moving an instance does not rebase imports.
-  const byPackage = new Map<string, (typeof declarations)[number]>();
-  for (const declaration of declarations) {
-    if (declaration.format === 'pack.ts') {
-      byPackage.set(PackageId.format(declaration.definition.packageId), declaration);
-    } else if (declaration.format === 'pack.json' && declaration.value.schemaVersion === '3.0.0') {
-      byPackage.set(
-        PackageId.format(parsePackSourceJson(declaration.value).unwrap().packageId),
-        declaration,
-      );
-    }
-  }
-  for (const declaration of declarations) {
-    if (declaration.format !== 'pack.json' || declaration.value.schemaVersion !== '3.0.0') continue;
-    const parsed = parsePackSourceJson(declaration.value).unwrap();
-    if (parsed.format !== 'instance') continue;
-    await capturePluginSourceInput(
-      sourceInputs,
-      declaration.sourcePath,
-      declaration.sourceRevision,
-    );
-    const visited = new Set<string>();
-    let parentId = PackageId.format(parsed.parent);
-    let values = { ...parsed.values };
-    for (;;) {
-      if (visited.has(parentId)) failure(declaration.sourcePath, 'Pack instance cycle');
-      visited.add(parentId);
-      const parent = byPackage.get(parentId);
-      if (!parent) failure(declaration.sourcePath, `missing parent ${parentId}`);
-      if (parent.format === 'pack.ts') {
-        // Each isolated executor is single-use; reload an instance's original module.
-        const { loadScriptablePack } = await import('@forgeax/engine-pack/source-node');
-        const definition = (await loadScriptablePack(parent.sourcePath)).unwrap();
+  const executors = createScriptablePackModuleExecutorPool({ maxWorkers: 1, maxTasksPerWorker: 1 });
+  const definitionFor = (declaration: ScriptablePackSourceDeclaration) =>
+    retainedInventory
+      ? declaration.definition
+      : createLazyScriptablePackDefinition({
+          sourcePath: declaration.sourcePath,
+          definition: declaration.definition,
+          sourceClosure: declaration.sourceClosure,
+          sourceSnapshot: capturedSources,
+          executors,
+        });
+  try {
+    for (const declaration of declarations) {
+      if (declaration.format === 'pack.ts') {
         await evaluate(
-          parent.sourcePath,
-          digest([declaration.sourceRevision, parent.sourceRevision]),
-          definition,
-          parsed.packageId,
-          values,
+          declaration.sourcePath,
+          declaration.sourceRevision,
+          definitionFor(declaration),
         );
-        break;
+      } else if (
+        declaration.format === 'pack.json' &&
+        declaration.value.schemaVersion === '3.0.0'
+      ) {
+        const parsed = declaration.value;
+        if (parsed.format !== 'direct') continue;
+        const projected = projectDirectPackJson(parsed);
+        const outputs = Object.fromEntries(
+          projected.assets.map((asset) => [
+            asset.sourceKey,
+            { ...asset.payload, kind: asset.kind },
+          ]),
+        ) as PackOutputMap;
+        await add(declaration.sourcePath, declaration.sourceRevision, parsed.packageId, outputs);
       }
-      if (parent.format !== 'pack.json') failure(declaration.sourcePath, 'invalid instance parent');
-      const next = parsePackSourceJson(parent.value).unwrap();
-      if (next.format !== 'instance')
-        failure(declaration.sourcePath, 'instance parent must be a parameterized source');
-      values = { ...next.values, ...values };
-      parentId = PackageId.format(next.parent);
     }
+    // Instances must execute the original declaring module; moving an instance does not rebase imports.
+    for (const [sourcePath, instance] of inventory.instances) {
+      await capturePluginSourceInput(sourceInputs, sourcePath, instance.sourceRevision);
+      const definition = retainedInventory
+        ? (await loadScriptablePack(instance.root.sourcePath)).unwrap()
+        : definitionFor(instance.root);
+      await evaluate(
+        instance.root.sourcePath,
+        digest([instance.sourceRevision, instance.root.sourceRevision]),
+        definition,
+        instance.packageId,
+        instance.values,
+      );
+    }
+    return { assets, sourceInputs, deferred: [...new Set(deferred)].sort() };
+  } finally {
+    await executors.dispose();
   }
-  return { assets, sourceInputs, deferred: [...new Set(deferred)].sort() };
 }
 
 export function pluginAssetClosure(
@@ -361,8 +358,16 @@ export async function assertPluginSourceInputs(
   inventory: PluginSourceInventory,
   projectRoot: string,
 ): Promise<void> {
-  const current = new Map<string, string>();
-  await capturePluginSourceInputs(await realpath(projectRoot), current);
+  const current = new Set<string>();
+  await visitPluginSourceInputPaths(await realpath(projectRoot), async (path) => {
+    const canonical = await realpath(path);
+    if (current.has(canonical))
+      failure(canonical, {
+        reason: 'source path alias changed during plugin compilation',
+        path,
+      });
+    current.add(canonical);
+  });
   const expectedInputs = new Map(
     await Promise.all(
       [...inventory.sourceInputs].map(
@@ -370,7 +375,7 @@ export async function assertPluginSourceInputs(
       ),
     ),
   );
-  for (const path of current.keys())
+  for (const path of current)
     if (!expectedInputs.has(path))
       failure(path, { reason: 'source added during plugin compilation' });
   for (const [path, expected] of expectedInputs) {
@@ -384,6 +389,22 @@ export async function assertPluginSourceInputs(
 
 /** Fence project code and dependency authority before any compiler consumes it. */
 async function capturePluginSourceInputs(root: string, inputs: Map<string, string>): Promise<void> {
+  await visitPluginSourceInputPaths(root, async (path) => {
+    await capturePluginSourceInput(
+      inputs,
+      path,
+      `sha256:${createHash('sha256')
+        .update(await readFile(path))
+        .digest('hex')}`,
+    );
+  });
+}
+
+/** Enumerate the same source authority without consuming content needed only by the final fence. */
+async function visitPluginSourceInputPaths(
+  root: string,
+  visitInput: (path: string) => Promise<void>,
+): Promise<void> {
   const ignored = new Set([
     'node_modules',
     '.git',
@@ -402,15 +423,9 @@ async function capturePluginSourceInputs(root: string, inputs: Map<string, strin
       if (entry.isDirectory()) await visit(path);
       else if (
         entry.isFile() &&
-        /(?:\.[cm]?[jt]sx?|\.json|lock\.yaml|bun\.lock)$/.test(entry.name)
+        /(?:\.[cm]?[jt]sx?|\.wgsl|\.json|lock\.yaml|bun\.lock)$/.test(entry.name)
       ) {
-        await capturePluginSourceInput(
-          inputs,
-          path,
-          `sha256:${createHash('sha256')
-            .update(await readFile(path))
-            .digest('hex')}`,
-        );
+        await visitInput(path);
       }
     }
   }

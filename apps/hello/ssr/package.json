@@ -22,7 +22,11 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-ssr smoke",
     "rhiDebug": {
-      "riskFamilies": ["materials-textures", "render-targets", "temporal"]
+      "riskFamilies": [
+        "materials-textures",
+        "render-targets",
+        "temporal"
+      ]
     },
     "metrics": {
       "bundle-size": {
@@ -63,9 +67,9 @@
     "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "playwright": "^1.56.1",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

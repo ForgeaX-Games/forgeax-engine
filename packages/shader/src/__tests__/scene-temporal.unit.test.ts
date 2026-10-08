@@ -70,8 +70,8 @@ describe('scene temporal varyings', () => {
 
   it.each(pbrTemporalConsumers)('%s imports the shared PBR temporal authority', (file) => {
     const source = readFileSync(resolve(import.meta.dirname, '..', file), 'utf8');
-    expect(source).toContain('#import forgeax_scene_temporal::{sceneViewZ}');
-    expect(source).toContain('#import forgeax_pbr::temporal::{projectPbrSceneTemporal}');
+    expect(source).toMatch(/#import forgeax_scene_temporal::\{[^}]*\bsceneViewZ\b/);
+    expect(source).toMatch(/#import forgeax_pbr::temporal::\{[^}]*\bprojectPbrSceneTemporal\b/);
     expect(source).toMatch(/@interpolate\(perspective\) currentClip : vec4<f32>/);
     expect(source).toMatch(/@interpolate\(perspective\) previousClip : vec4<f32>/);
     expect(source).not.toMatch(

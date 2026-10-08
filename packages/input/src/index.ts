@@ -58,6 +58,21 @@ export {
   InputSet,
 } from './frame-start-scan-system';
 export type {
+  GamepadFeedback,
+  GamepadFeedbackAdmission,
+  GamepadFeedbackIntent,
+  GamepadFeedbackResult,
+  GamepadFeedbackStatus,
+  GamepadFeedbackTarget,
+  GamepadRumble,
+} from './gamepad-feedback';
+export {
+  createGamepadFeedback,
+  GAMEPAD_FEEDBACK_CAPACITY,
+  GAMEPAD_FEEDBACK_KEY,
+  GAMEPAD_FEEDBACK_MAX_DURATION_MS,
+} from './gamepad-feedback';
+export type {
   GestureEvent,
   GestureState,
   SwipeDirection,

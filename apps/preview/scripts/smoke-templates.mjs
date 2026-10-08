@@ -6,16 +6,19 @@
 // journey; every other template must at least load, start, size its canvas, and
 // leave the renderer alive.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { chromium } from 'playwright';
 import { PNG } from 'pngjs';
+import { probeLocalization } from '../../../templates/game-3d/scripts/localization-probe.mjs';
 import { probeRuntimeVase } from '../../../templates/game-3d/scripts/runtime-vase-probe.mjs';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { GameProjectSchema } from '@forgeax/engine/project';
 import { createOwnedProcessGroupStopper } from '../../shared/scripts/rhi-debug-process.mjs';
+import browserLaunch from '../../../scripts/ci/browser-launch.json' with { type: 'json' };
 
 const ROOT = resolve(import.meta.dirname, '..', '..', '..');
 const PROJECTS = [
@@ -44,7 +47,7 @@ const SERVER_STARTUP_TIMEOUT_MS = Number.isFinite(configuredServerStartupTimeout
   && configuredServerStartupTimeoutMs > 0
   ? Math.min(configuredServerStartupTimeoutMs, MAX_SERVER_STARTUP_TIMEOUT_MS)
   : DEFAULT_SERVER_STARTUP_TIMEOUT_MS;
-const CHROME_CHANNEL = process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome';
+const CHROME_CHANNEL = process.env.FORGEAX_CHROME_CHANNEL ?? browserLaunch.channel;
 const CI_LIGHTWEIGHT = process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1';
 const positiveEnv = (name, fallback) => {
   const value = Number.parseInt(process.env[name] ?? '', 10);
@@ -74,7 +77,7 @@ const CHROME_ARGS = [
   '--use-angle=swiftshader',
   '--ignore-gpu-blocklist',
   '--disable-gpu-driver-bug-workarounds',
-  '--disable-dawn-features=disallow_unsafe_apis',
+  '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
   '--autoplay-policy=no-user-gesture-required',
 ];
 const SELECTED_TEMPLATE_SLUGS = (process.env.FORGEAX_TEMPLATE_SMOKE_SLUGS ?? '')
@@ -140,35 +143,71 @@ function discoverTemplates() {
 const templates = discoverTemplates();
 mkdirSync(ARTIFACT_DIR, { recursive: true });
 
-const server = spawn(
-  process.execPath,
-  [
-    resolve(createRequire(import.meta.url).resolve('vite/package.json'), '..', 'bin/vite.js'),
-    '--host',
-    '127.0.0.1',
-    '--port',
-    String(PORT),
-    '--strictPort',
-  ],
-  {
-    cwd: resolve(ROOT, 'apps/preview'),
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, FORGEAX_TEMPLATE_SMOKE: '1' },
-  },
-);
+let server;
 let serverOutput = '';
 let serverSpawnError;
 let serverExit;
+let stopServer = async () => {};
+let game3dSmokeRoot;
+async function prepareGame3dSmokeProject() {
+  const root = await mkdtemp(resolve(ARTIFACT_DIR, 'game3d-ci-'));
+  try {
+    await cp(resolve(ROOT, 'templates/game-3d'), root, {
+      recursive: true,
+      filter: (path) => !['node_modules', '.forgeax', 'dist', '.git'].includes(path.split(sep).at(-1)),
+    });
+    await mkdir(resolve(root, 'node_modules/@forgeax'), { recursive: true });
+    await symlink(resolve(ROOT, 'packages/engine'), resolve(root, 'node_modules/@forgeax/engine'), 'dir');
+    const scenePath = resolve(root, 'assets/scene.pack.ts');
+    const scene = await readFile(scenePath, 'utf8');
+    if (!scene.includes('mapSize: 2048,')) throw new Error('Game 3D CI fixture expected three 2048-square shadow cascades');
+    await writeFile(scenePath, scene.replace('mapSize: 2048,', 'mapSize: 256,'));
+    return root;
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
+}
 const appendServerOutput = (stream, chunk) => {
   serverOutput += `[${stream}] ${chunk.toString()}`;
 };
-server.stdout.on('data', (chunk) => { appendServerOutput('stdout', chunk); });
-server.stderr.on('data', (chunk) => { appendServerOutput('stderr', chunk); });
-server.on('error', (error) => { serverSpawnError = error; });
-server.on('exit', (code, signal) => { serverExit = { code, signal }; });
+
+function startServer(templateSlug) {
+  serverOutput = '';
+  serverSpawnError = undefined;
+  serverExit = undefined;
+  server = spawn(
+    process.execPath,
+    [
+      resolve(createRequire(import.meta.url).resolve('vite/package.json'), '..', 'bin/vite.js'),
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(PORT),
+      '--strictPort',
+    ],
+    {
+      cwd: resolve(ROOT, 'apps/preview'),
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // This child serves the scoped development Pack protocol, even when its
+      // caller builds production artifacts in the same shell.
+      env: { ...process.env, NODE_ENV: 'development', FORGEAX_TEMPLATE_SMOKE: '1', FORGEAX_TEMPLATE_SMOKE_SLUGS: templateSlug,
+        ...(game3dSmokeRoot === undefined ? {} : { FORGEAX_TEMPLATE_SMOKE_GAME3D_ROOT: game3dSmokeRoot }) },
+    },
+  );
+  server.stdout.on('data', (chunk) => { appendServerOutput('stdout', chunk); });
+  server.stderr.on('data', (chunk) => { appendServerOutput('stderr', chunk); });
+  server.on('error', (error) => { serverSpawnError = error; });
+  server.on('exit', (code, signal) => { serverExit = { code, signal }; });
+
+  stopServer = server.pid === undefined
+    ? async () => {}
+    : createOwnedProcessGroupStopper(server);
+}
 
 let browser;
+let browserServer;
 let context;
 let page;
 let activeEvidence;
@@ -182,6 +221,13 @@ function cancelSmoke(signal) {
   cancelled = signal;
   cancellation = (async () => {
     const cleanup = await Promise.allSettled([closeSmokeBrowser(), stopServer()]);
+    if (game3dSmokeRoot !== undefined && cleanup[1].status === 'fulfilled') {
+      try {
+        await rm(game3dSmokeRoot, { recursive: true, force: true });
+      } catch (error) {
+        cleanup.push({ status: 'rejected', reason: error });
+      }
+    }
     writeReport('failed', {
       error: `template smoke cancelled by ${signal}`,
       cleanupErrors: cleanup.filter((result) => result.status === 'rejected').map((result) => String(result.reason)),
@@ -206,10 +252,6 @@ function writeReport(status, extra = {}) {
   );
 }
 
-const stopServer = server.pid === undefined
-  ? async () => {}
-  : createOwnedProcessGroupStopper(server);
-
 function unexpectedConsoleErrors(template, evidence) {
   return evidence.consoleErrors.filter(
     (message) =>
@@ -219,15 +261,43 @@ function unexpectedConsoleErrors(template, evidence) {
 }
 
 async function closeSmokeBrowser() {
+  const closingEvidence = activeEvidence;
   activeEvidence = undefined;
   const cleanupErrors = [];
   const currentPage = page;
   const currentContext = context;
-  const currentBrowser = browser;
+  const currentBrowserServer = browserServer;
+  // Keep teardown errors separate from the completed gameplay oracle. These
+  // bounded observations do not acknowledge App/Worker disposal or settle work.
+  const shutdownEvidence = { phase: 'inspection-unobserved', events: [], droppedEvents: 0, attempts: [] };
+  if (closingEvidence !== undefined) closingEvidence.shutdown = shutdownEvidence;
+  const closingText = (value) => {
+    try { return String(value).slice(0, 2048); }
+    catch { return 'UNOBSERVED: error text unavailable'; }
+  };
+  const recordClosingEvent = (kind, message) => {
+    if (shutdownEvidence.events.length >= 32) { shutdownEvidence.droppedEvents += 1; return; }
+    shutdownEvidence.events.push({ kind, message: closingText(message) });
+  };
+  const onClosingPageError = (error) => {
+    try { recordClosingEvent('pageerror', error?.message ?? error); }
+    catch { shutdownEvidence.droppedEvents += 1; }
+  };
+  const onClosingConsole = (message) => {
+    try { if (message.type() === 'error') recordClosingEvent('console-error', message.text()); }
+    catch { shutdownEvidence.droppedEvents += 1; }
+  };
+  try {
+    currentPage?.on?.('pageerror', onClosingPageError);
+    currentPage?.on?.('console', onClosingConsole);
+  } catch { recordClosingEvent('observer-error', 'UNOBSERVED: closing listeners unavailable'); }
   page = undefined;
   context = undefined;
   browser = undefined;
+  browserServer = undefined;
   const attemptClose = async (label, close) => {
+    const attempt = { label, status: 'pending' };
+    shutdownEvidence.attempts.push(attempt);
     let timer;
     try {
       const closed = await Promise.race([
@@ -235,20 +305,54 @@ async function closeSmokeBrowser() {
         new Promise((resolve) => { timer = setTimeout(() => resolve(false), 10_000); }),
       ]);
       if (!closed) throw new Error(`${label} cleanup incomplete after 10s`);
+      attempt.status = 'completed';
+      return true;
     } catch (cause) {
+      attempt.status = 'failed';
+      attempt.cause = closingText(cause);
       cleanupErrors.push(new Error(`${label} cleanup failed`, { cause }));
+      return false;
     } finally {
+      if (label === 'Preview') attempt.phase = shutdownEvidence.phase;
       clearTimeout(timer);
     }
   };
   // Keep page, context, and browser teardown independent. A Playwright page
   // rejection must not leave its WebGPU context alive for the next template.
+  // Page destruction cannot await asynchronous pagehide work. Use the Host's
+  // existing disposal protocol while its Worker/GPU lifetime is still live.
+  await attemptClose('Preview', async () => {
+    if (currentPage === undefined || currentPage.isClosed()) {
+      shutdownEvidence.phase = 'page-unavailable';
+      return;
+    }
+    shutdownEvidence.phase = 'inspection-query';
+    const running = await currentPage.evaluate(() => globalThis.__forgeaxPreviewInspection !== undefined);
+    if (!running) { shutdownEvidence.phase = 'inspection-absent'; return; }
+    shutdownEvidence.phase = 'dispose-message-posting';
+    await currentPage.evaluate(() => window.postMessage({ type: 'VAG_PREVIEW_DISPOSE' }, '*'));
+    shutdownEvidence.phase = 'dispose-message-posted';
+    await currentPage.waitForFunction(
+      () => globalThis.__forgeaxPreviewInspection === undefined && document.querySelector('[data-forgeax-ui-root]') === null,
+      null,
+      { timeout: 10_000 },
+    );
+    shutdownEvidence.phase = 'inspection-and-ui-retired';
+  });
   await attemptClose('page', () => currentPage?.close());
   await attemptClose('context', () => currentContext?.close());
-  await attemptClose('browser', () => currentBrowser?.close());
+  // The public server handle owns the process, including when the protocol
+  // client can no longer close it. Recovery retires that process but keeps
+  // the original 10-second close failure as a failed smoke.
+  const browserClosed = await attemptClose('browser', () => currentBrowserServer?.close());
+  if (!browserClosed)
+    await attemptClose('browser process', () => currentBrowserServer?.kill());
+  try {
+    currentPage?.off?.('pageerror', onClosingPageError);
+    currentPage?.off?.('console', onClosingConsole);
+  } catch { recordClosingEvent('observer-error', 'UNOBSERVED: closing listener removal failed'); }
   await sleep(250);
   if (cleanupErrors.length > 0) {
-    currentBrowser?._connection?.close();
     throw new AggregateError(cleanupErrors, 'template smoke browser cleanup failed');
   }
 }
@@ -376,11 +480,25 @@ async function classifySdkSourceHostGpuInstanceLoss(evidence) {
 }
 
 async function launchSmokeBrowser() {
-  return chromium.launch({
+  const startedAt = performance.now();
+  browserServer = await chromium.launchServer({
     headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
     channel: CHROME_CHANNEL,
     args: CHROME_ARGS,
+    timeout: 30_000,
   });
+  try {
+    return await chromium.connect(browserServer.wsEndpoint(), {
+      timeout: Math.max(1, 30_000 - (performance.now() - startedAt)),
+    });
+  } catch (cause) {
+    try {
+      await closeSmokeBrowser();
+    } catch (cleanup) {
+      throw new AggregateError([cause, cleanup], 'template smoke browser startup and cleanup failed');
+    }
+    throw cause;
+  }
 }
 
 async function createSmokePage(targetBrowser, { probePointerLock = false } = {}) {
@@ -621,7 +739,7 @@ async function readGame3dCanvasRender() {
 function serverDiagnostics(lastStatus, elapsedMs) {
   return {
     origin: ORIGIN,
-    pid: server.pid ?? null,
+    pid: server?.pid ?? null,
     elapsedMs,
     lastStatus: lastStatus ?? null,
     spawnError: serverSpawnError === undefined ? null : String(serverSpawnError),
@@ -633,6 +751,7 @@ function serverDiagnostics(lastStatus, elapsedMs) {
 async function waitForServerReady() {
   const startedAt = Date.now();
   let lastStatus;
+  let lastProbeError;
   while (Date.now() - startedAt < SERVER_STARTUP_TIMEOUT_MS) {
     const elapsedMs = Date.now() - startedAt;
     if (serverSpawnError !== undefined) {
@@ -654,8 +773,13 @@ async function waitForServerReady() {
       });
       lastStatus = response.status;
       body = await response.text();
-    } catch {
+    } catch (error) {
       // Vite is still starting, or its producer has not answered yet.
+      lastProbeError = {
+        name: error?.name,
+        message: error instanceof Error ? error.message : String(error),
+        code: error?.cause?.code ?? error?.code,
+      };
     }
     if (body !== undefined) {
       if (response.ok) {
@@ -671,7 +795,7 @@ async function waitForServerReady() {
     await sleep(Math.min(250, Math.max(0, SERVER_STARTUP_TIMEOUT_MS - (Date.now() - startedAt))));
   }
   throw new Error(
-    `Preview server did not become ready within ${SERVER_STARTUP_TIMEOUT_MS}ms: ${JSON.stringify(serverDiagnostics(lastStatus, Date.now() - startedAt))}`,
+    `Preview server did not become ready within ${SERVER_STARTUP_TIMEOUT_MS}ms: ${JSON.stringify({ ...serverDiagnostics(lastStatus, Date.now() - startedAt), lastProbeError })}`,
   );
 }
 
@@ -882,18 +1006,21 @@ async function waitForGame3dPointerLock(label) {
   }
 }
 
-async function waitForTemplateReady() {
+async function waitForTemplateReady(requireCompletedFrame = true) {
   await page.waitForFunction(
-    () => {
+    (requireCompletedFrame) => {
       const inspection = globalThis.__forgeaxPreviewInspection;
       const canvas = document.querySelector('canvas');
-      const state = inspection?.renderer.health()?.reason;
+      const health = inspection?.renderer.health();
+      const state = health?.reason;
+      const completed = document.documentElement.dataset.forgeaxFrameCompleted;
       return inspection !== undefined
         && state === 'alive'
+        && (!requireCompletedFrame || (completed !== undefined && Number(completed) >= 0))
         && (canvas?.width ?? 0) > 0
         && (canvas?.height ?? 0) > 0;
     },
-    undefined,
+    requireCompletedFrame,
     { timeout: 30_000, polling: 100 },
   );
   await page.evaluate((settleFrames) => new Promise((done) => {
@@ -1018,6 +1145,8 @@ async function smokeGame3d(evidence) {
     throw new Error(`game-3d UI asset is incomplete: ${JSON.stringify(ui)}`);
   }
 
+  evidence.localization = await probeLocalization(page, ARTIFACT_DIR);
+
   evidence.runtimeVase = await probeRuntimeVase(page, async () => {
     const result = await page.evaluate(() => globalThis.__forgeaxPreviewInspection.read('game-3d.runtime-vase'));
     if (!result.ok) throw new Error(JSON.stringify(result));
@@ -1039,8 +1168,8 @@ async function smokeGame3d(evidence) {
   // the game-owned scene witness is ready so a blank game cannot pass on
   // lifecycle/inspection evidence alone.
   const render = await readGame3dCanvasRender();
-  // Use exposed game canvas beside the parameter panel, including the small CI viewport.
-  const inputPoint = { x: box.x + box.width * 0.1, y: box.y + box.height / 2 };
+  // Both panels begin 14px from the edge; retain native input outside their controls.
+  const inputPoint = { x: box.x + 4, y: box.y + 4 };
 
   await page.bringToFront();
   await page.mouse.move(inputPoint.x, inputPoint.y);
@@ -1170,12 +1299,55 @@ async function smokeGame3d(evidence) {
   };
 }
 
+async function smokeEmptyStartupReadiness(evidence) {
+  const catalog = await (await fetch(`${ORIGIN}${CATALOG_URL}`)).json();
+  const scene = catalog.entries.find((entry) => entry.guid === '019fb7ce-1000-7000-8000-000000000001');
+  if (scene?.kind !== 'scene' || typeof scene.packageUrl !== 'string') {
+    throw new Error('empty startup disposal requires the ordinary scene Catalog entry');
+  }
+  await restartSmokeBrowser(evidence);
+  const packageUrl = new URL(scene.packageUrl, ORIGIN);
+  const matches = (url) => url.origin === packageUrl.origin && url.pathname === packageUrl.pathname;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let admitted;
+  const blocked = new Promise((resolve) => { admitted = resolve; });
+  await page.route(matches, async (route) => {
+    admitted();
+    await held;
+    await route.continue().catch(() => undefined);
+  });
+  const requested = page.waitForRequest((request) => matches(new URL(request.url())), { timeout: 30_000 });
+  evidence.phase = 'startup-disposal';
+  try {
+    await Promise.all([
+      page.goto(`${ORIGIN}/?game=empty`, { waitUntil: 'domcontentloaded', timeout: 30_000 }),
+      requested,
+      blocked,
+    ]);
+    const premature = await page.evaluate(() => globalThis.__forgeaxPreviewInspection !== undefined);
+    if (premature) throw new Error('Preview advertised readiness while its native Scene startup was still blocked');
+    release();
+    await page.waitForFunction(() => globalThis.__forgeaxPreviewInspection !== undefined, null, { timeout: 30_000 });
+    await page.evaluate(() => window.postMessage({ type: 'VAG_PREVIEW_DISPOSE' }, '*'));
+    await page.waitForFunction(
+      () => globalThis.__forgeaxPreviewInspection === undefined && document.querySelector('[data-forgeax-ui-root]') === null,
+      null,
+      { timeout: 10_000 },
+    );
+    evidence.startupDisposal = { sceneGuid: scene.guid, sceneRequestHeld: true, notPublishedDuringLoad: true, retired: true };
+  } finally {
+    release();
+    await page.unroute(matches);
+  }
+}
+
 async function smokeTemplate(template, evidence) {
   await page.goto(`${ORIGIN}/?game=${encodeURIComponent(template.slug)}`, {
     waitUntil: 'domcontentloaded',
     timeout: 30_000,
   });
-  await waitForTemplateReady();
+  await waitForTemplateReady(template.slug !== 'empty' && template.manifest.roots?.engine !== undefined);
   if (template.slug === 'game-3d') {
     await waitForSubmittedRendererFrame('game-3d renderer did not submit an initial frame');
   }
@@ -1208,6 +1380,8 @@ async function smokeTemplate(template, evidence) {
     await classifySdkSourceHostGpuInstanceLoss(evidence);
   }
 
+  if (template.slug === 'empty') await smokeEmptyStartupReadiness(evidence);
+
   const unexpected = unexpectedConsoleErrors(template, evidence);
   if (evidence.pageErrors.length > 0) throw new Error(`${template.slug} page errors: ${evidence.pageErrors.join(' | ')}`);
   if (unexpected.length > 0) throw new Error(`${template.slug} console errors: ${unexpected.join(' | ')}`);
@@ -1216,8 +1390,6 @@ async function smokeTemplate(template, evidence) {
 
 let smokeFailure;
 try {
-  await waitForServerReady();
-
   for (const template of templates) {
     const evidence = {
       slug: template.slug,
@@ -1232,6 +1404,12 @@ try {
       sequence: 0,
     };
     templateEvidence.push(evidence);
+    if (CI_LIGHTWEIGHT && template.slug === 'game-3d') {
+      game3dSmokeRoot = await prepareGame3dSmokeProject();
+      evidence.shadowMapSize = 256;
+    }
+    startServer(template.slug);
+    await waitForServerReady();
     await restartSmokeBrowser(evidence);
     await smokeTemplate(template, evidence);
     evidence.status =
@@ -1239,6 +1417,12 @@ try {
     console.log(
       `[${template.slug}] ${evidence.status === 'passed' ? 'PASS' : 'PASS-WITH-OMISSIONS'} id=${template.id} name=${template.name}`,
     );
+    await closeSmokeBrowser();
+    await stopServer();
+    if (game3dSmokeRoot !== undefined) {
+      await rm(game3dSmokeRoot, { recursive: true, force: true });
+      game3dSmokeRoot = undefined;
+    }
   }
 
 } catch (error) {
@@ -1254,6 +1438,10 @@ try {
   }
   try {
     await stopServer();
+    if (game3dSmokeRoot !== undefined) {
+      await rm(game3dSmokeRoot, { recursive: true, force: true });
+      game3dSmokeRoot = undefined;
+    }
   } catch (error) {
     cleanupError = cleanupError === undefined
       ? error

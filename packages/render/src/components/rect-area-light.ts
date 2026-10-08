@@ -1,6 +1,7 @@
 // @forgeax/engine-render - single-sided rectangular area-light authoring facts.
 
 import { defineComponent } from '@forgeax/engine-ecs';
+import { LIGHTING_CHANNELS_DEFAULT } from './lighting-channels';
 
 /**
  * Single-sided rectangular area light. Transform supplies the center and
@@ -16,6 +17,8 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * topology; without it the emitter stays uniform.
  */
 export const RectAreaLight = defineComponent('RectAreaLight', {
+  // f64 preserves invalid author inputs until render validation (no u32 wrapping).
+  lightingChannels: { type: 'f64', default: LIGHTING_CHANNELS_DEFAULT },
   color: { type: 'array<f32, 3>', default: new Float32Array([1, 1, 1]) },
   intensity: { type: 'f32', default: 1 },
   width: { type: 'f32', default: 1 },

@@ -46,6 +46,7 @@
     "apps/learn-render/6.pbr/4.transmission-refraction/assets/material-transmission-gltf.pack.json",
     "apps/learn-render/6.pbr/4.transmission-refraction/assets/material-transmission.pack.json",
     "apps/shadertoy/fractal-pyramid/src/fractal-pyramid.pack.json",
-    "apps/shadertoy/happy-blob/src/happy-blob.pack.json"
+    "apps/shadertoy/happy-blob/src/happy-blob.pack.json",
+    "packages/runtime/src/__tests__/fixtures/layered-target/layered-target.pack.json"
   ]
 }

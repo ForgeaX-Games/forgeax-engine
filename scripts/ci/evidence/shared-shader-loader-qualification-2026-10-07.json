@@ -1,0 +1,135 @@
+{
+  "rows": [
+    {
+      "variant": "before",
+      "elapsedMs": 12132.85575,
+      "cpuUserMs": 1598.784,
+      "cpuSystemMs": 442.094,
+      "maxRSSKiB": 885776,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "after",
+      "elapsedMs": 7777.184333,
+      "cpuUserMs": 1147.22,
+      "cpuSystemMs": 172.321,
+      "maxRSSKiB": 836448,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "after",
+      "elapsedMs": 9135.729708,
+      "cpuUserMs": 1149.021,
+      "cpuSystemMs": 222.625,
+      "maxRSSKiB": 836512,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "before",
+      "elapsedMs": 17250.231166999998,
+      "cpuUserMs": 1408.463,
+      "cpuSystemMs": 205.167,
+      "maxRSSKiB": 919040,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "before",
+      "elapsedMs": 13239.962540999999,
+      "cpuUserMs": 1500.333,
+      "cpuSystemMs": 231.124,
+      "maxRSSKiB": 915728,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "after",
+      "elapsedMs": 10888.896208,
+      "cpuUserMs": 1053.157,
+      "cpuSystemMs": 142.17,
+      "maxRSSKiB": 836464,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "after",
+      "elapsedMs": 11892.608124999999,
+      "cpuUserMs": 1177.433,
+      "cpuSystemMs": 162.728,
+      "maxRSSKiB": 835808,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    },
+    {
+      "variant": "before",
+      "elapsedMs": 16234.455665999998,
+      "cpuUserMs": 1509.086,
+      "cpuSystemMs": 239.38,
+      "maxRSSKiB": 927760,
+      "entries": 67,
+      "materialShaders": 26,
+      "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+      "node": "v22.23.2",
+      "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+    }
+  ],
+  "limits": "Sequential actual Node loader calls on a heavily shared Mac; ABBA ordering does not isolate external load. No Catalog/Browser/GPU/CI time verdict.",
+  "schemaVersion": 1,
+  "kind": "Node shared shader publication loader qualification",
+  "baseHead": "c9e48add03a86fba404483acabdae20f288bcdd2",
+  "sourceOwner": "packages/vite-plugin-shader/src/shared-engine-inputs.ts",
+  "publication": {
+    "fileBytes": 45403514,
+    "uniqueSources": 3433,
+    "reconstructedCharacters": 519141101
+  },
+  "functional": {
+    "red": "one Node loader case fails without browser Crypto; three integrity cases pass",
+    "green": "11 cases pass across loader, source-publication and packaged-source-digest files",
+    "broaderNegative": "shared-import-ownership unit case reaches its original 5000ms deadline on both unchanged control and candidate",
+    "browserAndGpu": "not part of this CPU-only qualification"
+  },
+  "compiledComparison": {
+    "beforeSha256": "3f6d233582ddb2b0049ef6506d4c11e3d34c34003abf67de7bf637e0a811812a",
+    "afterSha256": "1750f163c1b10d84fc63866a003c4bfaa910888edfa2982782298ad3596d0b0e",
+    "finalSourceSha256": "82eb99d5de65297ddb773068c0e541b0dd99586561d46ba8e2145706f32c6366",
+    "note": "Compared modules compile the actual owner source. After the ABBA series, the final source renames the private verifier, generalizes error labels and removes redundant packaged-row checks already enforced by that verifier. These do not alter the compared shared-loader algorithm; final-source output is checked separately.",
+    "finalCompiledSha256": "316bdff5e28af2556862f7dfdba1bcd0cfcd88869b75ce11ca6907b3a43d3722"
+  },
+  "finalSourceCheck": {
+    "variant": "final",
+    "elapsedMs": 7513.550875,
+    "cpuUserMs": 1157.275,
+    "cpuSystemMs": 239.018,
+    "maxRSSKiB": 836880,
+    "entries": 67,
+    "materialShaders": 26,
+    "outputDigest": "1f24d2d12869f4f632d81776d60c47567c3a4a55a61f594ff2e243269c8268e6",
+    "node": "v22.23.2",
+    "inputDigest": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b"
+  }
+}

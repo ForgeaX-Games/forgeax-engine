@@ -18,6 +18,8 @@
 import {
   AnimationPlayer,
   defineAnimationGraph,
+  defineAnimationMask,
+  deriveAnimationTargetId,
   evaluateAnimationGraph,
   serializeAnimationGraph,
 } from '@forgeax/engine-animation';
@@ -129,6 +131,36 @@ describe('AnimationGraph collect round-trip (M4 / w28, AC-14 part b)', () => {
     if (ap === undefined) return;
     // The graph scalar shared field resolves to the catalogued GUID string.
     expect(ap.graph).toBe(g.guid);
+  });
+
+  it('keeps World-local mask handles transient while collecting ordinary playback assets', () => {
+    const world = makeWorld();
+    const reg = makeRegistry();
+    const clip = registerClip(world, reg, G_WALK, 10);
+    const mask = world.allocSharedRef(
+      'AnimationMask',
+      defineAnimationMask([
+        { targetId: deriveAnimationTargetId(['Rig', 'Upper']), weight: 1 },
+      ]).unwrap(),
+    );
+    const player = world
+      .spawn({
+        component: AnimationPlayer,
+        data: {
+          clips: [clip.handle],
+          times: [0],
+          weights: [1],
+          speeds: [1],
+          masks: [mask],
+          nodeMasks: [mask],
+        },
+      })
+      .unwrap();
+    const collected = rootsToSceneAsset(reg, world, [player]).unwrap();
+    const data = apOf(collected);
+    expect(data?.clips).toEqual([clip.guid]);
+    expect(data).not.toHaveProperty('masks');
+    expect(data).not.toHaveProperty('nodeMasks');
   });
 
   it('skips a graph == 0 (no-graph) entity 0-sentinel: lossless, no graph key emitted', () => {

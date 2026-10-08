@@ -1,4 +1,5 @@
-export type ToolRealm = 'build' | 'host' | 'engine' | 'frontend';
+export const TOOL_REALMS = Object.freeze(['build', 'host', 'engine', 'frontend'] as const);
+export type ToolRealm = (typeof TOOL_REALMS)[number];
 
 /**
  * Trusted identity of the plugin fiber that owns a callable contribution.
@@ -197,6 +198,7 @@ export interface ToolRunOptions extends ToolSnapshotInput {
   /** Explicit provider route used when one operation has multiple owners. */
   readonly providerId?: string;
   readonly sourceId?: string;
+  /** Provider generation observed by the caller. */
   readonly generation?: number;
   /** Internal owner context supplied by ToolApiRegistry. */
   readonly owner?: ToolExecutionOwner;
@@ -372,12 +374,6 @@ export type ToolRuntimeError =
       readonly expected: string;
       readonly hint: string;
       readonly detail: { readonly reason: string; readonly runId?: string };
-    }
-  | {
-      readonly code: 'tool-timing-invalid';
-      readonly expected: string;
-      readonly hint: string;
-      readonly detail: { readonly reason: string };
     };
 
 export type ToolRuntimeErrorCode = ToolRuntimeError['code'];

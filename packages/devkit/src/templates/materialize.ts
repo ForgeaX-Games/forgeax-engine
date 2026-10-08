@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   type TemplateDescriptor,
@@ -145,6 +145,13 @@ export async function readTemplateDescriptor(templateRoot: string): Promise<Temp
   }
 }
 
+export type TemplateMaterializeError = {
+  readonly code: 'template-materialize-failed';
+  readonly expected: string;
+  readonly hint: string;
+  readonly detail: { readonly stage: string; readonly reason: string };
+};
+
 function materializeError(stage: string, reason: unknown): Error & TemplateMaterializeError {
   return Object.assign(new Error('template materialization failed'), {
     code: 'template-materialize-failed' as const,
@@ -196,73 +203,5 @@ export async function writeProjectIdentity(root: string, identity: ProjectIdenti
     ]);
   } catch (cause) {
     throw materializeError('write-manifests', cause);
-  }
-}
-
-export interface MaterializeTemplateInput {
-  readonly templateRoot: string;
-  readonly targetRoot: string;
-  readonly targetBasename: string;
-  readonly identity?: ProjectIdentityOverrides;
-}
-
-export interface MaterializedTemplate {
-  readonly root: string;
-  readonly identity: ProjectIdentity;
-}
-
-export type TemplateMaterializeError = {
-  readonly code: 'template-materialize-failed';
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail: { readonly stage: string; readonly reason: string };
-};
-
-export async function materializeTemplate(
-  input: MaterializeTemplateInput,
-): Promise<Result<MaterializedTemplate, TemplateMaterializeError>> {
-  const targetRoot = resolve(input.targetRoot);
-  // Atomic publication must stay on the destination filesystem; the SDK may
-  // live on another volume (including a read-only installation).
-  const stagingRoot = join(
-    dirname(targetRoot),
-    `.${basename(targetRoot)}.template-staging-${process.pid}`,
-  );
-  try {
-    await stat(input.templateRoot);
-    await rm(stagingRoot, { recursive: true, force: true });
-    await mkdir(dirname(targetRoot), { recursive: true });
-    await cp(input.templateRoot, stagingRoot, {
-      recursive: true,
-      filter: (source) => {
-        const absolute = resolve(source);
-        return (
-          absolute !== targetRoot &&
-          !absolute.startsWith(`${targetRoot}/`) &&
-          absolute !== stagingRoot &&
-          !absolute.startsWith(`${stagingRoot}/`)
-        );
-      },
-    });
-    const identity: ProjectIdentity = {
-      id: input.identity?.id ?? input.targetBasename,
-      name: input.identity?.name ?? input.targetBasename,
-      packageName: input.identity?.packageName ?? `@local/${input.targetBasename}`,
-    };
-    await writeProjectIdentity(stagingRoot, identity);
-    await rm(targetRoot, { recursive: true, force: true });
-    await rename(stagingRoot, targetRoot);
-    return ok({ root: targetRoot, identity });
-  } catch (error) {
-    await rm(stagingRoot, { recursive: true, force: true });
-    throw Object.assign(new Error('template materialization failed'), {
-      code: 'template-materialize-failed',
-      expected: 'template copy, validation, and atomic rename complete',
-      hint: 'repair the template source and rerun materialization',
-      detail: {
-        stage: 'copy-or-rename',
-        reason: error instanceof Error ? error.message : String(error),
-      },
-    });
   }
 }

@@ -13,7 +13,8 @@ import {
   type Result,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
-import { validateMeshCardLayout } from './mesh-card-artifact';
+import { admitsMeshCardLayout, validateMeshCardLayout } from './mesh-card-artifact';
+import { validateMeshCollisionAttachment } from './mesh-collision';
 import { deriveVertexLayoutProjection } from './vertex-attribute-layout.js';
 
 const nativeLittleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
@@ -71,11 +72,17 @@ function refsMeta(
     if (!valid.ok) throw valid.error;
     if (
       !payload.submeshes?.length ||
-      payload.submeshes.some((section) => section.topology !== 'triangle-list') ||
-      payload.morphTargets ||
-      payload.attributes?.skinIndex
+      !admitsMeshCardLayout({
+        submeshes: payload.submeshes,
+        morphTargets: payload.morphTargets,
+        skinIndex: payload.attributes?.skinIndex,
+      })
     )
       throw new Error('card layouts require static triangle-list geometry');
+  }
+  if (payload.collision !== undefined) {
+    const valid = validateMeshCollisionAttachment(payload as MeshAsset, payload.collision);
+    if (!valid.ok) throw valid.error;
   }
   const materialSlots = (payload.materialSlots ?? [{ slotName: 'Default' }]).map(
     (slot, slotIndex) => {
@@ -139,6 +146,14 @@ function refsMeta(
         ? [{ indexOffset: 0, indexCount: payload.indices?.length ?? 0, materialSlot: 0 }]
         : payload.submeshes,
     materialSlots,
+    ...(payload.collision === undefined
+      ? {}
+      : {
+          collision: {
+            positions: Array.from(payload.collision.positions),
+            indices: Array.from(payload.collision.indices),
+          },
+        }),
     ...(payload.cardLayout === undefined ? {} : { cardLayout: payload.cardLayout }),
     ...(payload.aabb === undefined ? {} : { aabb: jsonValue(payload.aabb) }),
     ...(morphTargetMasks === undefined ? {} : { morphTargetMasks }),
@@ -341,6 +356,14 @@ export function packMeshBin(
   sourceKey: string,
   refs: readonly string[] = [],
 ): Result<Uint8Array, MeshBinEncodeError> {
+  if (payload.distanceField !== undefined)
+    return err(
+      failure(
+        sourceKey,
+        'complete Mesh publication for distance field artifacts',
+        'use the Mesh output producer to preserve the distance field attachment',
+      ),
+    );
   try {
     const prepared = prepareMeshData(payload, sourceKey, refs);
     if (!prepared.ok) return prepared;

@@ -1,3 +1,4 @@
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 import { dirname, resolve } from 'node:path';
@@ -44,7 +45,7 @@ if (!existsSync(resolve(distRoot, 'pack-index.json'))) {
 }
 
 const packIndexText = readFileSync(resolve(distRoot, 'pack-index.json'), 'utf8');
-const packIndex = JSON.parse(packIndexText);
+const packIndex = decodeCatalogWire(JSON.parse(packIndexText)).unwrap();
 const packageFiles = new Map(
   packIndex.map(entry => [entry.packageUrl, resolve(distRoot, entry.packageUrl.slice(1))]),
 );

@@ -33,20 +33,24 @@ import { getSsaoParameters, SSAO_SAMPLE_COUNTS } from './ssao-config';
 
 type DepthResolutionContext = Pick<_InternalRenderPipelineContext, 'runtime'> & {
   readonly frameState: {
-    readonly perFrameGraph?: {
-      readonly getColorTargetTexture: (key: string) => Texture | undefined;
+    readonly compiledFrameGraph?: {
+      readonly targets: {
+        readonly getColorTargetTexture: (key: string) => Texture | undefined;
+      };
     } | null;
   };
 };
 
 type RenderGraphRecordContext = _InternalRenderPipelineContext & {
   readonly frameState: _InternalRenderPipelineContext['frameState'] & {
-    readonly perFrameGraph?: {
-      readonly getColorTargetDescriptor: (
-        key: string,
-      ) => { readonly format: TextureFormat } | undefined;
-      readonly getColorTargetView: (key: string) => TextureView | undefined;
-      readonly getColorTargetTexture: (key: string) => Texture | undefined;
+    readonly compiledFrameGraph: {
+      readonly targets: {
+        readonly getColorTargetDescriptor: (
+          key: string,
+        ) => { readonly format: TextureFormat } | undefined;
+        readonly getColorTargetView: (key: string) => TextureView | undefined;
+        readonly getColorTargetTexture: (key: string) => Texture | undefined;
+      };
     } | null;
   };
 };
@@ -77,8 +81,8 @@ export function resolveDepthOnlyView(
   label: string,
   preferredKey?: string | null,
 ): TextureView | null {
-  const graph = internals.frameState.perFrameGraph;
-  if (graph === null || graph === undefined) return null;
+  const graph = internals.frameState.compiledFrameGraph?.targets;
+  if (graph === undefined) return null;
   const preferredTexture =
     preferredKey === null || preferredKey === undefined
       ? undefined
@@ -139,7 +143,7 @@ function ensureSsaoRecordCompanions(internals: _InternalRenderPipelineContext): 
   if (pp.ssaoFilteringSampler === null) {
     // Despite the field name, this sampler is non-filtering (NEAREST):
     // bindings 3 (noise sampler) + 8 (ssaoSampler) pair with unfilterable
-    // float textures (rgba32float noise / r8unorm ssaoRaw on dawn without
+    // float textures (rgba32float noise / rgba8unorm ssaoRaw on dawn without
     // float32-filterable). The "filtering" label in the field name predates
     // the sampler-type split; the resource itself is non-filtering.
     const res = device.createSampler({
@@ -378,7 +382,7 @@ export function recordSsaoCalcPass(
     graphPass ??
     encoder.beginRenderPass(
       buildBeginRenderPassDescriptor(
-        { colorFormats: ['r8unorm'], depthFormat: undefined, sampleCount: 1 },
+        { colorFormats: ['rgba8unorm'], depthFormat: undefined, sampleCount: 1 },
         { colorViews: [ssaoRawView] },
         'post-process',
       ) as never,
@@ -390,10 +394,10 @@ export function recordSsaoCalcPass(
 }
 
 /**
- * recordSsaoBlurPass — fullscreen SSAO 4x4 box blur (M8 / w38).
+ * recordSsaoBlurPass — fullscreen SSAO 5x5 depth/normal-aware blur.
  *
- * Reads the half-resolution ssaoRaw (R8), applies a 16-tap box blur, writes
- * the blurred result to ssaoBlurred. The BGL is the same 9-entry SSAO BGL
+ * Reads the half-resolution ssaoRaw (visibility + encoded center normal),
+ * writes the single-channel blurred result to ssaoBlurred. The BGL is the same 9-entry SSAO BGL
  * as the calc pass; the only difference is binding 7 carries the real
  * ssaoRaw view (vs the 1x1 fallback the calc pass binds).
  */
@@ -723,7 +727,7 @@ function dispatchFullscreenPass(
     writeView = storageViewRes.value;
     writeFormat = ctx.pipelineState?.format ?? 'rgba8unorm';
   } else {
-    const legacyGraph = requireRenderGraphRecordContext(ctx).frameState.perFrameGraph;
+    const legacyGraph = requireRenderGraphRecordContext(ctx).frameState.compiledFrameGraph?.targets;
     const graphColorFormat = legacyGraph?.getColorTargetDescriptor(color)?.format;
     if (graphColorFormat !== undefined) writeFormat = graphColorFormat;
     const resolvedColor = (resolveCtx?.resolve(color) as TextureView | undefined) ?? null;

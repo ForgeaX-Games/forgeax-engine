@@ -39,7 +39,7 @@ function expand(source: MeshAsset) {
       meshGeneration: 1,
       materialHandle: 1,
       materialGeneration: 1,
-      style: { kind: 'lines', widthPx: 8 },
+      style: { kind: 'lines', width: 8 },
       layer: 1,
       visible: true,
       sourceBounds: [],

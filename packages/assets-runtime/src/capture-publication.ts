@@ -87,7 +87,7 @@ export async function captureAssetPublication(
     )
       throw new TypeError('a fixed capture requires a current publication');
     const request = { signal: options.signal ?? null };
-    const cached = options.registry?.packFileCache.get(row.packageUrl);
+    const cached = options.registry?.packFiles.get(row.packageUrl)?.value;
     const raw =
       cached ??
       (await (async () => {
@@ -105,7 +105,7 @@ export async function captureAssetPublication(
     if (!verifiedPack.ok) return verifiedPack;
     const pack = verifiedPack.value;
     if (options.registry)
-      options.registry.packFileCache.set(row.packageUrl, {
+      options.registry.cachePackFile(row.packageUrl, {
         ...pack,
         assets: pack.assets.map((asset) => ({
           ...asset,

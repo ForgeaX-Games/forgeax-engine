@@ -236,6 +236,7 @@ async function runPartition({ cliPath, partition, reportPath, env }) {
     cwd: ROOT,
     env: { ...env, FORGEAX_DAWN_PARTITION: partition.id },
     label: `Dawn direct-light ${partition.id}`,
+    gpuLease: true,
     // Preserve the existing ten-minute full-frame test budget, with one
     // minute for startup and teardown before reclaiming a stuck native tree.
     timeoutMs: 11 * 60_000,

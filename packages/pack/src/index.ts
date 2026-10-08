@@ -2,6 +2,34 @@
 // Disk schema, GUID tools, and browser-safe asset contracts.
 // Node-only catalog/build APIs live under @forgeax/engine-pack/build.
 
+export type {
+  AnimationClip,
+  AnimationGraph,
+  Asset,
+  AudioClipAsset,
+  EquirectAsset,
+  FontAsset,
+  MaterialAsset,
+  MeshAsset,
+  PackV2,
+  PackV2Error,
+  ParticleEffectAsset,
+  RenderPipelineAsset,
+  SamplerAsset,
+  SceneAsset,
+  SkeletonAsset,
+  SkinAsset,
+  TextureAsset,
+  TilesetAsset,
+  VideoAsset,
+} from '@forgeax/engine-types';
+export type { ArtifactPathContext } from './artifact-path.js';
+export { validateArtifactPath } from './artifact-path.js';
+export {
+  type CompactCatalogWire,
+  decodeCatalogWire,
+  encodeCatalogWire,
+} from './catalog-wire.js';
 export {
   type CookedMaterialRecord,
   collectMaterialCookRefs,
@@ -40,6 +68,11 @@ export {
   PackageId,
 } from './guid.js';
 export {
+  type MaterialArtifactWriteInput,
+  type MaterialArtifactWriteResult,
+  writeMaterialArtifact,
+} from './material/artifact-writer.js';
+export {
   decodeMeshBinHeader,
   decodeMeshBinMorphs,
   MESH_BIN_DIGEST_BYTES,
@@ -55,6 +88,12 @@ export {
 export * from './pack-authoring.js';
 export { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
 export {
+  projectRuntimePack,
+  type RuntimeAssetProjectionInput,
+  type RuntimePackProjectionInput,
+} from './runtime-projection.js';
+export { parsePackV2, validateMeta, validatePack, validatePackV2 } from './schema-compiled.js';
+export {
   type AssetReader,
   isScriptablePackAssetKind,
   projectScriptablePackSceneComponents,
@@ -66,56 +105,3 @@ export {
   type ScriptablePackSourceClosureEntry,
 } from './scriptable-pack.js';
 export { calculateTopologyDiff, diffTopology } from './topology.js';
-
-import { err, ok, type PackV2, type PackV2Error, type Result } from '@forgeax/engine-types';
-
-export type { ArtifactPathContext } from './artifact-path.js';
-export { validateArtifactPath } from './artifact-path.js';
-
-import { validatePackV2 } from './schema-compiled.js';
-
-export type {
-  AnimationClip,
-  AnimationGraph,
-  Asset,
-  AudioClipAsset,
-  EquirectAsset,
-  FontAsset,
-  MaterialAsset,
-  MeshAsset,
-  PackV2,
-  PackV2Error,
-  ParticleEffectAsset,
-  RenderPipelineAsset,
-  SamplerAsset,
-  SceneAsset,
-  SkeletonAsset,
-  SkinAsset,
-  TextureAsset,
-  TilesetAsset,
-  VideoAsset,
-} from '@forgeax/engine-types';
-export {
-  type MaterialArtifactWriteInput,
-  type MaterialArtifactWriteResult,
-  writeMaterialArtifact,
-} from './material/artifact-writer.js';
-export {
-  projectRuntimePack,
-  type RuntimeAssetProjectionInput,
-  type RuntimePackProjectionInput,
-} from './runtime-projection.js';
-export { validateMeta, validatePack, validatePackV2 } from './schema-compiled.js';
-
-export function parsePackV2(value: unknown): Result<PackV2, PackV2Error> {
-  if (!validatePackV2(value)) {
-    return err({
-      code: 'pack-v2-envelope-invalid',
-      expected: 'a Pack v2 envelope with unique asset GUIDs and valid descriptors',
-      hint: 'validate the pack against packages/pack/schema/pack.schema.json and re-cook it',
-      detail: { observed: 'invalid pack', expected: 'schemaVersion 2.0.0' },
-    });
-  }
-
-  return ok(value);
-}

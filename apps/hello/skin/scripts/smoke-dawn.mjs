@@ -63,7 +63,7 @@ const FOX_META_PATH = resolve(repoRoot, 'forgeax-engine-assets/khronos-gltf-samp
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(
     `[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -499,7 +499,7 @@ for (const { x, clip, label } of lineup) {
     component: AnimationPlayer,
     data: {
     clips: [clip],
-    times: new Float32Array([0]),
+    times: new Float64Array([0]),
     weights: new Float32Array([1]),
     speeds: new Float32Array([1]),
     paused: false,

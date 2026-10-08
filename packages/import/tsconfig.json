@@ -15,6 +15,7 @@
   "references": [
     { "path": "../ddc" },
     { "path": "../geometry" },
+    { "path": "../math" },
     { "path": "../pack" },
     { "path": "../scene" },
     { "path": "../shader" },

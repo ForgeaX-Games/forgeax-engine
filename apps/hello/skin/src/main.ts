@@ -331,7 +331,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
     // SoA inline-array columns as readonly tuples.
     const ap = apRes.value as unknown as {
       clips: Uint32Array;
-      times: Float32Array;
+      times: Float64Array;
       weights: Float32Array;
     };
     const state = currentPaused ? 'Paused' : 'Playing';

@@ -2,7 +2,7 @@ import { serializeCookedMaterialRecord } from '@forgeax/engine-pack';
 import { AssetGuid, definePackageId } from '@forgeax/engine-pack/source';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { type MaterialAsset, ok } from '@forgeax/engine-types';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { type RuntimePackContent, RuntimePackProducer } from '../../../import/src/runtime-pack.js';
 import { AssetRegistry } from '../asset-registry.js';
 import { loadMaterialReadyByGuid } from '../registry/load-by-guid.js';
@@ -145,5 +145,120 @@ it('fences the direct material readiness operation against a changed parent publ
   } finally {
     registry.clearCatalogSource();
     source.dispose();
+  }
+});
+
+async function sharedArtifactFixture(blockFirstBody = false) {
+  const source = producer();
+  const publication = (await source.admit(material(parent))).unwrap();
+  const row = defined(publication.rows[0]);
+  const registry = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
+  const reads: string[] = [];
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  registry.setCatalogSource(
+    {
+      enumerate: async () => ok(publication.rows),
+      subscribe: () => () => {},
+      openPackage(url) {
+        const bound = defined(source.catalog.openPackage(url));
+        return async (input, init) => {
+          const response = await bound(input, init);
+          if (!String(input).endsWith('.wgsl')) return response;
+          reads.push(String(input));
+          const ordinal = reads.length;
+          const body = response.arrayBuffer.bind(response);
+          Object.defineProperty(response, 'arrayBuffer', {
+            value: async () => {
+              if (ordinal === 1) {
+                enter();
+                if (blockFirstBody) await gate;
+              }
+              return body();
+            },
+          });
+          return response;
+        };
+      },
+    },
+    async () => {
+      throw new Error('read escaped its bound publication');
+    },
+  );
+  return {
+    registry,
+    row,
+    reads,
+    entered,
+    resume,
+    load: () => registry.loadByGuid(registry.parseGuid(row.guid)),
+    ready: () =>
+      loadMaterialReadyByGuid(registry, {
+        guid: row.guid,
+        specializationKey: 'publication/ready',
+      }),
+    dispose() {
+      resume();
+      registry.clearCatalogSource();
+      source.dispose();
+    },
+  };
+}
+
+it.each([
+  'asset-first',
+  'material-first',
+] as const)('shares verified program bytes across both loading APIs: %s', async (order) => {
+  const f = await sharedArtifactFixture();
+  try {
+    if (order === 'asset-first') expect((await f.load()).ok).toBe(true);
+    else expect(await f.ready()).toMatchObject({ status: 'Ready' });
+    expect((await f.load()).ok).toBe(true);
+    expect(await f.ready()).toMatchObject({ status: 'Ready' });
+    expect(f.reads).toHaveLength(1);
+    f.registry.invalidate(f.row.guid);
+    expect((await f.load()).ok).toBe(true);
+    expect(await f.ready()).toMatchObject({ status: 'Ready' });
+    expect(f.reads).toHaveLength(2);
+    expect(f.reads[1]).toBe(f.reads[0]);
+  } finally {
+    f.dispose();
+  }
+});
+
+it('shares an unfinished body read between GUID loading and material readiness', async () => {
+  const f = await sharedArtifactFixture(true);
+  const first = f.load();
+  let second: ReturnType<typeof f.ready> | undefined;
+  let finished = false;
+  const cacheRead = vi.spyOn(f.registry.artifactCache, 'read');
+  try {
+    await f.entered;
+    cacheRead.mockClear();
+    second = f.ready();
+    void second.then(() => {
+      finished = true;
+    });
+    await vi.waitFor(() => expect(cacheRead).toHaveBeenCalledTimes(1), {
+      timeout: 300,
+      interval: 5,
+    });
+    expect(f.reads).toHaveLength(1);
+    expect(finished).toBe(false);
+    f.resume();
+    expect((await first).ok).toBe(true);
+    expect(await second).toMatchObject({ status: 'Ready' });
+    expect(f.reads).toHaveLength(1);
+  } finally {
+    f.resume();
+    await Promise.allSettled([first, ...(second === undefined ? [] : [second])]);
+    cacheRead.mockRestore();
+    f.dispose();
   }
 });

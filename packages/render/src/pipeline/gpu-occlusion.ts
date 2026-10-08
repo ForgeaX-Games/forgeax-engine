@@ -34,22 +34,25 @@ export function sceneViewImport(
  * Two-phase HZB occlusion shared by the Standard lanes. The early scene pass
  * drew last frame's visible GPU items; its depth seeds a furthest pyramid,
  * the late cull re-tests every other candidate against it, and the caller's
- * late scene pass then draws what that revealed. Returns `false` when the
- * projection reserved no late phase, so the caller adds no late pass.
+ * late scene pass then draws what that revealed. Returns the pyramid, which
+ * later passes may test against, or `undefined` when the projection reserved
+ * no late phase, so the caller adds no late pass.
  */
 export function addGpuLateOcclusion(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
   input: {
     readonly gpuDriven: RenderPipelineGpuDrivenProjection | undefined;
-    /** Single-sample depth-only view of the early pass's depth. */
+    /** Depth-only view of the early pass's depth. */
     readonly depth: GraphTextureView;
+    /** The early depth is multisampled; the seed then spans every sample. */
+    readonly multisampled: boolean;
     readonly width: number;
     readonly height: number;
     readonly view: () => Result<GraphBuffer, RenderGraphError>;
   },
-): Result<boolean, RenderGraphError> {
+): Result<GraphTextureView | undefined, RenderGraphError> {
   const addLateOcclusion = input.gpuDriven?.addLateOcclusion;
-  if (addLateOcclusion === undefined) return ok(false);
+  if (addLateOcclusion === undefined) return ok(undefined);
   const view = input.view();
   if (!view.ok) return view;
   const pyramid = addDepthPyramidPasses(graph, {
@@ -58,9 +61,10 @@ export function addGpuLateOcclusion(
     height: input.height,
     view: view.value,
     reduction: 'furthest',
+    multisampled: input.multisampled,
   });
   if (!pyramid.ok) return pyramid;
   const late = addLateOcclusion(pyramid.value.pyramid.pyramid);
   if (!late.ok) return late;
-  return ok(true);
+  return ok(pyramid.value.pyramid.pyramid);
 }

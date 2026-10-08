@@ -1,9 +1,10 @@
 #define_import_path forgeax_ssr::temporal
-#import forgeax_pbr::gbuffer::{loadStandardNormalRoughness}
+#import forgeax_pbr::gbuffer::{loadStandardNormalRoughness, encodeStandardNormalRoughness, decodeStandardNormalRoughness}
 
 // SSR temporal resolve keeps history as a renderer-owned consumer resource.
-// The alpha channel stores the source view depth, so a history sample can be
-// rejected without creating a second depth-history allocation.
+// History alpha stores absolute source view depth; its sign records whether
+// that lattice point missed last frame. This distinguishes transient thin
+// coverage from consecutive loss without a new allocation.
 struct SsrTemporalParams {
   historyValid : u32,
   maxHistoryWeight : f32,
@@ -25,7 +26,10 @@ struct SsrTemporalParams {
 @group(0) @binding(7) var resolvedOutput : texture_storage_2d<rgba16float, write>;
 #import forgeax_view::common::View
 @group(0) @binding(8) var<uniform> view : View;
-// Four bytes retain the actual world normal (RGB) and confidence (A).
+// Four bytes retain presentation reactivity (R), the actual octahedral normal
+// (GB), and fixed-lattice confidence (A). G uses seven normal bits and one
+// fixed-lattice source-reactive flag; B uses eight normal bits. The presentation
+// response is never read back as a source flag. Encoding shares the GBuffer kernel.
 // Reconstructing a prior shading normal from neighboring half-float depths
 // confuses thin side faces with the adjoining top surface.
 @group(0) @binding(9) var previousSurface : texture_2d<f32>;
@@ -81,33 +85,50 @@ fn ssrLatticeCoordinate(uv : vec2<f32>, fullSize : vec2<u32>) -> vec2<f32> {
   return (uv * vec2<f32>(fullSize) - vec2<f32>(0.5)) * 0.5;
 }
 
-fn ssrHistoryTap(pixel : vec2<i32>, expectedDepth : f32, normal : vec3<f32>, footprintWeight : f32) -> vec4<f32> {
+struct SsrHistorySample {
+  color : vec4<f32>,
+  missing : bool,
+  reactivity : f32,
+};
+
+fn ssrHistoryTap(pixel : vec2<i32>, expectedDepth : f32, normal : vec3<f32>, footprintWeight : f32) -> SsrHistorySample {
+  // The nearest miss state always has positive bilinear weight. Zero-weight
+  // taps contribute neither history nor source state, so do not fetch them.
+  if (footprintWeight <= 0.0) { return SsrHistorySample(vec4<f32>(0.0), false, 0.0); }
   let history = textureLoad(previousHistory, pixel, 0);
   let surface = textureLoad(previousSurface, pixel, 0);
-  if (depthReject(expectedDepth, history.a) || normalReject(normal, surface.xyz * 2.0 - 1.0)) {
-    return vec4<f32>(0.0);
+  let packedNormalSource = u32(round(surface.g * 255.0));
+  let sourceReactivity = f32(packedNormalSource & 1u);
+  if (depthReject(expectedDepth, abs(history.a)) || normalReject(normal, decodeStandardNormalRoughness(
+      u32(round(f32(packedNormalSource >> 1u) * (4095.0 / 127.0)))
+        | (u32(round(surface.b * 4095.0)) << 12u)).xyz)) {
+    return SsrHistorySample(vec4<f32>(0.0), false, 0.0);
   }
   let weight = footprintWeight * finiteUnit(surface.a);
-  return vec4<f32>(history.rgb * weight, weight);
+  return SsrHistorySample(vec4<f32>(history.rgb * weight, weight), history.a < 0.0, sourceReactivity * weight);
 }
 
-fn sampleSsrHistory(uv : vec2<f32>, fullSize : vec2<u32>, expectedDepth : f32, normal : vec3<f32>) -> vec4<f32> {
+fn sampleSsrHistory(uv : vec2<f32>, fullSize : vec2<u32>, expectedDepth : f32, normal : vec3<f32>) -> SsrHistorySample {
   let coordinate = ssrLatticeCoordinate(uv, fullSize);
   let first = vec2<i32>(floor(coordinate));
   let fraction = fract(coordinate);
   let last = vec2<i32>(textureDimensions(previousHistory, 0)) - vec2<i32>(1);
-  // Fixed taps expose the same two-dimensional footprint without dynamic
-  // loop control. Keep accumulation order and receiver rejection unchanged.
-  var sum = vec4<f32>(0.0);
-  sum += ssrHistoryTap(clamp(first + vec2<i32>(0, 0), vec2<i32>(0), last),
+  let tap00 = ssrHistoryTap(clamp(first, vec2<i32>(0), last),
     expectedDepth, normal, (1.0 - fraction.x) * (1.0 - fraction.y));
-  sum += ssrHistoryTap(clamp(first + vec2<i32>(1, 0), vec2<i32>(0), last),
+  let tap10 = ssrHistoryTap(clamp(first + vec2<i32>(1, 0), vec2<i32>(0), last),
     expectedDepth, normal, fraction.x * (1.0 - fraction.y));
-  sum += ssrHistoryTap(clamp(first + vec2<i32>(0, 1), vec2<i32>(0), last),
+  let tap01 = ssrHistoryTap(clamp(first + vec2<i32>(0, 1), vec2<i32>(0), last),
     expectedDepth, normal, (1.0 - fraction.x) * fraction.y);
-  sum += ssrHistoryTap(clamp(first + vec2<i32>(1, 1), vec2<i32>(0), last),
+  let tap11 = ssrHistoryTap(clamp(first + vec2<i32>(1, 1), vec2<i32>(0), last),
     expectedDepth, normal, fraction.x * fraction.y);
-  return vec4<f32>(sum.rgb / max(sum.a, 1e-6), sum.a);
+  let sum = tap00.color + tap10.color + tap01.color + tap11.color;
+  // Miss state belongs to the closest fixed-lattice point, not the brightest
+  // confidence-weighted neighbor. A nearby new hit cannot revive a lost source.
+  let nearestMissing = select(select(tap00.missing, tap10.missing, fraction.x >= 0.5),
+    select(tap01.missing, tap11.missing, fraction.x >= 0.5), fraction.y >= 0.5);
+  return SsrHistorySample(vec4<f32>(sum.rgb / max(sum.a, 1e-6), sum.a),
+    nearestMissing,
+    (tap00.reactivity + tap10.reactivity + tap01.reactivity + tap11.reactivity) / max(sum.a, 1e-6));
 }
 
 struct SsrCurrentSample {
@@ -117,6 +138,7 @@ struct SsrCurrentSample {
 
 // A tap carries confidence-premultiplied color until the footprint is summed.
 fn ssrCurrentTap(pixel : vec2<i32>, expectedDepth : f32, normal : vec3<f32>, footprintWeight : f32) -> SsrCurrentSample {
+  if (footprintWeight <= 0.0) { return SsrCurrentSample(vec4<f32>(0.0), 0.0); }
   let sourceNormal = loadStandardNormalRoughness(currentNormal, pixel * 2).xyz;
   let sourceDepth = viewDistance(textureLoad(currentDepth, pixel * 2, 0));
   if (depthReject(expectedDepth, sourceDepth) || normalReject(normal, sourceNormal)) {
@@ -203,10 +225,10 @@ struct NeighborhoodBounds {
 };
 
 fn ssrNeighborhoodRow(pixel : vec2<i32>, last : vec2<i32>) -> NeighborhoodBounds {
-  let left = textureLoad(currentTrace, clamp(pixel + vec2<i32>(-1, 0), vec2<i32>(0), last), 0).rgb;
-  let center = textureLoad(currentTrace, clamp(pixel, vec2<i32>(0), last), 0).rgb;
-  let right = textureLoad(currentTrace, clamp(pixel + vec2<i32>(1, 0), vec2<i32>(0), last), 0).rgb;
-  return NeighborhoodBounds(min(min(left, center), right), max(max(left, center), right));
+  let left = textureLoad(currentTrace, clamp(pixel + vec2<i32>(-1, 0), vec2<i32>(0), last), 0);
+  let center = textureLoad(currentTrace, clamp(pixel, vec2<i32>(0), last), 0);
+  let right = textureLoad(currentTrace, clamp(pixel + vec2<i32>(1, 0), vec2<i32>(0), last), 0);
+  return NeighborhoodBounds(min(min(left.rgb, center.rgb), right.rgb), max(max(left.rgb, center.rgb), right.rgb));
 }
 
 fn neighborhoodClamp(pixel : vec2<i32>, size : vec2<u32>) -> NeighborhoodBounds {
@@ -224,6 +246,7 @@ fn resolveSsrTemporal(
   current : vec4<f32>,
   history : vec4<f32>,
   historyConfidence : f32,
+  previousMissing : bool,
   lower : vec3<f32>,
   upper : vec3<f32>,
   historyInBounds : bool,
@@ -236,7 +259,12 @@ fn resolveSsrTemporal(
   let velocityFactor = 1.0 - finiteUnit(length(temporal.xy) * 64.0);
   let requestedWeight = finiteUnit(params.maxHistoryWeight);
   let accepted = params.historyValid != 0u && historyInBounds && depthCompatible && normalCompatible && historyConfidence > 0.001;
-  let weight = select(0.0, min(requestedWeight, 0.9) * reactiveFactor * velocityFactor, accepted);
+  // A single missing phase keeps thin-source energy. Repeated loss retires
+  // confidence with a 0.4 ceiling. Recovery from that loss interpolates back
+  // to 0.9; ordinary fractional coverage keeps the stable ceiling.
+  let coverageRatio = finiteUnit(current.a / max(historyConfidence, 1e-6));
+  let historyLimit = select(0.9, mix(0.4, 0.9, coverageRatio), previousMissing);
+  let weight = select(0.0, min(requestedWeight, historyLimit) * reactiveFactor * velocityFactor, accepted);
   // Accumulate premultiplied confidence, not black radiance from a miss.
   // An accepted history survives a transient miss with bounded decay, while
   // a new hit with no valid history is immediately visible.
@@ -251,6 +279,9 @@ struct SsrTemporalSample {
   color : vec4<f32>,
   normal : vec3<f32>,
   depth : f32,
+  reactivity : f32,
+  missing : bool,
+  sourceReactive : bool,
 };
 
 fn resolveSsrAt(uv : vec2<f32>, fullSize : vec2<u32>) -> SsrTemporalSample {
@@ -262,26 +293,50 @@ fn resolveSsrAt(uv : vec2<f32>, fullSize : vec2<u32>) -> SsrTemporalSample {
   let historyUv = reprojectUv(uv, temporal.xy);
   let historyInBounds = all(historyUv >= vec2<f32>(0.0)) && all(historyUv <= vec2<f32>(1.0));
   let normal = loadStandardNormalRoughness(currentNormal, vec2<i32>(fullPixel)).xyz;
+  // Empty depth cannot admit a current ray or compatible receiver history.
+  // Retire it without reconstructing world position or fetching eight taps.
+  if (currentDepthSample <= 0.0) {
+    return SsrTemporalSample(vec4<f32>(0.0), normal, 0.0, 0.0, true, false);
+  }
   let sourceUv = (vec2<f32>(fullPixel) + vec2<f32>(0.5)) / vec2<f32>(fullSize);
   let worldH = view.inverseViewProj * vec4<f32>(sourceUv.x * 2.0 - 1.0, 1.0 - sourceUv.y * 2.0, depthNdc, 1.0);
   let priorClip = view.temporalPreviousViewProj * vec4<f32>(worldH.xyz / worldH.w, 1.0);
   let current = sampleCurrentSsr(currentUv, fullSize, currentDepthSample, normal);
-  let history = sampleSsrHistory(historyUv, fullSize, priorClip.w, normal);
+  // Perspective clip W is view distance; orthographic clip W is always one.
+  var previousDepth = priorClip.w;
+  if (view.temporalProjection.z > 0.5) {
+    previousDepth = viewDistance(priorClip.z / max(abs(priorClip.w), 1e-8));
+  }
+  let history = sampleSsrHistory(historyUv, fullSize, previousDepth, normal);
   let size = textureDimensions(currentTrace, 0);
   let pixel = clamp(vec2<i32>(floor(ssrLatticeCoordinate(currentUv, fullSize) + vec2<f32>(0.5))), vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1));
-  let bounds = neighborhoodClamp(pixel, size);
+  // No current hit means the existing resolver deliberately accepts straight
+  // history without color clipping. Do not fetch the unused nine-tap bounds.
+  var bounds = NeighborhoodBounds(vec3<f32>(0.0), vec3<f32>(0.0));
+  if (current.color.a > 0.0) { bounds = neighborhoodClamp(pixel, size); }
+  // If a reactive reflected source vanishes, its last accepted evidence
+  // survives the first miss. Do not feed a confidence-loss mask back through
+  // consecutive misses: that would spread rejection over static thin edges.
+  let sourceReactivity = max(current.reactivity, select(0.0, history.reactivity,
+    current.color.a <= 0.0 && !history.missing));
   let resolved = resolveSsrTemporal(
     current.color,
-    history,
-    history.a,
+    history.color,
+    history.color.a,
+    history.missing,
     bounds.lower,
     bounds.upper,
     historyInBounds,
     currentDepthSample > 0.0,
     true,
-    vec4<f32>(temporal.xyz, max(temporal.w, current.reactivity)),
+    vec4<f32>(temporal.xyz, max(temporal.w, sourceReactivity)),
   );
-  return SsrTemporalSample(resolved, normal, finitePositive(currentDepthSample));
+  // Retire unavailable radiance in SSR itself. Sampling loss is not source
+  // motion: propagating even a one-code mask would reset TAA's stationary
+  // age at static silhouettes. The trace's actual source flag survives its
+  // first miss independently of presentation reconstruction.
+  return SsrTemporalSample(resolved, normal, finitePositive(currentDepthSample),
+    sourceReactivity, current.color.a <= 0.0, current.reactivity > 0.0);
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -292,16 +347,19 @@ fn ssr_temporal(@builtin(global_invocation_id) globalId : vec3<u32>) {
   let fullSize = textureDimensions(currentDepth, 0);
   let uv = (vec2<f32>(globalId.xy * 2u) + vec2<f32>(0.5)) / vec2<f32>(fullSize);
   let history = resolveSsrAt(uv, fullSize);
-  textureStore(historyOutput, pixel, vec4<f32>(history.color.rgb, history.depth));
-  textureStore(surfaceOutput, pixel, vec4<f32>(history.normal * 0.5 + 0.5, history.color.a));
+  textureStore(historyOutput, pixel, vec4<f32>(history.color.rgb, select(history.depth, -history.depth, history.missing)));
   // Presentation remains on the current raster lattice expected by material
   // composition and the reflection mips. Store its radiance premultiplied by
   // confidence so the presentation pyramid can use hardware filtering without
   // darkening miss footprints. This output never feeds persistent history back
   // into itself; historyOutput above remains straight radiance + depth.
-  var presented = history.color;
+  var presented = history;
   if (any(params.currentJitterUv != vec2<f32>(0.0))) {
-    presented = resolveSsrAt(uv - params.currentJitterUv, fullSize).color;
+    presented = resolveSsrAt(uv - params.currentJitterUv, fullSize);
   }
-  textureStore(resolvedOutput, pixel, vec4<f32>(presented.rgb * presented.a, presented.a));
+  let packedNormal = encodeStandardNormalRoughness(history.normal, 0.0);
+  let octNormal = vec2<f32>(f32(packedNormal & 4095u), f32((packedNormal >> 12u) & 4095u)) / 4095.0;
+  let normalSource = (u32(round(octNormal.x * 127.0)) << 1u) | select(0u, 1u, history.sourceReactive);
+  textureStore(surfaceOutput, pixel, vec4<f32>(presented.reactivity, f32(normalSource) / 255.0, octNormal.y, history.color.a));
+  textureStore(resolvedOutput, pixel, vec4<f32>(presented.color.rgb * presented.color.a, presented.color.a));
 }

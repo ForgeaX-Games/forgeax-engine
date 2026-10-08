@@ -43,12 +43,6 @@ export function isRenderFeatureTargetHandle(value: unknown): value is RenderFeat
   );
 }
 
-export function renderFeatureAttachmentResource(
-  resource: string | RenderFeatureTargetHandle,
-): string {
-  return isRenderFeatureTargetHandle(resource) ? resource.kind : resource;
-}
-
 export function resolveStandardRenderFeatureTargets(input: {
   readonly tonemap: string;
   readonly antialias: string;

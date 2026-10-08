@@ -1,26 +1,6 @@
 #define_import_path forgeax_environment::cubemap
-
-// @forgeax/engine-shader - atmosphere-cubemap.wgsl
-//
-// The sole production caller of daylight_sky_radiance. Background and IBL
-// consumers sample this generated cube; neither owns another evaluator.
-
-#import forgeax_environment::daylight::{daylight_sky_radiance}
-
-struct AtmosphereCubeParams {
-  sunDirection: vec3<f32>,
-  sunIlluminance: f32,
-  sunColor: vec3<f32>,
-  _sunColorPad: f32,
-  turbidity: f32,
-  rayleigh: f32,
-  mieCoefficient: f32,
-  mieDirectionalG: f32,
-  sunAngularRadius: f32,
-  sunDiscEnabled: f32,
-  circumsolarStrength: f32,
-  circumsolarWidth: f32,
-};
+#import forgeax_view::common::{View, clampLinearHdr}
+#import forgeax_atmosphere::coordinates::{atmosphere_observer, atmosphere_sky_uv}
 
 struct AtmosphereCubeVsIn {
   // xy is clip-space; z is a one-based cube-face tag supplied by the
@@ -33,7 +13,9 @@ struct AtmosphereCubeVsOut {
   @location(0) direction: vec3<f32>,
 };
 
-@group(0) @binding(0) var<uniform> atmosphere: AtmosphereCubeParams;
+@group(0) @binding(0) var<uniform> view: View;
+@group(0) @binding(1) var sky: texture_2d<f32>;
+@group(0) @binding(3) var filtering: sampler;
 
 @vertex
 fn atmosphere_cubemap_vs(input: AtmosphereCubeVsIn) -> AtmosphereCubeVsOut {
@@ -59,17 +41,7 @@ fn atmosphere_cubemap_vs(input: AtmosphereCubeVsIn) -> AtmosphereCubeVsOut {
 
 @fragment
 fn atmosphere_cubemap_fs(input: AtmosphereCubeVsOut) -> @location(0) vec4<f32> {
-  let radiance = daylight_sky_radiance(
-    normalize(input.direction),
-    atmosphere.sunDirection,
-    atmosphere.sunColor,
-    atmosphere.sunIlluminance,
-    atmosphere.turbidity,
-    atmosphere.rayleigh,
-    atmosphere.mieCoefficient,
-    atmosphere.mieDirectionalG,
-    atmosphere.circumsolarStrength,
-    atmosphere.circumsolarWidth,
-  );
-  return vec4<f32>(radiance, 1.0);
+  let origin=atmosphere_observer(view.atmosphere,view.cameraPos);
+  let uv=atmosphere_sky_uv(view.atmosphere,origin,normalize(-view.lightDir),normalize(input.direction));
+  return vec4<f32>(clampLinearHdr(textureSampleLevel(sky,filtering,uv,0.0).rgb*view.lightColor),1.0);
 }

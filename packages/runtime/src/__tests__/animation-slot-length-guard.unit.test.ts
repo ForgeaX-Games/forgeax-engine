@@ -40,7 +40,7 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
         component: AnimationPlayer,
         data: {
           clips: [clipOne, clipTwo],
-          times: new Float32Array([0, 0]),
+          times: new Float64Array([0, 0]),
           weights: new Float32Array([1]),
           speeds: new Float32Array([1, 1]),
         },
@@ -69,7 +69,7 @@ describe('AnimationPlayer — slot-length guard (M1 / w2)', () => {
         component: AnimationPlayer,
         data: {
           clips: [clip],
-          times: new Float32Array([0]),
+          times: new Float64Array([0]),
           weights: new Float32Array([1]),
           speeds: new Float32Array([1]),
         },

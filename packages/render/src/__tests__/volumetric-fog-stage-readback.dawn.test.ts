@@ -598,6 +598,8 @@ async function runInjectReadback(
       { binding: 13, visibility: 4, sampler: { type: 'filtering' } },
       { binding: 16, visibility: 4, texture: { sampleType: 'float', viewDimension: '2d' } },
       { binding: 17, visibility: 4, sampler: { type: 'filtering' } },
+      { binding: 25, visibility: 4, texture: { sampleType: 'float', viewDimension: '2d' } },
+      { binding: 26, visibility: 4, sampler: { type: 'filtering' } },
       ...Array.from({ length: 7 }, (_, index) => ({
         binding: 18 + index,
         visibility: 4,
@@ -677,6 +679,8 @@ async function runInjectReadback(
       { binding: 13, resource: { kind: 'sampler', value: densitySampler.value } },
       { binding: 16, resource: { kind: 'textureView', value: projectorView } },
       { binding: 17, resource: { kind: 'sampler', value: densitySampler.value } },
+      { binding: 25, resource: { kind: 'textureView', value: projectorView } },
+      { binding: 26, resource: { kind: 'sampler', value: densitySampler.value } },
       ...Array.from({ length: 7 }, (_, index) => ({
         binding: 18 + index,
         resource: {

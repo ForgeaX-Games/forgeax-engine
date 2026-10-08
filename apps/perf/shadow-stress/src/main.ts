@@ -38,7 +38,7 @@ import {
   characterPositions,
   DIRECTIONAL_CASCADE_COUNT,
   DIRECTIONAL_LIGHT_DIRECTION,
-  GROUND_HALF_EXTENT,
+  groundHalfExtent,
   parseWorkloadOptions,
   SPOT_LIGHT_COUNT,
   spotLightPositions,
@@ -81,6 +81,8 @@ export interface ShadowRasterSample {
   /** Static-layer misses that re-rastered only dirty regions over retained depth. */
   readonly staticPartialCount: number;
   readonly texelCulled: number;
+  /** Final-layer casters whose receivers the camera HZB hides (Deferred only). */
+  readonly cameraCulled: number;
   readonly misses: readonly string[];
 }
 
@@ -131,6 +133,8 @@ export interface ShadowStressEvidence {
   /** Last frames after the sampled window, which an opt-in RHI capture records. */
   trailingSamples: Array<{ readonly raster: ShadowRasterSample; readonly gpuDriven: GpuDrivenSample }>;
   capsuleShadow: CapsuleShadowInspection | null;
+  /** Per-frame GPU durations keyed `passKind:passName`, plus the `TOTAL` sum; `gpuTiming=1` only. */
+  gpuPassNanos: Record<string, number[]>;
 }
 
 declare global {
@@ -159,8 +163,10 @@ function sampleShadowRaster(frame: number, raster: ShadowRasterInspection): Shad
   let staticMissCount = 0;
   let staticPartialCount = 0;
   let texelCulled = 0;
+  let cameraCulled = 0;
   for (const view of raster.views) {
     texelCulled += view.texelCulled ?? 0;
+    cameraCulled += view.cameraCulled ?? 0;
     const layer = view.identity.layer === undefined ? '' : `.${view.identity.layer}`;
     if (layer !== '') staticLayerViewCount++;
     if (view.cache === 'miss') {
@@ -178,6 +184,7 @@ function sampleShadowRaster(frame: number, raster: ShadowRasterInspection): Shad
     staticMissCount,
     staticPartialCount,
     texelCulled,
+    cameraCulled,
     misses,
   };
 }
@@ -301,6 +308,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
         renderPath: options.renderPath,
         gpuOcclusion: options.gpuOcclusion,
       },
+      ...(options.gpuPassTiming ? { gpuPassTiming: {} } : {}),
       time: { fixedDeltaSeconds: FIXED_DELTA_SECONDS, maxStepsPerUpdate: 4, maxDeltaSeconds: 0.1 },
     },
     forgeaxBundlerAdapter(),
@@ -310,6 +318,24 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     return;
   }
   const app = appResult.value;
+  const gpuPassNanos: Record<string, number[]> = {};
+  if (options.gpuPassTiming) {
+    app.renderer.subscribe((event) => {
+      if (event.kind !== 'frame-submitted') return;
+      void app.renderer.observe(event.receipt, { include: ['timings'] }).then((observed) => {
+        const timings = observed.ok ? observed.value.timings : undefined;
+        if (timings === undefined || (timings.status !== 'complete' && timings.status !== 'partial')) return;
+        const perPass: Record<string, number> = { TOTAL: 0 };
+        for (const pass of timings.frame.passes) {
+          if (pass.status !== 'measured') continue;
+          const key = `${pass.passKind}:${pass.passName}`;
+          perPass[key] = (perPass[key] ?? 0) + pass.durationNanoseconds;
+          perPass.TOTAL = (perPass.TOTAL ?? 0) + pass.durationNanoseconds;
+        }
+        for (const [key, nanos] of Object.entries(perPass)) (gpuPassNanos[key] ??= []).push(nanos);
+      });
+    });
+  }
   const world = app.world;
   const errors: ShadowStressEvidence['appRendererErrors'] = [];
   app.onError((error) => {
@@ -331,6 +357,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     Materials.standard({ baseColor: [0.9, 0.75, 0.25, 1], roughness: 0.4 }),
   );
 
+  const groundExtent = groundHalfExtent(options.camera);
   const declaredStatic = options.mobilityStatic
     ? [{ component: Mobility, data: { kind: MobilityKindValue.static } }]
     : [];
@@ -338,7 +365,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     .spawn(
       {
         component: Transform,
-        data: { pos: [0, -0.05, 0], quat: [0, 0, 0, 1], scale: [GROUND_HALF_EXTENT * 2, 0.1, GROUND_HALF_EXTENT * 2] },
+        data: { pos: [0, -0.05, 0], quat: [0, 0, 0, 1], scale: [groundExtent * 2, 0.1, groundExtent * 2] },
       },
       { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
       { component: MeshRenderer, data: { materials: [groundMaterial] } },
@@ -435,10 +462,10 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     }
   }
 
-  if (options.lodOscillate) {
+  if (options.lodGridSide > 0) {
     const assets = app.assets;
     if (assets === undefined) {
-      console.error(`${TAG} lodOscillate needs an App AssetRegistry to catalog the lower LOD meshes`);
+      console.error(`${TAG} the LOD grid needs an App AssetRegistry to catalog the lower LOD meshes`);
       return;
     }
     const lodGuids = [
@@ -454,7 +481,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
         { mesh: lodGuids[1], screenCoverage: LOD_SCREEN_COVERAGE[1] },
       ],
     });
-    const grid = lodGridPositions();
+    const grid = lodGridPositions(options.lodGridSide);
     for (let index = 0; index < grid.length / 3; index++) {
       world
         .spawn(
@@ -617,6 +644,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
     shadowRasterSamples: [],
     gpuDrivenSamples: [],
     trailingSamples: [],
+    gpuPassNanos,
   };
   Object.assign(globalThis, { __forgeaxShadowStress: evidence });
 
@@ -652,7 +680,7 @@ async function bootstrap(target: HTMLCanvasElement, options: WorkloadOptions): P
           quaternion[2] = Math.sin(half);
           quaternion[3] = Math.cos(half);
         }
-        if (options.camera === 'orbit' || options.lodOscillate) {
+        if (options.camera !== 'static' || options.lodOscillate) {
           const pose = cameraPose(options.camera, seconds, options.lodOscillate);
           for (const row of results[1] ?? []) {
             const transform = row.mut(Transform);

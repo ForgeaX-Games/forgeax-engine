@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // game-default production material-edit smoke: authored sidecar -> build pack -> runtime.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -124,24 +125,21 @@ async function capture(label, browser) {
       const listed = globalThis.__forgeaxPreviewInspection?.list();
       return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2;
     }, null, { timeout: 30_000 });
-    const pack = await page.evaluate(async (guid) => {
+    const indexWire = await page.evaluate(async () => {
       const indexResponse = await fetch('/pack-index.json');
       if (!indexResponse.ok) throw new Error(`pack-index status=${indexResponse.status}`);
-      const index = await indexResponse.json();
-      const entries = Array.isArray(index)
-        ? index
-        : Array.isArray(index.entries)
-          ? index.entries
-          : Object.values(index.entries ?? index);
-      const row = entries.find((entry) => entry.guid === guid);
-      if (!row) throw new Error(`material GUID ${guid} missing from production pack-index`);
+      return indexResponse.json();
+    });
+    const row = decodeCatalogWire(indexWire).unwrap().find((entry) => entry.guid === GUID);
+    if (!row) throw new Error(`material GUID ${GUID} missing from production pack-index`);
+    const pack = await page.evaluate(async ({ guid, row }) => {
       const packageResponse = await fetch(row.packageUrl);
       if (!packageResponse.ok) throw new Error(`material package status=${packageResponse.status}`);
       const packageJson = await packageResponse.json();
       const asset = (packageJson.assets ?? []).find((entry) => entry.guid === guid) ?? packageJson;
       const values = asset.payload?.values ?? asset.values;
       return { guid: row.guid, name: row.name, packageUrl: row.packageUrl, baseColor: values?.baseColor ?? null };
-    }, GUID);
+    }, { guid: GUID, row: { guid: row.guid, name: row.name, packageUrl: row.packageUrl } });
     const game = await page.evaluate(() => globalThis.__forgeaxPreviewInspection?.read('game-default.snapshot'));
     if (!game?.ok || game.value.state.phase !== 'Play') throw new Error(`game snapshot is not Play: ${JSON.stringify(game)}`);
     const screenshot = await stableScreenshot(page, resolve(ARTIFACT_DIR, `${label}.png`));

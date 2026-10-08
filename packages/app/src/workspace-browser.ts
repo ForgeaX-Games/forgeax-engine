@@ -43,6 +43,7 @@ export interface EngineWorkspaceBrowserOptions {
     context: Context;
     canvas: HTMLCanvasElement;
     asset: EngineWorkspaceAsset;
+    targetId: string;
   }) => Promise<App>;
   readonly canvas: HTMLCanvasElement;
   readonly project: EngineWorkspaceProject;
@@ -181,17 +182,16 @@ const workspaceBrowserCommandsPlugin: Plugin.Object<EngineWorkspaceBrowserOption
       );
     const errors: unknown[] = [];
     let submittedFrame = 0;
-    let completedFrame = 0;
+    let readyCompletedFrame = 0;
     if (typeof canvas.addEventListener === 'function')
       ctx.effect(() => {
         const removeSubmitted = subscribeBrowserFrameSubmitted(canvas, (frame) => {
           submittedFrame = frame.frameId;
         });
         const completed = (event: Event) => {
-          completedFrame = Math.max(
-            completedFrame,
-            (event as CustomEvent<BrowserFrameCompleted>).detail.frameId,
-          );
+          const frame = (event as CustomEvent<BrowserFrameCompleted>).detail;
+          if (frame.presentation === 'ready')
+            readyCompletedFrame = Math.max(readyCompletedFrame, frame.frameId);
         };
         canvas.addEventListener(FORGEAX_FRAME_COMPLETED_EVENT, completed);
         return () => {
@@ -303,7 +303,7 @@ const workspaceBrowserCommandsPlugin: Plugin.Object<EngineWorkspaceBrowserOption
           'Engine workspace capture dimensions must match the active target dimensions',
         );
       const deadline = Date.now() + 10_000;
-      while (completedFrame <= frameFloor) {
+      while (readyCompletedFrame <= frameFloor) {
         assertAvailable();
         input.signal?.throwIfAborted();
         // Hidden previews retain their tools and can render an explicitly requested frame.
@@ -315,11 +315,105 @@ const workspaceBrowserCommandsPlugin: Plugin.Object<EngineWorkspaceBrowserOption
           )
             throw step.error;
         }
-        if (Date.now() >= deadline)
-          throw new Error('Engine workspace did not complete a new frame before capture');
+        if (Date.now() >= deadline) {
+          const {
+            state,
+            surface,
+            frame,
+            environment,
+            recovery,
+            iblBinding,
+            meshMaterialBindings,
+            featureGraph,
+            featureDiagnostics,
+          } = app.renderer.inspect();
+          const rhiCapture = (() => {
+            const encoded = canvas.dataset?.forgeaxPreviewRhiWindow;
+            if (encoded === undefined || encoded.length > 65_536) return undefined;
+            try {
+              const parsed = JSON.parse(encoded) as {
+                targetId?: unknown;
+                worldIdentity?: unknown;
+              } | null;
+              return parsed?.targetId === target.targetId &&
+                parsed.worldIdentity === app.world.identity
+                ? parsed
+                : undefined;
+            } catch {
+              return undefined;
+            }
+          })();
+          const detail = {
+            ...(rhiCapture === undefined ? {} : { rhiCapture }),
+            targetId: target.targetId,
+            worldIdentity: app.world.identity,
+            frameFloor,
+            submittedFrame,
+            readyCompletedFrame,
+            presented,
+            extent: { width: canvas.width, height: canvas.height },
+            renderer: {
+              state,
+              surface,
+              frame,
+              environment,
+              recovery,
+              iblBinding,
+              featureGraph,
+              meshMaterialBindings: meshMaterialBindings?.map(
+                ({ worldId, worldIdentity, entityKey, bindings, diagnostics, residency }) => ({
+                  worldId,
+                  worldIdentity,
+                  entityKey,
+                  bindings,
+                  diagnostics: diagnostics.map(({ code, slotIndex, handle }) => ({
+                    code,
+                    slotIndex,
+                    handle,
+                  })),
+                  residency: residency.map(
+                    ({ readiness, samplers, textures, preparationFailure }) => ({
+                      readiness,
+                      samplers,
+                      textures,
+                      preparationFailure:
+                        preparationFailure === undefined
+                          ? undefined
+                          : {
+                              code: preparationFailure.code,
+                              expected: preparationFailure.expected,
+                              hint: preparationFailure.hint,
+                            },
+                    }),
+                  ),
+                }),
+              ),
+              featureDiagnostics: featureDiagnostics?.map(({ identity, status, latestError }) => ({
+                identity,
+                status,
+                latestError:
+                  latestError === undefined
+                    ? undefined
+                    : {
+                        code: latestError.code,
+                        expected: latestError.expected,
+                        hint: latestError.hint,
+                      },
+              })),
+            },
+            execution: app.execution.report(),
+            errors: errors.slice(),
+          };
+          throw new EngineWorkspaceError(
+            'engine-workspace-browser-failure',
+            'A new ready frame from the requested Engine preview',
+            `Engine workspace did not complete a new ready frame before capture: ${JSON.stringify(detail)}`,
+            detail,
+          );
+        }
         await new Promise((resolve) => setTimeout(resolve, 16));
       }
-      const frameId = completedFrame;
+      const frameId = readyCompletedFrame;
       const png = canvas.toDataURL('image/png');
       if (!png.startsWith('data:image/png'))
         throw new Error('Engine workspace canvas returned an invalid PNG');
@@ -459,6 +553,7 @@ const workspaceBrowserCommandsPlugin: Plugin.Object<EngineWorkspaceBrowserOption
                   context: childContext,
                   canvas: childCanvas,
                   asset: asset,
+                  targetId: childId,
                 });
                 childBrowser = await childContext.plugin(engineWorkspaceBrowserPlugin, {
                   app: childApp,

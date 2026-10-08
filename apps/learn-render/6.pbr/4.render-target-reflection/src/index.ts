@@ -741,7 +741,7 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       for (const face of CUBE_CAMERA_FACE_ORDER.keys()) {
         const ticketResult = renderer.requestTargetReadback(targetResult.value, {
           mipLevel: 0,
-          face,
+          layer: face,
         });
         if (!ticketResult.ok) throw ticketResult.error;
         cubeTickets.push(ticketResult.value);

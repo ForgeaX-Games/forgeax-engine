@@ -10,8 +10,8 @@ import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 // hello-fbx-skin vite config (feat-20260615-fbx-importer-via-sdk M5 t51).
 //
-// pluginPack scans forgeax-engine-assets/vendor/fbx-test for humanoid.fbx +
-// humanoid.fbx.meta.json, dispatching to fbxImporter at build time. The runtime
+// pluginPack selects humanoid.fbx.meta.json from forgeax-engine-assets/vendor/fbx-test,
+// dispatching its humanoid.fbx source to fbxImporter at build time. The runtime
 // resolves the GUIDs at registry time via configureRuntimeAssetCatalog(...)
 // + loadByGuid<SceneAsset>(sceneGuid) + sceneInstances.instantiate x 3 with
 // per-instance AnimationPlayer for pose-distinct rendering.
@@ -21,7 +21,7 @@ import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
-const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test')];
+const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/vendor/fbx-test/humanoid.fbx.meta.json')];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-fbx-skin');
 
 export default defineConfig({

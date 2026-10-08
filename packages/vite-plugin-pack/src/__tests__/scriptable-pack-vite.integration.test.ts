@@ -7,6 +7,7 @@ import { resolveAnimationAsset } from '@forgeax/engine-animation';
 import { createAssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { createHostAudioConsumer, WebAudioEngine } from '@forgeax/engine-audio-webaudio';
 import { World } from '@forgeax/engine-ecs';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { AssetGuid, PackageId } from '@forgeax/engine-pack/guid';
 import { resolveTilesetRuntime } from '@forgeax/engine-render/internal';
 import { defaultAssetDecoderContributions } from '@forgeax/engine-runtime';
@@ -404,9 +405,9 @@ describe.sequential('ScriptablePack Vite publication', () => {
         });
         await plugin.closeBundle();
 
-        const index = JSON.parse(
-          String(emitted.get('pack-index.json')),
-        ) as readonly PackIndexEntry[];
+        const index = decodeCatalogWire(
+          JSON.parse(String(emitted.get('pack-index.json'))),
+        ).unwrap() as readonly PackIndexEntry[];
         expect(new Set(index.map((entry) => entry.kind))).toEqual(new Set(ALL_KINDS));
         for (const entry of index) {
           expect(entry.packageUrl).toMatch(/^\/assets\/[^/]+\.pack\.json$/);
@@ -562,7 +563,9 @@ describe.sequential('ScriptablePack Vite publication', () => {
           kind: 'play',
           entityId: 1,
           sourceKey: audioResult.value.sourceKey,
-          bytes: audioResult.value.bytes,
+          ...(audioResult.value.bytes
+            ? { bytes: audioResult.value.bytes }
+            : { stream: audioResult.value.stream }),
           options: { loop: false, volume: 1, spatialBlend: 0, bus: 'sfx' },
         });
         await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
@@ -660,9 +663,9 @@ export default {
         });
         await plugin.closeBundle();
 
-        const catalog = JSON.parse(
-          String(emitted.get('pack-index.json')),
-        ) as readonly PackIndexEntry[];
+        const catalog = decodeCatalogWire(
+          JSON.parse(String(emitted.get('pack-index.json'))),
+        ).unwrap() as readonly PackIndexEntry[];
         expect(catalog).toHaveLength(1);
         expect(catalog[0]).toMatchObject({
           guid: GENERATED_GUID,

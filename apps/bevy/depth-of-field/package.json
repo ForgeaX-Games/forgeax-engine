@@ -21,11 +21,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-depth-of-field smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },
-      "fps": { "enabled": false, "reason": "static demo; fps no-regression covered by engine-runtime gates" },
-      "bench": { "enabled": false, "reason": "static demo; bench focus on engine-render" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-depth-of-field smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; Bevy depth of field reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "static demo; fps no-regression covered by engine-runtime gates"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "static demo; bench focus on engine-render"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-depth-of-field smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy depth of field reproduction"
+      }
     }
   },
   "dependencies": {
@@ -42,8 +57,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

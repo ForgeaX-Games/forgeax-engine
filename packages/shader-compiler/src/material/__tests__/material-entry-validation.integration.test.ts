@@ -1,7 +1,18 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
 import { GPU_DRIVEN_MATERIAL_ROW_BYTES } from '@forgeax/engine-shader';
+import type { MaterialAsset, MaterialPass } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { cookMaterialAsset, generateParameterModule } from '../cook.js';
+import { createMaterialPackCooker } from '../pack-cooker.js';
+import { materialPrograms } from '../publication.js';
 import { buildMaterialSourceCatalog } from '../source-catalog.js';
+import {
+  DEFAULT_MATERIAL_VARIANT_CONTEXT,
+  type MaterialVariantContext,
+} from '../variant-context.js';
 
 const source = `#define_import_path test::entries
 struct VertexOutput {
@@ -28,14 +39,24 @@ async function cook(
   moduleSource = source,
   passName = 'Forward',
   parameters: readonly { readonly name: string; readonly type: 'color' | 'f32' }[] = [],
+  context: MaterialVariantContext = DEFAULT_MATERIAL_VARIANT_CONTEXT,
 ) {
   const sources = buildMaterialSourceCatalog({
-    engine: [],
+    engine: [
+      {
+        path: 'common.wgsl',
+        source: await readFile(
+          new URL('../../../../shader/src/common.wgsl', import.meta.url),
+          'utf8',
+        ),
+      },
+    ],
     project: [{ path: 'entries.wgsl', source: moduleSource }],
   });
   if (!sources.ok) throw sources.error;
   return cookMaterialAsset({
     material: 'entry-validation',
+    context,
     table: {
       'entry-validation': {
         kind: 'material',
@@ -78,6 +99,47 @@ struct VsOutput {
 }
 @fragment fn fs_main() -> @location(0) vec4<f32> {
   return material.tint;
+}
+`;
+
+const nativeSceneIndexSource = `#define_import_path test::entries
+#import forgeax_material::parameters::{material}
+#import forgeax_view::common::{view}
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+#import forgeax_view::common::{sceneIndexDraw}
+#else
+#import forgeax_view::common::{meshes, instances}
+#endif
+struct VsInput {
+  @location(0) position : vec3<f32>,
+}
+struct VsOutput {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) @interpolate(flat) materialIndex : u32,
+}
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+@vertex fn vs_scene_index(input : VsInput, @builtin(instance_index) idx : u32) -> VsOutput {
+  let visible = visibleItems[idx];
+  let draw = sceneIndexDraw(visible.x);
+  var output : VsOutput;
+  output.clip = view.worldViewProj * draw.world * vec4<f32>(input.position, 1.0);
+  output.materialIndex = visible.y;
+  return output;
+}
+#else
+@vertex fn vs_main(input : VsInput, @builtin(instance_index) idx : u32) -> VsOutput {
+  var output : VsOutput;
+  output.clip = view.worldViewProj * meshes[0].worldFromLocal * instances[idx].localFromInstance * vec4<f32>(input.position, 1.0);
+  output.materialIndex = 0u;
+  return output;
+}
+#endif
+@fragment fn fs_main(input : VsOutput) -> @location(0) vec4<f32> {
+#ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
+  return sceneMaterials[input.materialIndex].tint;
+#else
+  return material.tint;
+#endif
 }
 `;
 
@@ -232,6 +294,135 @@ describe('selected material graphics entries', () => {
     });
     expect(pass?.compile.wgsl).toContain('sceneMaterials');
     expect(pass?.compile.wgsl).toContain('visibleItems');
+  });
+
+  it.each([
+    'Forward',
+    'ShadowCaster',
+  ])('cooks native conditional direct/scene-index programs for %s', async (passName) => {
+    const result = await cook('vs_main', 'fs_main', nativeSceneIndexSource, passName, [
+      { name: 'tint', type: 'color' },
+    ]);
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) return;
+    const pass = result.value.passes[0];
+    expect(pass?.abi?.sceneIndexEntry).toBe('vs_scene_index');
+    expect(pass?.sceneCompile).toBeDefined();
+    const direct = pass?.compile.wgsl;
+    const scene = pass?.sceneCompile?.wgsl;
+    expect(direct).toContain('fn vs_main');
+    expect(direct).not.toContain('fn vs_scene_index');
+    expect(direct).not.toContain('sceneTransforms');
+    expect(scene).toContain('fn vs_scene_index');
+    expect(scene).not.toContain('fn vs_main');
+    expect(scene).toContain('sceneTransforms');
+    expect(scene).toContain('sceneInstances');
+    expect(scene).toContain('scenePrimitives');
+    expect(scene).not.toMatch(/var<[^>]+> (?:meshes|instances)\b/);
+    const programs = materialPrograms(result.value.passes, {
+      guid: 'entry-validation',
+      source: result.value.resolved.asset,
+    });
+    expect(programs).toHaveLength(2);
+    expect(
+      programs.flatMap((program) => program.selections.map((selection) => selection.address)),
+    ).toEqual(['direct', 'scene-index']);
+  });
+
+  it.each([
+    false,
+    true,
+  ])('publishes native opaque shadows beside a custom scene program, shadow first: %s', async (shadowFirst) => {
+    const root = await mkdtemp(join(tmpdir(), 'custom-scene-shadow-'));
+    try {
+      await writeFile(join(root, 'entries.wgsl'), nativeSceneIndexSource);
+      const forward: MaterialPass = {
+        name: 'Forward',
+        program: { module: 'test::entries', vertexEntry: 'vs_main', fragmentEntry: 'fs_main' },
+      };
+      const shadow: MaterialPass = {
+        name: 'ShadowCaster',
+        program: { module: 'forgeax::default-shadow-caster' },
+      };
+      const source: MaterialAsset = {
+        kind: 'material',
+        parameters: [{ name: 'tint', type: 'color' }],
+        passes: shadowFirst ? [shadow, forward] : [forward, shadow],
+      };
+      const cooked = await createMaterialPackCooker([root]).cook({
+        guid: 'custom-with-native-shadow',
+        source,
+      });
+      const record = validateCookedMaterialRecord(
+        (cooked.payload as { cooked: unknown }).cooked,
+      ).unwrap();
+      expect(record.resolved.parameters).toEqual(source.parameters);
+      expect(record.programs.flatMap((program) => program.selections)).toHaveLength(8);
+      for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+        for (const pass of ['Forward', 'ShadowCaster']) {
+          const selections = record.programs
+            .flatMap((program) => program.selections)
+            .filter(
+              (selection) => selection.pass === pass && selection.context.capability === capability,
+            );
+          expect(selections.map((selection) => selection.address)).toEqual([
+            'direct',
+            'scene-index',
+          ]);
+          for (const selection of selections) {
+            expect(selection.abi?.materialRow.fields).toEqual(['tint']);
+            expect(selection.abi?.vertexInputs).toEqual([
+              { semantic: 'position', location: 0, format: 'float32x3' },
+            ]);
+          }
+        }
+      }
+      const shadowScene = record.programs.find((program) =>
+        program.selections.some(
+          (selection) => selection.pass === 'ShadowCaster' && selection.address === 'scene-index',
+        ),
+      );
+      expect(shadowScene).toBeDefined();
+      const wgsl = new TextDecoder().decode(shadowScene?.artifact.bytes);
+      expect(wgsl).toContain('sceneTransforms');
+      expect(wgsl).toContain('shadowCasterCascade');
+      expect(wgsl).toContain('applyViewClipping');
+      expect(wgsl).toContain('applyLodCoverage');
+      expect(wgsl).not.toContain('material.metallic');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an invalid conditional scene entry instead of publishing only the direct program', async () => {
+    const result = await cook(
+      'vs_main',
+      'fs_main',
+      nativeSceneIndexSource.replace('draw.world', 'draw.missingWorld'),
+      'Forward',
+      [{ name: 'tint', type: 'color' }],
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('shader-compile-failed');
+  });
+
+  it('keeps native conditional shaders direct-only on uniform-fallback devices', async () => {
+    const result = await cook(
+      'vs_main',
+      'fs_main',
+      nativeSceneIndexSource,
+      'Forward',
+      [{ name: 'tint', type: 'color' }],
+      {
+        ...DEFAULT_MATERIAL_VARIANT_CONTEXT,
+        capability: 'uniform-fallback',
+      },
+    );
+    expect(result.ok, result.ok ? '' : result.error.message).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.passes[0]?.sceneCompile).toBeUndefined();
+    expect(result.value.passes[0]?.abi).toBeUndefined();
   });
 
   it('publishes an authored equivalent row when a full-custom source owns Material', async () => {

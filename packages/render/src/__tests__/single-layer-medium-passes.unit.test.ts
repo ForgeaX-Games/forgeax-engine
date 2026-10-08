@@ -221,7 +221,7 @@ describe('single-layer medium graph producer pair', () => {
         getPostProcessPipeline: () => ({}) as never,
       },
       pipelineState: { colorAttachmentFormat: 'r32float', format: 'rgba8unorm' },
-      frameState: { perFrameGraph: undefined },
+      frameState: { compiledFrameGraph: null },
       bindGroupCounts: {},
       geometryDepthKey: 'scene-depth',
       postProcessParams: new Map(),

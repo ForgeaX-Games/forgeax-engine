@@ -12,7 +12,11 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 // shader + capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
-const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures')];
+// Publish this demo's complete asset closure, without unrelated sibling sources.
+const assetRoots = [
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/metal.png.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/wood.png.meta.json'),
+];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-5-3-3-csm');
 
 export default withRhiDebug({

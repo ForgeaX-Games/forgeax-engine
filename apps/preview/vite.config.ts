@@ -29,6 +29,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..');
 const previewPort = resolveProjectPort(undefined);
 const templatesDir = resolve(monorepoRoot, 'templates');
+const game3dRoot = process.env.FORGEAX_TEMPLATE_SMOKE === '1'
+  && process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1'
+  && process.env.FORGEAX_TEMPLATE_SMOKE_GAME3D_ROOT
+  ? resolve(process.env.FORGEAX_TEMPLATE_SMOKE_GAME3D_ROOT)
+  : resolve(templatesDir, 'game-3d');
 const appsDir = resolve(monorepoRoot, 'apps');
 const templateAssetRoot = resolve(appsDir, 'game-capability-lab', 'assets');
 const isPublicDistribution = existsSync(resolve(monorepoRoot, '.forgeax-public-distribution'));
@@ -64,7 +69,7 @@ const templatePackRoots = selectTemplateAssetRoots(
     },
     {
       slug: 'game-3d',
-      roots: collectAssetDeclarationRoots(resolve(templatesDir, 'game-3d', 'assets')),
+      roots: collectAssetDeclarationRoots(resolve(game3dRoot, 'assets')),
     },
     {
       slug: 'brotato-3d',
@@ -80,7 +85,7 @@ const templatePackRoots = selectTemplateAssetRoots(
 );
 const game3dOnlySmoke =
   selectedTemplateSlugs.length === 1 && selectedTemplateSlugs[0] === 'game-3d';
-const materialPackages = game3dOnlySmoke
+const materialPackages = selectedTemplateSlugs.length > 0 && !selectedTemplateSlugs.includes('game-capability-lab')
   ? []
   : [
       resolve(templateAssetRoot, 'animated-target-material.pack.json'),
@@ -179,16 +184,21 @@ const externalAssetRoots = isPublicDistribution
 // therefore every tracked game-3d pack) as a unit. The SDK collision lane
 // selects only game-3d; keep its startup closure to that template rather than
 // scanning unrelated Preview fixtures before the server can listen. The full
-// smoke roster keeps the broader roots for its cross-template coverage.
+// empty template needs no external resources. The full smoke roster retains
+// every template and its external dependency closure. The large
+// Surface material matrix is prepared only by the independent Surface owner.
 const packRoots = surfaceOnly
   ? [...surfacePackRoots, ...(process.env.FORGEAX_WATER_DEMO === '1' ? [skyMetaPath] : [])]
   : [
       ...templatePackRoots,
-      ...(game3dOnlySmoke
+      ...(game3dOnlySmoke || (selectedTemplateSlugs.length === 1 && selectedTemplateSlugs[0] === 'empty')
         ? []
         : [
-            surfaceEvidencePackRoot,
-            previewUiAuthoringMetaPath,
+            // Template journeys never consume the independent Surface/water
+            // or UI-authoring fixtures. Their own gates retain those roots.
+            ...(process.env.FORGEAX_TEMPLATE_SMOKE === '1'
+              ? []
+              : [surfaceEvidencePackRoot, previewUiAuthoringMetaPath]),
             ...externalAssetRoots.filter((root) => existsSync(root)),
           ]),
     ];
@@ -220,7 +230,7 @@ export default defineConfig(async ({ command }) => {
       ],
       cookers: [
         createMaterialPackCooker([
-          resolve(templatesDir, 'game-3d', 'assets', 'shaders'),
+          resolve(game3dRoot, 'assets', 'shaders'),
           resolve(here, 'assets', 'shaders'),
           resolve(templateAssetRoot),
         ]),
@@ -232,7 +242,7 @@ export default defineConfig(async ({ command }) => {
     ['depth-of-field', 'apps/game-capability-lab/depth-of-field.forge.json'],
     ['brotato-3d', 'apps/showcase/brotato-3d/forge.json'],
     ['empty', 'templates/empty/forge.json'],
-    ['game-3d', 'templates/game-3d/forge.json'],
+    ['game-3d', resolve(game3dRoot, 'forge.json')],
   ] as const;
   const programPlugins = await Promise.all(manifests.map(async ([namespace, path]) => {
     const manifest = JSON.parse(await readFile(resolve(monorepoRoot, path), 'utf8'));
@@ -265,10 +275,9 @@ export default defineConfig(async ({ command }) => {
       // parameter contract, while the WGSL module remains the build-time
       // source. This keeps manifest paramSchema and runtime MaterialAsset in
       // lockstep on WebGPU and the WebGL2 fallback.
-      // The isolated game-3d collision lane has no game-capability-lab
-      // material users. Leaving this list empty lets forgeaxShader consume
-      // the producer-owned shared engine manifest instead of compiling the
-      // whole custom-material fleet before Vite opens its listener.
+      // Other template servers have no game-capability-lab material users.
+      // Leaving this list empty lets forgeaxShader consume the verified
+      // shared engine manifest without compiling unrelated custom materials.
       materialPackages,
     }) as never,
     // RHI capture is a dev-only inspection front door. Keeping the plugin out
@@ -284,7 +293,7 @@ export default defineConfig(async ({ command }) => {
   server: {
     ...previewPort,
     fs: {
-      allow: [monorepoRoot],
+      allow: [monorepoRoot, game3dRoot],
     },
   },
   preview: previewPort,

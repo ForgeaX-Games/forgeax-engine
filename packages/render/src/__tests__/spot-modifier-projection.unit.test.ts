@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COOKIE_SLICE_MIP_CHAIN_BYTES } from '../prepare/extended-lighting/resources';
-import {
-  prepareCookieProjection,
-  projectCookieUv,
-  projectIesCoordinates,
-  spotModifierProduct,
-} from '../prepare/extended-lighting/spot-modifiers';
+import { prepareCookieProjection } from '../prepare/extended-lighting/spot-modifiers';
 
 function chainOf(projection: ReturnType<typeof prepareCookieProjection>): Uint8Array {
   if (projection?.source.kind !== 'mip-chain') throw new Error('expected a CPU mip chain');
@@ -13,27 +8,6 @@ function chainOf(projection: ReturnType<typeof prepareCookieProjection>): Uint8A
 }
 
 describe('Spot modifier projection', () => {
-  it('keeps the shared multiplication order and unit identities', () => {
-    expect(
-      spotModifierProduct({ brdf: 2, range: 0.8, cone: 0.5, ies: 0.25, cookie: 0.4, shadow: 0.75 }),
-    ).toBe(2 * 0.8 * 0.5 * 0.25 * 0.4 * 0.75);
-    expect(spotModifierProduct({ brdf: 1, range: 1, cone: 1, shadow: 1 })).toBe(1);
-  });
-
-  it('projects roll and non-square cookie dimensions into stable coordinates', () => {
-    const coords = projectIesCoordinates([0, 0, -1], 90);
-    expect(coords).toMatchObject({ azimuth: expect.any(Number), elevation: expect.any(Number) });
-    expect(projectCookieUv([0, 0, -1], 90, 2)).toMatchObject({
-      u: expect.any(Number),
-      v: expect.any(Number),
-    });
-  });
-
-  it('returns black behind the light and outside the projected cone', () => {
-    expect(projectIesCoordinates([0, 0, 1], 0)).toBeUndefined();
-    expect(projectCookieUv([0, 2, -1], 0, 1)).toBeUndefined();
-  });
-
   it('projects non-square sRGB RGBA data once into linear fixed-size slices', () => {
     const asset = {
       kind: 'texture' as const,

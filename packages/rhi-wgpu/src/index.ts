@@ -71,6 +71,7 @@ export type { WgpuWasm } from '@forgeax/engine-wgpu-wasm';
 import {
   err,
   ok,
+  RAY_QUERY_BACKEND_UNSUPPORTED,
   type RequestAdapterOptions,
   type Result,
   type RhiAdapter,
@@ -79,6 +80,7 @@ import {
   RhiError,
   type RhiInstance,
   type ShaderModule,
+  validateRayQueryShader,
 } from '@forgeax/engine-rhi';
 import { type GpuCanvasContextLike, makeCanvasContext, makeRhiAdapter } from './adapter';
 import { getRhiWgpuModule } from './internal/wasm-loader';
@@ -388,7 +390,13 @@ function createRawShaderModule(
       }),
     );
   }
-  const mirrored: { label?: string; code: string } = { code: desc.code };
+  const rayQueryGate = validateRayQueryShader(RAY_QUERY_BACKEND_UNSUPPORTED, desc.code);
+  if (!rayQueryGate.ok) return rayQueryGate;
+  // WebGL2 has no external textures; lower the WGSL type to the sampled 2D
+  // texture that the lowered bind-group layout entry carries.
+  const mirrored: { label?: string; code: string } = {
+    code: desc.code.replace(/\btexture_external\b/g, 'texture_2d<f32>'),
+  };
   if ('label' in desc && desc.label !== undefined) mirrored.label = desc.label;
   try {
     return ok(

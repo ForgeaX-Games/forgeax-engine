@@ -1,5 +1,12 @@
-import type { RhiAdapter, RhiDevice } from '@forgeax/engine-rhi';
+import { RAY_QUERY_FEATURE, type RhiAdapter, type RhiDevice } from '@forgeax/engine-rhi';
+import {
+  type StandardSharedTransmissionHost,
+  standardSharedTransmissionConflicts,
+} from '@forgeax/engine-shader';
+import { ATMOSPHERE_REQUIRED_SAMPLED_TEXTURES } from '../environment/capability';
 import { EXTENDED_LIGHTING_REQUIRED_SAMPLED_TEXTURES } from '../prepare/extended-lighting/resources';
+import type { MaterialSnapshot } from '../render-system-extract';
+import { DEFERRED_ATTACHMENT_BYTES } from '../standard-attachments';
 import { STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES } from './shader-prewarm-policy';
 
 const COMPRESSION_FEATURES: GPUFeatureName[] = [
@@ -19,6 +26,42 @@ export { STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES };
 export function transmissionBackdropAvailable(limit: number | undefined): boolean {
   return limit === undefined || limit >= STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES;
 }
+
+/**
+ * How one Standard transmission material fits the sampled-texture budget.
+ * `dedicated` uses the full layout; `shared` binds transmission, thickness and
+ * the backdrop through the split metallic/roughness/alpha pairs of the fixed
+ * 16-texture layout; `exceeded` names the authored maps that occupy those pairs.
+ */
+export type StandardTransmissionSlotAdmission =
+  | { readonly kind: 'dedicated' }
+  | { readonly kind: 'shared' }
+  | {
+      readonly kind: 'exceeded';
+      readonly conflicts: readonly StandardSharedTransmissionHost[];
+    };
+
+/**
+ * Admit a Standard transmission material against the sampled-texture budget.
+ * The canonical boot schema reserves transmission fields even for base-only
+ * materials, so presence comes from authored data. `undefined` means the draw
+ * requests no transmission; below the dedicated budget the material either
+ * shares the split scalar-map pairs or is `exceeded` and renders without it.
+ */
+export function standardTransmissionAdmission(
+  material: Pick<MaterialSnapshot, 'materialShaderId' | 'paramSnapshot' | 'standardTextureMask'>,
+  sampledTextureLimit: number | undefined,
+): StandardTransmissionSlotAdmission | undefined {
+  if (
+    material.materialShaderId !== 'forgeax::default-standard-pbr' ||
+    material.paramSnapshot?.transmission === undefined
+  )
+    return undefined;
+  if (transmissionBackdropAvailable(sampledTextureLimit)) return { kind: 'dedicated' };
+  const conflicts = standardSharedTransmissionConflicts(material.standardTextureMask ?? 0);
+  return conflicts.length === 0 ? { kind: 'shared' } : { kind: 'exceeded', conflicts };
+}
+
 /**
  * The complete Standard physical root can declare all optional texture slots.
  * Its material group therefore needs two more sampled-texture entries than the
@@ -53,30 +96,48 @@ export function deriveDeviceFeatureAdmission(adapter: AdapterFeatureProbe): Devi
   if (adapter.features.has('timestamp-query')) {
     requiredFeatures.push('timestamp-query');
   }
+  // Native wgpu exposes hardware Ray Query as an extension feature; admitting it
+  // lets the GI lanes select `traversal: 'ray-query'` from `caps.rayQuery`.
+  const rayQuery = RAY_QUERY_FEATURE as GPUFeatureName;
+  if (adapter.features.has(rayQuery)) requiredFeatures.push(rayQuery);
   const adapterSampledTextureLimit = adapter.limits?.maxSampledTexturesPerShaderStage ?? 0;
   const visibleSurface =
     adapter.features.has('primitive-index') &&
-    (adapter.limits?.maxColorAttachments ?? 0) >= 6 &&
-    (adapter.limits?.maxColorAttachmentBytesPerSample ?? 0) >= 48;
+    (adapter.limits?.maxColorAttachments ?? 0) >= 7 &&
+    (adapter.limits?.maxColorAttachmentBytesPerSample ?? 0) >=
+      DEFERRED_ATTACHMENT_BYTES.visibleSurface;
   if (visibleSurface) requiredFeatures.push('primitive-index');
+  // Request the real Standard attachment footprint, including receiver channels
+  // and temporal/visible-surface metadata, only when the adapter
+  // supports it; graph admission keeps the independent raster otherwise.
+  const colorAttachmentBytes = adapter.limits?.maxColorAttachmentBytesPerSample ?? 0;
+  const requiredColorAttachmentBytes = visibleSurface
+    ? Math.min(colorAttachmentBytes, DEFERRED_ATTACHMENT_BYTES.visibleSurfaceTemporal)
+    : colorAttachmentBytes >= DEFERRED_ATTACHMENT_BYTES.temporal
+      ? DEFERRED_ATTACHMENT_BYTES.temporal
+      : undefined;
   const requiredSampledTextureLimit =
-    adapterSampledTextureLimit >= STANDARD_PHYSICAL_REQUIRED_SAMPLED_TEXTURES
-      ? STANDARD_PHYSICAL_REQUIRED_SAMPLED_TEXTURES
-      : adapterSampledTextureLimit >= EXTENDED_LIGHTING_REQUIRED_SAMPLED_TEXTURES
-        ? EXTENDED_LIGHTING_REQUIRED_SAMPLED_TEXTURES
-        : adapterSampledTextureLimit >= STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES
-          ? STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES
-          : undefined;
+    adapterSampledTextureLimit >= ATMOSPHERE_REQUIRED_SAMPLED_TEXTURES
+      ? ATMOSPHERE_REQUIRED_SAMPLED_TEXTURES
+      : adapterSampledTextureLimit >= STANDARD_PHYSICAL_REQUIRED_SAMPLED_TEXTURES
+        ? STANDARD_PHYSICAL_REQUIRED_SAMPLED_TEXTURES
+        : adapterSampledTextureLimit >= EXTENDED_LIGHTING_REQUIRED_SAMPLED_TEXTURES
+          ? EXTENDED_LIGHTING_REQUIRED_SAMPLED_TEXTURES
+          : adapterSampledTextureLimit >= STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES
+            ? STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES
+            : undefined;
   return {
     requiredFeatures,
-    ...(requiredSampledTextureLimit === undefined && !visibleSurface
+    ...(requiredSampledTextureLimit === undefined && requiredColorAttachmentBytes === undefined
       ? {}
       : {
           requiredLimits: {
             ...(requiredSampledTextureLimit === undefined
               ? {}
               : { maxSampledTexturesPerShaderStage: requiredSampledTextureLimit }),
-            ...(visibleSurface ? { maxColorAttachmentBytesPerSample: 48 } : {}),
+            ...(requiredColorAttachmentBytes === undefined
+              ? {}
+              : { maxColorAttachmentBytesPerSample: requiredColorAttachmentBytes }),
           },
         }),
   };
@@ -100,4 +161,14 @@ export function isTimestampQueryAdmitted(
     Number.isFinite(caps.timestampPeriodNanoseconds) &&
     caps.timestampPeriodNanoseconds > 0
   );
+}
+
+/** WebGPU limits may be prototype accessors; publish their numeric POD values. */
+export function inspectDeviceCapabilities(device: RhiDevice) {
+  const numeric: Record<string, number> = {};
+  for (const key in device.limits) {
+    const value = device.limits[key as keyof typeof device.limits];
+    if (typeof value === 'number') numeric[key] = value;
+  }
+  return { capabilities: Object.freeze({ ...device.caps }), limits: Object.freeze(numeric) };
 }

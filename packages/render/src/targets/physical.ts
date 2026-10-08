@@ -1,7 +1,25 @@
 import type { RhiDevice, RhiError, Texture, TextureView } from '@forgeax/engine-rhi';
-import type { RenderTargetDescriptor } from './contracts';
+import type { RenderError } from '../errors/render';
+import { RenderTargetOperationFailedError } from '../errors/render';
+import {
+  GPU_TEXTURE_USAGE_COPY_DST,
+  GPU_TEXTURE_USAGE_COPY_SRC,
+  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
+  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
+} from '../gpu-texture-usage';
+import type { RenderResult } from '../render-contract';
+import { type RenderTargetDescriptor, renderTargetLayerCount } from './contracts';
 
-/** Renderer-private physical storage for one logical target generation. */
+/**
+ * Renderer-private physical storage for one logical target generation.
+ *
+ * `layerViews[layer]` is the color attachment for one writable layer (cube
+ * face, array layer, or 3D depth slice). For `3d`, every entry is the same
+ * mip-0 `3d` view and the writer selects the slice with the attachment's
+ * `depthSlice`; other shapes use a single-layer `2d` view per layer. One
+ * transient depth attachment is shared by every layer write: each write
+ * clears it, so its contents never outlive one pass.
+ */
 export interface RenderTargetPhysical {
   readonly device: RhiDevice;
   readonly sampledDepth?: true;
@@ -11,22 +29,13 @@ export interface RenderTargetPhysical {
   readonly view: TextureView;
   readonly mipViews: readonly TextureView[];
   readonly colorTextures: readonly Texture[];
-  readonly faceViews: readonly TextureView[];
-  readonly depthTextures: readonly Texture[];
-  readonly depthViews: readonly TextureView[];
+  readonly layerViews: readonly TextureView[];
+  readonly depthTexture: Texture;
+  readonly depthView: TextureView;
   readonly resolveTexture?: Texture;
   readonly resolveView: TextureView;
-  readonly resolveFaceViews: readonly TextureView[];
+  readonly resolveLayerViews: readonly TextureView[];
 }
-
-import type { RenderError } from '../errors/render';
-import { RenderTargetOperationFailedError } from '../errors/render';
-import {
-  GPU_TEXTURE_USAGE_COPY_SRC,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from '../gpu-texture-usage';
-import type { RenderResult } from '../render-contract';
 
 function mipCount(descriptor: RenderTargetDescriptor): number {
   return descriptor.mipLevels === 1
@@ -57,8 +66,12 @@ export function createRenderTargetPhysical(
       }),
     };
   };
-  const layers = descriptor.shape === 'cube' ? 6 : 1;
+  const layers = renderTargetLayerCount(descriptor);
+  const volume = descriptor.shape === '3d';
+  const arrayLayers = volume ? 1 : layers;
+  // COPY_DST admits framebuffer snapshots into renderer-owned 2D targets.
   const usage =
+    GPU_TEXTURE_USAGE_COPY_DST |
     GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
     (descriptor.sampled ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
     (descriptor.readback ? GPU_TEXTURE_USAGE_COPY_SRC : 0);
@@ -67,14 +80,14 @@ export function createRenderTargetPhysical(
     size: { width: descriptor.width, height: descriptor.height, depthOrArrayLayers: layers },
     format: descriptor.format,
     mipLevelCount: mipCount(descriptor),
-    // WebGPU forbids multisampled array textures. The cube is always the
-    // single-sample resolve destination; MSAA capture uses one depth=1 color
-    // texture per face below.
+    // WebGPU forbids multisampled array textures. The layered texture is
+    // always the single-sample resolve destination; MSAA capture uses one
+    // depth=1 color texture per layer below.
     sampleCount: 1,
-    dimension: '2d',
+    dimension: volume ? '3d' : '2d',
     usage,
     viewFormats: undefined,
-    textureBindingViewDimension: descriptor.shape === 'cube' ? 'cube' : undefined,
+    textureBindingViewDimension: descriptor.shape === '2d' ? undefined : descriptor.shape,
   });
   if (!created.ok) return failed(created.error);
   const texture = created.value;
@@ -84,7 +97,7 @@ export function createRenderTargetPhysical(
     baseMipLevel: 0,
     mipLevelCount: mipCount(descriptor),
     baseArrayLayer: 0,
-    arrayLayerCount: layers,
+    arrayLayerCount: arrayLayers,
   });
   if (!view.ok) return failed(view.error);
   const mipViews: TextureView[] = [];
@@ -94,60 +107,54 @@ export function createRenderTargetPhysical(
       baseMipLevel: mip,
       mipLevelCount: 1,
       baseArrayLayer: 0,
-      arrayLayerCount: layers,
+      arrayLayerCount: arrayLayers,
     });
     if (!mipView.ok) return failed(mipView.error);
     mipViews.push(mipView.value);
   }
-  const resolveFaceViews: TextureView[] = [];
-  for (let face = 0; face < layers; face += 1) {
-    const faceView = device.createTextureView(texture, {
-      dimension: '2d',
-      baseMipLevel: 0,
-      mipLevelCount: 1,
-      baseArrayLayer: face,
-      arrayLayerCount: 1,
-    });
-    if (!faceView.ok) return failed(faceView.error);
-    resolveFaceViews.push(faceView.value);
+  const resolveLayerViews: TextureView[] = [];
+  if (volume) {
+    const sliceView = mipViews[0] ?? view.value;
+    for (let slice = 0; slice < layers; slice += 1) resolveLayerViews.push(sliceView);
+  } else {
+    for (let layer = 0; layer < layers; layer += 1) {
+      const layerView = device.createTextureView(texture, {
+        dimension: '2d',
+        baseMipLevel: 0,
+        mipLevelCount: 1,
+        baseArrayLayer: layer,
+        arrayLayerCount: 1,
+      });
+      if (!layerView.ok) return failed(layerView.error);
+      resolveLayerViews.push(layerView.value);
+    }
   }
+  const depth = device.createTexture({
+    label: `render-target.${generation}.depth`,
+    size: { width: descriptor.width, height: descriptor.height, depthOrArrayLayers: 1 },
+    mipLevelCount: 1,
+    sampleCount: descriptor.sampleCount,
+    dimension: '2d',
+    format: 'depth32float-stencil8',
+    usage:
+      GPU_TEXTURE_USAGE_RENDER_ATTACHMENT | (sampledDepth ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0),
+    viewFormats: undefined,
+    textureBindingViewDimension: undefined,
+  });
+  if (!depth.ok) return failed(depth.error);
+  allocations.push(depth.value);
+  const depthView = device.createTextureView(depth.value, {
+    dimension: '2d',
+    baseArrayLayer: 0,
+    arrayLayerCount: 1,
+  });
+  if (!depthView.ok) return failed(depthView.error);
   const colorTextures: Texture[] = [];
-  const faceViews: TextureView[] = [];
-  const depthTextures: Texture[] = [];
-  const depthViews: TextureView[] = [];
-  for (let face = 0; face < layers; face += 1) {
-    const depth = device.createTexture({
-      label: `render-target.${generation}.depth.${face}`,
-      size: {
-        width: descriptor.width,
-        height: descriptor.height,
-        depthOrArrayLayers: descriptor.sampleCount === 4 ? 1 : layers,
-      },
-      mipLevelCount: 1,
-      sampleCount: descriptor.sampleCount,
-      dimension: '2d',
-      format: 'depth32float-stencil8',
-      usage:
-        GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-        (sampledDepth ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0),
-      viewFormats: undefined,
-      textureBindingViewDimension: undefined,
-    });
-    if (!depth.ok) return failed(depth.error);
-    allocations.push(depth.value);
-    const depthView = device.createTextureView(depth.value, {
-      dimension: '2d',
-      baseArrayLayer: descriptor.sampleCount === 4 ? 0 : face,
-      arrayLayerCount: 1,
-    });
-    if (!depthView.ok) return failed(depthView.error);
-    depthTextures.push(depth.value);
-    depthViews.push(depthView.value);
-  }
+  const layerViews: TextureView[] = [];
   if (descriptor.sampleCount === 4) {
-    for (let face = 0; face < layers; face += 1) {
+    for (let layer = 0; layer < layers; layer += 1) {
       const msaa = device.createTexture({
-        label: `render-target.${generation}.msaa.${face}`,
+        label: `render-target.${generation}.msaa.${layer}`,
         size: { width: descriptor.width, height: descriptor.height, depthOrArrayLayers: 1 },
         format: descriptor.format,
         mipLevelCount: 1,
@@ -168,12 +175,12 @@ export function createRenderTargetPhysical(
       });
       if (!msaaView.ok) return failed(msaaView.error);
       colorTextures.push(msaa.value);
-      faceViews.push(msaaView.value);
+      layerViews.push(msaaView.value);
     }
   } else {
-    for (let face = 0; face < layers; face += 1) {
+    for (let layer = 0; layer < layers; layer += 1) {
       colorTextures.push(texture);
-      faceViews.push(resolveFaceViews[face] ?? view.value);
+      layerViews.push(resolveLayerViews[layer] ?? view.value);
     }
   }
   return {
@@ -187,12 +194,12 @@ export function createRenderTargetPhysical(
       view: view.value,
       mipViews,
       colorTextures,
-      faceViews,
-      depthTextures,
-      depthViews,
+      layerViews,
+      depthTexture: depth.value,
+      depthView: depthView.value,
       ...(descriptor.sampleCount === 4 ? { resolveTexture: texture } : {}),
       resolveView: view.value,
-      resolveFaceViews,
+      resolveLayerViews,
     },
   };
 }
@@ -206,7 +213,7 @@ export function destroyRenderTargetPhysical(
   textures.add(physical.texture);
   if (physical.resolveTexture !== undefined) textures.add(physical.resolveTexture);
   for (const texture of physical.colorTextures) textures.add(texture);
-  for (const texture of physical.depthTextures) textures.add(texture);
+  textures.add(physical.depthTexture);
   const failures = destroyTextures(device, textures);
   return failures.length === 0
     ? { ok: true, value: undefined }

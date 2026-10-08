@@ -4,7 +4,9 @@
 // fresh ReplaySession. Consumers should use structured Result errors and keep
 // browser, Node, and backend ownership at their host boundaries.
 
+export type { BindingAccess } from './binding-access';
 export {
+  type BufferFieldType,
   type BufferRecordLayout,
   type BufferRecords,
   type BufferScalar,
@@ -25,6 +27,7 @@ export type {
   JsonValue,
   ResourceConsumer,
   ResourceEntry,
+  WorkAccelerationStructure,
   WorkBinding,
   WorkEntry,
   WorkPipeline,
@@ -38,8 +41,31 @@ export {
   type ResourceLifecycleSummary,
 } from './frame-model';
 export { type FrameSummary, summarizeFrame } from './frame-summary';
+export {
+  type AtlasTile,
+  type DepthProjection,
+  type DisplayOptions,
+  decodeImage,
+  depthImage,
+  encodePng,
+  extractTile,
+  type FloatImage,
+  type ImageLayout,
+  type ImageStats,
+  imageStats,
+  readbackImage,
+  toRgba8,
+} from './image';
 export type { UnseededResource } from './initial-contents';
-export { decodeTape, digestBytes as tapeDigest, encodeTape } from './protocol/codec';
+export type { TapeBlobEntry, TapeContainerIndex } from './protocol/codec';
+export {
+  decodeTape,
+  decodeTapeContainerIndex,
+  digestBytes as tapeDigest,
+  encodeTape,
+  readTapePreamble,
+  TAPE_PREAMBLE_BYTES,
+} from './protocol/codec';
 export type { EventCategory, EventSemantics } from './protocol/event-semantics';
 export {
   EVENT_SEMANTICS,
@@ -81,17 +107,27 @@ export {
   type RecorderAttachment,
   type RecorderBackend,
   type RecorderOptions,
+  type TapeArtifact,
+  tapeArtifact,
 } from './recorder/session';
-export { replayDeviceRequest } from './replay/device-request';
+export { replayDeviceRequest, usesAccelerationStructures } from './replay/device-request';
 export {
+  type BatchReadRequest,
+  type BatchReadResults,
+  bindingReadRequest,
+  type FrameTiming,
   type InspectField,
   openReplay,
+  type PassTiming,
   type ReadbackSubresource,
   type ReplayBackend,
   type ReplayReadbackResult,
   type ReplaySession,
   type TextureSubresource,
   type WorkInspection,
+  type WorkOutput,
+  type WorkOutputRead,
+  workOutputs,
 } from './replay/session';
 export { decodeTexelRaw, decodeToRgba8, halfToFloat } from './texel-decode';
 export {

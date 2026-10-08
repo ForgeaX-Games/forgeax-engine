@@ -841,8 +841,7 @@ export function rootsToSceneAsset(
   // fixed-point premise: collect output must be a pure function of the graph).
   const anchorsSorted = [...anchorEntities].sort((a, b) => a - b);
 
-  // Classify members for non-root anchors.
-  const memberEntities = new Set<number>();
+  // Classify members for non-root anchors; the key set is the member set.
   const memberOrigin = new Map<number, { anchorRaw: number; memberLocalId: number }>();
   for (const er of anchorsSorted) {
     if (rootRawSet.has(er)) continue; // root anchor: don't classify members
@@ -851,8 +850,7 @@ export function rootsToSceneAsset(
     const retainedState = sr.value as unknown as CollectorSceneState;
     for (const [me, lid] of retainedState.entityToLocalId) {
       const mr = me as number;
-      if (visited.has(mr) && !anchorEntities.has(mr) && !memberEntities.has(mr)) {
-        memberEntities.add(mr);
+      if (visited.has(mr) && !anchorEntities.has(mr) && !memberOrigin.has(mr)) {
         memberOrigin.set(mr, { anchorRaw: er, memberLocalId: lid as unknown as number });
       }
     }
@@ -870,9 +868,8 @@ export function rootsToSceneAsset(
         localId !== undefined &&
         visited.has(mr) &&
         !anchorEntities.has(mr) &&
-        !memberEntities.has(mr)
+        !memberOrigin.has(mr)
       ) {
-        memberEntities.add(mr);
         memberOrigin.set(mr, { anchorRaw: er, memberLocalId: localId });
       }
     }
@@ -881,27 +878,24 @@ export function rootsToSceneAsset(
   // A nested synthetic SceneInstance root is structural too. Its carrier is
   // already claimed by the parent instance above; fold the anchor into that
   // same member origin before allocating parent mounts.
-  const childOfForAnchor = world.components.resolve('ChildOf');
-  if (childOfForAnchor !== undefined) {
-    for (const anchorRaw of [...anchorEntities]) {
-      if (rootRawSet.has(anchorRaw) || memberEntities.has(anchorRaw)) continue;
-      const parentRes = world.get(
-        anchorRaw as EntityHandle,
-        childOfForAnchor as EcsComponent<string>,
-      );
-      if (!parentRes.ok) continue;
-      const carrierRaw = (parentRes.value as Record<string, unknown>).parent as number | undefined;
-      const origin = carrierRaw === undefined ? undefined : memberOrigin.get(carrierRaw);
-      if (origin !== undefined) {
-        memberEntities.add(anchorRaw);
-        memberOrigin.set(anchorRaw, origin);
-      }
-    }
+  const childOf = world.components.resolve('ChildOf');
+  const parentRawOf = (raw: number): number | undefined => {
+    if (childOf === undefined) return undefined;
+    const parent = world.get(raw as EntityHandle, childOf as EcsComponent<string>);
+    return parent.ok
+      ? ((parent.value as Record<string, unknown>).parent as number | undefined)
+      : undefined;
+  };
+  for (const anchorRaw of [...anchorEntities]) {
+    if (rootRawSet.has(anchorRaw) || memberOrigin.has(anchorRaw)) continue;
+    const carrierRaw = parentRawOf(anchorRaw);
+    const origin = carrierRaw === undefined ? undefined : memberOrigin.get(carrierRaw);
+    if (origin !== undefined) memberOrigin.set(anchorRaw, origin);
   }
 
   // Remove inner anchors (members of outer anchors).
   for (const er of anchorEntities) {
-    if (memberEntities.has(er) && !rootRawSet.has(er)) anchorEntities.delete(er);
+    if (memberOrigin.has(er) && !rootRawSet.has(er)) anchorEntities.delete(er);
   }
 
   // Inner instance members must use the surviving outer mount's slot window.
@@ -943,14 +937,13 @@ export function rootsToSceneAsset(
   // structural Transform/Children/ChildOf/Entity that _spawnMountEntity leaves),
   // and its sole visited child is A. The mount for A then takes P's slot:
   // mount.parent = P's ChildOf parent, and any ref to P resolves to the mount.
-  const childOfTk0 = world.components.resolve('ChildOf');
   const childrenTk0 = world.components.resolve('Children');
   const carrierAllowed = new Set(['Transform', 'GlobalTransform', 'Children', 'ChildOf', 'Entity']);
   const carrierForAnchor = new Map<number, number>(); // anchorRaw -> carrierRaw
   const carrierToAnchor = new Map<number, number>(); // carrierRaw -> anchorRaw
   const isMountCarrier = (p: number, anchorRaw: number): boolean => {
     if (rootRawSet.has(p)) return false;
-    if (anchorEntities.has(p) || memberEntities.has(p)) return false;
+    if (anchorEntities.has(p) || memberOrigin.has(p)) return false;
     if (!visited.has(p)) return false;
     for (const [compName, compToken] of world.components.entries()) {
       if (carrierAllowed.has(compName)) continue;
@@ -975,20 +968,16 @@ export function rootsToSceneAsset(
     }
     return true;
   };
-  if (childOfTk0) {
-    // Deterministic order (D-7): a carrier shared by two anchors is claimed by
-    // the lowest-handle anchor regardless of Set iteration order.
-    for (const anchorRaw of anchorsSorted) {
-      if (!anchorEntities.has(anchorRaw)) continue; // pruned inner anchor
-      if (rootRawSet.has(anchorRaw)) continue;
-      const cr = world.get(anchorRaw as EntityHandle, childOfTk0 as EcsComponent<string>);
-      if (!cr.ok) continue;
-      const pRaw = (cr.value as Record<string, unknown>).parent as number | undefined;
-      if (pRaw === undefined) continue;
-      if (!carrierToAnchor.has(pRaw) && isMountCarrier(pRaw, anchorRaw)) {
-        carrierForAnchor.set(anchorRaw, pRaw);
-        carrierToAnchor.set(pRaw, anchorRaw);
-      }
+  // Deterministic order (D-7): a carrier shared by two anchors is claimed by
+  // the lowest-handle anchor regardless of Set iteration order.
+  for (const anchorRaw of anchorsSorted) {
+    if (!anchorEntities.has(anchorRaw)) continue; // pruned inner anchor
+    if (rootRawSet.has(anchorRaw)) continue;
+    const pRaw = parentRawOf(anchorRaw);
+    if (pRaw === undefined) continue;
+    if (!carrierToAnchor.has(pRaw) && isMountCarrier(pRaw, anchorRaw)) {
+      carrierForAnchor.set(anchorRaw, pRaw);
+      carrierToAnchor.set(pRaw, anchorRaw);
     }
   }
 
@@ -1002,7 +991,7 @@ export function rootsToSceneAsset(
     // itself has no durable declaration and must not be minted as `entity-0`
     // during collect, otherwise each collect/reload cycle adds another root.
     if (rootRawSet.has(er) && anchorEntities.has(er)) continue;
-    if (!anchorEntities.has(er) && !memberEntities.has(er)) {
+    if (!anchorEntities.has(er) && !memberOrigin.has(er)) {
       ownedEntities.push(er);
     }
   }
@@ -1056,13 +1045,16 @@ export function rootsToSceneAsset(
     if (orderedEntities[i] !== undefined) bfsIdx.set(orderedEntities[i] as number, i);
   }
   nonRootAnchors.sort((a, b) => (bfsIdx.get(a.entityRaw) ?? 0) - (bfsIdx.get(b.entityRaw) ?? 0));
+  // Mount i belongs to nonRootAnchors[i]; its localId is ownedCount + i.
+  const mountIndexByAnchor = new Map<number, number>();
+  for (const [index, anchor] of nonRootAnchors.entries()) {
+    mountIndexByAnchor.set(anchor.entityRaw, index);
+  }
 
   // ── Step 3: Allocate mount windows ──
   const ownedCount = ownedEntities.length;
   const outMounts: SceneInstanceMount[] = [];
   let nextMF = ownedCount + nonRootAnchors.length;
-  const childOfTk = world.components.resolve('ChildOf');
-
   const transformTk = world.components.resolve('Transform');
   for (const a of nonRootAnchors) {
     // When a mount carrier was absorbed (Step 1.75), the mount takes the
@@ -1070,23 +1062,14 @@ export function rootsToSceneAsset(
     // own parent IS the carrier, which no longer exists as an owned entity), and
     // carry the carrier's Transform as mount.components so placement round-trips.
     const carrierRaw = carrierForAnchor.get(a.entityRaw);
-    const parentSourceRaw = carrierRaw ?? a.entityRaw;
+    const pRaw = parentRawOf(carrierRaw ?? a.entityRaw);
     let mp: number | undefined;
-    if (childOfTk) {
-      const cr = world.get(parentSourceRaw as EntityHandle, childOfTk as EcsComponent<string>);
-      if (cr.ok) {
-        const pRaw = (cr.value as Record<string, unknown>).parent as number;
-        if (pRaw !== undefined) {
-          const ol = entityToLocalId.get(pRaw);
-          if (ol !== undefined) mp = ol;
-          else {
-            const mo = memberOrigin.get(pRaw);
-            if (mo !== undefined) {
-              const ai = nonRootAnchors.findIndex((x) => x.entityRaw === mo.anchorRaw);
-              if (ai >= 0) mp = ownedCount + ai;
-            }
-          }
-        }
+    if (pRaw !== undefined) {
+      mp = entityToLocalId.get(pRaw);
+      if (mp === undefined) {
+        const mo = memberOrigin.get(pRaw);
+        const ai = mo === undefined ? undefined : mountIndexByAnchor.get(mo.anchorRaw);
+        if (ai !== undefined) mp = ownedCount + ai;
       }
     }
     let mountComponents: SceneInstanceMount['components'] | undefined;
@@ -1150,26 +1133,14 @@ export function rootsToSceneAsset(
     // An absorbed mount carrier resolves to its mount's localId (the mount took
     // the carrier's slot in Step 1.75), so refs to the carrier — e.g. the
     // wrapper's Children list — point at the mount rather than dangle.
-    const absorbedAnchor = carrierToAnchor.get(t);
-    if (absorbedAnchor !== undefined) {
-      for (let i = 0; i < nonRootAnchors.length; i++) {
-        if (nonRootAnchors[i]?.entityRaw === absorbedAnchor) return ownedCount + i;
-      }
-    }
-    for (let i = 0; i < nonRootAnchors.length; i++) {
-      if (nonRootAnchors[i]?.entityRaw === t) return ownedCount + i;
-    }
+    const mountIndex = mountIndexByAnchor.get(carrierToAnchor.get(t) ?? t);
+    if (mountIndex !== undefined) return ownedCount + mountIndex;
     const mo = memberOrigin.get(t);
-    if (mo !== undefined) {
-      for (let i = 0; i < nonRootAnchors.length; i++) {
-        if (nonRootAnchors[i]?.entityRaw === mo.anchorRaw) {
-          let mf = ownedCount + nonRootAnchors.length;
-          for (let j = 0; j < i; j++) mf += nonRootAnchors[j]?.totalSlots ?? 0;
-          return mf + mo.memberLocalId;
-        }
-      }
-    }
-    return undefined;
+    const owner = mo === undefined ? undefined : mountIndexByAnchor.get(mo.anchorRaw);
+    const ownerMount = owner === undefined ? undefined : outMounts[owner];
+    return mo === undefined || ownerMount === undefined
+      ? undefined
+      : (ownerMount.memberFirst as number) + mo.memberLocalId;
   }
 
   // ── Step 4: Build SceneEntity rows ──
@@ -1186,22 +1157,16 @@ export function rootsToSceneAsset(
     const components: Record<string, Record<string, unknown>> = {};
     const isRoot = rootRawSet.has(entityRaw);
 
-    for (const [compName, compToken] of registeredComps) {
-      if (
-        !collectProfile.includeComponent(
-          compName,
-          componentDefinition(compToken).policy.transient === true,
-        )
-      )
+    for (const [compName, comp] of registeredComps) {
+      const definition = componentDefinition(comp);
+      if (!collectProfile.includeComponent(compName, definition.policy.transient === true))
         continue;
       if (isRoot && compName === 'ChildOf') continue;
 
-      const valRes = world.get(entity, compToken as EcsComponent<string>);
+      const valRes = world.get(entity, comp as EcsComponent<string>);
       if (!valRes.ok) continue;
 
       const val = valRes.value as Record<string, unknown>;
-      const comp = compToken;
-      if (comp === undefined) continue;
 
       const schema = componentSchema(comp);
       const schemaKeys = Object.keys(schema);
@@ -1228,25 +1193,12 @@ export function rootsToSceneAsset(
           !collectProfile.includeField(
             compName,
             fieldName,
-            componentDefinition(comp).fields[fieldName]?.transient === true,
+            definition.fields[fieldName]?.transient === true,
           )
         )
           continue;
 
-        const schemaFieldType = schema[fieldName];
         const entityKind = classifyEntityField(comp as EcsComponent, fieldName);
-        const sharedClass =
-          schemaFieldType !== undefined ? classifyFieldSchema(schemaFieldType) : undefined;
-
-        if (!entityKind && !sharedClass) {
-          if (_isArrayLike(rawValue)) {
-            fieldValues[fieldName] = _normalizeArray(rawValue);
-          } else {
-            fieldValues[fieldName] = rawValue;
-          }
-          continue;
-        }
-
         if (entityKind !== null) {
           // The synthetic root anchor is transient and is intentionally omitted
           // from the authored entity map. A member's implicit ChildOf edge to
@@ -1295,7 +1247,7 @@ export function rootsToSceneAsset(
             fieldValues[fieldName] = lid2;
           }
         } else {
-          // shared<T> field — reverse-lookup handle(s) to GUID(s) via the shared
+          // Plain or shared<T> field. A shared field reverse-looks-up handle(s) to GUID(s) via the shared
           // kernel (same two-state NULL-sentinel the M5 override serializer uses).
           // scalar handle 0 -> undefined => omit the field (deserialize restores
           // the slot-0 default; emitting 0 would be misread as refs index 0 by
@@ -1304,8 +1256,9 @@ export function rootsToSceneAsset(
           // AnimationPlayer.graph (shared<AnimationGraph> scalar, M4/w31) is
           // handled generically here — no special case needed.
           const normalized = _isArrayLike(rawValue) ? _normalizeArray(rawValue) : rawValue;
+          const sharedClass = classifyFieldSchema(schema[fieldName]);
           if (sharedClass === undefined) {
-            // Fallback: non-entity, non-shared — pass through
+            // Plain value field — pass through.
             fieldValues[fieldName] = normalized;
             continue;
           }

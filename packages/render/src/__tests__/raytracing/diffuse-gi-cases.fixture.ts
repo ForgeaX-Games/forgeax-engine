@@ -99,7 +99,7 @@ export async function verifyGiPunctual(fixture: DiffuseGiFixture) {
   const point = {
     kind: 'point' as const,
     position: vec3.create(3, 0, 3),
-    color: vec3.create(1, 1, 1),
+    color: vec3.create(Math.PI, Math.PI, Math.PI),
     intensity: Math.PI,
     invRangeSquared: 0,
   };

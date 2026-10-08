@@ -1,4 +1,5 @@
 import { mat4 } from '@forgeax/engine-math';
+import { cameraLensProjection } from '../camera-projection';
 import type { CameraProjection } from '../components/camera';
 import type { CameraSnapshot } from '../render-contract';
 
@@ -89,24 +90,6 @@ function temporalJitterUv(
   return [sample[0] / Math.max(1, surfaceWidth), sample[1] / Math.max(1, surfaceHeight)];
 }
 
-function cameraProjection(camera: CameraSnapshot): Float32Array {
-  const projection = mat4.create();
-  if (camera.projection === 'orthographic') {
-    mat4.orthographicReverseZ(
-      projection,
-      camera.orthoLeft,
-      camera.orthoRight,
-      camera.orthoTop,
-      camera.orthoBottom,
-      camera.near,
-      camera.far,
-    );
-  } else {
-    mat4.perspectiveReverseZ(projection, camera.fov, camera.aspect, camera.near, camera.far);
-  }
-  return projection;
-}
-
 function resetReason(
   current: CameraSnapshot,
   viewId: string,
@@ -133,7 +116,7 @@ export function projectTemporalView(input: TemporalViewInput): TemporalView {
     input.internalHeight ?? input.surfaceHeight,
   );
   const view = mat4.invert(mat4.create(), camera.world);
-  const projection = cameraProjection(camera);
+  const projection = cameraLensProjection(camera);
   const currentUnjitteredViewProjection = mat4.multiply(mat4.create(), projection, view);
   const clipJitter = mat4.identity(mat4.create());
   clipJitter[12] = currentJitterUv[0] * 2;

@@ -22,7 +22,7 @@
 
 import type { World as WorldType } from '@forgeax/engine-ecs';
 import { World } from '@forgeax/engine-ecs';
-import type { RhiCaps } from '@forgeax/engine-rhi';
+import { type RhiCaps, RhiError } from '@forgeax/engine-rhi';
 import type { EquirectAsset, Handle } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -47,6 +47,8 @@ const capsRenderable: RhiCaps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: false,
   float32Filterable: false,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
 } as unknown as RhiCaps;
 
@@ -106,12 +108,18 @@ function makeReadyDevice(probe: DeviceProbe): any {
 }
 
 // A device whose createTexture fails -> upload fail-fast -> status:'failed'.
+const deviceFailure = new RhiError({
+  code: 'device-lost',
+  expected: 'a live device',
+  hint: 'test double: every allocation fails',
+});
+
 // biome-ignore lint/suspicious/noExplicitAny: opaque mock GPU device surface
 function makeFailingDevice(): any {
   return {
     createShaderModule: () => okShim({ __mock: 'shader' }),
-    createTexture: () => ({ ok: false as const, error: undefined }),
-    createTextureView: () => ({ ok: false as const, error: undefined }),
+    createTexture: () => ({ ok: false as const, error: deviceFailure }),
+    createTextureView: () => ({ ok: false as const, error: deviceFailure }),
     queue: {
       writeTexture: () => okShim(undefined),
       writeBuffer: () => okShim(undefined),
@@ -301,7 +309,7 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
       code: 'equirect-projection-failed',
       handle: handle as unknown as number,
     });
-    expect(fired[0]?.hint).toContain('declare Skylight');
+    expect(fired[0]?.hint).toContain('device-lost');
 
     // Frame 3+: the latch keeps the channel quiet -- no re-fire, no retry
     // (the store's status:'failed' short-circuit + the frameState latch).
@@ -309,6 +317,31 @@ describe('driveLazyEquirectProjection — lazy projection state machine (M3 / w2
     driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
     expect(fired.length).toBe(1);
     expect(store.getCubemapStatus(handle)).toBe('failed');
+  });
+
+  it('an 8-bit equirect reports its invalid-source-format cause through the projection error', () => {
+    const probe: DeviceProbe = { textures: 0 };
+    const store = configuredStore(makeReadyDevice(probe), capsRenderable);
+    const world = new World();
+    const handle = catalogEquirect(world, {
+      ...equirectPod(),
+      format: 'rgba8unorm',
+      data: new Uint8Array(4 * 2 * 4),
+    });
+    const reg = new RhiErrorListenerRegistry();
+    const causes: string[] = [];
+    reg.add((e) => {
+      if (e.code === 'equirect-projection-failed') causes.push(e.detail.cause.code);
+    });
+    const frameState = makeFrameState();
+    const internals = makeInternals(store, reg, capsRenderable);
+
+    driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
+    driveLazyEquirectProjection(internals, world, frameState, handle as unknown as number);
+
+    expect(store.getCubemapStatus(handle)).toBe('failed');
+    expect(causes).toEqual(['invalid-source-format']);
+    expect(probe.textures).toBe(0);
   });
 
   it('handle resolves to a non-equirect / missing POD -> no launch, no crash', () => {

@@ -43,7 +43,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "no performance benchmarks; deterministic correctness verified by unit and model tests"
+        "reason": "hardware-dependent publication diagnostic is opt-in; deterministic correctness is gated by unit and model tests"
       },
       "gate": {
         "enabled": false,

@@ -26,9 +26,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-wgpu-wasm": "workspace:*",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "forgeax": {
     "metrics": {

@@ -8,8 +8,10 @@ it(
   60_000,
 );
 
-it('reuses render bundles for 60 frames and replays every draw on a fresh Dawn device', async () => {
-  const result = await runRenderBundleFixture();
+it('reuses render bundles and replays every draw on a fresh Dawn device', async () => {
+  const result = await runRenderBundleFixture(
+    process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 8 : 60,
+  );
   const directory = 'artifacts/render-bundle';
   await mkdir(directory, { recursive: true });
   await writeFile(`${directory}/stable.rhitape`, result.artifact.bytes);

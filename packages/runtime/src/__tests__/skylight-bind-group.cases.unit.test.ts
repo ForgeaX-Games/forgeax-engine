@@ -113,13 +113,15 @@ import {
 import {
   assembleMaterialWithSkylightEntries,
   createSkylightFallback,
-  mergeSkylightIntoMaterialBgl,
 } from '../../../render/src/ibl/skylight-bind-group';
-import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../../../render/src/pbr-pipeline';
+import {
+  appendInjection,
+  buildPbrPipelineLayouts,
+  buildUnlitMaterialBgl,
+} from '../../../render/src/pbr-pipeline';
 import { INSTANCE_STORAGE_STRIDE_FLOATS } from '../../../render/src/record/mesh-ssbo';
 import { selectSwapChainFormat } from '../../../render/src/render-system';
 import { createSkinPaletteAllocator } from '../../../render/src/systems/skin-palette-allocator';
-import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { drawWithOwners } from './renderer-test-utils';
 
@@ -225,8 +227,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../../../render/src/systems/transparent-sort-config';
 import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
-import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
-import { transparentSortEntries } from '../systems/transparent-sort';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 void [
@@ -248,7 +248,6 @@ void [
   MeshFilter,
   MeshRenderer,
   Name,
-  REC709_LUMA_WEIGHTS,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   Skin,
@@ -298,7 +297,6 @@ void [
   it,
   makeMockShaderRegistry,
   mat4,
-  mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
   propagateTransforms,
   readFileSync,
@@ -310,8 +308,6 @@ void [
   standardMaterialShaderVariants,
   subscribeRendererErrors,
   toShared,
-  tonemapReinhardLuminance,
-  transparentSortEntries,
   unwrapRendererError,
   urpPipeline,
   vec3,
@@ -343,7 +339,6 @@ type __MergedKeep =
   | Texture
   | TextureFormat
   | TextureView
-  | TransparentEntry
   | WorldType;
 
 {
@@ -434,10 +429,10 @@ type __MergedKeep =
 
   // ─── Assertion (a): merged BGL is length 13 with Skylight bindings 7..12 ────
 
-  describe('t40 round-4 (a) mergeSkylightIntoMaterialBgl shape', () => {
+  describe('t40 round-4 (a) IBL injection shape', () => {
     it('returns 13 entries; binding 0..6 preserved; 7..13 in D-5 order [irrTex, irrSampler, prefTex, prefSampler, brdfTex, brdfSampler, uniform]', () => {
       const materialEntries = makeMaterialBglEntries();
-      const merged = mergeSkylightIntoMaterialBgl(materialEntries);
+      const merged = [...materialEntries, ...appendInjection(materialEntries, 'ibl')];
 
       expect(merged).toHaveLength(13);
 
@@ -472,11 +467,6 @@ type __MergedKeep =
       // BRDF sampling shares irradianceSampler; binding 12 carries its uniform.
       expect(merged[12]?.binding).toBe(12);
       expect((merged[12] as { buffer?: { type: string } }).buffer?.type).toBe('uniform');
-    });
-
-    it('rejects non-7-entry material BGL input', () => {
-      expect(() => mergeSkylightIntoMaterialBgl([])).toThrow();
-      expect(() => mergeSkylightIntoMaterialBgl(makeMaterialBglEntries().slice(0, 5))).toThrow();
     });
   });
 
@@ -526,7 +516,7 @@ type __MergedKeep =
         expect(desc.size.height).toBe(1);
       }
 
-      // Both cube maps carry six white faces. The 1x1 BRDF fallback stores the
+      // Both cube maps upload six white faces in one call. The 1x1 BRDF fallback stores the
       // split-sum approximation A=1 / B=0 as rg16float. The mock returns one
       // shared texture object, so classify writes by payload bytes instead.
       let whiteCount = 0;
@@ -545,6 +535,8 @@ type __MergedKeep =
         const isBrdfApprox =
           dv.getUint16(0, true) === 0x3c00 && dv.getUint16(2, true) === 0x0000 && !isWhiteHead;
         if (isWhiteHead) {
+          expect(call[3]).toMatchObject({ depthOrArrayLayers: 6 });
+          expect(dv.getUint16(5 * 256, true)).toBe(0x3c00);
           whiteCount += 1;
         } else if (isBrdfApprox) {
           brdfApproxCount += 1;
@@ -552,7 +544,7 @@ type __MergedKeep =
           expect.fail('unexpected Skylight fallback texture payload');
         }
       }
-      expect(whiteCount).toBe(12);
+      expect(whiteCount).toBe(2);
       expect(brdfApproxCount).toBe(1);
     });
 

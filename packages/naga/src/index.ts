@@ -17,11 +17,11 @@
 //   between phases without inspecting the underlying naga IR
 //   (plan-strategy §S-1 opaque handle invariant).
 
+import { manifestMalformed } from '@forgeax/engine-shader';
 import { ensureReady } from '@forgeax/engine-wgpu-wasm';
 import {
   err,
   initFailed,
-  manifestMalformed,
   ok,
   type Result,
   ShaderError,
@@ -33,7 +33,6 @@ export {
   compileFailed,
   err,
   initFailed,
-  manifestMalformed,
   ok,
   type Result,
   type ResultErr,
@@ -41,10 +40,14 @@ export {
   ShaderError,
   type ShaderErrorCode,
   type ShaderErrorDetail,
-  shaderNotFound,
 } from './errors.js';
 
 // === Opaque handle types ============================================================
+
+interface ModuleHandle {
+  /** Release the owned native IR; do not use a consumed or released handle. */
+  free(): void;
+}
 
 /**
  * Handle for the `parse` output. The underlying type is a wasm-bindgen exported
@@ -52,17 +55,17 @@ export {
  * directly (charter proposition 4 + opaque handle invariant). Pass through to
  * `validate` to advance to phase 2.
  *
- * Surface type uses `unknown` to keep this layer math-free and opaque-handle
- * pure (no direct dependency on @forgeax/engine-wgpu-wasm/pkg ABI types). Downstream
- * consumers should not inspect the handle.
+ * Only native release is exposed; IR fields remain private without a pkg ABI
+ * dependency. Free the handle if stopping before validation; validate consumes it.
  */
-export type ParsedModule = unknown;
+export type ParsedModule = ModuleHandle;
 
 /**
  * Handle for the `validate` output (Module + ModuleInfo); pass through to
- * `emit_reflection` for the reflection JSON emit.
+ * `emit_reflection` for the reflection JSON emit. Free it after the last borrowed
+ * operation, including an operation that returns a failure.
  */
-export type ValidatedModule = unknown;
+export type ValidatedModule = ModuleHandle;
 
 export interface ShaderReflectionMember {
   readonly name: string;

@@ -1,5 +1,5 @@
 /** Stage progress goes to stderr; the final SDK JSON remains machine-readable. */
-export async function sdkStage(label, operation) {
+export async function sdkStage(label, operation, timeoutMs) {
   const started = performance.now();
   const elapsed = () => Math.round(performance.now() - started);
   console.error(`[sdk] start ${label}`);
@@ -7,8 +7,20 @@ export async function sdkStage(label, operation) {
     console.error(`[sdk] running ${label} elapsedMs=${elapsed()}`);
   }, 30_000);
   heartbeat.unref();
+  let timeout;
   try {
-    const result = await operation();
+    const pending = Promise.resolve().then(operation);
+    const result = await (timeoutMs === undefined
+      ? pending
+      : Promise.race([
+          pending,
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+              timeoutMs,
+            );
+          }),
+        ]));
     console.error(`[sdk] complete ${label} elapsedMs=${elapsed()}`);
     return result;
   } catch (error) {
@@ -22,5 +34,6 @@ export async function sdkStage(label, operation) {
     throw error;
   } finally {
     clearInterval(heartbeat);
+    clearTimeout(timeout);
   }
 }

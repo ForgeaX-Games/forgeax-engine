@@ -1,12 +1,10 @@
 // @forgeax/engine-render - SortKey (per-entity transparent sort override, f32).
 //
-// Schema: 1 f32 column (value). Entity-level sort override consumed by
-// `transparent-sort.ts` (M-3 w23): when present, SortKey.value REPLACES
-// the mode-formula result for this entity in the (layer, sortValue)
-// composite ordering. Override priority is higher than every
-// TransparentSortConfig mode computation (horizontal-z / Y-sort /
-// Y-Z-blend) so AI users can pin a single entity above / below the
-// procedural ordering without reshaping the entire scene.
+// Schema: 1 f32 column (value). Entity-level sort override read at extract
+// time and carried on Points/Lines retained snapshots. The mesh transparent
+// order owner, `TransparentSortCache` (systems/transparent-dispatch.ts),
+// currently derives its secondary key from TransparentSortConfig.mode only
+// and does not read SortKey.
 //
 // Like Layer, SortKey is a generic ECS renderer component — NOT a
 // 2D-only special. 3D entities may also carry SortKey to bias their
@@ -16,8 +14,7 @@
 // AC-19 derivation audit row (4) names this file as the
 // `defineComponent` factory derivation. JSDoc surfaces the override
 // priority via @derives (ECS factory) annotation; the consumer side
-// of the override behaviour is implemented + verified in M-3 w16 +
-// w23, not here.
+// of the override behaviour belongs to the sort owner, not here.
 //
 // @derives defineComponent factory (packages/ecs/src/component.ts) —
 //   f32 is a legacy scalar type; its intrinsic properties (byteSize / viewCtor
@@ -41,7 +38,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  * magnitudes work but cross-layer biasing should usually go through
  * `Layer` instead.
  *
- * Override priority (M-3 w23 transparent-sort algorithm):
+ * Intended override priority (not yet consumed by `TransparentSortCache`):
  *
  *   if (world.has(entity, SortKey)) {
  *     sortValue = world.get(entity, SortKey).value;
@@ -68,7 +65,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *
  * @example Spawn payload omitting SortKey — the 4-layer fallback fills 0:
  *   // entity reads back SortKey only if explicitly attached;
- *   // otherwise the mode-formula path is taken by transparent-sort.ts.
+ *   // otherwise the mode-formula path is taken by the sort owner.
  */
 export const SortKey = defineComponent('SortKey', {
   value: { type: 'f32', default: 0 },

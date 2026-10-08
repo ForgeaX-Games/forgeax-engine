@@ -15,7 +15,7 @@ import test from 'node:test';
 
 const sourcePath = resolve('scripts/ci/delete-workflow-artifacts.mjs');
 
-function runFixture({ listFails = false, preserveName } = {}) {
+function runFixture({ listFails = false, preserveName, artifacts } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-delete-workflow-artifacts-'));
   const binDir = join(root, 'bin');
   const logPath = join(root, 'gh.log');
@@ -27,7 +27,7 @@ function runFixture({ listFails = false, preserveName } = {}) {
 const args = process.argv.slice(2);
 if (args.includes('--paginate')) {
   if (process.env.GH_TEST_LIST_FAIL === '1') process.exit(1);
-  process.stdout.write('101\\tfirst\\n102\\tsecond\\n');
+  process.stdout.write(process.env.GH_TEST_ARTIFACTS ?? '101\\tfirst\\n102\\tsecond\\n');
   process.exit(0);
 }
 if (args.includes('--method') && args.includes('DELETE')) {
@@ -53,6 +53,7 @@ process.exit(1);
           GH_TOKEN: 'fixture-token',
           GH_TEST_LIST_FAIL: listFails ? '1' : '0',
           GH_TEST_LOG: logPath,
+          ...(artifacts === undefined ? {} : { GH_TEST_ARTIFACTS: artifacts }),
         },
       },
     );
@@ -68,7 +69,7 @@ test('deletes every artifact returned by the workflow-run listing', () => {
   const fixture = runFixture();
   assert.equal(fixture.status, 0, fixture.stderr);
   assert.match(fixture.stdout, /transient artifacts deleted: 2; preserved: 0; failed deletions: 0/);
-  assert.deepEqual(fixture.log.trim().split('\n'), [
+  assert.deepEqual(fixture.log.trim().split('\n').sort(), [
     'repos/owner/repo/actions/artifacts/101',
     'repos/owner/repo/actions/artifacts/102',
   ]);
@@ -85,4 +86,17 @@ test('does not fail the workflow when the listing API is unavailable', () => {
   const fixture = runFixture({ listFails: true });
   assert.equal(fixture.status, 0, fixture.stderr);
   assert.match(fixture.stdout, /could not list transient artifacts/);
+});
+
+test('preserves original failed captures after a later successful attempt', () => {
+  const fixture = runFixture({
+    artifacts:
+      '101\tcore-build-a1\n102\tfailure-view-integration-evidence-3-a1\n103\tview-integration-evidence-3-a2\n104\tfailure-preview-rhi-window-1\n',
+  });
+  assert.equal(fixture.status, 0, fixture.stderr);
+  assert.match(fixture.stdout, /transient artifacts deleted: 2; preserved: 2; failed deletions: 0/);
+  assert.deepEqual(fixture.log.trim().split('\n').sort(), [
+    'repos/owner/repo/actions/artifacts/101',
+    'repos/owner/repo/actions/artifacts/103',
+  ]);
 });

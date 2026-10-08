@@ -1,4 +1,8 @@
-import type { AssetRegistry, DynamicTextureStore } from '@forgeax/engine-assets-runtime';
+import type {
+  AssetRegistry,
+  DynamicTextureStore,
+  MaterialRenderProjection,
+} from '@forgeax/engine-assets-runtime';
 import type { VertexLayoutProjection } from '@forgeax/engine-geometry';
 import type { Profiler } from '@forgeax/engine-profiler';
 import type { CompiledRenderGraphInfo } from '@forgeax/engine-render-graph';
@@ -35,7 +39,6 @@ import type {
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { derive, MAX_CLIPPING_PLANES } from '@forgeax/engine-types';
-import type { MaterialRenderProjection } from '../assembly/material/assembly';
 import type { DeviceScope } from '../device/device-scope';
 import type { MeshGpuHandles } from '../device/gpu-residency';
 import type { EngineMetrics } from '../engine-metrics';
@@ -52,6 +55,14 @@ import {
 import type { SkylightFallback } from '../ibl/skylight-bind-group';
 import type { BloomInspection, ShadowViewInvalidationReason } from '../inspection-types';
 import type { HealthListenerRegistry, RhiErrorListenerRegistry } from '../lifecycle';
+import {
+  appliedOutputColorSpace,
+  type OutputColorSpace,
+  type OutputColorSpaceReport,
+  type OutputColorSpaceState,
+  observeDisplayP3Configuration,
+  outputColorSpaceFallback,
+} from '../output-color-space';
 import type { StandardTopologyInputValue } from '../pipeline/standard-lighting/topology';
 import type { StandardProfile } from '../pipeline/standard-profile';
 import type { PipelineBuilderShaderModuleFactory } from '../pipeline-builder';
@@ -60,10 +71,12 @@ import type { PointsLinesRecordPlan } from '../points-lines/record';
 import type { RenderResourceScope } from '../publication/resource-scope';
 import type { ReflectionProbeTable } from '../reflection/gpu-table';
 import type { ReflectionProbeSelectionResult } from '../reflection/projection';
-import type { FrameObservationDomain } from '../render-contract';
+import type {
+  FrameObservationDomain,
+  RenderPipelineObservationCaptureOwner,
+} from '../render-contract';
 import type { PersistentShadowCasterProjection } from '../scene/render-scene';
 import type { SsrAdmissionIdentity } from '../ssr/identity';
-import type { TypedFrameObservationCapture } from '../typed-render-graph-primitives';
 import type { GpuPassTimingReason } from './gpu-pass-timing/errors';
 import type {
   GpuPassTimingCapture,
@@ -151,22 +164,6 @@ import type {
 } from './frame-snapshot';
 import type { FoldDispatchPlan } from './mesh-ssbo';
 
-/**
- * Armed only for the first published recovery frame. Candidate preparation
- * must make every pipeline and static residency lookup a cache hit before this
- * guard is armed; a miss during draw is a hard failure before queue submission.
- * Explicit preparation between draws remains allowed, including new geometry
- * admitted on the first fixed step after device recovery.
- */
-export interface RecoveryColdWorkGuard {
-  arm(): void;
-  beginFrame(): void;
-  endFrame(): void;
-  notePipelineColdWork(): void;
-  noteUploadColdWork(): void;
-  finish(): void;
-}
-
 export interface RenderSystemRuntime {
   standardDeferredShaders?:
     | import('../pipeline/standard-deferred-lighting').StandardDeferredShaderSources
@@ -179,13 +176,7 @@ export interface RenderSystemRuntime {
   /** Graph identity written by the typed graph for the current receipt. */
   observationGraphGeneration?: number | undefined;
   /** Renderer-owned capture bridge consumed after queue submission. */
-  readonly observationCaptureOwner?:
-    | {
-        register(capture: TypedFrameObservationCapture): void;
-        consume(frameNumber: number): readonly TypedFrameObservationCapture[];
-        drain(): readonly TypedFrameObservationCapture[];
-      }
-    | undefined;
+  readonly observationCaptureOwner?: RenderPipelineObservationCaptureOwner | undefined;
   /** Internal backend-fixture hook evaluated at the submit transaction edge. */
   readonly beforeSubmit?: ((device: RhiDevice) => RhiError | undefined) | undefined;
   readonly deviceScope: DeviceScope;
@@ -193,6 +184,11 @@ export interface RenderSystemRuntime {
   readonly observationCaptureDomains?: readonly FrameObservationDomain[] | undefined;
   /** Resolve a recorder/backend wrapper before configuring the native surface. */
   readonly resolveSurfaceDevice?: (device: RhiDevice) => Result<RhiDevice, RhiError>;
+  /**
+   * Renderer-owned output colour-space negotiation. Absent means sRGB. The
+   * record stage encodes `report.effective`; RenderTarget views pin sRGB.
+   */
+  readonly outputColorSpace?: OutputColorSpaceState | undefined;
   readonly errorRegistry: RhiErrorListenerRegistry;
   readonly debugOverlay?: RenderDebugOverlay | undefined;
   readonly healthRegistry: HealthListenerRegistry;
@@ -284,6 +280,8 @@ export interface RenderSystemRuntime {
   ) => MaterialShaderPipelineEntry | null;
   /** Reflection-derived UV count included in the material PipelineSpec cache key. */
   readonly getMaterialShaderUvSetCount?: (materialShaderId: string) => number | undefined;
+  /** Read a build-time cooked utility selected for the receiving device. */
+  readonly getFeatureShaderSource?: ((identifier: string) => string | undefined) | undefined;
   readonly getMaterialShaderBindingContract?: (
     materialShaderId: string,
   ) =>
@@ -301,8 +299,6 @@ export interface RenderSystemRuntime {
   ) => BindGroupLayout | undefined;
   /** Handle-first factory for built-in same-frame GPU producers. */
   readonly immediateShaderModuleFactory?: PipelineBuilderShaderModuleFactory;
-  /** Optional guard for the first recovery frame's cold-work boundary. */
-  readonly recoveryColdWorkGuard?: RecoveryColdWorkGuard | undefined;
   readonly metrics: EngineMetrics;
   readonly lookupPostProcess?: (
     id: string,
@@ -323,6 +319,10 @@ export interface RenderSystemRuntime {
   readonly resolveRenderTargetTextureSource?: (
     source: import('../targets/contracts').RenderTargetTextureSource,
   ) => import('../targets/material-source').RenderTargetMaterialSourceBinding | undefined;
+  /** Renderer-owned external texture sources (GPUTexture import and per-frame video). */
+  readonly externalTextures?:
+    | import('../textures/external-texture').ExternalTextureBinder
+    | undefined;
 }
 
 /** Renderer-owned bridge from retained Points/Lines facts into main geometry. */
@@ -481,6 +481,10 @@ export interface PipelineState {
   readonly skinPaletteAllocator: SkinPaletteAllocator | null;
   readonly defaultWhiteTextureView: TextureView;
   readonly defaultNormalTextureView: TextureView;
+  /** White volume for `texture_3d` material params before their source promotes. */
+  readonly defaultWhite3dTextureView?: TextureView;
+  /** White array for `texture_2d_array` material params before their source promotes. */
+  readonly defaultWhite2dArrayTextureView?: TextureView;
   /** Missing anisotropy maps encode a neutral direction and unit strength. */
   readonly defaultAnisotropyTextureView?: TextureView;
   readonly unlitPipelineHdr: RhiRenderPipeline | null;
@@ -489,6 +493,9 @@ export interface PipelineState {
   readonly shadowArrayFallbackTextureView: TextureView;
   readonly shadowAtlasFallbackTextureView: TextureView;
   readonly extendedLightingAvailable?: boolean;
+  readonly atmosphereAvailable?: boolean;
+  readonly viewLinearSampler?: Sampler;
+  readonly atmosphereFallbackView?: TextureView | undefined;
   readonly iesProfileTexture?: Texture;
   readonly cookieTexture?: Texture;
   readonly cookieMatrixBuffer?: Buffer;
@@ -514,7 +521,12 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   submittedPassNames?: readonly string[];
   readonly canvas: Pick<HTMLCanvasElement, 'width' | 'height'>;
   readonly viewOutput?:
-    | { readonly texture: Texture; readonly width: number; readonly height: number }
+    | {
+        readonly texture: Texture;
+        readonly width: number;
+        readonly height: number;
+        readonly eye?: import('../components/stereo-camera').StereoEye;
+      }
     | undefined;
   /** Build identity injected by the host's build-tool adapter. */
   readonly build?: string | undefined;
@@ -562,6 +574,8 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
       ) => RhiRenderPipeline | null)
     | undefined;
   rendererFrameNumber?: number | undefined;
+  /** Renderer-owned diffuse GI budget split shared by every CameraView's field. */
+  giBudget?: import('../raytracing/diffuse-gi-budget').DiffuseGiBudget | undefined;
   rendererCaptureOwner?: import('../capture/renderer-captures').RendererCaptureOwner | undefined;
   gpuPassTimingSession?: GpuPassTimingSession | undefined;
   gpuPassTimingCapture?: GpuPassTimingCapture | undefined;
@@ -576,8 +590,14 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
   ) => void;
   readonly encodeRenderTargetReadbacks?: (
     encoder: RhiCommandEncoder,
-    faces?: readonly number[],
+    written?: readonly import('../assembly/render-target-host').RenderTargetLayerWrite[],
   ) => void;
+  readonly encodeFramebufferSnapshots?:
+    | ((
+        encoder: RhiCommandEncoder,
+        source: import('../targets/framebuffer-snapshot').FramebufferSnapshotSource,
+      ) => void)
+    | undefined;
   /** Composed renderer utility sources installed atomically at build-ready. */
   volumetricFogShaders?: VolumetricFogShaderSources | undefined;
   /** Composed renderer utility sources installed atomically at build-ready. */
@@ -588,6 +608,7 @@ export interface RenderSystemInternals extends RenderSystemRuntime {
 }
 
 export interface _StandardForwardSceneView {
+  readonly capturedAtmosphere?: import('../environment/storage').AtmosphereStorage | undefined;
   readonly visibleSurface?: import('../raytracing/visible-surface').VisibleSurfaceProjection;
   readonly environmentIbl?: { readonly irradiance: TextureView; readonly prefilter: TextureView };
   readonly captureDispatch?: readonly DispatchEntry[];
@@ -614,6 +635,10 @@ export interface _StandardForwardSceneView {
   readonly profilePhase?: <T>(phase: RenderRecordPhase, action: () => T) => T;
   /** Why the CPU directional cache cannot reuse its layers; undefined on reuse. */
   readonly directionalShadowCacheMiss: ShadowViewInvalidationReason | undefined;
+  /** Authored CPU cascade decision; absent preserves the whole-map policy. */
+  readonly directionalShadowCascadeMiss?:
+    | readonly (ShadowViewInvalidationReason | undefined)[]
+    | undefined;
   readonly world: RenderResourceScope;
   readonly resourceScopes?: readonly RenderResourceScope[];
   readonly tonemapActive: boolean;
@@ -688,7 +713,6 @@ export interface _StandardForwardSceneView {
     readonly payload: Uint8Array;
   };
   hdrpSsaoBlurredView?: TextureView;
-  readonly occlusion?: import('../scene/visibility/occlusion-runtime').OcclusionFrameProjection;
 }
 
 export type _InternalRenderPipelineContext = RenderPipelineContext & _StandardForwardSceneView;
@@ -798,12 +822,21 @@ function surfaceCapabilityFacts(
   };
 }
 
+/**
+ * Configure the canvas surface and negotiate its presentation colour space.
+ * sRGB keeps the spec default (no `colorSpace` member). Display P3 is
+ * requested explicitly and verified through `getConfiguration()`; any
+ * rejection or absence reconfigures the default sRGB surface and returns a
+ * structured fallback so the Output Transform never encodes a gamut the
+ * surface does not present.
+ */
 export function configureSurface(
   context: RhiCanvasContext,
   device: RhiDevice,
   format: TextureFormat,
   colorAttachmentFormat: TextureFormat,
-): Result<void, RhiError> {
+  colorSpace: OutputColorSpace = 'srgb',
+): Result<OutputColorSpaceReport, RhiError> {
   const backendKind = device.caps?.backendKind ?? 'webgpu';
   const isWebGl2 = backendKind === 'wgpu-webgl2';
   const surfaceFormats = resolveSurfaceFormatPair(
@@ -824,17 +857,27 @@ export function configureSurface(
   // usage. Raw-only deliberately has no alternate view.
   const supportsTextureBinding =
     backendKind !== 'wgpu-webgl2' && (device.caps?.storageBuffer ?? true);
-  const configured = context.configure({
+  const descriptor = {
     device,
     format: surfaceFormats.storage,
-    alphaMode: isWebGl2 ? 'opaque' : 'premultiplied',
+    alphaMode: isWebGl2 ? ('opaque' as const) : ('premultiplied' as const),
     usage:
       GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
       (supportsTextureBinding ? GPU_TEXTURE_USAGE_TEXTURE_BINDING : 0) |
       (isWebGl2 ? 0 : GPU_TEXTURE_USAGE_COPY_SRC),
     viewFormats: [...profile.value.viewFormats],
-  });
-  if (!configured.ok) return configured;
+  };
+  let colorSpaceReport: OutputColorSpaceReport = appliedOutputColorSpace('srgb');
+  if (colorSpace === 'display-p3') {
+    const wide = context.configure({ ...descriptor, colorSpace: 'display-p3' });
+    colorSpaceReport = wide.ok
+      ? observeDisplayP3Configuration(context.getConfiguration())
+      : outputColorSpaceFallback('configure-rejected', wide.error.code);
+  }
+  if (colorSpaceReport.effective === 'srgb') {
+    const configured = context.configure(descriptor);
+    if (!configured.ok) return configured;
+  }
   if (
     isWebGl2 &&
     (context.presentationProof === undefined ||
@@ -862,6 +905,32 @@ export function configureSurface(
       }),
     );
   }
+  return ok(colorSpaceReport);
+}
+
+/**
+ * Configure the surface for `state` and commit what a successful configure
+ * proves: the pipeline's configured flag, the negotiated colour-space report,
+ * and the swap-chain format probe.
+ */
+export function configurePipelineSurface(
+  context: RhiCanvasContext,
+  device: RhiDevice,
+  state: PipelineState,
+  outputColorSpace: OutputColorSpaceState | undefined,
+): Result<void, RhiError> {
+  const configured = configureSurface(
+    context,
+    device,
+    state.format,
+    state.colorAttachmentFormat,
+    outputColorSpace?.requested,
+  );
+  if (!configured.ok) return configured;
+  state.perPassResources.configured = true;
+  if (outputColorSpace !== undefined) outputColorSpace.report = configured.value;
+  (globalThis as { __forgeaxSwapChainFormat?: TextureFormat }).__forgeaxSwapChainFormat =
+    state.format;
   return ok(undefined);
 }
 

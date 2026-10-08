@@ -26,6 +26,7 @@ import {
   normalizeLicenseReport,
   normalizePackageArchive,
   normalizePnpmStore,
+  normalizeSdkRegistryLockfile,
   prepareWasmPackageForPack,
   SDK_CAPABILITIES,
   SDK_MANIFEST_VERSION,
@@ -45,6 +46,7 @@ import {
 } from './sdk-lib.mjs';
 import { archiveEngineSource } from './sdk-source.mjs';
 import { sdkStage } from './sdk-stage.mjs';
+import { stageViewToolPackage } from './sdk-view.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = resolve(dirname(new URL(import.meta.url).pathname), '../..');
@@ -164,6 +166,26 @@ const status = await git(['status', '--porcelain']);
 if (status !== '' && !args.includes('--allow-dirty')) {
   throw new Error('sdk-dirty-checkout: commit or stash all changes before building the SDK');
 }
+const viewRoot = resolve(root, 'tools/view');
+await readFile(resolve(viewRoot, 'LICENSE')).catch((cause) => {
+  throw new Error('sdk-view-license-missing: View owner must authorize public distribution', {
+    cause,
+  });
+});
+const viewCommit = await git(['rev-parse', 'HEAD:tools/view']);
+const actualViewCommit = (await run('git', ['rev-parse', 'HEAD'], { cwd: viewRoot })).stdout.trim();
+if (
+  actualViewCommit !== viewCommit ||
+  (await run('git', ['status', '--porcelain'], { cwd: viewRoot })).stdout.trim()
+)
+  throw new Error('sdk-view-source-mismatch');
+// Reject incomplete checked substrate inputs before the expensive source build.
+for (const entry of SDK_SOURCE_WASM)
+  for (const file of entry.files) {
+    await readFile(resolve(root, entry.root, file)).catch((cause) => {
+      throw new Error(`sdk-source-wasm-path: ${entry.package}/${file}`, { cause });
+    });
+  }
 await run('node', ['scripts/forgeax/check-engine-skills.mjs']);
 const licenseReport = stable(
   normalizeLicenseReport(
@@ -214,15 +236,19 @@ await run(
     env: { ...process.env, FORGEAX_SDK_BUILD: '1' },
   },
 );
-const shaderReleaseRoot = resolve(root, 'shared-build-inputs-release');
-await rm(shaderReleaseRoot, { recursive: true, force: true });
-await run('node', [
+// Keep generated profile inputs as acceleration. The producer validates the
+// current compiler/source/profile and payload bytes before any reuse; disabled
+// task caches still compile from source. These inputs never enter the archive.
+const preparedShaders = await run('node', [
   'scripts/forgeax/prepare-shader-release-inputs.mjs',
   '--build',
   '--shared-input-manifest',
   'shared-build-inputs/manifest.json',
 ]);
-await rm(shaderReleaseRoot, { recursive: true, force: true });
+// Keep cache admission visible without changing the builder's final JSON stdout.
+for (const line of preparedShaders.stdout.split('\n')) {
+  if (line.startsWith('[shader-profile]')) console.error(line);
+}
 // build:engine already emits the complete declaration graph, including DevKit.
 const { createMigrationRoster } = await import(
   pathToFileURL(resolve(root, 'packages/devkit/dist/index.mjs')).href
@@ -253,9 +279,19 @@ for (const entry of await readdir(resolve(root, 'packages'), { withFileTypes: tr
     name: manifest.name,
     version,
     directory: entry.name,
+    role: 'runtime',
     root: dirname(packagePath),
   });
 }
+// Build the fixed tool source into the same package inventory and publisher.
+await run('pnpm', ['build:tools']);
+publicPackages.push({
+  name: '@forgeax/view',
+  version,
+  directory: 'view',
+  root: viewRoot,
+  role: 'tool',
+});
 publicPackages.sort((a, b) => a.name.localeCompare(b.name));
 
 const wasmPackageConfig = new Map(
@@ -282,7 +318,9 @@ try {
   await cp(canonicalKitRoot, canonicalKitPackageRoot, { recursive: true });
   // Resolve the workspace once. Serial recursive packing preserves the package
   // work and hooks without starting a fresh workspace scan for every tarball.
-  const ordinaryPackages = publicPackages.filter((entry) => !wasmPackageConfig.has(entry.name));
+  const ordinaryPackages = publicPackages.filter(
+    (entry) => entry.role === 'runtime' && !wasmPackageConfig.has(entry.name),
+  );
   await run('pnpm', [
     '--recursive',
     '--workspace-concurrency=1',
@@ -312,6 +350,16 @@ try {
   await cp(canonicalKitBackup, canonicalKitPackageRoot, { recursive: true });
   await rm(canonicalKitBackupRoot, { recursive: true, force: true });
 }
+const toolStage = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-view-stage-'));
+try {
+  const packageRoot = resolve(toolStage, 'package');
+  await stageViewToolPackage(viewRoot, packageRoot, version);
+  await writePackageArchive(toolStage, resolve(packageArchives, `forgeax-view-${version}.tgz`), {
+    releaseVersion: version,
+  });
+} finally {
+  await rm(toolStage, { recursive: true, force: true });
+}
 for (const path of (await filesUnder(packageArchives)).filter((entry) => entry.endsWith('.tgz'))) {
   const { stdout } = await run('tar', ['-xOf', path, 'package/package.json']);
   const manifest = JSON.parse(stdout);
@@ -320,7 +368,7 @@ for (const path of (await filesUnder(packageArchives)).filter((entry) => entry.e
   await sdkStage(`normalize package ${manifest.name}`, () =>
     normalizePackageArchive(path, execFileAsync, { releaseVersion: version }),
   );
-  const releaseName = `${manifest.name.slice(1).replace('/', '-')}-${version}.tgz`;
+  const releaseName = `${manifest.name.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
   await rename(path, resolve(packageArchives, releaseName));
 }
 
@@ -345,20 +393,15 @@ for (const entry of publicPackages) {
   await run('tar', ['-xzf', archiveEntry.path, '-C', destination, '--strip-components=1']);
 }
 
-function npmTarballUrl(name, version) {
-  const slash = name.indexOf('/');
-  const packageName = slash >= 0 ? name.slice(slash + 1) : name;
-  return `https://registry.npmjs.org/${name}/-/${packageName}-${version}.tgz`;
-}
-
 async function normalizeTemplateLockfile(template) {
   const lockfilePath = resolve(template, 'pnpm-lock.yaml');
-  let lockfile = await readFile(lockfilePath, 'utf8');
-  for (const item of tarballs.values()) {
-    const localUrl = `http://127.0.0.1:${port}/tarballs/${engineCommit}/${basename(item.path)}`;
-    lockfile = lockfile.replaceAll(localUrl, npmTarballUrl(item.name, item.version));
-  }
-  await writeFile(lockfilePath, lockfile);
+  const ownedUrls = [...tarballs.values()].map(
+    (item) => `http://127.0.0.1:${port}/tarballs/${engineCommit}/${basename(item.path)}`,
+  );
+  await writeFile(
+    lockfilePath,
+    normalizeSdkRegistryLockfile(await readFile(lockfilePath, 'utf8'), ownedUrls),
+  );
 }
 
 const registry = createServer(async (request, response) => {
@@ -414,6 +457,42 @@ const port = typeof address === 'object' && address !== null ? address.port : 0;
 
 const dependencies = { '@forgeax/engine': version };
 try {
+  const toolRuntime = resolve(stage, 'toolchain/cli-runtime');
+  await mkdir(toolRuntime, { recursive: true });
+  await writeFile(
+    resolve(toolRuntime, 'package.json'),
+    JSON.stringify(
+      {
+        name: 'forgeax-sdk-cli-runtime',
+        private: true,
+        type: 'module',
+        packageManager,
+        dependencies: { '@forgeax/engine': version, '@forgeax/view': version },
+      },
+      null,
+      2,
+    ),
+  );
+  await cp(
+    resolve(root, 'templates/pnpm-workspace.yaml'),
+    resolve(toolRuntime, 'pnpm-workspace.yaml'),
+  );
+  await run(
+    'corepack',
+    [
+      packageManager,
+      'install',
+      '--ignore-scripts',
+      '--child-concurrency=1',
+      '--registry',
+      `http://127.0.0.1:${port}`,
+      '--store-dir',
+      resolve(stage, 'store/pnpm'),
+    ],
+    { cwd: toolRuntime, env: { ...process.env, XDG_CACHE_HOME: pnpmMetadataCache } },
+  );
+  await normalizeTemplateLockfile(toolRuntime);
+  await rm(resolve(toolRuntime, 'node_modules'), { recursive: true, force: true });
   for (const sdkTemplate of SDK_TEMPLATES) {
     const sourceTemplate = resolve(root, sdkTemplate.sourceRoot);
     const template = resolve(stage, sdkTemplate.sourceRoot);
@@ -490,8 +569,8 @@ try {
       },
     );
     // The local registry is only a build-time transport. Published templates
-    // must carry canonical npm tarball URLs so the npm carrier can install
-    // online; the ZIP's immutable store supplies those same integrities
+    // must resolve owned packages through the selected consumer registry so the
+    // npm carrier can install online; the ZIP's immutable store supplies those same integrities
     // offline under the generated lockfile trust boundary and complete packaged store.
     await normalizeTemplateLockfile(template);
     await rm(resolve(template, 'node_modules'), { recursive: true, force: true });
@@ -644,6 +723,7 @@ function artifactSummary(prefix) {
 }
 const packageRows = publicPackages.map((item) => ({
   name: item.name,
+  role: item.role,
   version: item.version,
   root: `packages/${item.directory}`,
   ...artifactSummary(`packages/${item.directory}`),
@@ -669,6 +749,7 @@ const sdkManifest = {
   schemaVersion: SDK_MANIFEST_VERSION,
   sdkVersion: version,
   engineCommit,
+  viewCommit,
   requirements: { node: '>=22.13.0', pnpm: pnpmVersion, pnpmStoreFormat },
   capabilities: SDK_CAPABILITIES,
   packages: packageRows,
@@ -702,7 +783,7 @@ await writeFile(
 );
 await writeFile(
   resolve(outputRoot, `forgeax-sdk-v${version}.provenance.json`),
-  `${JSON.stringify({ schemaVersion: '1.0.0', engineCommit, sdkVersion: version, builder: 'scripts/forgeax/build-sdk.mjs' }, null, 2)}\n`,
+  `${JSON.stringify({ schemaVersion: '1.0.0', engineCommit, viewCommit, sdkVersion: version, builder: 'scripts/forgeax/build-sdk.mjs' }, null, 2)}\n`,
 );
 
 const carrierWorktree = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-carrier-'));
@@ -772,6 +853,7 @@ const result = {
   archive,
   sha256: digest,
   engineCommit,
+  viewCommit,
   sdkVersion: version,
   npm: {
     packageArchives,

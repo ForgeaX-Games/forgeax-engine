@@ -129,11 +129,16 @@ continues to own its independently acquired result.
 
 The workspace runtime owns its preview collection and one optional Play. Opening
 a distinct preview preserves other targets; closing the project drains them all.
+Play remains the presented owner until its close acknowledgment succeeds; a failed
+close retains that identity. Public stop uses the existing workspace mutation queue,
+so concurrent stop, start and project replacement cannot remove its browser before
+cleanup settles. A real disconnect settles pending close requests as lost transport,
+with unconfirmed cleanup; it is never a completed native cleanup acknowledgment.
 `preview.resize` uses positive integer output pixels, preserves World and generation,
 and requires the target owner's resize capability, including for an isolated Play target. It rejects
 unfinished camera interactions; consumers submit measured dimensions without
-mutating target metadata. Capture waits for a completed frame submitted after
-the size or camera change; an older in-flight completion cannot satisfy that
+mutating target metadata. Capture waits for a completed `ready` frame submitted after
+the size or camera change; a completed `pending` fallback does not qualify. An older in-flight completion cannot satisfy that
 barrier. PNG pixels and returned dimensions must describe the same surface.
 The browser preview plugin pauses continuous rendering while its canvas has no
 visible intersection. Queries remain available and explicit capture steps the
@@ -228,6 +233,13 @@ single-frame `captureFrame()` capability. A successful call returns one
 self-contained `rhi-tape` artifact; pass that same artifact to DevKit's
 `rhi.summary` and `rhi.inspect` operations, using the summary's
 `FrameModel.works[].workIndex` for selection.
+
+The artifact is lazy: `byteLength` and `chunks(n)` are free, while `digest` and
+`bytes` are computed on first access. `captureFrame({ seed: { maxResourceBytes } })`
+omits oversized initial contents. `app.rhiCapture.upload(artifact, { runId,
+endpoint?, signal?, chunkBytes?, chunkAttempts? })` streams the tape to the
+`vite-plugin-rhi-debug` chunk routes with bounded memory and per-chunk digests,
+resumes by `runId`, and resolves to the server-verified path and digest.
 
 App owns only the optional capture capability. Replay, readback, PNG output,
 and artifact/file handling remain in the RHI-debug core and DevKit shells, so
@@ -426,7 +438,10 @@ consuming its next publication, preserving a stable resource seed and one
 complete frame in the tape. The frame loop must supply the captured frame.
 
 The App `startupTimeoutMs` policy also bounds child Renderer initialization and
-replacement; a child does not impose a separate shorter startup limit.
+replacement, plus SharedKernel worker initialization and module preflight; a child
+does not impose a separate shorter startup limit. Kernel startup and preflight
+share one pool-start deadline, while running kernel dispatch keeps its separate
+5-second deadline.
 An explicit value also bounds the preliminary DedicatedWorker capability probe,
 so a slow probe does not override that startup policy with its default deadline.
 
@@ -497,6 +512,13 @@ the Render status, closed reason/error `code`, and recovery `hint`. When App
 drives `draw`, a plugin obtains that same receipt from the Render-owned
 `frame-submitted` event. Membership
 timing remains producer-specific and is not generic accepted GPU evidence.
+
+`CreateAppOptions.outputColorSpace` (`'srgb'` default | `'display-p3'`) is forwarded to
+Render without App policy. Under Worker execution it reaches both the local Renderer and the
+split render worker. App does not probe `matchMedia` and does not own a fallback. The negotiated
+result is Render's `inspect().output.colorSpace` in the realm that owns the Renderer, and
+`renderer.setOutputColorSpace(space)` switches it at the next draw. See
+[Render §Display-P3 output colour space](../render/README.md#display-p3-output-colour-space).
 
 `CreateAppOptions.features` is the transparent app seam for producer-owned
 renderer features. The array is forwarded to the existing renderer options
@@ -795,6 +817,11 @@ const result = await createApp(canvas, {
 });
 ```
 
+With `execution`, return `PreparedExecutionBootstrap.ssrIdentity` instead of
+passing a top-level option. App validates the four string fields and transports
+the same value to the local, Engine Worker or Render Worker constructor. App
+does not derive or certify provenance; the bootstrap owner defines its scope.
+
 Then read `result.value.renderer.inspect().ssrDependencies`. Without
 `ssrIdentity`, the projection is explicitly `requested: false` with
 `failure.code === 'ssr-not-requested'` and zero SSR work; it is not an unknown
@@ -927,6 +954,12 @@ ToolApi contributions. Callers use `projectId`, `targetId` and `worldId` from
 after readiness. These operations target the project App. Independent preview
 and Play targets are not implicitly selected.
 
+Workspace capture requires a new completed `ready` frame from its own canvas
+within ten seconds. A timeout retains the requested target's frame floor,
+submitted/ready counts, presentation extent, Renderer environment inspection,
+execution report and bounded errors. A healthy editor target does not qualify
+an independent resource preview; diagnose the target named in the failure.
+
 | Tool suffix under `engine.runtime-pack` | Input and behavior |
 |:--|:--|
 | `inspect`, `snapshot` | Inspect admitted definitions/import identities, or export durable source JSON. |
@@ -967,3 +1000,30 @@ cancelled terminal is not cleanup evidence: inspect the connection's installatio
 after the pending operation drains. An install cancelled during result delivery
 disposes only that newly created Fiber. Explicit successful disposal reports
 `cleanup: 'completed'`; failures preserve the native cleanup diagnostic.
+
+## Host streaming audio observations
+
+`execution.report().audio.streaming`, when available, carries aggregate encoded/PCM/pending bytes, pending reads and underruns from the existing Host consumer. Main and Engine Worker frame paths share the same closed intents. Kernel Workers receive no audio objects. Rebuild replaces the consumer and fences old reads; [the audio owner](../audio-webaudio/README.md#long-audio-through-source-meta-and-guid) defines buffering/control/failure semantics.
+
+`execution.createHostAudio` is the Host-only consumer factory for shared native bus effects. It is used in both selected main and Worker realms, called again on rebuild, and never serialized into Worker initialization. Return a fresh consumer per generation; read [the Host assembly example](../audio-webaudio/README.md#app-host-effect-assembly).
+
+### Host gamepad feedback
+
+The existing input provider owns browser haptics. Gameplay uses the optional
+`GamepadFeedback` World resource and targets from the frozen input scan; see the
+[Input feedback contract](../input/README.md#gamepad-feedback). A composite input
+backend forwards the same feedback owner. App creates no media bus or second
+plugin tree.
+
+Engine Workers create a bounded producer for each World realm. Accepted
+frame/simulation completion carries `feedbackIntents` to the Host input owner;
+its next `InputBackendSample` carries terminal results and loss count back.
+Frame credit, World identity and the input target's attachment/generation fence
+old and duplicate output. Candidate failure disposes its producer. Rebuild
+revokes the old Host input attachment, and input Fiber cleanup releases only its
+owned effect. Render and Kernel Workers receive no actuator or native Promise.
+
+`app.stop()` stops scheduling; effects already dispatched retain their finite
+native duration. Use `feedback.stop(target)` before stopping to request cancel,
+or `app.dispose()` to release the owner. Native reset failure is a structured
+result, not a physical stop guarantee.

@@ -49,6 +49,7 @@ export * as box2 from './box2';
 export * as box3 from './box3';
 export * as circle2 from './circle2';
 export * as color from './color';
+export * as curve3 from './curve3';
 export * as easing from './easing';
 export * as euler from './euler';
 export * as halfFloat from './f32-to-f16-bytes';

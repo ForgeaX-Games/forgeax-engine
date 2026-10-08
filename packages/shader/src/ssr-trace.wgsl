@@ -1,5 +1,14 @@
 #define_import_path forgeax_ssr::trace
 #import forgeax_pbr::gbuffer::{loadStandardNormalRoughness}
+#import forgeax_depth_pyramid::sample::{
+  DEPTH_PYRAMID_EMPTY_DEPTH,
+  linearizeViewDepth,
+  depthPyramidCell,
+  depthPyramidDepthOrEmpty,
+  depthPyramidFootprintEnd,
+  depthPyramidFootprintStart,
+  depthPyramidLevelSize,
+}
 
 // The spatial trace is bounded by the public M1 contract.
 const SSR_TRACE_MAX_COARSE_STEPS : u32 = 48u;
@@ -8,7 +17,7 @@ const SSR_TRACE_MAX_REFINE_STEPS : u32 = 5u;
 @group(0) @binding(0) var sceneDepth : texture_depth_2d;
 @group(0) @binding(1) var sceneNormal : texture_2d<u32>;
 @group(0) @binding(2) var sceneColor : texture_2d<f32>;
-@group(0) @binding(3) var hizPyramid : texture_2d<f32>;
+@group(0) @binding(3) var depthPyramid : texture_2d<f32>;
 @group(0) @binding(4) var traceOutput : texture_storage_2d<rgba16float, write>;
 
 // This is the existing Standard View UBO, not a second camera state source.
@@ -78,9 +87,9 @@ fn projectWorldViewDistance(worldPosition : vec3<f32>) -> f32 {
   if (!isFinite(clip.w) || clip.w <= 1e-5) {
     return 0.0;
   }
-  // Hi-Z stores positive linear view distance. Perspective clip.w is that
-  // distance; orthographic clip.w is constant and needs the projection range.
-  // Comparing clip.z / clip.w with Hi-Z mixes normalized depth and world units
+  // The depth pyramid stores positive linear view distance. Perspective clip.w
+  // is that distance; orthographic clip.w is constant and needs the projection
+  // range. Comparing clip.z / clip.w with the pyramid mixes normalized depth and world units
   // and rejects every visible ray in ordinary scenes more than one unit away.
   return select(
     clip.w,
@@ -90,7 +99,9 @@ fn projectWorldViewDistance(worldPosition : vec3<f32>) -> f32 {
   );
 }
 
-fn maxSsrHiZMip(fullSize : vec2<u32>) -> u32 {
+// Trace levels address one depth hierarchy for the march: level 0 is the
+// full-resolution scene depth and level n is depth-pyramid level n - 1.
+fn maxSsrTraceLevel(fullSize : vec2<u32>) -> u32 {
   let extent = max(fullSize.x, fullSize.y);
   if (extent <= 1u) {
     return 0u;
@@ -98,43 +109,17 @@ fn maxSsrHiZMip(fullSize : vec2<u32>) -> u32 {
   return u32(floor(log2(f32(extent))));
 }
 
-// Lookup uses the physical mip's normalized coordinate. The producer's
-// conservative ceil-end footprint makes the neighboring lookup cells share
-// an odd source boundary instead of dropping it between floor-sized cells.
-fn ssrHiZCoordinate(uv : vec2<f32>, destinationSize : vec2<u32>) -> vec2<u32> {
-  let destinationLast = destinationSize - vec2<u32>(1u);
-  let destinationCoordinate = min(
-    vec2<u32>(clamp(uv * vec2<f32>(destinationSize), vec2<f32>(0.0), vec2<f32>(destinationLast))),
-    destinationLast,
-  );
-  return destinationCoordinate;
-}
-
-fn ssrHiZCoverageStart(index : u32, sourceSize : u32, destinationSize : u32) -> u32 {
-  return index * sourceSize / destinationSize;
-}
-
-fn ssrHiZCoverageEnd(index : u32, sourceSize : u32, destinationSize : u32) -> u32 {
-  return min(
-    ((index + 1u) * sourceSize + destinationSize - 1u) / destinationSize,
-    sourceSize,
-  );
-}
-
-fn sampleSsrHiZ(uv : vec2<f32>, mip : u32) -> f32 {
-  if (mip == 0u) {
+fn sampleSsrTraceDepth(uv : vec2<f32>, traceLevel : u32) -> f32 {
+  if (traceLevel == 0u) {
     let size = textureDimensions(sceneDepth, 0);
     let pixel = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), vec2<i32>(size) - vec2<i32>(1));
     let depth = textureLoad(sceneDepth, pixel, 0);
-    if (depth <= 0.0 || depth > 1.0) { return 3.402823e+38; }
-    let centerUv = (vec2<f32>(pixel) + vec2<f32>(0.5)) / vec2<f32>(size);
-    return projectWorldViewDistance(reconstructWorldPosition(centerUv, depth));
+    if (depth <= 0.0 || depth > 1.0) { return DEPTH_PYRAMID_EMPTY_DEPTH; }
+    return linearizeViewDepth(depth, view.temporalProjection);
   }
-  let physicalMip = min(mip - 1u, textureNumLevels(hizPyramid) - 1u);
-  let size = textureDimensions(hizPyramid, physicalMip);
-  let coordinate = ssrHiZCoordinate(uv, size);
-  let depth = textureLoad(hizPyramid, vec2<i32>(coordinate), i32(physicalMip)).r;
-  return select(3.402823e+38, depth, isFinite(depth) && depth > 0.0);
+  let level = min(traceLevel - 1u, textureNumLevels(depthPyramid) - 1u);
+  let cell = depthPyramidCell(uv, depthPyramidLevelSize(depthPyramid, level));
+  return depthPyramidDepthOrEmpty(textureLoad(depthPyramid, vec2<i32>(cell), i32(level)).r);
 }
 
 struct SsrTraceHit {
@@ -186,48 +171,42 @@ fn ssrRescueCandidateInRay(origin : vec3<f32>, direction : vec3<f32>,
 }
 
 // When the coarse march lands on an empty full-resolution texel, descend the
-// already-produced Hi-Z minimum hierarchy to recover the child footprint that
+// already-produced closest-depth pyramid to recover the child footprint that
 // contains the nearest surface. This keeps the public 48-step budget while
 // retaining thin projected features between coarse samples.
-fn locateSsrHiZCandidate(uv : vec2<f32>, coarseMip : u32, fullSize : vec2<u32>,
+fn locateSsrPyramidCandidate(uv : vec2<f32>, coarseLevel : u32, fullSize : vec2<u32>,
   startUv : vec2<f32>, deltaUv : vec2<f32>, fallbackFraction : f32,
   endFraction : f32) -> SsrDepthCandidate {
-  if (coarseMip == 0u || textureNumLevels(hizPyramid) == 0u) {
+  if (coarseLevel == 0u || textureNumLevels(depthPyramid) == 0u) {
     return ssrInvalidDepthCandidate();
   }
-  let physicalMip = coarseMip - 1u;
-  let size = textureDimensions(hizPyramid, i32(physicalMip));
-  var coordinate = ssrHiZCoordinate(uv, size);
-  let depth = textureLoad(hizPyramid, vec2<i32>(coordinate), i32(physicalMip)).r;
+  let level = coarseLevel - 1u;
+  let size = depthPyramidLevelSize(depthPyramid, level);
+  var coordinate = depthPyramidCell(uv, size);
+  let depth = textureLoad(depthPyramid, vec2<i32>(coordinate), i32(level)).r;
   if (!isFinite(depth) || depth <= 0.0) { return ssrInvalidDepthCandidate(); }
 
   // Each reduction level stores the minimum of its complete integer-normalized
   // child footprint. Select the child that owns that minimum rather than
-  // assuming the parent's center is the hit location. The final mip-0
+  // assuming the parent's center is the hit location. The final level-0
   // candidate is still validated against the real depth/normal/coverage
   // buffers below.
   var parentSize = size;
-  for (var descend = coarseMip; descend > 1u; descend -= 1u) {
-    let nextPhysicalMip = descend - 2u;
-    let nextSize = textureDimensions(hizPyramid, i32(nextPhysicalMip));
-    let childStart = vec2<u32>(
-      ssrHiZCoverageStart(coordinate.x, nextSize.x, parentSize.x),
-      ssrHiZCoverageStart(coordinate.y, nextSize.y, parentSize.y),
-    );
-    let childEnd = vec2<u32>(
-      ssrHiZCoverageEnd(coordinate.x, nextSize.x, parentSize.x),
-      ssrHiZCoverageEnd(coordinate.y, nextSize.y, parentSize.y),
-    );
+  for (var descend = coarseLevel; descend > 1u; descend -= 1u) {
+    let nextLevel = descend - 2u;
+    let nextSize = depthPyramidLevelSize(depthPyramid, nextLevel);
+    let childStart = depthPyramidFootprintStart(coordinate, nextSize, parentSize);
+    let childEnd = depthPyramidFootprintEnd(coordinate, nextSize, parentSize);
     var childCoordinate = vec2<u32>(0u);
-    var childDepth = 3.402823e+38;
+    var childDepth = DEPTH_PYRAMID_EMPTY_DEPTH;
     var childFound = false;
     for (var childY = childStart.y; childY < childEnd.y; childY += 1u) {
       for (var childX = childStart.x; childX < childEnd.x; childX += 1u) {
         let candidate = min(vec2<u32>(childX, childY), nextSize - vec2<u32>(1u));
         let candidateDepth = textureLoad(
-          hizPyramid,
+          depthPyramid,
           vec2<i32>(candidate),
-          i32(nextPhysicalMip),
+          i32(nextLevel),
         ).r;
         if (isFinite(candidateDepth) && candidateDepth > 0.0 && candidateDepth < childDepth) {
           childCoordinate = candidate;
@@ -241,21 +220,14 @@ fn locateSsrHiZCandidate(uv : vec2<f32>, coarseMip : u32, fullSize : vec2<u32>,
     parentSize = nextSize;
   }
 
-  // Hi-Z mip 0 is seeded from the integer source footprint used by
-  // `ssr_hiz_seed`: floor(cell * fullSize / hizSize) through the next cell
-  // boundary. Even dimensions are 2x2, while odd dimensions use the same
+  // Pyramid level 0 is seeded from the shared integer source footprint
+  // (`depthPyramidFootprintStart`/`End` over the full-resolution depth). Even dimensions are 2x2, while odd dimensions use the same
   // conservative ceil-end overlap as every reduction level. Its minimum depth
   // is not necessarily the footprint center, so select the actual nearest
   // valid source texel before validating coverage/normal.
-  let hizSize = textureDimensions(hizPyramid, 0);
-  let sourceStart = vec2<u32>(
-    ssrHiZCoverageStart(coordinate.x, fullSize.x, hizSize.x),
-    ssrHiZCoverageStart(coordinate.y, fullSize.y, hizSize.y),
-  );
-  let sourceEnd = vec2<u32>(
-    ssrHiZCoverageEnd(coordinate.x, fullSize.x, hizSize.x),
-    ssrHiZCoverageEnd(coordinate.y, fullSize.y, hizSize.y),
-  );
+  let pyramidSize = textureDimensions(depthPyramid, 0);
+  let sourceStart = depthPyramidFootprintStart(coordinate, fullSize, pyramidSize);
+  let sourceEnd = depthPyramidFootprintEnd(coordinate, fullSize, pyramidSize);
   var candidatePixel = sourceStart;
   var candidateRawDepth = 0.0;
   for (var sourceY = sourceStart.y; sourceY < sourceEnd.y; sourceY += 1u) {
@@ -266,7 +238,7 @@ fn locateSsrHiZCandidate(uv : vec2<f32>, coarseMip : u32, fullSize : vec2<u32>,
       );
       let sourceDepth = textureLoad(sceneDepth, vec2<i32>(sourcePixel), 0);
       // Perspective and orthographic depth are monotonic with view distance,
-      // so comparing the raw depth values preserves the Hi-Z nearest owner.
+      // so comparing the raw depth values preserves the pyramid's nearest owner.
       if (isFinite(sourceDepth) && sourceDepth > 0.0 && sourceDepth <= 1.0 &&
           sourceDepth > candidateRawDepth) {
         candidatePixel = sourcePixel;
@@ -288,7 +260,7 @@ fn locateSsrHiZCandidate(uv : vec2<f32>, coarseMip : u32, fullSize : vec2<u32>,
   );
 }
 
-// A structural/direct trace may be supplied without a Hi-Z hierarchy. Keep
+// A structural/direct trace may be supplied without a depth pyramid. Keep
 // that path bounded too, but inspect a short projected neighborhood so a thin
 // depth texel between two coarse samples is not silently lost.
 fn locateSsrLocalCandidate(uv : vec2<f32>, pixel : vec2<u32>, fullSize : vec2<u32>,
@@ -465,20 +437,20 @@ fn ssrRefineGeometricHit(origin : vec3<f32>, direction : vec3<f32>, maxDistance 
 // Mirror rays spend steps in proportion to their projected pixel span, as in
 // Three's non-stochastic path. A small fixed budget stretches samples over
 // thin silhouettes and can jump directly from in-front-of-wall to sky.
-// The 48/5 bound, Hi-Z, material coverage, and BRDF owner remain explicit.
+// The 48/5 bound, depth pyramid, material coverage, and BRDF owner remain explicit.
 fn traceScreenRay(
   origin : vec3<f32>,
   direction : vec3<f32>,
   maxDistance : f32,
   thickness : f32,
   fullSize : vec2<u32>,
-  hizDepth : f32,
-  hizMaxMip : u32,
+  coarsestDepth : f32,
+  maxTraceLevel : u32,
 ) -> SsrTraceHit {
   var result = SsrTraceHit(0.0, vec2<f32>(0.0), 0.0, 0.0);
   if (!isFinite(maxDistance) || maxDistance <= 0.0 ||
       !isFinite(thickness) || thickness <= 0.0 || maxDistance < thickness ||
-      !isFinite(hizDepth) || hizDepth <= 0.0) { return result; }
+      !isFinite(coarsestDepth) || coarsestDepth <= 0.0) { return result; }
   let startDepth = projectWorldViewDistance(origin);
   let depthDirection = dot(vec3<f32>(view.worldViewProj[0].w,
     view.worldViewProj[1].w, view.worldViewProj[2].w), direction);
@@ -499,7 +471,7 @@ fn traceScreenRay(
   if (deltaUv.y < -1e-6) { endFraction = min(endFraction, -startUv.y / deltaUv.y); }
   let span = abs(deltaUv * endFraction * vec2<f32>(fullSize));
   let count = min(SSR_TRACE_MAX_COARSE_STEPS, max(1u, u32(ceil(max(span.x, span.y)))));
-  let coarseMip = min(hizMaxMip, u32(floor(log2(max(1.0, max(span.x, span.y) / f32(count))))));
+  let coarseLevel = min(maxTraceLevel, u32(floor(log2(max(1.0, max(span.x, span.y) / f32(count))))));
   let inverseStart = 1.0 / max(startDepth, 1e-5);
   let inverseEnd = 1.0 / max(endDepth, 1e-5);
   var lower = 0.0;
@@ -529,22 +501,22 @@ fn traceScreenRay(
       min(endFraction, min(exitFractions.x, exitFractions.y)) - 1e-4 / max(pixelSpan, 1.0));
     let exitDepth = 1.0 / mix(inverseStart, inverseEnd, exitFraction);
     let intervalDepth = max(rayDepth, exitDepth);
-    // Hi-Z contains point depths, not the minimum of an oblique surface's
+    // The pyramid contains point depths, not the minimum of an oblique surface's
     // entire texel footprint. Keep the authored thickness in this broad-phase
     // bound; the in-texel tangent intersection below still decides new hits.
-    // A zero logical mip means no reduced hierarchy is available. Its mip-0
+    // A zero trace level means no reduced hierarchy is available. Its level-0
     // sample is the current full-resolution texel, so an empty texel must not
     // discard the bounded neighborhood rescue below.
-    if (coarseMip > 0u && sampleSsrHiZ(uv, coarseMip) > intervalDepth + thickness) { continue; }
+    if (coarseLevel > 0u && sampleSsrTraceDepth(uv, coarseLevel) > intervalDepth + thickness) { continue; }
     var samplePixel = pixel;
     var sampleUv = uv;
     var sampleDepth = textureLoad(sceneDepth, vec2<i32>(pixel), 0);
     var sampleFraction = fraction;
     var candidate = ssrInvalidDepthCandidate();
     if (sampleDepth <= 0.0 || sampleDepth > 1.0) {
-      candidate = locateSsrHiZCandidate(
+      candidate = locateSsrPyramidCandidate(
         uv,
-        coarseMip,
+        coarseLevel,
         fullSize,
         startUv,
         deltaUv,
@@ -556,7 +528,7 @@ fn traceScreenRay(
       // already visits each texel; scanning a wide neighborhood there would
       // turn a nearby wall into a false hit on an otherwise empty sky ray.
       let projectedStepPixels = max(span.x, span.y) / f32(max(count, 1u));
-      if (!candidate.valid && coarseMip == 0u && projectedStepPixels > 2.0) {
+      if (!candidate.valid && coarseLevel == 0u && projectedStepPixels > 2.0) {
         candidate = locateSsrLocalCandidate(
           uv,
           pixel,
@@ -576,8 +548,8 @@ fn traceScreenRay(
     }
     if (sampleDepth <= 0.0 || textureLoad(reflectionFallback, vec2<i32>(samplePixel), 0).a <= 0.5) { continue; }
     let sampleRayDepth = 1.0 / mix(inverseStart, inverseEnd, sampleFraction);
-    let surface = reconstructWorldPosition(sampleUv, sampleDepth);
-    if (intervalDepth + thickness < projectWorldViewDistance(surface)) { continue; }
+    let surfaceViewDepth = linearizeViewDepth(sampleDepth, view.temporalProjection);
+    if (intervalDepth + thickness < surfaceViewDepth) { continue; }
     // A moving occluder can invalidate yesterday's hit even when its back
     // face or depth separation rejects today's radiance. Preserve that
     // evidence on misses; sky and samples beyond the ray interval contribute
@@ -585,6 +557,7 @@ fn traceScreenRay(
     result.reactivity = max(result.reactivity, ssrSourceReactivity(vec2<i32>(samplePixel)));
     let normal = loadStandardNormalRoughness(sceneNormal, vec2<i32>(samplePixel)).xyz;
     if (dot(normal, -direction) <= 0.0) { continue; }
+    let surface = reconstructWorldPosition(sampleUv, sampleDepth);
     // Coarse steps can enter a face before its depth crossing and leave the
     // silhouette before the next sample. Intersect this sampled tangent plane
     // within the adjacent step interval, then validate against the actual hit
@@ -608,7 +581,7 @@ fn traceScreenRay(
       fullSize,
       samplePixel,
     )) { continue; }
-    if (sampleRayDepth < projectWorldViewDistance(surface)) {
+    if (sampleRayDepth < surfaceViewDepth) {
       // Extending the depth interval must not extend the sampled surface.
       // At a silhouette the neighboring texel may belong to another plane.
       if (!candidate.valid && !ssrRescueCandidateInRay(
@@ -633,8 +606,8 @@ fn traceScreenRay(
     let bracketLower = min(f32(step - 1u) / f32(count) * endFraction, sampleFraction);
     let bracketUpper = max(exitFraction, sampleFraction);
     lower = select(sampleFraction, bracketLower,
-      sampleRayDepth >= projectWorldViewDistance(surface));
-    upper = select(bracketUpper, sampleFraction, sampleRayDepth >= projectWorldViewDistance(surface));
+      sampleRayDepth >= surfaceViewDepth);
+    upper = select(bracketUpper, sampleFraction, sampleRayDepth >= surfaceViewDepth);
     found = true;
     break;
   }
@@ -645,7 +618,7 @@ fn traceScreenRay(
     let uv = startUv + deltaUv * middle;
     let pixel = min(vec2<u32>(clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0)) *
       vec2<f32>(fullSize)), fullSize - vec2<u32>(1u));
-    let surfaceDepth = sampleSsrHiZ(uv, 0u);
+    let surfaceDepth = sampleSsrTraceDepth(uv, 0u);
     let rayDepth = 1.0 / mix(inverseStart, inverseEnd, middle);
     // A depth crossing on a rejected surface is not the accepted bracket.
     // Near contact points, depth-only bisection can walk backward onto the
@@ -679,7 +652,7 @@ fn traceScreenRay(
     pixel, depth, normal, result);
   if (refined.hit > 0.0 || !ssrShadingNormalVaries(pixel, normal)) {
     if (refined.hit <= 0.0 && rescued) {
-      // Hi-Z/local rescue already validated the candidate against the full
+      // Pyramid/local rescue already validated the candidate against the full
       // depth, normal, coverage, ray-distance, and thickness gates. Preserve
       // that exact texel instead of letting the generic bisection walk back
       // onto the empty coarse sample.
@@ -748,10 +721,10 @@ fn ssr_trace(@builtin(global_invocation_id) globalId : vec3<u32>) {
   }
   textureStore(hitReactivityOutput, vec2<i32>(globalId.xy), vec4<f32>(0.0));
   let fullPixel = min(globalId.xy * vec2<u32>(2u), fullSize - vec2<u32>(1u));
-  let physicalMaxMip = textureNumLevels(hizPyramid) - 1u;
-  let hizMaxMip = min(maxSsrHiZMip(fullSize), physicalMaxMip + 1u);
-  let hizSize = textureDimensions(hizPyramid, physicalMaxMip);
-  let hizPixel = min(globalId.xy, hizSize - vec2<u32>(1u));
+  let coarsestLevel = textureNumLevels(depthPyramid) - 1u;
+  let maxTraceLevel = min(maxSsrTraceLevel(fullSize), coarsestLevel + 1u);
+  let coarsestSize = depthPyramidLevelSize(depthPyramid, coarsestLevel);
+  let coarsestPixel = min(globalId.xy, coarsestSize - vec2<u32>(1u));
   let depth = textureLoad(sceneDepth, vec2<i32>(fullPixel), 0);
   let normalData = loadStandardNormalRoughness(sceneNormal, vec2<i32>(fullPixel));
   let normalUnnormalized = normalData.xyz;
@@ -768,7 +741,7 @@ fn ssr_trace(@builtin(global_invocation_id) globalId : vec3<u32>) {
     normalUnnormalized / normalLength,
     isFinite(normalLength) && normalLength > 1e-5,
   );
-  let hizDepth = textureLoad(hizPyramid, vec2<i32>(hizPixel), i32(physicalMaxMip)).r;
+  let coarsestDepth = textureLoad(depthPyramid, vec2<i32>(coarsestPixel), i32(coarsestLevel)).r;
   let uv = (vec2<f32>(fullPixel) + vec2<f32>(0.5)) / vec2<f32>(fullSize);
   // The record-side sentinel is deliberately binary: a finite zero means the
   // authored effect is disabled, while any non-finite value must fail closed.
@@ -796,8 +769,8 @@ fn ssr_trace(@builtin(global_invocation_id) globalId : vec3<u32>) {
     maxDistance,
     thickness,
     fullSize,
-    hizDepth,
-    hizMaxMip,
+    coarsestDepth,
+    maxTraceLevel,
   );
   let edge = traceEdge(hitResult.uv);
   textureStore(hitReactivityOutput, vec2<i32>(globalId.xy), vec4<f32>(hitResult.reactivity));

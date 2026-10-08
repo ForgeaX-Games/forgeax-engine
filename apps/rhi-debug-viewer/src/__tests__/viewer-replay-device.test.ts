@@ -20,6 +20,8 @@ describe('viewer fresh replay device request', () => {
         textureCompressionAstc: true,
         firstInstanceIndirect: true,
         float32Filterable: true,
+        textureImport: false,
+        externalTexture: false,
         rg11b10ufloatRenderable: true,
       }),
       new Set<GPUFeatureName>([

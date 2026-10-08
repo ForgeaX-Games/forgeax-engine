@@ -19,12 +19,7 @@ import type { ViteDevServer } from 'vite';
 import { createViteConfig } from './host.js';
 import { type DevKitHostBinding, hostBindingError } from './host-binding.js';
 import { commandError, readProjectFacts } from './project.js';
-import type {
-  BrowserCarrierAdapter,
-  BrowserCarrierRunIdentity,
-  BrowserCarrierTarget,
-  BrowserExecutionTarget,
-} from './tools/display-carrier.js';
+import type { BrowserCarrierTarget, BrowserExecutionTarget } from './tools/display-carrier.js';
 import { acquireBrowserCarrierPage } from './tools/display-carrier.js';
 import type {
   BrowserCaptureOptions,
@@ -148,34 +143,30 @@ export type BrowserCaptureTarget =
 
 export type BrowserLaunchProfile = 'development' | 'release';
 
-export interface SoftwareBrowserOpenOptions {
-  /** `auto` preserves the host/browser lane; the other values are assertions. */
-  readonly backend?: CaptureBackend;
-  /** @deprecated Use `backend: 'software'`. */
-  readonly software?: boolean;
-  readonly browser?: string;
-  readonly width?: number;
-  readonly height?: number;
-  readonly port?: number;
-  readonly requireUi?: boolean;
-  readonly deterministic?: boolean;
+export interface SoftwareBrowserOpenOptions
+  extends Pick<
+    BrowserCaptureOptions,
+    | 'backend'
+    | 'software'
+    | 'browser'
+    | 'width'
+    | 'height'
+    | 'port'
+    | 'requireUi'
+    | 'deterministic'
+    | 'headless'
+    | 'carrier'
+    | 'carrierRun'
+    | 'carrierGeneration'
+  > {
   readonly outputDir?: string;
   readonly report?: string;
   readonly runId?: string;
-  readonly headless?: boolean;
   readonly target?: BrowserCaptureTarget;
   /** Use an already-running project server owned by the live project child. */
   readonly serverUrl?: string;
   /** Borrow an existing Host for this capture's main-thread project server. */
   readonly host?: DevKitHostBinding;
-  /**
-   * Optional already-open display carrier. When headless is explicitly false,
-   * DevKit asks the carrier for one exact page and keeps its lease until close.
-   * Headless sessions never call this adapter.
-   */
-  readonly carrier?: BrowserCarrierAdapter;
-  readonly carrierRun?: BrowserCarrierRunIdentity;
-  readonly carrierGeneration?: number;
   /** Release omits unsafe WebGPU/file-access flags; development preserves the legacy lane. */
   readonly launchProfile?: BrowserLaunchProfile;
 }
@@ -439,6 +430,8 @@ export function browserLaunchArgs(
       '--enable-unsafe-webgpu',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
+      // Expose supported adapter limits rather than Chrome's privacy tiers.
+      '--disable-dawn-features=tiered_adapter_limits',
     );
   }
   if (backend !== 'software') return common;
@@ -1026,7 +1019,6 @@ async function openBrowserCaptureSession(
           colorScheme: 'light',
           locale: 'en-US',
           timezoneId: 'UTC',
-          serviceWorkers: 'block',
         });
       }
       const activePage = page;

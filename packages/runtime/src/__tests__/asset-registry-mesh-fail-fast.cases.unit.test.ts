@@ -458,7 +458,7 @@ type __MergedKeep =
       }
     });
 
-    it('(3) maxIndex+1 !== vertexCount triggers gate (vertices 12-divisible but indices max mismatch)', () => {
+    it('(3) accepts an indexed subset of a larger canonical vertex allocation', () => {
       const reg = new AssetRegistry(makeMockShaderRegistry());
       // vertices.length=24 = 2 verts * 12F, but indices max=0 means only vertex 0 is referenced
       const result = reg.catalog(AssetGuid.random(), {
@@ -477,12 +477,10 @@ type __MergedKeep =
           },
         ],
       });
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('mesh-vertex-stride-mismatch');
-        const d = result.error.detail as { vertexCount: number; floatsPerVertex: number };
-        expect(d.vertexCount).toBe(1); // maxIndex=0 + 1
-        expect(d.floatsPerVertex).toBe(24); // 24/1 = 24
+      expect(result.ok).toBe(true);
+      if (result.ok && result.value.kind === 'mesh') {
+        expect(result.value.vertices).toHaveLength(24);
+        expect(Array.from(result.value.indices ?? [])).toEqual([0, 0, 0]);
       }
     });
 

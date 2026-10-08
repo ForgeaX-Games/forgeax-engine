@@ -719,10 +719,6 @@ describe('barrel distortion real output on Dawn', () => {
         .spawn({
           component: Atmosphere,
           data: {
-            turbidity: 2,
-            rayleigh: 1,
-            mieCoefficient: 0.005,
-            mieDirectionalG: 0.8,
             sunAngularRadius: 0.004675,
           },
         })

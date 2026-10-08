@@ -26,7 +26,7 @@ function writeEvidence(build = 'head') {
   writeFileSync(
     resolve(packageRoot, 'evidence/gpu-frame-samples.json'),
     JSON.stringify({
-      schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v2',
+      schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v3',
       identity: { build },
       retainedSamples: 128,
       metrics: { timestampAvailable: true, gpuMedianImprovement: 0.5 },
@@ -60,7 +60,7 @@ describe('gpu-frame-samples reportSchema dispatch', () => {
     expect(result.value).toBe(0.5);
     expect(spawnFn).not.toHaveBeenCalled();
     expect(validateFn).toHaveBeenCalledWith(
-      expect.objectContaining({ schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v2' }),
+      expect.objectContaining({ schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v3' }),
       { pkgRoot: packageRoot },
     );
   });

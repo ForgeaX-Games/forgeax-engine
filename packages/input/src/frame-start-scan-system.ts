@@ -66,6 +66,7 @@ export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
   fn: (world) => {
     const backend = world.getResource<InputBackend>(INPUT_BACKEND_KEY);
     const sample = backend.sample();
+    backend.feedback?.acceptResults(sample.feedbackResults ?? [], sample.feedbackLostResults ?? 0);
 
     // Action mapping: derive states from InputMap Resource + prev snapshot edges.
     // D-6: edge baseline reuses existing prev InputSnapshot Resource (Derive,
@@ -87,7 +88,7 @@ export const InputFrameStartScan: SystemHandle<readonly []> = defineSystem({
     const previousSnapshot = world.hasResource(INPUT_SNAPSHOT_RESOURCE_KEY)
       ? world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY)
       : undefined;
-    const snapshot = snapshotFromSample(sample, actionStates, inputMap, previousSnapshot);
+    const snapshot = snapshotFromSample(sample, actionStates, previousSnapshot);
     world.insertResource(INPUT_SNAPSHOT_RESOURCE_KEY, snapshot);
   },
 });

@@ -173,7 +173,6 @@ function makeFrameState(): MockObj {
   return {
     frameNumber: 1,
     compiledFrameGraph: null,
-    compiledFrameGraphTopologyKey: null,
     compiledFrameGraphGeneration: 0,
     retiredCompiledFrameGraphs: new Set(),
     instanceBuffers: new Map(),

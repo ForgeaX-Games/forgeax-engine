@@ -19,13 +19,42 @@
     "gauntletScenario": {
       "id": "hello-transform-hierarchy-diagnostic-repair",
       "script": "smoke:gauntlet",
-      "domains": ["World and host contract", "Rendering and shader construction"],
-      "packages": ["@forgeax/engine-ecs", "@forgeax/engine-scene", "@forgeax/engine-render", "@forgeax/engine-runtime"],
-      "risks": ["baseline", "fault", "behavioral", "recovery", "cleanup"],
-      "phaseInputs": ["baseline", "fault", "recovery", "cleanup"],
+      "domains": [
+        "World and host contract",
+        "Rendering and shader construction"
+      ],
+      "packages": [
+        "@forgeax/engine-ecs",
+        "@forgeax/engine-scene",
+        "@forgeax/engine-render",
+        "@forgeax/engine-runtime"
+      ],
+      "risks": [
+        "baseline",
+        "fault",
+        "behavioral",
+        "recovery",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "baseline",
+        "fault",
+        "recovery",
+        "cleanup"
+      ],
       "evidence": {
-        "frontDoors": ["ecs-world", "dawn-node", "browser-app"],
-        "legs": ["semantic", "live", "gpu", "behavioral", "recovery"]
+        "frontDoors": [
+          "ecs-world",
+          "dawn-node",
+          "browser-app"
+        ],
+        "legs": [
+          "semantic",
+          "live",
+          "gpu",
+          "behavioral",
+          "recovery"
+        ]
       },
       "oracle": {
         "stdoutIncludes": [
@@ -68,8 +97,8 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -143,5 +145,59 @@ describe('ensureWasm (shared lib)', () => {
     expect(log).toHaveBeenLastCalledWith(
       expect.stringContaining('pnpm -F @forgeax/engine-fbx fetch-wasm'),
     );
+  });
+});
+
+describe('Codec postinstall bundle completeness', () => {
+  it.each([
+    'basis_transcoder.mjs',
+    'encode/basis_encoder.mjs',
+  ])('fetches a WASM-only partial bundle missing %s, then skips a complete bundle', async (missingGlue) => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-codec-ensure-'));
+    tempRoots.push(root);
+    const scripts = join(root, 'packages/codec/scripts');
+    const pkg = join(root, 'packages/codec/pkg');
+    await mkdir(scripts, { recursive: true });
+    await mkdir(join(pkg, 'encode'), { recursive: true });
+    await mkdir(join(root, 'scripts/lib'), { recursive: true });
+    await copyFile(
+      fileURLToPath(new URL('../../packages/codec/scripts/ensure-wasm.mjs', import.meta.url)),
+      join(scripts, 'ensure-wasm.mjs'),
+    );
+    await copyFile(
+      fileURLToPath(new URL('../lib/ensure-wasm-lib.mjs', import.meta.url)),
+      join(root, 'scripts/lib/ensure-wasm-lib.mjs'),
+    );
+    const receipt = join(root, 'fetch-receipt');
+    await writeFile(
+      join(scripts, 'fetch-wasm.mjs'),
+      `import { writeFileSync } from 'node:fs'; writeFileSync(process.env.CODEC_TEST_RECEIPT, 'fetched');`,
+    );
+    for (const file of [
+      'basis_transcoder.mjs',
+      'basis_transcoder.wasm',
+      'encode/basis_encoder.mjs',
+      'encode/basis_encoder.wasm',
+    ]) {
+      if (file !== missingGlue) await writeFile(join(pkg, file), 'fixture');
+    }
+    const env = { ...process.env, CODEC_TEST_RECEIPT: receipt };
+    delete env.FORGEAX_SKIP_CODEC_WASM_FETCH;
+    const run = () =>
+      spawnSync(process.execPath, [join(scripts, 'ensure-wasm.mjs')], {
+        env,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+    const partial = run();
+    expect(partial.status).toBe(0);
+    expect(partial.stdout).toContain('fetching pre-built WASM');
+    expect(await readFile(receipt, 'utf8')).toBe('fetched');
+    await rm(receipt);
+    await writeFile(join(pkg, missingGlue), 'fixture');
+    const complete = run();
+    expect(complete.status).toBe(0);
+    expect(complete.stdout).toContain('already present');
+    await expect(readFile(receipt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

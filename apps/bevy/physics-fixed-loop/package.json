@@ -21,11 +21,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-physics-fixed-loop smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "demo bundle is downstream of engine-runtime" },
-      "fps": { "enabled": false, "reason": "fixed-step behavior is covered by the demo smoke" },
-      "bench": { "enabled": false, "reason": "not a benchmark app" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-physics-fixed-loop smoke" },
-      "spike-report": { "enabled": false, "reason": "implemented Bevy reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle is downstream of engine-runtime"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "fixed-step behavior is covered by the demo smoke"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "not a benchmark app"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-physics-fixed-loop smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "implemented Bevy reproduction"
+      }
     }
   },
   "dependencies": {
@@ -41,8 +56,8 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

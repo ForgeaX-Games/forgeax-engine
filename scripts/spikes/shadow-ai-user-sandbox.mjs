@@ -469,7 +469,7 @@ async function main() {
   console.log(`node ${process.version}`);
   console.log(`dawn-ready: ${typeof navigator !== 'undefined' && navigator?.gpu !== undefined}`);
 
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (!globalThis.navigator) {
     Object.defineProperty(globalThis, 'navigator', {

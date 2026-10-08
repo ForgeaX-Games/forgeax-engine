@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 import {
   createMaterialPackCooker,
   compileShader,

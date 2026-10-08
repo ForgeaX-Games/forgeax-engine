@@ -1,5 +1,6 @@
 #define_import_path forgeax_standard::deferred_lighting
 #pragma variant_axis CLUSTER_FORWARD_AVAILABLE
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 #pragma variant_axis EXTENDED_LIGHTING_AVAILABLE
 #pragma variant_axis PROJECTOR_AVAILABLE
 #pragma variant_axis DIRECTIONAL_PCSS_AVAILABLE
@@ -17,7 +18,11 @@
 @group(1) @binding(4) var sceneDepth : texture_depth_2d;
 @group(1) @binding(5) var screenOcclusion : texture_2d<f32>;
 @group(1) @binding(6) var linearSampler : sampler;
-@group(1) @binding(7) var<uniform> params : vec4<f32>;
+struct DeferredLightingParams {
+  lanes : vec4<f32>,
+  occlusion : vec4<f32>,
+};
+@group(1) @binding(7) var<uniform> params : DeferredLightingParams;
 @group(1) @binding(8) var irradianceMap : texture_cube<f32>;
 @group(1) @binding(9) var prefilterMap : texture_cube<f32>;
 @group(1) @binding(10) var brdfLut : texture_2d<f32>;
@@ -25,6 +30,7 @@
 @group(1) @binding(12) var<uniform> skylight : SkylightUniforms;
 @group(1) @binding(13) var<storage, read> capsules : array<vec4<f32>>;
 @group(1) @binding(14) var<storage, read> capsuleTiles : array<u32>;
+@group(1) @binding(15) var receiverGeometry : texture_2d<u32>;
 @group(3) @binding(0) var<storage, read> probeBlendRecords : array<vec4<f32>>;
 
 struct DeferredOutput {
@@ -42,7 +48,7 @@ fn capsuleCapArea(angle : f32) -> f32 {
   return 2.0 * CAPSULE_PI * (1.0 - cos(angle));
 }
 
-// Fraction of the light cone (half-angle params.w) left unblocked by one
+// Fraction of the light cone (half-angle params.lanes.w) left unblocked by one
 // capsule: the closest point on its segment to the light ray is treated as a
 // sphere whose solid angle overlaps the cone, faded out past the capsule reach.
 fn capsuleVisibility(position : vec3<f32>, toLight : vec3<f32>, a : vec3<f32>, radius : f32,
@@ -89,7 +95,7 @@ fn directionalCapsuleShadow(position : vec3<f32>, pixel : vec2<i32>) -> f32 {
     let index = capsuleTiles[offset + i] * 2u;
     let start = capsules[index];
     let end = capsules[index + 1u];
-    visibility *= capsuleVisibility(position, toLight, start.xyz, start.w, end.xyz, end.w, params.w);
+    visibility *= capsuleVisibility(position, toLight, start.xyz, start.w, end.xyz, end.w, params.lanes.w);
     if (visibility <= 0.001) { break; }
   }
   return visibility;
@@ -127,7 +133,7 @@ fn directionalContactShadow(position : vec3<f32>, normal : vec3<f32>, originPixe
   let pixelSpan = length((screenEnd - screenStart) * dims * 0.5);
   if (pixelSpan < 1.5) { return 1.0; }
   let steps = clamp(ceil(pixelSpan / 4.0), 3.0, CONTACT_SHADOW_MAX_STEPS);
-  let noiseCoord = vec2<f32>(originPixel) + 5.588238 * params.y;
+  let noiseCoord = vec2<f32>(originPixel) + 5.588238 * params.lanes.y;
   let jitter = fract(52.9829189 * fract(dot(noiseCoord, vec2<f32>(0.06711056, 0.00583715))));
   let startDistance = select(clipStart.w, contactShadowLinearDepth(clipStart.z / clipStart.w, near, far, true), orthographic);
   let endDistance = select(clipEnd.w, contactShadowLinearDepth(clipEnd.z / clipEnd.w, near, far, true), orthographic);
@@ -195,26 +201,31 @@ fn resolveStandardDeferred(in : FullscreenOutput) -> DeferredOutput {
     albedo.a, roughness, response.rgb, skylight, irradianceMap, linearSampler,
     prefilterMap, linearSampler, brdfLut, skylightPrefilterMap, sh, localBlend);
   var screenAo = 1.0;
-  if (params.x > 0.0) {
-    screenAo = pow(clamp(textureSampleLevel(screenOcclusion, linearSampler, uv, 0.0).r, 0.0, 1.0), params.x);
+  if (params.lanes.x > 0.0) {
+    screenAo = pow(clamp(textureSampleLevel(screenOcclusion, linearSampler, uv, 0.0).r, 0.0, 1.0), params.lanes.x);
   }
   let ao = response.a * screenAo;
   let viewZ = sceneViewZ(view.worldViewProj * vec4<f32>(position, 1.0), view.temporalProjection);
   var shadow = 1.0;
   if (receiveShadows) {
-    shadow = evalDirectionalShadowFactor(normal, position, viewZ);
+    // Geometry owns this exact raster plane; BRDF and decals retain their
+    // independent shading normal. No depth-neighborhood inference is needed.
+    let receiverNormal = loadStandardNormalRoughness(receiverGeometry, pixel).xyz;
+    let directionalLayerBase = textureLoad(receiverGeometry, pixel, 0).r >> 24u;
+    shadow = evalDirectionalShadowFactor(receiverNormal, position, viewZ, directionalLayerBase);
     if (view.directionalShadowFilter.w > 0.0 && shadow > 0.0) {
       shadow *= directionalContactShadow(position, normal, pixel);
     }
-    if (params.z > 0.0 && shadow > 0.0 && dot(normal, -view.lightDir) > 0.0) {
+    if (params.lanes.z > 0.0 && shadow > 0.0 && dot(normal, -view.lightDir) > 0.0) {
       shadow *= directionalCapsuleShadow(position, pixel);
     }
   }
   let direct = evaluateStandardDirect(position, ndc, viewZ, normal, direction, albedo.rgb, vec3<f32>(0.0),
-    albedo.a, roughness * roughness, response.rgb, shadow, receiveShadows);
+    albedo.a, roughness * roughness, response.rgb, shadow, receiveShadows, textureLoad(receiverGeometry, pixel, 0).g);
   // Add radiance to geometry-owned SceneColor; attachment blending preserves
   // its emissive and opacity without sampling the active color attachment.
-  return DeferredOutput(vec4<f32>((environment.diffuse + environment.specular) * ao + direct, 0.0),
+  let directAo = mix(1.0, screenAo, clamp(params.occlusion.x, 0.0, 1.0));
+  return DeferredOutput(vec4<f32>((environment.diffuse + environment.specular) * ao + direct * directAo, 0.0),
     vec4<f32>(environment.specular * ao, 1.0), vec4<f32>(environment.response * response.a, response.a));
 }
 

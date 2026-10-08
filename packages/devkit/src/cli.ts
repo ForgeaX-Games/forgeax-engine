@@ -1,4 +1,3 @@
-import { runDevkitCli } from './cli-host.js';
 import { runLiveDevDaemon, runLiveProjectProcess } from './live-dev.js';
 
 const rawArgs = process.argv.slice(2);
@@ -36,7 +35,8 @@ if (rawArgs[0] === '--__forgeax-backend') {
   if (root === undefined || generation === undefined) process.exitCode = 2;
   else await runLiveProjectProcess(root, generation, rawArgs[3]);
 } else {
-  const result = await runDevkitCli(rawArgs);
+  const { runUnifiedCli } = await import('./unified-cli.js');
+  const result = await runUnifiedCli(rawArgs);
   const jsonFlag = [...rawArgs]
     .reverse()
     .find((arg) => arg === '--json' || arg.startsWith('--json='));

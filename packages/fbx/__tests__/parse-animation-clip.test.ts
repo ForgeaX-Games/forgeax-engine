@@ -3,7 +3,7 @@
 // Schema: flat per-channel timeline (keyTimes + interleaved keyValues, stride 3
 // for translation/scale, 4 for rotation quat). The binding emits real unit
 // quaternions for rotation (sampled from EvaluateLocalTransform().GetQ()), so
-// the bridge only resamples + re-normalizes -- it never euler-converts.
+// the bridge retains native bake times + re-normalizes -- it never euler-converts.
 
 import { describe, expect, it } from 'vitest';
 import type { AnimationClipPod } from '@forgeax/engine-types';
@@ -32,8 +32,8 @@ const MOCK_ANIM_RAW: FbxRawAnimDoc = {
 };
 
 describe('parseAnimationClips', () => {
-  it('parses single clip with 30fps resample', () => {
-    const pods: AnimationClipPod[] = parseAnimationClips(MOCK_ANIM_RAW, 30);
+  it('retains native source key times and values', () => {
+    const pods: AnimationClipPod[] = parseAnimationClips(MOCK_ANIM_RAW);
 
     expect(pods.length).toBe(1);
     const pod = pods[0]!;
@@ -45,29 +45,29 @@ describe('parseAnimationClips', () => {
     expect(ch.property).toBe('translation');
     expect(ch.targetId).toBe('ab65f0305fc1868ca96d3361a86bd9ba');
 
-    // 30 fps resample: 0..1.0 at 1/30 increments = 31 frames
+    // Preserve the three native knots, with no second fixed-rate resample.
     const sampler = ch.sampler;
-    expect(sampler.input.length).toBe(31);
+    expect(sampler.input.length).toBe(3);
     expect(sampler.input[0]).toBeCloseTo(0);
-    expect(sampler.input[30]).toBeCloseTo(1.0);
+    expect(sampler.input[2]).toBeCloseTo(1.0);
     expect(sampler.interpolation).toBe('LINEAR');
 
     // Output stride = 3 for translation
-    expect(sampler.output.length).toBe(31 * 3);
+    expect(sampler.output.length).toBe(3 * 3);
 
     // Frame 0: X=0, Y=0, Z=0
     expect(sampler.output[0]).toBeCloseTo(0);
     expect(sampler.output[1]).toBeCloseTo(0);
     expect(sampler.output[2]).toBeCloseTo(0);
 
-    // Frame 15 (t=0.5): X is linear between 0->10 (key 0.5 = value 5)
-    const midIdx = 15 * 3;
+    // Middle knot (t=0.5): X is linear between 0->10 (key 0.5 = value 5)
+    const midIdx = 1 * 3;
     expect(sampler.output[midIdx + 0]).toBeCloseTo(5); // X at t=0.5
     expect(sampler.output[midIdx + 1]).toBeCloseTo(0);
     expect(sampler.output[midIdx + 2]).toBeCloseTo(0);
 
-    // Frame 30 (t=1.0): X=10, Y=0, Z=0
-    const lastIdx = 30 * 3;
+    // Final knot (t=1.0): X=10, Y=0, Z=0
+    const lastIdx = 2 * 3;
     expect(sampler.output[lastIdx + 0]).toBeCloseTo(10);
   });
 
@@ -92,15 +92,15 @@ describe('parseAnimationClips', () => {
       ],
     };
 
-    const pod = parseAnimationClips(raw, 30)[0]!;
+    const pod = parseAnimationClips(raw)[0]!;
     const ch = pod.channels[0]!;
     expect(ch.property).toBe('rotation');
     const out = ch.sampler.output;
-    expect(out.length).toBe(31 * 4);
+    expect(out.length).toBe(2 * 4);
 
     // Every frame must be a UNIT quaternion. The old euler-as-quat bug
     // produced values like quat x=62.93 (length far from 1).
-    for (let f = 0; f < 31; f++) {
+    for (let f = 0; f < 2; f++) {
       const b = f * 4;
       const len = Math.hypot(out[b]!, out[b + 1]!, out[b + 2]!, out[b + 3]!);
       expect(len).toBeCloseTo(1, 4);
@@ -110,9 +110,16 @@ describe('parseAnimationClips', () => {
 
     // Endpoints match the authored quaternions.
     expect(out[3]).toBeCloseTo(1); // frame0 w = 1 (identity)
-    const last = 30 * 4;
+    const last = 1 * 4;
     expect(out[last + 1]).toBeCloseTo(s); // frameN y
     expect(out[last + 3]).toBeCloseTo(s); // frameN w
+  });
+
+  it('retains a 10ms excursion and a clip tail below 1/30s', () => {
+    const input = [0,0.005,0.01,0.015], output = [0,0,0, 8,0,0, 0,0,0, 3,0,0];
+    const clip = parseAnimationClips({clips:[{duration:0.015,channels:[{targetNode:'root',property:'translation',keyTimes:input,keyValues:output}]}]})[0]!;
+    expect(Array.from(clip.channels[0]!.sampler.input)).toEqual(Array.from(new Float32Array(input)));
+    expect(Array.from(clip.channels[0]!.sampler.output)).toEqual(output);
   });
 
   it('returns empty array for missing clips', () => {
@@ -129,10 +136,10 @@ describe('parseAnimationClips', () => {
     expect(pods[0]!.channels.length).toBe(0);
   });
 
-  it('defaults to 30 fps', () => {
+  it('does not introduce a second uniform timeline', () => {
     const pods = parseAnimationClips(MOCK_ANIM_RAW);
     expect(pods.length).toBe(1);
-    expect(pods[0]!.channels[0]!.sampler.input.length).toBe(31);
+    expect(pods[0]!.channels[0]!.sampler.input.length).toBe(3);
   });
 
   it.each(['', '/root', 'root/', 'root//hip'])(

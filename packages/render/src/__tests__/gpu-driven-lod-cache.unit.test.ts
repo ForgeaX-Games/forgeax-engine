@@ -278,7 +278,14 @@ describe('GPU-driven filtered-plan cache', () => {
       lodSelectionChanges: 0,
       candidateUploadBytes: 2 * 304,
     });
-    expect(phases).toEqual(['record/gpu-driven-prepare/plan', 'record/gpu-driven-prepare/filter']);
+    expect(phases).toEqual([
+      'record/gpu-driven-prepare/plan',
+      'record/gpu-driven-prepare/filter',
+      'record/gpu-driven-prepare/filter/lod',
+      'record/gpu-driven-prepare/filter/lod/projection',
+      'record/gpu-driven-prepare/filter/lod/selection',
+      'record/gpu-driven-prepare/filter/lod/identity',
+    ]);
 
     expect(prepareAt(5.1)).toBeDefined();
     expect(production.inspect()).toMatchObject({
@@ -292,7 +299,14 @@ describe('GPU-driven filtered-plan cache', () => {
       batchCount: 1,
     });
     // The plan phase only validates the per-batch memo; no batch is re-derived.
-    expect(phases).toEqual(['record/gpu-driven-prepare/plan', 'record/gpu-driven-prepare/filter']);
+    expect(phases).toEqual([
+      'record/gpu-driven-prepare/plan',
+      'record/gpu-driven-prepare/filter',
+      'record/gpu-driven-prepare/filter/lod',
+      'record/gpu-driven-prepare/filter/lod/projection',
+      'record/gpu-driven-prepare/filter/lod/selection',
+      'record/gpu-driven-prepare/filter/lod/identity',
+    ]);
 
     // Crossing a LOD threshold is GPU-selected: no plan filter, no candidate
     // or height upload. The CPU mirror still counts the selection change.

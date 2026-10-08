@@ -4,7 +4,9 @@ import { Context } from '@forgeax/engine-plugin';
 import type { createProfiler } from '@forgeax/engine-profiler';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createApp } from '../create-app';
+import { prepareBootstrapEntry } from '../execution/bootstrap-entry';
 import type { RuntimePackAssembly } from '../runtime-packs.js';
+import { ssrIdentityFixture } from './execution-fixtures';
 
 const constructRuntimeRendererHost = vi.hoisted(() => vi.fn());
 vi.mock('@forgeax/engine-runtime/internal/renderer-host', () => ({
@@ -12,6 +14,76 @@ vi.mock('@forgeax/engine-runtime/internal/renderer-host', () => ({
   loadRhiPack: vi.fn(),
 }));
 afterEach(() => vi.unstubAllGlobals());
+
+it.each([
+  false,
+  true,
+])('constructs the local Renderer with optional bootstrap SSR identity: %s', async (provided) => {
+  const renderer = {
+    state: () => 'alive',
+    attach: () => ({ ok: true, value: { dispose() {} } }),
+    subscribe: () => () => {},
+    dispose: vi.fn(),
+    releaseSurface: () => ({ ok: true, value: undefined }),
+    restoreSurface: () => ({ ok: true, value: undefined }),
+  };
+  constructRuntimeRendererHost.mockClear();
+  constructRuntimeRendererHost.mockResolvedValue({ ok: true, value: { renderer } });
+  vi.stubGlobal('requestAnimationFrame', () => 1);
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  const bootstrap = `data:text/javascript,${encodeURIComponent(`
+    const identity=${JSON.stringify(ssrIdentityFixture)};
+    export default () => (${provided ? '{ssrIdentity:identity}' : '{}'});
+  `)}`;
+  const prepared = await prepareBootstrapEntry(bootstrap, undefined);
+  if (!prepared.ok) throw prepared.error;
+  const canvas = {
+    tagName: 'CANVAS',
+    isConnected: true,
+    width: 64,
+    height: 64,
+    clientWidth: 64,
+    clientHeight: 64,
+    addEventListener() {},
+    removeEventListener() {},
+  } as unknown as HTMLCanvasElement;
+  const result = await createApp(canvas, {
+    input: { sample: vi.fn(), detach: vi.fn() },
+    execution: { bootstrap, workers: { engine: false, render: false, kernels: false } },
+  });
+  expect(result.ok, result.ok ? undefined : JSON.stringify(result.error)).toBe(true);
+  if (!result.ok) return;
+  try {
+    expect(constructRuntimeRendererHost).toHaveBeenCalledTimes(1);
+    const options = constructRuntimeRendererHost.mock.calls[0]?.[1];
+    if (provided) expect(options.ssrIdentity).toBe(prepared.value.ssrIdentity);
+    else expect(options).not.toHaveProperty('ssrIdentity');
+  } finally {
+    await result.value.dispose();
+  }
+  expect(renderer.dispose).toHaveBeenCalledTimes(1);
+});
+
+it('keeps top-level SSR identity realm-bound when execution is configured', async () => {
+  constructRuntimeRendererHost.mockClear();
+  const canvas = {
+    tagName: 'CANVAS',
+    isConnected: true,
+    width: 64,
+    height: 64,
+    clientWidth: 64,
+    clientHeight: 64,
+  } as unknown as HTMLCanvasElement;
+  const result = await createApp(canvas, {
+    ssrIdentity: ssrIdentityFixture,
+    execution: {
+      bootstrap: 'data:text/javascript,export default () => ({})',
+      workers: { engine: false, render: false, kernels: false },
+    },
+  });
+  expect(result).toMatchObject({ ok: false, error: { code: 'app-execution-bootstrap-failed' } });
+  expect(constructRuntimeRendererHost).not.toHaveBeenCalled();
+});
 
 it.each([
   false,

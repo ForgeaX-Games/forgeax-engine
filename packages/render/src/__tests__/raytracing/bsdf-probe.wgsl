@@ -9,7 +9,7 @@ fn probe(id:vec3u, n:vec3f, outgoing:vec3f) {
   let u=(f32(id.x)+0.5)/f32(count);
   let v=fract(f32(id.x)*0.61803398875);
   let w=fract(f32(id.x)*0.754877666);
-  let surface=RayMaterialSurface(vec4f(0.8,0.4,0.2,1),vec4f(n,0.65),vec4f(0),vec4f(0),vec4u(1),vec4f(0,0,1,0));
+  let surface=RayMaterialSurface(vec4f(0.8,0.4,0.2,1),vec4f(n,0.65),vec4f(0),vec4f(0),vec4u(1u,0u,0u,0u),vec4f(0,0,1,0));
   let sample=sampleRayBsdf(surface,outgoing,vec3f(w,u,v));
   let incoming=vec3f(sqrt(1.0-u*u)*cos(6.28318530718*v),sqrt(1.0-u*u)*sin(6.28318530718*v),u);
   output[id.x]=Probe(vec4f(sample.direction,sample.pdf),vec4f(sample.weight,f32(sample.valid)),

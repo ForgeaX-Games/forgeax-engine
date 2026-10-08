@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 2,
+  "command": "pnpm build:engine",
+  "engineShaderCompileCount": 1,
+  "appShaderCompileCount": 0,
+  "assetCookHitCount": 0,
+  "assetCookMissCount": 0,
+  "assetCookWriteFailureCount": 0,
+  "stageDurationMs": {
+    "packages": 462490.8,
+    "package-runtime-dependencies": 21557.2,
+    "types-preflight": 450865.6,
+    "types": 23788.5,
+    "producer": 771402.9
+  }
+}

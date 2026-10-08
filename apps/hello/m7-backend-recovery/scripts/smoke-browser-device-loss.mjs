@@ -116,7 +116,9 @@ try {
     args: browserArgs,
   });
   browser.on('disconnected', () => browserLifecycle.push('disconnected'));
-  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  // Keep all three real GPU-loss journeys and their 60-frame receipts at lower CI fill cost.
+  const viewport = process.env.CI ? { width: 320, height: 240 } : { width: 800, height: 600 };
+  const page = await browser.newPage({ viewport });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());

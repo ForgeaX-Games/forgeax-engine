@@ -72,7 +72,7 @@ for (const algorithm of ['ssao', 'gtao'] as const)
     const depth = texture('depth32float');
     const normal = texture('r32uint');
     const aoSize = Math.ceil(size / 2);
-    const raw = texture('r8unorm', aoSize, aoSize);
+    const raw = texture('rgba8unorm', aoSize, aoSize);
     const blurred = texture('r8unorm', aoSize, aoSize);
     const noise = texture('rgba32float', 4, 4);
     const uniform = device.createBuffer({
@@ -151,7 +151,7 @@ for (const algorithm of ['ssao', 'gtao'] as const)
       const calc = device.createRenderPipeline({
         layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
         vertex: { module, entryPoint: 'vs_ssao' },
-        fragment: { module, entryPoint: 'fs_ssao_calc', targets: [{ format: 'r8unorm' }] },
+        fragment: { module, entryPoint: 'fs_ssao_calc', targets: [{ format: 'rgba8unorm' }] },
       });
       const sampler = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat' });
       const bindings = device.createBindGroup({
@@ -196,10 +196,22 @@ for (const algorithm of ['ssao', 'gtao'] as const)
       const mean = (x0: number, x1: number) => {
         let sum = 0;
         for (let y = 8; y < aoSize - 8; y++)
-          for (let x = x0; x < x1; x++) sum += 1 - (values[y * 256 + x] ?? NaN) / 255;
+          for (let x = x0; x < x1; x++) sum += 1 - (values[y * 256 + x * 4] ?? NaN) / 255;
         return sum / ((aoSize - 16) * (x1 - x0));
       };
       expect(errors).toEqual([]);
+      // The blur weights taps by the octahedral normal carried in raw.gb.
+      const center = (aoSize >> 1) * 256 + (aoSize >> 1) * 4;
+      const ox = ((values[center + 1] ?? NaN) / 255) * 2 - 1;
+      const oy = ((values[center + 2] ?? NaN) / 255) * 2 - 1;
+      const oz = 1 - Math.abs(ox) - Math.abs(oy);
+      const tilted = scene.startsWith('plane') || scene === 'orthographic';
+      const expected = tilted ? [0, Math.SQRT1_2, Math.SQRT1_2] : [0, 0, 1];
+      const length = Math.hypot(ox, oy, oz);
+      expect(
+        (ox * (expected[0] ?? 0) + oy * (expected[1] ?? 0) + oz * (expected[2] ?? 0)) / length,
+        'raw carries the center world normal',
+      ).toBeGreaterThan(0.999);
       if (scene === 'contact') {
         expect(
           mean(aoSize / 2 - 4, aoSize / 2),

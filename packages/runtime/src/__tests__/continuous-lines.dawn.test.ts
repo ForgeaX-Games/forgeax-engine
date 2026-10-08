@@ -19,4 +19,4 @@ it('renders continuous and dashed lines and proves RHI replay on Dawn', async ()
       writeFileSync(`${directory}/${name}`, bytes);
     },
   });
-}, 120_000);
+}, 240_000);

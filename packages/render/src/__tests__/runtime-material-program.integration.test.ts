@@ -18,7 +18,10 @@ import { MeshFilter, MeshRenderer } from '../components';
 import { installPublicationPrograms } from '../publication/programs';
 import { createRenderPublisher } from '../publication/publisher';
 import { RenderPublicationReceiver } from '../publication/receiver';
-import { materialRayForMaterial, resolveMaterialSnapshot } from '../render-system-extract';
+import {
+  materialSurfaceProgramsForMaterial,
+  resolveMaterialSnapshot,
+} from '../render-system-extract';
 import { extractFrames } from '../render-system-extract-tail';
 
 it('keeps cooked Forward and ShadowCaster programs when World values change or a catalogue entry is replaced', () => {
@@ -55,15 +58,16 @@ it('keeps cooked Forward and ShadowCaster programs when World values change or a
     throw new Error('Missing cooked metadata');
   assets.recordMaterialReadiness(record.guid, {
     status: 'Ready',
-    guid: record.guid,
-    materialGuid: record.guid,
-    publicationGeneration: record.publicationGeneration,
-    specializationKey: record.specializationKey,
-    artifactDigest: record.artifactDigest,
-    sourceClosure: record.sourceClosure,
-    parameterContract: record.parameterContract,
-    record,
-    programs: record.programs,
+    record: {
+      ...record,
+      materialGuid: record.guid,
+      publicationGeneration: record.publicationGeneration,
+      specializationKey: record.specializationKey,
+      artifactDigest: record.artifactDigest,
+      sourceClosure: record.sourceClosure,
+      parameterContract: record.parameterContract,
+      programs: record.programs,
+    },
   });
   const handle = world.internSharedRef('MaterialAsset', base);
   world
@@ -105,7 +109,7 @@ it('keeps cooked Forward and ShadowCaster programs when World values change or a
   expect(read().materialProgramKeys).toEqual(before.materialProgramKeys);
 });
 
-it('carries the accepted ray program through value edits and detached publication', async () => {
+it('carries both accepted Surface programs through value edits and detached publication', async () => {
   const assets = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const receiverAssets = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const world = new World();
@@ -133,9 +137,27 @@ it('carries the accepted ray program through value edits and detached publicatio
     const ray = {
       specializationKey: `program/${digest}`,
       artifact: { mediaType: 'text/wgsl' as const, path: 'ray.wgsl', bytes, digest },
-      selections: [{ pass: 'Forward', context }],
+      selections: [{ pass: 'Forward', context, entry: 'cs_surface' }],
     };
-    const programs = [...record.programs, ray];
+    const cardBytes = new TextEncoder().encode(`card fixture generation ${generation}`);
+    const cardDigest = createMaterialArtifactDigest(cardBytes);
+    const card = {
+      specializationKey: `program/${cardDigest}`,
+      artifact: {
+        mediaType: 'text/wgsl' as const,
+        path: 'card.wgsl',
+        bytes: cardBytes,
+        digest: cardDigest,
+      },
+      selections: [
+        {
+          pass: 'Forward',
+          context: { ...context, pass: 'card-capture' as const },
+          entry: 'vs_card',
+        },
+      ],
+    };
+    const programs = [...record.programs, ray, card];
     const artifactDigest = createMaterialProgramSetDigest(programs, record.resolved.passes);
     const cooked = {
       ...record,
@@ -161,17 +183,24 @@ it('carries the accepted ray program through value edits and detached publicatio
     assets.catalog(cooked.guid, material).unwrap();
     assets.recordMaterialReadiness(cooked.guid, {
       status: 'Ready',
-      guid: cooked.guid,
-      materialGuid: cooked.guid,
-      publicationGeneration: generation,
-      specializationKey: cooked.specializationKey,
-      artifactDigest: cooked.artifactDigest,
-      sourceClosure: cooked.sourceClosure,
-      parameterContract: cooked.parameterContract,
-      record: cooked,
-      programs: cooked.programs,
+      record: {
+        ...cooked,
+        materialGuid: cooked.guid,
+        publicationGeneration: generation,
+        specializationKey: cooked.specializationKey,
+        artifactDigest: cooked.artifactDigest,
+        sourceClosure: cooked.sourceClosure,
+        parameterContract: cooked.parameterContract,
+        programs: cooked.programs,
+      },
     });
-    return { material, key: ray.specializationKey, bytes };
+    return {
+      material,
+      key: ray.specializationKey,
+      bytes,
+      cardKey: card.specializationKey,
+      cardBytes,
+    };
   };
   const first = publishMaterial(1);
   for (const context of [
@@ -180,7 +209,9 @@ it('carries the accepted ray program through value edits and detached publicatio
     { ...MATERIAL_CONTEXT, geometry: 'skinned' as const },
     { ...MATERIAL_CONTEXT, instrumentation: 'validation' as const },
   ])
-    expect(materialRayForMaterial(first.material, assets, context, first.material)).toBeUndefined();
+    expect(
+      materialSurfaceProgramsForMaterial(first.material, assets, context, first.material),
+    ).toBeUndefined();
   const handle = world.internSharedRef('MaterialAsset', first.material);
   world
     .spawn(
@@ -197,9 +228,19 @@ it('carries the accepted ray program through value edits and detached publicatio
       materialContext: MATERIAL_CONTEXT,
       cull: 'none',
     }).renderables[0]?.material;
-  expect(read().materialRay?.programKey).toBe(first.key);
-  expect(frameRead()?.materialRay?.programKey).toBe(first.key);
-  expect(read().materialRay?.evaluateCoverage).toBe(false);
+  expect(read().materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
+  expect(
+    materialSurfaceProgramsForMaterial(
+      first.material,
+      assets,
+      { ...MATERIAL_CONTEXT, capability: 'storage-buffer-atmosphere' },
+      first.material,
+    )?.['ray-hit']?.programKey,
+  ).toBe(first.key);
+  expect(frameRead()?.materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
+  expect(read().materialSurfacePrograms?.['card-capture']?.programKey).toBe(first.cardKey);
+  expect(frameRead()?.materialSurfacePrograms?.['card-capture']?.programKey).toBe(first.cardKey);
+  expect(read().materialSurfacePrograms?.['ray-hit']?.evaluateCoverage).toBe(false);
   const coverage = world
     .spawn({
       component: RuntimeMaterialValue,
@@ -211,16 +252,21 @@ it('carries the accepted ray program through value edits and detached publicatio
       },
     })
     .unwrap();
-  expect(read().materialRay).toEqual({ programKey: first.key, evaluateCoverage: true });
-  expect(frameRead()?.materialRay).toEqual(read().materialRay);
+  expect(read().materialSurfacePrograms?.['ray-hit']).toEqual({
+    programKey: first.key,
+    evaluateCoverage: true,
+  });
+  expect(frameRead()?.materialSurfacePrograms?.['ray-hit']).toEqual(
+    read().materialSurfacePrograms?.['ray-hit'],
+  );
   world.despawn(coverage).unwrap();
-  expect(read().materialRay?.evaluateCoverage).toBe(false);
+  expect(read().materialSurfacePrograms?.['ray-hit']?.evaluateCoverage).toBe(false);
   // An arbitrary Surface can cut holes even with zero Standard alphaCutoff.
   expect(
-    materialRayForMaterial(first.material, assets, MATERIAL_CONTEXT, {
+    materialSurfaceProgramsForMaterial(first.material, assets, MATERIAL_CONTEXT, {
       ...first.material,
       surface: { model: 'standard', module: 'game::cut-holes' },
-    })?.evaluateCoverage,
+    })?.['ray-hit']?.evaluateCoverage,
   ).toBe(true);
 
   const source = world
@@ -235,11 +281,13 @@ it('carries the accepted ray program through value edits and detached publicatio
     })
     .unwrap();
   expect(read().roughness).toBe(0.25);
-  expect(read().materialRay?.programKey).toBe(first.key);
+  expect(read().materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
   const latest = publishMaterial(2);
   expect(latest.key).not.toBe(first.key);
-  expect(read().materialRay?.programKey).toBe(first.key);
-  expect(frameRead()?.materialRay?.programKey).toBe(first.key);
+  expect(read().materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
+  expect(frameRead()?.materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
+  expect(read().materialSurfacePrograms?.['card-capture']?.programKey).toBe(first.cardKey);
+  expect(frameRead()?.materialSurfacePrograms?.['card-capture']?.programKey).toBe(first.cardKey);
   const device = (await new RhiNullAdapter().requestDevice()).unwrap();
   const identity = { source: 'ray-publication', epoch: 1 };
   const publisher = createRenderPublisher(world, assets, identity, {
@@ -251,15 +299,23 @@ it('carries the accepted ray program through value edits and detached publicatio
     const packet = structuredClone(candidate.packet);
     candidate.accept();
     expect(packet.programs.some((program) => program.key === first.key)).toBe(true);
+    expect(packet.programs.some((program) => program.key === first.cardKey)).toBe(true);
+    expect(packet.programs.some((program) => program.key === latest.cardKey)).toBe(false);
     expect(packet.programs.some((program) => program.key === latest.key)).toBe(false);
     installPublicationPrograms(receiverAssets, packet.programs);
     const accepted = new RenderPublicationReceiver(identity).accept(packet).unwrap();
-    expect(accepted.frame.renderables[0]?.material.materialRay?.programKey).toBe(first.key);
+    expect(
+      accepted.frame.renderables[0]?.material.materialSurfacePrograms?.['ray-hit']?.programKey,
+    ).toBe(first.key);
     expect(receiverAssets.getMaterialArtifact(first.key)?.bytes).toEqual(first.bytes);
+    expect(
+      accepted.frame.renderables[0]?.material.materialSurfacePrograms?.['card-capture']?.programKey,
+    ).toBe(first.cardKey);
+    expect(receiverAssets.getMaterialArtifact(first.cardKey)?.bytes).toEqual(first.cardBytes);
     expect(receiverAssets.getMaterialArtifact(latest.key)).toBeUndefined();
     world.despawn(source).unwrap();
     expect(read().roughness).toBeCloseTo(0.8);
-    expect(read().materialRay?.programKey).toBe(first.key);
+    expect(read().materialSurfacePrograms?.['ray-hit']?.programKey).toBe(first.key);
   } finally {
     publisher.dispose();
   }

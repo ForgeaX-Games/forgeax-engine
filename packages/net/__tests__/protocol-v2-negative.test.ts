@@ -13,6 +13,9 @@ describe('protocol-v2 negative matrix', () => {
   it.each([
     ['protocol-v1', { version: 1, kind: 'baseline' }],
     ['unsupported-kind', { version: 2, kind: 'batch' }],
+    ['prototype-key-kind', { version: 2, kind: 'toString', sessionId: 1, epoch: 1, sequence: 0 }],
+    ['array-wrapped-kind', { version: 2, kind: ['ack'], sessionId: 1, epoch: 1, acknowledgedSequence: 0 }],
+    ['prototype-key-rejected-kind', { version: 2, kind: 'rejection', sessionId: 1, epoch: 1, sequence: 1, rejectedKind: 'constructor', reason: 'x' }],
     ['missing-session', { version: 2, kind: 'delta', epoch: 1, sequence: 2 }],
     ['unsafe-epoch', { version: 2, kind: 'delta', sessionId: 1, epoch: Number.MAX_SAFE_INTEGER + 1, sequence: 2 }],
     ['baseline-not-sequence-one', { version: 2, kind: 'baseline', sessionId: 1, epoch: 1, sequence: 2, tick: 1, fingerprint: 'x', entities: [] }],

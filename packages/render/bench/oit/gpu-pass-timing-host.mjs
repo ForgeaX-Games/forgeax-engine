@@ -98,7 +98,7 @@ async function manifestUrl() {
 }
 
 async function installDawn() {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   const gpu = create([]);
   if (globalThis.navigator === undefined) {

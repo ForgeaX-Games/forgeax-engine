@@ -5,6 +5,7 @@ import {
   err,
   ok,
 } from '@forgeax/engine-types';
+import { admitAudioStream } from '../audio-stream';
 
 export const audioContribution: AssetDecoderContribution<AudioClipAsset, 'audio'> = {
   kind: { kind: 'audio' } as AssetKind<AudioClipAsset, 'audio'>,
@@ -21,6 +22,17 @@ export const audioContribution: AssetDecoderContribution<AudioClipAsset, 'audio'
               ? Uint8Array.from(source.bytes as number[])
               : undefined;
         const body = envelope.artifacts.body ?? envelope.artifacts.source;
+        if (body?.delivery === 'stream') {
+          const stream = admitAudioStream(source.stream, body, artifacts.locate?.(body) ?? '');
+          if (stream)
+            return ok({ kind: 'audio', sourceKey: envelope.guid, mediaType: 'audio/wav', stream });
+          return err({
+            code: 'asset-package-invalid',
+            expected: 'a validated PCM16 stream index and HTTP locator',
+            hint: 'recook the streaming source and use an HTTP Range delivery host',
+            detail: { guid: envelope.guid, reason: 'invalid audio stream' },
+          });
+        }
         if (body !== undefined) {
           const bodyBytes = await artifacts.read(body);
           if (!bodyBytes.ok) return bodyBytes;

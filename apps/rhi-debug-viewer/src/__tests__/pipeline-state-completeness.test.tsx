@@ -48,6 +48,7 @@ function model(): ViewerModel {
             bufferOffset: null,
             bufferSize: null,
             dynamicOffset: null,
+            access: 'read',
           },
         ],
         vertexBuffers: [{ slot: 0, bufferHandleId: 'buffer:vertex', offset: 8, size: 36 }],
@@ -55,6 +56,7 @@ function model(): ViewerModel {
         attachments: {
           colorViewHandleIds: ['view:color'],
           colorResolveViewHandleIds: [null],
+          colorDepthSlices: [null],
           depthStencilViewHandleId: 'view:depth',
         },
       },
@@ -69,6 +71,7 @@ function model(): ViewerModel {
         commandIndices: [3],
         colorAttachmentViewHandleIds: ['view:color'],
         colorAttachmentResolveViewHandleIds: [null],
+        colorAttachmentDepthSlices: [null],
         depthStencilViewHandleId: 'view:depth',
       },
     ],

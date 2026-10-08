@@ -8,7 +8,7 @@
 //     'total: N/M packages x kinds passed') capped at 30 lines.
 //   - <details><summary>complete metrics details (<count> entries)</summary>
 //     full matrix listing every (package, kind, value, threshold, status)
-//     row, capped at 60 lines.
+//     row, followed by the producer's per-entry evidence. No metric rows are dropped.
 //   - The body is markdown only (no images, no emoji, no colour codes) so
 //     the same text is consumable by AI users, pipes, and humans alike
 //     (charter proposition 3 machine-readable union > prose).
@@ -18,6 +18,8 @@
 //   --report-dir default = <repo-root>/report
 //   --out        default = <report-dir>/sticky-comment.md (mkdir -p as needed)
 //   --stdout     also echo the rendered markdown to process.stdout
+//   --ci-context prepend FORGEAX_CI_NEEDS gate outcomes to the existing report;
+//                missing failed/skipped producer bodies remain explicit evidence.
 //
 // Reference:
 //   - requirements §AC-07 / §AC-15
@@ -41,15 +43,18 @@ for (let i = 0; i < argv.length; i++) {
     args.out = argv[++i];
   } else if (a === '--stdout') {
     args.stdout = true;
+  } else if (a === '--ci-context') {
+    args.ciContext = true;
   }
 }
 
 const reportDir = resolve(args.reportDir ?? `${defaultRepoRoot}/report`);
 const outPath = resolve(args.out ?? `${reportDir}/sticky-comment.md`);
 
-const KIND_ORDER = ['bundle-size', 'fps', 'bench', 'gate', 'spike-report'];
+const KIND_ORDER = JSON.parse(
+  readFileSync(resolve(defaultRepoRoot, 'schemas/forgeax-metrics.schema.json'), 'utf8'),
+).required;
 const SUMMARY_CAP = 30;
-const DETAILS_CAP = 60;
 
 function listEntries(rootDir) {
   if (!existsSync(rootDir)) return [];
@@ -58,18 +63,22 @@ function listEntries(rootDir) {
     const pkgDir = `${rootDir}/${pkg}`;
     if (!statSync(pkgDir).isDirectory()) continue;
     for (const file of readdirSync(pkgDir).sort()) {
-      if (!file.endsWith('.json')) continue;
+      const kind = file.replace(/\.json$/, '');
+      if (file !== `${kind}.json` || !KIND_ORDER.includes(kind)) continue;
       try {
         const entry = JSON.parse(readFileSync(`${pkgDir}/${file}`, 'utf8'));
+        if (entry?.package !== pkg || entry.kind !== kind || typeof entry.status !== 'string') {
+          throw new Error('invalid metric identity or status');
+        }
         entries.push(entry);
-      } catch {
+      } catch (error) {
         entries.push({
           package: pkg,
           kind: file.replace(/\.json$/, ''),
           status: 'unavailable',
           value: null,
           threshold: null,
-          details: { message: 'malformed report json' },
+          details: { message: 'invalid metric report', cause: error.message },
         });
       }
     }
@@ -92,6 +101,16 @@ function isPixelDiffBench(entry) {
   return entry.kind === 'bench' && entry.details?.unit === 'pixels';
 }
 
+function benchMeasurement(entry) {
+  if (entry.details?.reportSchema === 'gpu-frame-samples') {
+    return { scale: 100, unit: '% GPU median improvement', comparison: '>=' };
+  }
+  if (entry.details?.reportSchema === 'vfx-batch-b') {
+    return { scale: 1, unit: ' ms p95', comparison: '<=' };
+  }
+  return { scale: 1, unit: ' ns/op', comparison: '<=' };
+}
+
 function formatValue(entry) {
   if (entry.value === null || entry.value === undefined) return 'n/a';
   const v = entry.value;
@@ -105,7 +124,8 @@ function formatValue(entry) {
     return `pixelDiff: ${v} pixels${ppFragment}`;
   }
   if (entry.kind === 'bench') {
-    return `${typeof v === 'number' ? v.toFixed(2) : v} ns/op`;
+    const measurement = benchMeasurement(entry);
+    return `${typeof v === 'number' ? (v * measurement.scale).toFixed(2) : v}${measurement.unit}`;
   }
   if (entry.kind === 'fps') {
     return `${typeof v === 'number' ? v.toFixed(2) : v} fps`;
@@ -120,7 +140,12 @@ function formatThreshold(entry) {
     return `<= ${entry.threshold} bytes (${kb} KB)`;
   }
   if (isPixelDiffBench(entry)) return `<= ${entry.threshold} pixels`;
-  if (entry.kind === 'bench') return `<= ${entry.threshold} ns/op`;
+  if (entry.kind === 'bench') {
+    const measurement = benchMeasurement(entry);
+    const threshold = entry.threshold * measurement.scale;
+    const value = measurement.scale === 1 ? String(threshold) : threshold.toFixed(2);
+    return `${measurement.comparison} ${value}${measurement.unit}`;
+  }
   if (entry.kind === 'fps') return `>= ${entry.threshold} fps`;
   return String(entry.threshold);
 }
@@ -136,8 +161,27 @@ function tableRow(entry) {
 function trimToCap(lines, cap, more) {
   if (lines.length <= cap) return lines;
   const kept = lines.slice(0, cap - 1);
-  kept.push(`| ... | ... | ... | ... | (${more} more, see <details>) |`);
+  kept.push(`| ... | ... | ... | ... | (${more - kept.length} more, see <details>) |`);
   return kept;
+}
+
+function workflowIdentity() {
+  const lines = [];
+  const productHead = process.env.EXPECTED_PRODUCT_SHA || process.env.GITHUB_SHA;
+  if (productHead) {
+    lines.push(`Head: \`${productHead}\``);
+    if (process.env.GITHUB_SHA && process.env.GITHUB_SHA !== productHead) {
+      lines.push(`Workflow event SHA: \`${process.env.GITHUB_SHA}\``);
+    }
+    if (process.env.GITHUB_RUN_ID && process.env.GITHUB_REPOSITORY) {
+      const url = `${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+      lines.push(
+        `Workflow: [${process.env.GITHUB_RUN_ID}](${url}); attempt ${process.env.GITHUB_RUN_ATTEMPT ?? 'unknown'}.`,
+      );
+    }
+    lines.push('');
+  }
+  return lines;
 }
 
 function render(entries) {
@@ -146,8 +190,10 @@ function render(entries) {
   const total = entries.length;
   const passed = okEntries.length;
 
-  const lines = [];
-  lines.push('### forgeax-engine metrics report');
+  const lines = ['### forgeax-engine metrics report', '', ...workflowIdentity()];
+  lines.push(
+    'Metric status is separate from overall CI acceptance. `n/a` target means no threshold was declared; an `ok` row does not establish an undeclared performance budget.',
+  );
   lines.push('');
   if (total === 0) {
     lines.push('_no metrics report files found under report/. Did `pnpm metrics:run` run?_');
@@ -166,25 +212,92 @@ function render(entries) {
     lines.push('');
   }
 
+  lines.push('| kind | reported | ok | non-ok |', '|:--|--:|--:|--:|');
+  for (const kind of KIND_ORDER) {
+    const rows = entries.filter((entry) => entry.kind === kind);
+    const ok = rows.filter((entry) => entry.status === 'ok').length;
+    lines.push(`| ${kind} | ${rows.length} | ${ok} | ${rows.length - ok} |`);
+  }
+  lines.push('');
+
   const detailsLines = [];
   detailsLines.push('<details>');
   detailsLines.push(`<summary>complete metrics details (${total} entries)</summary>`);
   detailsLines.push('');
   detailsLines.push(...tableHeader());
-  const detailsBudget = DETAILS_CAP - 5;
-  const allRows = entries.map(tableRow);
-  const detailsTrimmed = trimToCap(allRows, detailsBudget, allRows.length);
-  detailsLines.push(...detailsTrimmed);
+  detailsLines.push(...entries.map(tableRow));
   detailsLines.push('');
   detailsLines.push('</details>');
   lines.push(...detailsLines);
   lines.push('');
 
+  lines.push('<details>', '<summary>Producer evidence and failure details</summary>', '');
+  for (const entry of entries) {
+    lines.push(`#### ${entry.package} / ${entry.kind}`, '');
+    lines.push(`Report file: \`${entry.package}/${entry.kind}.json\``, '');
+    lines.push(
+      '```json',
+      JSON.stringify(entry.details ?? {}, null, 2).replaceAll('`', '\\u0060'),
+      '```',
+      '',
+    );
+  }
+  lines.push('</details>', '');
+
   return lines.join('\n');
 }
 
-const entries = listEntries(reportDir);
-const markdown = render(entries);
+function renderCiContext() {
+  const needs = JSON.parse(process.env.FORGEAX_CI_NEEDS ?? 'null');
+  if (!needs || Array.isArray(needs) || typeof needs !== 'object') {
+    throw new Error('FORGEAX_CI_NEEDS must contain the workflow needs object');
+  }
+  const jobs = Object.entries(needs).sort(([a], [b]) => a.localeCompare(b));
+  if (jobs.length === 0 || jobs.some(([, job]) => typeof job?.result !== 'string')) {
+    throw new Error('FORGEAX_CI_NEEDS must contain producer-owned gate results');
+  }
+  const bodyPath = resolve(reportDir, 'sticky-comment.md');
+  const body = existsSync(bodyPath) ? readFileSync(bodyPath, 'utf8') : '';
+  const lines = ['### forgeax-engine CI report', '', ...workflowIdentity()];
+  lines.push(
+    'Aggregate CI gate results below come from the workflow `needs` projection. Inspect the linked workflow for the full job/shard roster and failure logs. Metric status remains separate from complete CI acceptance.',
+    '',
+    '| gate | result |',
+    '|:--|:--|',
+    ...jobs.map(([name, job]) => `| ${name} | ${job.result} |`),
+    '',
+    '<details>',
+    '<summary>Gate producer outputs</summary>',
+    '',
+    '```json',
+    JSON.stringify(
+      Object.fromEntries(jobs.map(([name, job]) => [name, job.outputs ?? {}])),
+      null,
+      2,
+    ).replaceAll('`', '\\u0060'),
+    '```',
+    '',
+    '</details>',
+    '',
+  );
+  if (body.trim()) {
+    lines.push(body);
+  } else {
+    lines.push(
+      '> [!WARNING] Metric report unavailable; the producer supplied no report body.',
+      '',
+      `Metric producer result: \`${needs['metrics-validate']?.result ?? 'not-provided'}\`. Read the gate outcomes and workflow logs above.`,
+      '',
+    );
+    if (needs['metrics-validate']?.result === 'success') {
+      process.stderr.write('successful metrics producer has no report body\n');
+      process.exitCode = 1;
+    }
+  }
+  return lines.join('\n');
+}
+
+const markdown = args.ciContext ? renderCiContext() : render(listEntries(reportDir));
 
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, markdown.endsWith('\n') ? markdown : `${markdown}\n`, 'utf8');

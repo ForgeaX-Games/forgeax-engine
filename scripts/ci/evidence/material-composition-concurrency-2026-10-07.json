@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "qualification": "CPU-only actual scoped compiler composition call count; no Catalog, native GPU, or complete CI speedup qualification",
+  "baseline": {
+    "head": "380b243866c89122721b246eb443cf252f8e57f7",
+    "sourceSha256": "023d2e5731a74f5c6aa08d31dd70cb536572047b043d2d5d3db7381146365058",
+    "report": {
+      "sourceHead": "380b243866c89122721b246eb443cf252f8e57f7",
+      "kind": "actual owner source with real Naga delegate counted; CPU only, no Browser/GPU, no source patch",
+      "actualNagaCalls": 2,
+      "success": [true, true],
+      "wgslDigests": [
+        "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7",
+        "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7"
+      ],
+      "distinctResultObjects": true
+    }
+  },
+  "candidate": {
+    "baseHead": "ce0e3c6fb79869f9e13821f1693237a31699d75f",
+    "sourceSha256": "023e69e564f3be290fff4c8e047444472a31fac36aabaafe7785e9ba73617fae",
+    "report": {
+      "sourceHead": "ce0e3c6fb-plus-pending-patch",
+      "kind": "actual candidate TypeScript patch with real unchanged Naga delegate counted; CPU only, no Browser/GPU",
+      "actualNagaCalls": 1,
+      "success": [true, true],
+      "wgslDigests": [
+        "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7",
+        "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7"
+      ],
+      "distinctResultObjects": true
+    },
+    "finalFocusedRegression": {
+      "log": "/tmp/composer-concurrency-final-focused.log",
+      "sha256": "158039de56fcef84f7658156debd1b462b7044e2a911b936a1edb3f9cfa4b28c",
+      "files": 1,
+      "tests": 15,
+      "passed": 15,
+      "typeErrors": 0,
+      "elapsedSeconds": 7.74
+    }
+  },
+  "protocol": {
+    "nodeVersion": "22.23.2",
+    "source": "@compute @workgroup_size(1) fn main() {}",
+    "requests": 2,
+    "concurrent": true,
+    "actualNagaWarmupCallsOutsideCounter": 1,
+    "countedDelegate": "unchanged actual packages/naga/dist/index.mjs",
+    "sameWgsl": true,
+    "independentResultMetadata": true,
+    "cacheEntryLimit": 128,
+    "cacheJointByteLimit": 16777216,
+    "unchangedWasmProvenance": {
+      "schemaVersion": "wgpu-wasm-provenance/1",
+      "sourceContentKey": "sha256-53076cab8a20db2fa695ef5ce4a68c400e59caf0f96f8daecda9347451ae9eec",
+      "artifactSha256": "104bffa2d36b29c64a2be50d9f8bd81b2e894160e28fab221efc11cabe1b55e8",
+      "artifactBytes": 5570607,
+      "glueSha256": "da58dcb5a9171a2c81dfa5a3e67bbc7bb60e2852f95d61bddb07386540e2d15a",
+      "glueBytes": 148599,
+      "toolchain": {
+        "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+        "wasmPack": "wasm-pack 0.14.0",
+        "wasmBindgen": "unavailable"
+      },
+      "dependencies": {
+        "wgpu": "29.0.3",
+        "naga": "29.0.3",
+        "nagaOil": "0.22.0",
+        "wasmBindgen": "0.2.121"
+      },
+      "compilerFingerprint": "sha256-cf285cf35791d1ddbbc9d14715fb03c71e194fbb829ce462e3bb18040c5e56d8"
+    }
+  },
+  "retainedNegativeEvidence": {
+    "fullCompilerSuite": {
+      "log": "/tmp/composer-concurrency-compiler-suite.log",
+      "sha256": "2cbdf49bc108135aa17758ba7405268801c804d93124ce86d286b61e7389ac0f",
+      "files": 49,
+      "tests": 268,
+      "passed": 265,
+      "failed": 3,
+      "typeErrors": 0,
+      "elapsedSeconds": 801.76,
+      "failures": [
+        {
+          "test": "Standard anisotropy",
+          "originalBudgetMs": 30000,
+          "observedMs": 36559
+        },
+        {
+          "test": "medium Surface",
+          "originalBudgetMs": 5000,
+          "observedMs": 5986
+        },
+        {
+          "test": "oversized byte limit",
+          "originalBudgetMs": 5000,
+          "observedMs": 6051
+        }
+      ],
+      "recovery": {
+        "log": "/tmp/composer-concurrency-three-file-recovery.log",
+        "sha256": "b1dca1ec5944d66cd57231b88146e66dffd26a721e7b5345b70396de1a316d30",
+        "completeFiles": 3,
+        "tests": 53,
+        "passed": 53,
+        "failed": 0,
+        "typeErrors": 0,
+        "elapsedSeconds": 426.13,
+        "originalCaseBudgetsMs": [5000, 30000],
+        "changedFixture": "Same >16MiB UTF-8 input/output byte boundary and all assertions, fewer characters; no deadline increase."
+      }
+    },
+    "roi15PassiveKeyOrder": {
+      "kind": "passive in-memory producer event ordering, no factory identity",
+      "sourceHead": "f464fdb88885b501c2a686cd065a8bebfe070b7b",
+      "eventCount": 258,
+      "compositionStarts": 94,
+      "uniqueKeys": 70,
+      "repeatedStarts": 24,
+      "sameKeyStartsBeforePriorEnd": 0,
+      "overlaps": [],
+      "unfinished": {},
+      "limits": "Global event order lacks factory identity; synchronous real Naga composition time can be shared-host pressure. No Catalog cause or speedup inference."
+    }
+  },
+  "scopeLimits": [
+    "Real-Naga count/equality regression only; no timing claim.",
+    "Original 817 Catalog90s FAIL remains, source predates380compiler changes.",
+    "Current380Catalog/benchmark/SDK PASS witnesses do not include this candidate patch.",
+    "ROI15 repeated starts have no observed same-key overlap; cannot attribute their24repeats or CatalogFAIL to this bug.",
+    "Final-head complete CI and SDK still required before delivery."
+  ]
+}

@@ -16,6 +16,11 @@
       "types": "./dist/catalog-client.d.ts",
       "import": "./dist/catalog-client.mjs"
     },
+    "./http-artifact": {
+      "types": "./dist/http-artifact.d.ts",
+      "browser": null,
+      "import": "./dist/http-artifact.mjs"
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.mjs",

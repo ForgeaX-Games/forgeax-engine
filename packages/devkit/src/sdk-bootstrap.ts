@@ -1,17 +1,19 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { access, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { execFileCommand } from './child-process.js';
 import type { SdkContext } from './sdk.js';
 import type { CommandResult } from './types.js';
 
 const SDK_INIT_PATH = ['.forgeax', 'sdk-init.json'] as const;
-const SDK_INIT_SCHEMA_VERSION = '1.0.0' as const;
+const SDK_INIT_SCHEMA_VERSION = '2.0.0' as const;
 
 export interface SdkInitState {
   readonly schemaVersion: typeof SDK_INIT_SCHEMA_VERSION;
   readonly sdkVersion: string;
   readonly engineCommit: string;
+  readonly toolInputsDigest: string;
   readonly pnpm: string;
   readonly node: string;
   readonly platform: NodeJS.Platform;
@@ -119,13 +121,14 @@ async function currentPnpm(): Promise<CommandResult<string>> {
   }
 }
 
-function matchesState(sdk: SdkContext, state: unknown): state is SdkInitState {
+function matchesState(sdk: SdkContext, state: unknown, digest: string): state is SdkInitState {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) return false;
   const value = state as Record<string, unknown>;
   return (
     value.schemaVersion === SDK_INIT_SCHEMA_VERSION &&
     value.sdkVersion === sdk.manifest.sdkVersion &&
     value.engineCommit === sdk.manifest.engineCommit &&
+    value.toolInputsDigest === digest &&
     typeof value.pnpm === 'string' &&
     supportedPnpm(value.pnpm) &&
     value.node === process.versions.node &&
@@ -134,10 +137,31 @@ function matchesState(sdk: SdkContext, state: unknown): state is SdkInitState {
   );
 }
 
+async function toolRuntimeReady(sdk: SdkContext): Promise<boolean> {
+  const runtime = resolve(sdk.root, '.forgeax/cli-runtime');
+  await access(resolve(runtime, 'node_modules/@forgeax/engine/dist/bin/forgeax.mjs'));
+  await access(resolve(runtime, 'node_modules/@forgeax/view/host.pack.json'));
+  await access(
+    createRequire(resolve(runtime, 'package.json')).resolve('@forgeax/view/host.pack.json'),
+  );
+  for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    if (
+      !(await readFile(resolve(runtime, name))).equals(
+        await readFile(resolve(sdk.root, 'toolchain/cli-runtime', name)),
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
 export async function readSdkInitState(sdk: SdkContext): Promise<SdkInitState | undefined> {
   try {
     const value = JSON.parse(await readFile(sdkInitPath(sdk), 'utf8')) as unknown;
-    return matchesState(sdk, value) ? value : undefined;
+    const digest = await toolInputsDigest(sdk);
+    if (!matchesState(sdk, value, digest)) return undefined;
+    if (!(await toolRuntimeReady(sdk))) return undefined;
+    return value;
   } catch {
     return undefined;
   }
@@ -165,9 +189,15 @@ export async function requireSdkInitialization(
   return { ok: true, value: state };
 }
 
+async function toolInputsDigest(sdk: SdkContext): Promise<string> {
+  const hash = createHash('sha256');
+  for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'])
+    hash.update(await readFile(resolve(sdk.root, 'toolchain/cli-runtime', name)));
+  return hash.digest('hex');
+}
+
 async function copyBootstrapInputs(sdk: SdkContext, root: string): Promise<void> {
-  const template = sdk.templates.get('empty');
-  if (template === undefined) throw new Error('sdk-bootstrap-template-missing');
+  const template = resolve(sdk.root, 'toolchain/cli-runtime');
   for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'] as const) {
     await cp(resolve(template, name), resolve(root, name));
   }
@@ -199,10 +229,22 @@ export async function sdkInitCommand(
       { actual: pnpmResult.value, expected: sdk.manifest.requirements.pnpm },
     );
   }
+  let digest: string;
+  try {
+    digest = await toolInputsDigest(sdk);
+  } catch (cause) {
+    return commandFailure(
+      'sdk-init-failed',
+      'the SDK toolchain inputs to exist',
+      'Download a complete SDK archive, then rerun project init.',
+      { reason: String(cause), sdkRoot: sdk.root },
+    );
+  }
   const state: SdkInitState = {
     schemaVersion: SDK_INIT_SCHEMA_VERSION,
     sdkVersion: sdk.manifest.sdkVersion,
     engineCommit: sdk.manifest.engineCommit,
+    toolInputsDigest: digest,
     pnpm: pnpmResult.value,
     node: process.versions.node,
     platform: process.platform,
@@ -216,15 +258,16 @@ export async function sdkInitCommand(
   };
   if (options.dryRun === true || options.install === false) return { ok: true, value: report };
 
-  let staging: string | undefined;
+  const staging = resolve(sdk.root, '.forgeax/cli-runtime');
   try {
-    staging = await mkdtemp(resolve(tmpdir(), 'forgeax-sdk-init-'));
+    await mkdir(staging, { recursive: true });
     await copyBootstrapInputs(sdk, staging);
     await execFileCommand('pnpm', sdkBootstrapInstallArgs(sdk.store), {
       cwd: staging,
       env: { ...process.env, CI: 'true' },
       maxBuffer: 16 * 1024 * 1024,
     });
+    if (!(await toolRuntimeReady(sdk))) throw new Error('sdk-tool-runtime-incomplete');
     await mkdir(resolve(sdk.root, '.forgeax'), { recursive: true });
     await writeFile(sdkInitPath(sdk), `${JSON.stringify(state, null, 2)}\n`);
     return { ok: true, value: report };
@@ -235,7 +278,5 @@ export async function sdkInitCommand(
       'Inspect the pnpm output, repair Node/pnpm or platform permissions, then rerun forgeax project init from the SDK root.',
       { reason: cause instanceof Error ? cause.message : String(cause), sdkRoot: sdk.root },
     );
-  } finally {
-    if (staging !== undefined) await rm(staging, { recursive: true, force: true });
   }
 }

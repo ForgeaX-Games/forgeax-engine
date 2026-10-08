@@ -6,13 +6,15 @@ import type { DispatchEntry, RenderableSnapshot } from '../../render-system-extr
 import { TransparentSortCache } from '../transparent-dispatch';
 import {
   TRANSPARENT_SORT_MODE_DISTANCE,
+  TRANSPARENT_SORT_MODE_LAYER_Y,
+  TRANSPARENT_SORT_MODE_LAYER_YZ,
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../transparent-sort-config';
 
-function scope(mode: number): RenderResourceScope {
+function scope(mode: number, yzAlpha = 1): RenderResourceScope {
   return {
     hasResource: () => true,
-    getResource: () => ({ mode, yzAlpha: 1 }),
+    getResource: () => ({ mode, yzAlpha }),
   } as unknown as RenderResourceScope;
 }
 
@@ -23,6 +25,19 @@ function renderable(x: number, y: number, z: number): RenderableSnapshot {
   world[13] = y;
   world[14] = z;
   return { transform: { world } } as unknown as RenderableSnapshot;
+}
+
+/** Sprite-shaped slot: pivot from `pivotAndSize[1]`, height from the world Y column. */
+function sprite(y: number, z: number, pivotY: number, scaleY: number): RenderableSnapshot {
+  const world = new Float32Array(16);
+  world[0] = world[10] = world[15] = 1;
+  world[5] = scaleY;
+  world[13] = y;
+  world[14] = z;
+  return {
+    transform: { world },
+    material: { paramSnapshot: { pivotAndSize: [0.5, pivotY, 1, 1] } },
+  } as unknown as RenderableSnapshot;
 }
 
 function entry(renderableIndex: number, queue: number, layer = 0, material = 0): DispatchEntry {
@@ -131,5 +146,72 @@ describe('TransparentSortCache', () => {
       transparent,
     );
     expect(cache.inspect()).toEqual({ hits: 0, misses: 0 });
+  });
+});
+
+describe('TransparentSortCache mode formulas', () => {
+  const order = (
+    mode: number,
+    renderables: readonly RenderableSnapshot[],
+    layers: readonly number[] = [],
+    yzAlpha = 1,
+    world: RenderResourceScope = scope(mode, yzAlpha),
+  ) =>
+    new TransparentSortCache()
+      .sort(
+        renderables.map((_, i) => entry(i, RenderQueue.Transparent, layers[i] ?? 0)),
+        world,
+        [],
+        renderables,
+      )
+      .map((e) => e.renderableIndex);
+
+  it('LAYER_Z is layer-major across signed layers, then posZ ascending', () => {
+    const renderables = [
+      renderable(0, 0, 1),
+      renderable(0, 0, 2),
+      renderable(0, 0, 1),
+      renderable(0, 0, 0),
+    ];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_Z, renderables, [100, 0, -100, 0])).toEqual([
+      2, 3, 1, 0,
+    ]);
+  });
+
+  it('a world without TransparentSortConfig sorts as LAYER_Z', () => {
+    const missing = { hasResource: () => false } as unknown as RenderResourceScope;
+    const renderables = [renderable(0, 0, 3), renderable(0, 0, 1), renderable(0, 0, 2)];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_Y, renderables, [], 1, missing)).toEqual([1, 2, 0]);
+  });
+
+  it('LAYER_Y sorts by -(posY - pivotY * |scaleY|): higher feet draw first', () => {
+    // feet: 0, 1.5, -0.5
+    const renderables = [sprite(1, 0, 1, 1), sprite(2, 0, 0.5, 1), sprite(0, 0, 0.5, 1)];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_Y, renderables)).toEqual([1, 0, 2]);
+    // pivotY=0 makes footY === posY: 10/20/30 draw as 30/20/10.
+    const flat = [sprite(10, 0, 0, 1), sprite(20, 0, 0, 1), sprite(30, 0, 0, 1)];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_Y, flat)).toEqual([2, 1, 0]);
+  });
+
+  it('LAYER_Y interleaves sprites and taller tilemap cells by foot, using |scaleY|', () => {
+    // Sprites (pivot 0.5, height 32): feet 4, 64. Tilemap cells (pivot 0.2,
+    // height 64, one V-flipped with a negative scale): feet 17.2, 37.2, 57.2.
+    const renderables = [
+      sprite(20, 0, 0.5, 32),
+      sprite(80, 0, 0.5, 32),
+      sprite(30, 0, 0.2, 64),
+      sprite(50, 0, 0.2, 64),
+      sprite(70, 0, 0.2, -64),
+    ];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_Y, renderables)).toEqual([1, 4, 3, 2, 0]);
+  });
+
+  it('LAYER_YZ sorts by footY + yzAlpha * posZ with stable ties', () => {
+    // values: -0.5, 2, -0.5 (tie keeps dispatch order)
+    const renderables = [sprite(0, 0, 0.5, 1), sprite(2, 1, 1, 1), sprite(1, -1, 0.5, 1)];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_YZ, renderables)).toEqual([0, 2, 1]);
+    // yzAlpha=0.5 halves the Z term: 1.5 + 1 = 2.5 vs -0.5 + 2 = 1.5.
+    const tilted = [sprite(2, 2, 0.5, 1), sprite(0, 4, 0.5, 1)];
+    expect(order(TRANSPARENT_SORT_MODE_LAYER_YZ, tilted, [], 0.5)).toEqual([1, 0]);
   });
 });

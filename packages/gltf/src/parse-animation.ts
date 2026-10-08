@@ -12,12 +12,16 @@
 
 import { deriveAnimationTargetId } from '@forgeax/engine-animation/target-id';
 import type { AnimationTargetIdValue } from '@forgeax/engine-types';
-import { decodeF32Accessor } from './accessor/decode-accessor.js';
+import {
+  type AccessorJson,
+  type BufferViewJson,
+  decodeF32Accessor,
+} from './accessor/decode-accessor.js';
 import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 import { buildNodeParentMap, resolveNamedNodePath } from './node-path.js';
 
 /** Supported interpolation modes (CUBICSPLINE is deferred to OOS-skin-cubicspline). */
-type Interpolation = 'LINEAR' | 'STEP';
+type Interpolation = 'LINEAR' | 'STEP' | 'CUBICSPLINE';
 
 interface ChannelJson {
   readonly sampler: number;
@@ -40,20 +44,6 @@ interface AnimationJson {
 }
 
 const ANIMATION_ACCESSOR_TYPES = ['SCALAR', 'VEC2', 'VEC3', 'VEC4'] as const;
-
-interface AccessorJson {
-  readonly bufferView?: number;
-  readonly componentType: number;
-  readonly type: string;
-  readonly count: number;
-  readonly byteOffset?: number;
-}
-
-interface BufferViewJson {
-  readonly buffer: number;
-  readonly byteOffset?: number;
-  readonly byteLength: number;
-}
 
 export interface GltfAnimationChannelRecord {
   readonly targetId: AnimationTargetIdValue;
@@ -116,19 +106,16 @@ export function parseAnimation(
       if (sampler === undefined) continue;
 
       const interpolation = (sampler.interpolation ?? 'LINEAR') as string;
-      if (interpolation === 'CUBICSPLINE') {
+      if (
+        interpolation !== 'LINEAR' &&
+        interpolation !== 'STEP' &&
+        interpolation !== 'CUBICSPLINE'
+      ) {
         return err(
-          gltfErr('gltf-animation-cubicspline-unsupported', {
+          gltfErr('gltf-animation-sampler-invalid', {
             animationIndex: animIdx,
             samplerIndex: sampIdx,
-          }),
-        );
-      }
-      if (interpolation !== 'LINEAR' && interpolation !== 'STEP') {
-        return err(
-          gltfErr('gltf-animation-cubicspline-unsupported', {
-            animationIndex: animIdx,
-            samplerIndex: sampIdx,
+            reason: 'interpolation',
           }),
         );
       }
@@ -147,11 +134,19 @@ export function parseAnimation(
       const inputResult = decodeF32Accessor(
         sampler.input,
         inputAcc,
-        ANIMATION_ACCESSOR_TYPES,
+        ['SCALAR'],
         bufferViews,
         buffers,
       );
       if (!inputResult.ok) return err(inputResult.error);
+      if (inputResult.value.length < (interpolation === 'CUBICSPLINE' ? 2 : 1))
+        return err(
+          gltfErr('gltf-animation-sampler-invalid', {
+            animationIndex: animIdx,
+            samplerIndex: sampIdx,
+            reason: 'times',
+          }),
+        );
 
       const outputAcc = accessors[sampler.output];
       if (outputAcc === undefined) {
@@ -173,6 +168,21 @@ export function parseAnimation(
       );
       if (!outputResult.ok) return err(outputResult.error);
 
+      if (
+        inputResult.value.length === 0 ||
+        inputResult.value.some(
+          (value, index) =>
+            value < 0 || (index > 0 && value <= (inputResult.value[index - 1] ?? NaN)),
+        )
+      ) {
+        return err(
+          gltfErr('gltf-animation-sampler-invalid', {
+            animationIndex: animIdx,
+            samplerIndex: sampIdx,
+            reason: 'times',
+          }),
+        );
+      }
       decodedSamplers.push({
         input: inputResult.value,
         output: outputResult.value,
@@ -224,6 +234,35 @@ export function parseAnimation(
             animationIndex: animIdx,
             channelIndex: chIdx,
             nodeIndex: ch.target.node ?? -1,
+          }),
+        );
+      }
+      const stride =
+        ch.target.path === 'rotation'
+          ? 4
+          : ch.target.path === 'weights'
+            ? samplerRecord.output.length /
+              samplerRecord.input.length /
+              (samplerRecord.interpolation === 'CUBICSPLINE' ? 3 : 1)
+            : 3;
+      const expectedType =
+        ch.target.path === 'weights' ? 'SCALAR' : ch.target.path === 'rotation' ? 'VEC4' : 'VEC3';
+      const outputType = accessors[anim.samplers[ch.sampler]?.output ?? -1]?.type;
+      if (
+        outputType !== expectedType ||
+        !Number.isInteger(stride) ||
+        stride < 1 ||
+        stride > 8 ||
+        samplerRecord.output.length !==
+          samplerRecord.input.length *
+            stride *
+            (samplerRecord.interpolation === 'CUBICSPLINE' ? 3 : 1)
+      ) {
+        return err(
+          gltfErr('gltf-animation-sampler-invalid', {
+            animationIndex: animIdx,
+            samplerIndex: ch.sampler,
+            reason: 'values',
           }),
         );
       }

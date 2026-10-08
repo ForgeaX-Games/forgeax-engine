@@ -29,7 +29,7 @@ const optional = (manifest: Manifest, name: string) =>
 
 async function dependencyRoot(root: string, name: string): Promise<string | undefined> {
   const require = createRequire(join(root, 'package.json'));
-  const installed = (require.resolve.paths(name) ?? [])
+  const installed = (require.resolve.paths(`${name}/package.json`) ?? [])
     .map((directory) => join(directory, name, 'package.json'))
     .find(existsSync);
   return installed ? realpath(dirname(installed)) : undefined;

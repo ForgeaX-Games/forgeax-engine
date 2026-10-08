@@ -9,6 +9,7 @@ import {
   relativeScriptableImportCandidates,
   SCRIPTABLE_SOURCE_EXTENSIONS,
 } from './scriptable-pack-relative-import.js';
+import { isScriptablePackField, projectFailure } from './scriptable-pack-wire.js';
 
 if (parentPort === null) throw new Error('ScriptablePack worker requires a parent port');
 
@@ -32,23 +33,13 @@ type LoadedDefinition = {
   readonly runtime?: unknown;
   readonly build?: unknown;
 };
-const DECLARED_FIELDS = new Set([
-  'schemaVersion',
-  'packageId',
-  'name',
-  'parameters',
-  'sceneComponents',
-  'runtime',
-  'build',
-]);
-
 // Forward undeclared fields so the main-thread validator refuses them exactly
 // as it refuses the same module loaded in-process; a value that cannot cross
 // the port is replaced by its type name.
 function undeclaredFields(value: object): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
-    if (DECLARED_FIELDS.has(key)) continue;
+    if (isScriptablePackField(key)) continue;
     try {
       fields[key] = structuredClone(field);
     } catch {
@@ -63,16 +54,7 @@ const reads = new Map<number, (value: unknown) => void>();
 
 function failure(error: unknown): unknown {
   if (error === null || typeof error !== 'object') return error;
-  const value = error as Record<string, unknown>;
-  return {
-    name: value.name,
-    code: value.code,
-    expected: value.expected,
-    actual: value.actual,
-    hint: value.hint,
-    detail: value.detail,
-    message: value.message,
-  };
+  return projectFailure(error);
 }
 
 function serializableSceneComponents(value: unknown): unknown {
@@ -156,24 +138,83 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
     const path = pending.pop();
     if (path === undefined || sources.has(path)) continue;
     const source = capturedSources?.[path] ?? readFileSync(path, 'utf8');
-    sources.set(path, source);
     const resolvedImports = new Map<string, string>();
-    for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
-      const target = imported.fileName.startsWith('.')
-        ? resolveRelativeImport(path, imported.fileName)
-        : resolveBareImport(path, imported.fileName);
-      if (target === undefined) continue;
-      resolvedImports.set(imported.fileName, target);
-      if (imported.fileName.startsWith('.') || /\.(?:ts|tsx|mts|cts)$/.test(target)) {
-        pending.push(target);
-      }
+    const collectRuntimeImports: ts.TransformerFactory<ts.SourceFile> = () => (sourceFile) => {
+      const visit = (node: ts.Node): void => {
+        const specifier =
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          node.moduleSpecifier !== undefined &&
+          ts.isStringLiteral(node.moduleSpecifier)
+            ? node.moduleSpecifier.text
+            : ts.isCallExpression(node) &&
+                node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+                node.arguments.length === 1 &&
+                node.arguments[0] !== undefined &&
+                ts.isStringLiteral(node.arguments[0])
+              ? node.arguments[0].text
+              : undefined;
+        if (specifier !== undefined) {
+          const target = specifier.startsWith('.')
+            ? resolveRelativeImport(path, specifier)
+            : resolveBareImport(path, specifier);
+          if (target !== undefined) {
+            resolvedImports.set(specifier, target);
+            if (specifier.startsWith('.') || /\.(?:ts|tsx|mts|cts)$/.test(target)) {
+              pending.push(target);
+            }
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      return sourceFile;
+    };
+    // Collect surviving dependencies after type erasure. Captured author
+    // source remains the inventory authority, including type-only files.
+    const transpiled = ts.transpileModule(source, {
+      fileName: path,
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        isolatedModules: true,
+        sourceMap: false,
+      },
+      transformers: { after: [collectRuntimeImports] },
+      reportDiagnostics: true,
+    });
+    const errors =
+      transpiled.diagnostics?.filter(
+        (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+      ) ?? [];
+    if (errors.length > 0) {
+      throw new Error(
+        `ScriptablePack TypeScript transpile failed for ${path}: ${errors
+          .map((diagnostic) => {
+            const position = diagnostic.file?.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
+            const location =
+              position === undefined
+                ? path
+                : `${path}:${position.line + 1}:${position.character + 1}`;
+            return `${location}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`;
+          })
+          .join('; ')}`,
+      );
     }
+    sources.set(path, transpiled.outputText);
     imports.set(path, resolvedImports);
   }
 
+  // Final membership keeps bare and relative aliases of one compiled file on
+  // the same module instance. Reparse emitted JS without another transpile.
+  const printer = ts.createPrinter();
   for (const [path, source] of sources) {
     const replacements = imports.get(path) ?? new Map<string, string>();
-    const rewriteRelativeImports: ts.TransformerFactory<ts.SourceFile> = (context) => {
+    if (replacements.size === 0) {
+      writeFileSync(join(outputRoot, outputName(path)), source);
+      continue;
+    }
+    const rewriteRuntimeImports: ts.TransformerFactory<ts.SourceFile> = (context) => {
       const visit: ts.Visitor = (node) => {
         if (
           (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -182,7 +223,7 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
         ) {
           const target = replacements.get(node.moduleSpecifier.text);
           if (target !== undefined) {
-            const moduleSpecifier = ts.factory.createStringLiteral(
+            const rewrittenSpecifier = ts.factory.createStringLiteral(
               resolvedModuleSpecifier(target, sources, loadId),
             );
             return ts.isImportDeclaration(node)
@@ -190,7 +231,7 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
                   node,
                   node.modifiers,
                   node.importClause,
-                  moduleSpecifier,
+                  rewrittenSpecifier,
                   node.attributes,
                 )
               : ts.factory.updateExportDeclaration(
@@ -198,7 +239,7 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
                   node.modifiers,
                   node.isTypeOnly,
                   node.exportClause,
-                  moduleSpecifier,
+                  rewrittenSpecifier,
                   node.attributes,
                 );
           }
@@ -221,37 +262,17 @@ function compileModuleClosure(entryPath: string, outputRoot: string, loadId?: nu
       };
       return (sourceFile) => ts.visitNode(sourceFile, visit) as ts.SourceFile;
     };
-    const transpiled = ts.transpileModule(source, {
-      fileName: path,
-      compilerOptions: {
-        target: ts.ScriptTarget.ES2022,
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-        isolatedModules: true,
-        sourceMap: false,
-      },
-      transformers: { before: [rewriteRelativeImports] },
-      reportDiagnostics: true,
-    });
-    const errors =
-      transpiled.diagnostics?.filter(
-        (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-      ) ?? [];
-    if (errors.length > 0) {
-      throw new Error(
-        `ScriptablePack TypeScript transpile failed for ${path}: ${errors
-          .map((diagnostic) => {
-            const position = diagnostic.file?.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
-            const location =
-              position === undefined
-                ? path
-                : `${path}:${position.line + 1}:${position.character + 1}`;
-            return `${location}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`;
-          })
-          .join('; ')}`,
-      );
+    const transformed = ts.transform(
+      ts.createSourceFile(path, source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS),
+      [rewriteRuntimeImports],
+    );
+    try {
+      const rewritten = transformed.transformed[0];
+      if (rewritten === undefined) throw new Error(`ScriptablePack rewrite failed for ${path}`);
+      writeFileSync(join(outputRoot, outputName(path)), printer.printFile(rewritten));
+    } finally {
+      transformed.dispose();
     }
-    writeFileSync(join(outputRoot, outputName(path)), transpiled.outputText);
   }
   return join(outputRoot, outputName(resolve(entryPath)));
 }

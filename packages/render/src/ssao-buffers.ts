@@ -20,6 +20,7 @@
 import type { Buffer, Sampler, Texture, TextureView } from '@forgeax/engine-rhi';
 import { GPU_TEXTURE_USAGE_COPY_DST, GPU_TEXTURE_USAGE_TEXTURE_BINDING } from './gpu-texture-usage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from './gpu-usage';
+import { texelFallbackDescriptor, writeTexelFallback } from './ibl/skylight-bind-group';
 import type { RenderSystemRuntime } from './record/render-context';
 
 // Deterministic host-side SSAO data is owned by the buffer allocator because
@@ -177,32 +178,19 @@ export function getOrCreateSsaoFallbackTexture(
   }
 
   const device = runtime.device;
-  const texRes = device.createTexture({
-    label: 'hdrp-ssao-fallback-white',
-    size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-    mipLevelCount: 1,
-    sampleCount: 1,
-    dimension: '2d',
-    format: 'r8unorm',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-    textureBindingViewDimension: undefined,
-  });
+  const descriptor = texelFallbackDescriptor('hdrp-ssao-fallback-white', 'r8unorm');
+  const texRes = device.createTexture(descriptor);
   if (!texRes.ok) {
     runtime.errorRegistry.fire(texRes.error);
     return null;
   }
 
   // r8unorm: a single byte 0xFF normalizes to 1.0 (white => AO = 1.0).
-  const whitePixel = new Uint8Array([255]);
-  const writeRes = device.queue.writeTexture(
-    {
-      texture: texRes.value,
-      mipLevel: 0,
-      origin: { x: 0, y: 0, z: 0 },
-    },
-    whitePixel,
-    { offset: 0, bytesPerRow: 256, rowsPerImage: 1 },
-    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  const writeRes = writeTexelFallback(
+    device.queue,
+    texRes.value,
+    descriptor,
+    new Uint8Array([255]),
   );
   if (!writeRes.ok) {
     runtime.errorRegistry.fire(writeRes.error);

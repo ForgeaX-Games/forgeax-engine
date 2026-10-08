@@ -7,6 +7,7 @@
 // members and this cluster owner never performs an all-probe loop.
 
 #define_import_path forgeax_standard::cluster
+#import forgeax_view::common::{lightingChannelsMatch}
 
 #import forgeax_pbr::lighting_punctual::{evalPoint, evalPointFlat, evalSpot, evalSpotFlat, evalSpotShadowed}
 #import forgeax_pbr::lighting_spot_modifiers::{spotModifierFactors}
@@ -38,9 +39,10 @@ struct DirectLightSlot {
   direction           : vec4<f32>,
   auxiliary           : vec4<f32>,
   metadata            : vec4<u32>,
+  channels            : vec4<u32>,
 };
 
-const DIRECT_LIGHT_SLOT_BYTE_SIZE: u32 = 80u;
+const DIRECT_LIGHT_SLOT_BYTE_SIZE: u32 = 96u;
 
 struct ClusterUniform {
   grid         : vec4<u32>,
@@ -242,6 +244,7 @@ fn evaluateStandardClusterLights(
   transmission : vec3<f32>,
   flat_2d    : bool,
   receive_shadows : bool,
+  receiver_channels : u32,
 ) -> vec3<f32> {
   let gx = cluster_uniform.grid.x;
   let gy = cluster_uniform.grid.y;
@@ -258,6 +261,7 @@ fn evaluateStandardClusterLights(
   let list_count = cluster_grid[grid_offset + 1u];
   for (var i = 0u; i < list_count; i = i + 1u) {
     let light = light_data[light_index_list[list_offset + i]];
+    if (!lightingChannelsMatch(light.channels.x, receiver_channels)) { continue; }
     total_radiance += evaluate_cluster_light(
       light, world_pos, normal, view_dir, base_color, metallic, alpha_sq, f0,
       transmission, flat_2d, receive_shadows,

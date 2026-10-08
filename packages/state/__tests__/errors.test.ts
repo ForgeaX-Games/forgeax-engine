@@ -10,8 +10,6 @@ import type {
 } from '../src/errors';
 import {
   invalidVariant,
-  stateAlreadyDefined,
-  stateDefaultRequired,
   stateNotRegistered,
   throwStateError,
 } from '../src/errors';
@@ -20,35 +18,30 @@ describe('StateError code/detail correlation', () => {
   it('accepts every existing code with its matching detail', () => {
     if (false) {
       throwStateError('state-already-defined', '', '', {
-        code: 'state-already-defined',
         name: 'GameState',
         firstDefinedAt: undefined,
       });
       throwStateError('state-not-registered', '', '', {
-        code: 'state-not-registered',
         name: 'GameState',
       });
       throwStateError('invalid-variant', '', '', {
-        code: 'invalid-variant',
         name: 'GameState',
         got: 'missing',
         valid: ['idle'],
       });
       throwStateError('state-default-required', '', '', {
-        code: 'state-default-required',
         name: 'GameState',
       });
     }
 
     const details: StateErrorDetail[] = [
       {
-        code: 'state-already-defined',
         name: 'GameState',
         firstDefinedAt: undefined,
       },
-      { code: 'state-not-registered', name: 'GameState' },
-      { code: 'invalid-variant', name: 'GameState', got: 'missing', valid: ['idle'] },
-      { code: 'state-default-required', name: 'GameState' },
+      { name: 'GameState' },
+      { name: 'GameState', got: 'missing', valid: ['idle'] },
+      { name: 'GameState' },
     ];
     expect(details).toHaveLength(4);
   });
@@ -56,18 +49,11 @@ describe('StateError code/detail correlation', () => {
   it('rejects mismatched code/detail pairs', () => {
     if (false) {
       throwStateError(
-        'state-not-registered',
-        '',
-        '',
-        // @ts-expect-error -- detail.code must match the top-level code.
-        { code: 'state-default-required', name: 'GameState' },
-      );
-      throwStateError(
         'invalid-variant',
         '',
         '',
         // @ts-expect-error -- invalid-variant requires its own detail payload.
-        { code: 'state-not-registered', name: 'GameState' },
+        { name: 'GameState' },
       );
     }
 
@@ -92,7 +78,7 @@ describe('StateError code/detail correlation', () => {
       }
     }
 
-    expect(describeError(stateAlreadyDefined('GameState'))).toContain('GameState');
+    expect(describeError(stateNotRegistered('GameState'))).toContain('GameState');
     expectTypeOf<StateErrorCode>().toEqualTypeOf<
       | 'state-already-defined'
       | 'state-not-registered'
@@ -107,23 +93,22 @@ describe('StateError code/detail correlation', () => {
     >();
   });
 
-  it('preserves the runtime envelope and duplicated detail code', () => {
+  it('preserves the runtime envelope and snapshots invalid variants', () => {
+    const variants = ['idle'];
+    const snapshot = invalidVariant('GameState', 'missing', variants);
+    variants.push('later');
+    expect(snapshot.detail).toEqual({ name: 'GameState', got: 'missing', valid: ['idle'] });
     const errors: StateError[] = [
-      stateAlreadyDefined('GameState'),
       stateNotRegistered('GameState'),
       invalidVariant('GameState', 'missing', ['idle']),
-      stateDefaultRequired('GameState'),
     ];
 
     for (const error of errors) {
-      expect(error.detail.code).toBe(error.code);
+      expect(error.detail.name).toBe('GameState');
       expect(error.expected).toBeTypeOf('string');
       expect(error.hint).toBeTypeOf('string');
       expect(Object.getOwnPropertyDescriptor(error, 'message')?.get).toBeTypeOf('function');
       expect(Reflect.get(error, 'message')).toBe(`[${error.code}] ${error.hint}`);
     }
-
-    expect(errors[0]?.detail.code).toBe('state-already-defined');
-    expect(errors[0]?.detail).toHaveProperty('firstDefinedAt', undefined);
   });
 });

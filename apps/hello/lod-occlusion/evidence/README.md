@@ -22,36 +22,35 @@ stripped, so it is real geometry but cannot inflate the LOD candidate count.
 `metrics.workload` must repeat the locked counts, and
 `submittedInstanceRatio` is submitted candidates divided by 128; the
 production budget therefore requires `<= 0.2` (at least an 80% reduction), not
-a visibility-retention threshold. CPU p50/p95, query-map p50/p95, query page
-pressure, query memory, linked candidate/histogram counts, and derived
-geometry-work reduction are required when timestamps are available.
+a visibility-retention threshold. CPU p50/p95, linked candidate/histogram
+counts, and derived geometry-work reduction are required when timestamps are available.
 The CPU p95 regression is derived from `treatment` versus `occlusionOnly` so
-the fixed occlusion-query transport cost is not misattributed to LOD. GPU
+the fixed occluder and HZB cost is not misattributed to LOD. GPU
 timestamps continue to use the no-occluder baseline versus the complete
 treatment, preserving the combined feature-gain comparison.
 
-The CI runtime producer permits one fresh-process retry only when all six
+The CI runtime producer permits one fresh-process retry only when all five
 falsification cases, CPU admission, workload budget, and GPU median gain pass
 but the GPU p95 tail alone exceeds the unchanged 5% limit. The retry collects
 new same-device samples; it does not alter the workload or relax any threshold.
 
-The renderer-owned timestamp spans the first graph pass through the occlusion
-resolve/copy terminal marker on the same graph, encoder, and submit. Missing or
+GPU frame samples come from renderer-owned timestamps on the same graph,
+encoder, and submit. Missing or
 cross-identity samples produce `unavailable` or `identity-mismatch`; they cannot
 be promoted to a production-ready result. RhiNull is structural evidence only.
-The producer's two-sentinel occluder calibration is a query-path sanity check,
-not proof of the 16/112 distribution. A group snapshot must visit the
-renderer-derived settle floor before the validator can admit its workload
+The producer's two-sentinel occluder calibration is a GPU HZB sanity check,
+not proof of the 16/112 distribution. A group snapshot must run the
+`SETTLE_SUBMITS` window before the validator can admit its workload
 attribution.
 
 Falsification cases are recorded independently for forced LOD0, all-visible,
-occlusion off/on, page exhaustion, delayed map, and World reorder. Each
+occlusion off/on, GPU occlusion config off/on, and World reorder. Each
 falsification records the one injected intervention and its held facts;
 unavailable timestamp artifacts still carry that protocol so schema validation
-and later recovery remain deterministic. Forced LOD0 and delayed-map use the
-same locked placement/camera fixture, and delayed-map injects a 15 ms
-delay inside the renderer's test-only map boundary; the observed map latency
-must remain at least 10,000 µs.
+and later recovery remain deterministic. Forced LOD0 and GPU occlusion off/on
+use the same locked placement/camera fixture; with `gpuOcclusion: false` the
+treatment must report 128 visible / 0 occluded, and re-enabling it must
+restore 16 / 112.
 
 World reorder remains `unavailable` until the renderer exposes per-world facts
 from the same submit. Aggregate histogram equality and a later single-world

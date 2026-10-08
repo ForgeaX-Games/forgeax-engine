@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -6,7 +6,7 @@ import { build } from 'vite';
 import { expect, it } from 'vitest';
 
 it('bundles the public builtin entry in a default IIFE Worker and executes it', async () => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-builtin-worker-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-builtin-worker-')));
   try {
     const repository = resolve(import.meta.dirname, '../../../../..');
     await mkdir(resolve(root, 'node_modules/@forgeax'), { recursive: true });

@@ -40,12 +40,13 @@ describe('memory two-World convergence', () => {
     const authoritySession = new NetSession({ endpoint: authorityEndpoint, maxRawMessages: 8 });
     const replicaWorld = new World();
     replicaWorld.spawn({ component: LocalOnly, data: { value: 2 } }).unwrap();
-    const replica = createReplicaCoordinator(replicaWorld, replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(replicaWorld, replication);
     const replicaSession = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
     authoritySession.attachAuthority(authority);
     replicaSession.attachReplica(replica, replication.limits);
     authoritySession.receiveEvents();
     replicaSession.receiveEvents();
+    authoritySession.receiveEvents();
 
     expect(authoritySession.publish().ok).toBe(true);
     expect(replicaSession.receiveEvents()).toEqual([]);
@@ -64,12 +65,13 @@ describe('memory two-World convergence', () => {
     const [lateAuthorityEndpoint, lateReplicaEndpoint] = createMemoryEndpointPair();
     const lateAuthoritySession = new NetSession({ endpoint: lateAuthorityEndpoint, maxRawMessages: 8 });
     const lateReplicaWorld = new World();
-    const lateReplica = createReplicaCoordinator(lateReplicaWorld, replication, lateReplicaEndpoint);
+    const lateReplica = createReplicaCoordinator(lateReplicaWorld, replication);
     const lateReplicaSession = new NetSession({ endpoint: lateReplicaEndpoint, maxRawMessages: 8 });
     lateAuthoritySession.attachAuthority(authority);
     lateReplicaSession.attachReplica(lateReplica, replication.limits);
     lateAuthoritySession.receiveEvents();
     lateReplicaSession.receiveEvents();
+    lateAuthoritySession.receiveEvents();
 
     expect(lateAuthoritySession.publish().ok).toBe(true);
     expect(lateReplicaSession.receiveEvents()).toEqual([]);

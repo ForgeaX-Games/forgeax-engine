@@ -53,9 +53,15 @@ it('verifies spatial AA, lifecycle and real RHI Debug replay', {
   const root = 'artifacts/smaa/dawn';
   mkdirSync(root, { recursive: true });
   try {
-    await verifySmaa(renderer, recorder, canvas, (name, bytes) => {
-      writeFileSync(`${root}/${name}`, bytes);
-    });
+    await verifySmaa(
+      renderer,
+      recorder,
+      canvas,
+      (name, bytes) => {
+        writeFileSync(`${root}/${name}`, bytes);
+      },
+      process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 8 : 60,
+    );
   } finally {
     await renderer.dispose();
     target?.destroy();

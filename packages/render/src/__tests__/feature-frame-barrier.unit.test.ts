@@ -105,7 +105,14 @@ describe('Renderer feature frame barrier', () => {
     'submit',
   ] as const)('aborts shared consumption when %s fails', async (failure) => {
     const f = await fixture(failure);
-    expect(submitFrameRecordings([f.view('a'), f.view('b')])).toBe(false);
+    if (failure === 'submit')
+      expect(() => submitFrameRecordings([f.view('a'), f.view('b')])).toThrowError(
+        expect.objectContaining({
+          code: 'frame-submit-rejected',
+          detail: { operation: 'draw', stage: 'submit', accepted: false },
+        }),
+      );
+    else expect(submitFrameRecordings([f.view('a'), f.view('b')])).toBe(false);
     expect(f.events.filter((event) => event === 'extract:2')).toHaveLength(1);
     expect(f.events.filter((event) => event === 'feature-abort')).toHaveLength(1);
     expect(f.events).not.toContain('source-ack');

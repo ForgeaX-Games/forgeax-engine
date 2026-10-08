@@ -12,6 +12,7 @@ import type {
   ToolRuntimeError,
   ToolTerminal,
 } from './types.js';
+import { TOOL_REALMS } from './types.js';
 
 export type ToolApiProviderState = 'pending' | 'active' | 'revoking' | 'revoked' | 'failed';
 
@@ -68,13 +69,7 @@ export interface ToolApiProviderHandle {
   readonly revoke: (reason?: string) => Promise<void>;
 }
 
-export interface ToolApiRunOptions extends Omit<ToolRunOptions, 'owner'> {
-  /** Explicit provider route. Required when multiple sources expose an id. */
-  readonly providerId?: string;
-  readonly sourceId?: string;
-  /** Provider generation observed by the caller. */
-  readonly generation?: number;
-}
+export type ToolApiRunOptions = Omit<ToolRunOptions, 'owner'>;
 
 export interface ToolApi {
   readonly snapshot: () => ToolApiSnapshot;
@@ -151,7 +146,7 @@ function failedRun<TResult>(failure: ToolRuntimeError): ToolRun<TResult> {
 function validateProvider(input: ToolApiProviderInput): void {
   assertName(input.providerId, 'providerId');
   assertName(input.sourceId, 'sourceId');
-  if (!['build', 'host', 'engine', 'frontend'].includes(input.realm))
+  if (!TOOL_REALMS.includes(input.realm))
     throw new TypeError(`unsupported Tool API realm ${String(input.realm)}`);
   if (!Array.isArray(input.tools) || input.tools.length === 0)
     throw new TypeError('Tool API providers must publish at least one contribution');

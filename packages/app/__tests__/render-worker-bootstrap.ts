@@ -22,6 +22,7 @@ const entry: ExecutionBootstrapEntry = (data) => {
         const original = String(url);
         const source = `
           let device;
+          let injectedLoss = false;
           let ready = false;
           const pending = [];
           const requestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
@@ -29,13 +30,25 @@ const entry: ExecutionBootstrapEntry = (data) => {
             const adapter = await requestAdapter(...args);
             if (adapter) {
               const requestDevice = adapter.requestDevice.bind(adapter);
-              adapter.requestDevice = async (...args) => device = await requestDevice(...args);
+              adapter.requestDevice = async (...args) => {
+                device = await requestDevice(...args);
+                const nativeLoss = device.lost;
+                // destroy() is the real GPU loss trigger, but its native reason
+                // denotes intentional teardown. Only this recovery injection
+                // projects it as unexpected loss; normal disposal stays native.
+                Object.defineProperty(device, 'lost', { value: nativeLoss.then(info =>
+                  injectedLoss && info.reason === 'destroyed'
+                    ? { reason: 'unknown', message: 'Render Worker fixture loss: ' + info.message }
+                    : info
+                ) });
+                return device;
+              };
             }
             return adapter;
           };
           addEventListener('message', event => {
             if (!ready) { pending.push(event.data); event.stopImmediatePropagation(); return; }
-            if (event.data === 'lose-device') { event.stopImmediatePropagation(); device.destroy(); }
+            if (event.data === 'lose-device') { event.stopImmediatePropagation(); injectedLoss = true; device.destroy(); }
             if (event.data.kind === 'draw' && event.data.__sentAt !== undefined) {
               postMessage({kind: 'probe-delivery', durationMs: performance.timeOrigin + performance.now() - event.data.__sentAt});
             }

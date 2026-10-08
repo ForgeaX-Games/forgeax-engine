@@ -10,7 +10,7 @@ const appRoot = resolve(here, '..');
 const width = 320;
 const height = 180;
 const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 const gpu = create([]);

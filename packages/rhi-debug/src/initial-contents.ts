@@ -5,6 +5,8 @@ export interface UnseededResource {
   readonly kind: 'buffer' | 'texture';
   readonly format: string | null;
   readonly sampleCount: number;
+  /** Skipped by the capture's seed scope (`CaptureFrameOptions.seed`), not unavailable. */
+  readonly omitted: boolean;
 }
 
 /** Missing bytes are a tape fact, not proof of divergence: a recorded producer
@@ -21,6 +23,7 @@ export function unseededResources(tape: Tape): readonly UnseededResource[] {
         kind: event.kind === 'createBuffer' ? 'buffer' : 'texture',
         format: event.kind === 'createTexture' ? event.desc.format : null,
         sampleCount: event.kind === 'createTexture' ? (event.desc.sampleCount ?? 1) : 1,
+        omitted: resource.seed === 'omitted',
       },
     ];
   });

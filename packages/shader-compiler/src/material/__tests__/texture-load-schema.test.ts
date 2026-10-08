@@ -1,5 +1,10 @@
 import { fileURLToPath } from 'node:url';
-import { derive, type MaterialAsset, standardSurfaceParameters } from '@forgeax/engine-types';
+import {
+  derive,
+  type MaterialAsset,
+  projectMaterialParameterSchema,
+  standardSurfaceParameters,
+} from '@forgeax/engine-types';
 import { expect, it } from 'vitest';
 import { compareMaterialBindings } from '../../compare-param-schema.js';
 import {
@@ -8,11 +13,12 @@ import {
   compileShader,
   cookMaterialAsset,
 } from '../../index.js';
-import { projectStandardParameterSchema } from '../lower-standard-contract.js';
 
-const schema = projectStandardParameterSchema([
-  { name: 'color', type: 'texture', sampleType: 'unfilterable-float' },
-]).unwrap();
+const schema = projectMaterialParameterSchema(
+  [{ name: 'color', type: 'texture', sampleType: 'unfilterable-float' }],
+  '<anonymous>',
+  'cook',
+).unwrap();
 
 it.each([
   'storage-buffer',

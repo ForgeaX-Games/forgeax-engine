@@ -31,6 +31,7 @@ import {
 import { constructRendererHost } from '../construct-renderer';
 import { Materials } from '../materials';
 import { OIT_ACCUMULATE_PASS, OIT_COMPOSITE_PASS } from '../pipeline/standard-transparency';
+import { standardPbrFixtureVariants } from './shader-manifest-fixture';
 
 const STRAIGHT_OVER: GPUBlendState = {
   color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -62,7 +63,10 @@ const MANIFEST = `data:application/json,${encodeURIComponent(
       sourcePath: `${identifier}.wgsl`,
       composedWgsl: wgsl,
       paramSchema: JSON.stringify(schema),
-      variants: [],
+      variants:
+        identifier === 'forgeax::default-standard-pbr'
+          ? standardPbrFixtureVariants(wgsl as string)
+          : [],
     })),
   }),
 )}`;

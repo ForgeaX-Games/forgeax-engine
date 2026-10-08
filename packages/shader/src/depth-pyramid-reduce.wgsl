@@ -3,39 +3,28 @@
 // Depth pyramid reduction consumes the previous r32float mip.  It is deliberately a
 // separate module from the depth seed: WebGPU depth sample types cannot bind
 // an r32float view, while the seed must retain the depth-only binding.
-const DEPTH_PYRAMID_EMPTY_DEPTH : f32 = 3.402823e+38;
+#import forgeax_depth_pyramid::sample::{
+  DEPTH_PYRAMID_EMPTY_DEPTH,
+  depthPyramidDepthOrEmpty,
+  depthPyramidFootprintEnd,
+  depthPyramidFootprintStart,
+}
 
 @group(0) @binding(0) var sourcePyramid : texture_2d<f32>;
 @group(0) @binding(1) var pyramidOutput : texture_storage_2d<r32float, write>;
 
-fn isFinite(value : f32) -> bool {
-  return value == value && abs(value) < 3.402823e+38;
-}
-
-fn normalizeDepthPyramidDepth(value : f32) -> f32 {
-  return select(DEPTH_PYRAMID_EMPTY_DEPTH, value, isFinite(value) && value > 0.0);
-}
-
-// Physical WebGPU mip dimensions are floor-halved. Partition the source by
-// integer normalized boundaries and ceil the end boundary so adjacent
-// footprints overlap at odd boundaries; a 3-wide source reduced to one texel
-// must inspect all three source texels rather than a clamped 2x2 prefix.
 fn reduceDepthPyramidFootprint(
   destinationCoordinate : vec2<u32>,
   sourceSize : vec2<u32>,
   destinationSize : vec2<u32>,
   furthest : bool,
 ) -> f32 {
-  let sourceStart = destinationCoordinate * sourceSize / destinationSize;
-  let sourceEnd = min(
-    ((destinationCoordinate + vec2<u32>(1u)) * sourceSize + destinationSize -
-      vec2<u32>(1u)) / destinationSize,
-    sourceSize,
-  );
+  let sourceStart = depthPyramidFootprintStart(destinationCoordinate, sourceSize, destinationSize);
+  let sourceEnd = depthPyramidFootprintEnd(destinationCoordinate, sourceSize, destinationSize);
   var reduced = select(DEPTH_PYRAMID_EMPTY_DEPTH, 0.0, furthest);
   for (var y = sourceStart.y; y < sourceEnd.y; y += 1u) {
     for (var x = sourceStart.x; x < sourceEnd.x; x += 1u) {
-      let depth = normalizeDepthPyramidDepth(textureLoad(sourcePyramid, vec2<i32>(vec2<u32>(x, y)), 0).r);
+      let depth = depthPyramidDepthOrEmpty(textureLoad(sourcePyramid, vec2<i32>(vec2<u32>(x, y)), 0).r);
       reduced = select(min(reduced, depth), max(reduced, depth), furthest);
     }
   }

@@ -100,7 +100,7 @@ function writeReport(payload) {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   structuredFail(
     'dawn-node-import-failed',

@@ -1,8 +1,11 @@
-import type { ArtifactRef } from '@forgeax/engine-tool-runtime';
 import { evaluateMeshOracle, type MeshOracleInput } from '../evidence/oracle.js';
-import type { PreviewAssetRegistry, PreviewRenderRuntime } from '../host/preview-host.js';
 import { canonicalPresentation, createCanonicalPreviewRecipe } from '../kit/canonical.js';
-import { assetLoadFailure, type ResourcePreviewArgs, subjectFailure } from './subject.js';
+import {
+  loadResourceSubject,
+  type ResourcePreviewArgs,
+  type ResourcePreviewInput,
+  subjectFailure,
+} from './subject.js';
 
 export interface MeshSubjectInspection {
   readonly subjectDigest: string;
@@ -173,42 +176,15 @@ export function inspectMeshSubject(input: {
   };
 }
 
-export async function executeMeshPreview(
-  args: ResourcePreviewArgs,
-  input: {
-    readonly assets?: PreviewAssetRegistry;
-    readonly renderer?: PreviewRenderRuntime;
-    readonly rendererReady: boolean;
-    readonly worldReady: boolean;
-    readonly runId: string;
-    readonly artifacts?: readonly ArtifactRef[];
-  },
-) {
-  if (input.assets === undefined)
-    return subjectFailure(
-      'resource-preview-subject-invalid',
-      'resource preview host to expose the existing AssetRegistry',
-      { phase: 'asset-registry', runId: input.runId },
-    );
-  const loaded = await input.assets.loadByGuid<Record<string, unknown>>(args.guid);
-  if (!loaded.ok)
-    return assetLoadFailure(
-      'AssetRegistry.loadByGuid to resolve the requested mesh',
-      input.runId,
-      loaded.error,
-    );
-  const inspected = inspectMeshSubject({
-    guid: args.guid,
-    asset: loaded.value,
-    ...(loaded.digest === undefined ? {} : { digest: loaded.digest }),
-    ...(loaded.ownerFacts === undefined ? {} : { ownerFacts: loaded.ownerFacts }),
-  });
+export async function executeMeshPreview(args: ResourcePreviewArgs, input: ResourcePreviewInput) {
+  const loaded = await loadResourceSubject(args.guid, input, 'mesh');
+  if (!loaded.ok) return loaded;
+  const inspected = inspectMeshSubject(loaded.value);
   if (!inspected.ok) return inspected;
   const renderer = input.renderer;
   if (
-    !input.rendererReady ||
-    !input.worldReady ||
-    renderer === undefined ||
+    renderer?.rendererReady !== true ||
+    renderer.worldReady !== true ||
     renderer.drawCalls <= 0 ||
     renderer.nonBlackPixels <= 0 ||
     renderer.observation === undefined
@@ -242,7 +218,7 @@ export async function executeMeshPreview(
     aabb,
     submeshCount,
     materialSlotCount,
-    rendererHealthy: input.rendererReady && input.worldReady,
+    rendererHealthy: renderer.rendererReady && renderer.worldReady,
     drawCalls: renderer.drawCalls,
     nonBlackPixels: renderer.nonBlackPixels,
   };

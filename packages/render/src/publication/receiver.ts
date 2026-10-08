@@ -2,9 +2,14 @@ import type { AssetReader } from '@forgeax/engine-assets-runtime';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { type Asset, AssetError, err, type Handle, ok, type Result } from '@forgeax/engine-types';
 import { WORLD_CAPSULE_STRIDE } from '../capsule-shadow/world-capsules';
+import {
+  LIGHTING_CHANNELS_DEFAULT,
+  validateLightingChannels,
+} from '../components/lighting-channels';
 import type { DispatchEntry, ExtractedFrame, RenderableSnapshot } from '../render-system-extract';
 import type { RenderSceneOperation } from '../scene/render-scene-types';
 import { isCanvasTextureSource } from '../textures/canvas-texture';
+import { isExternalTextureSource } from '../textures/external-texture';
 import { CanvasFrameReceiver } from './canvas';
 import {
   type RenderPublication,
@@ -59,7 +64,11 @@ export class RenderPublicationReceiver {
           )
         : ok(value as T);
     };
+    const acceptedRevision = () => this.revision;
     this.resources = {
+      get revision() {
+        return acceptedRevision();
+      },
       identity: `${identity.source}:${identity.epoch}`,
       time: { delta: 0, elapsed: 0, maxDeltaSeconds: 0 },
       transparentSort: { mode: 0, yzAlpha: 1 },
@@ -107,10 +116,33 @@ export class RenderPublicationReceiver {
       packet.metadata === null ||
       typeof packet.metadata !== 'object' ||
       !Array.isArray(packet.metadata.cameras) ||
+      packet.metadata.lights === null ||
+      typeof packet.metadata.lights !== 'object' ||
+      !Array.isArray(packet.metadata.lights.point) ||
+      !Array.isArray(packet.metadata.lights.spot) ||
+      !Array.isArray(packet.metadata.lights.rect) ||
       !Number.isFinite(packet.time?.elapsed) ||
       !Number.isFinite(packet.time?.delta)
     )
       return reject('shape', 'frame metadata');
+    for (const light of [
+      packet.metadata.lights.directional,
+      ...packet.metadata.lights.point,
+      ...packet.metadata.lights.spot,
+      ...packet.metadata.lights.rect,
+    ]) {
+      if (
+        light !== undefined &&
+        (light === null ||
+          typeof light !== 'object' ||
+          validateLightingChannels(
+            light.lightingChannels === undefined
+              ? LIGHTING_CHANNELS_DEFAULT
+              : light.lightingChannels,
+          ) !== null)
+      )
+        return reject('shape', 'light lightingChannels');
+    }
     if (packet.canvasFrames !== undefined && !Array.isArray(packet.canvasFrames))
       return reject('shape', 'canvas frames');
     const canvasIds = new Set<number>();
@@ -223,12 +255,21 @@ export class RenderPublicationReceiver {
         return reject('shape', 'upsert template/transform');
       if (!Array.isArray(template.snapshot?.materials) || !Array.isArray(template.dispatch))
         return reject('shape', 'template');
+      if (
+        validateLightingChannels(
+          template.snapshot.lightingChannels === undefined
+            ? LIGHTING_CHANNELS_DEFAULT
+            : template.snapshot.lightingChannels,
+        ) !== null
+      )
+        return reject('shape', 'receiver lightingChannels');
       for (const material of template.snapshot.materials)
         for (const source of material.textureSources?.values() ?? [])
           if (
-            isCanvasTextureSource(source)
+            isExternalTextureSource(source) ||
+            (isCanvasTextureSource(source)
               ? !canvasIds.has(source.canvasTextureId)
-              : !sourceTokens.has(source)
+              : !sourceTokens.has(source))
           )
             return reject('shape', 'missing material texture source');
       if (template.snapshot.skin !== undefined) return reject('shape', 'source GPU skin receipt');

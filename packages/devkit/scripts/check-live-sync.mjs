@@ -110,10 +110,11 @@ try {
   const released = await command('camera', 'release');
   assert.equal(released.ok, true, JSON.stringify(released));
   assert.equal(released.value.control, 'game');
-  const html = join(root, 'assets', 'guide.ui.html');
-  const original = await readFile(html, 'utf8');
-  await writeFile(`${html}.tmp`, original.replace('3C starter', 'SYNC INITIAL'));
-  await rename(`${html}.tmp`, html);
+  // The guide title is now owned by its authored translation resource.
+  const messages = join(root, 'assets', 'guide.ui.i18n.json');
+  const original = await readFile(messages, 'utf8');
+  await writeFile(`${messages}.tmp`, original.replace('3C starter', 'SYNC INITIAL'));
+  await rename(`${messages}.tmp`, messages);
   const stale = await command('camera', 'get', '--revision', first.revision);
   assert.equal(
     stale.ok,
@@ -126,7 +127,7 @@ try {
   assert.equal((await command('focus', '--ref', ref)).error?.code, 'live-revision-stale');
 
   // Change again while the previous rebuild is in flight; only the final input may be ready.
-  await writeFile(html, original.replace('3C starter', 'SYNC INTERMEDIATE'));
+  await writeFile(messages, original.replace('3C starter', 'SYNC INTERMEDIATE'));
   const backgroundEnd = Date.now() + 20_000;
   let owner;
   do {
@@ -144,7 +145,7 @@ try {
     second.revision,
     'background refresh must work without any CLI request',
   );
-  await writeFile(html, original.replace('3C starter', 'SYNC FINAL'));
+  await writeFile(messages, original.replace('3C starter', 'SYNC FINAL'));
   const third = await ready(second.revision);
   const capture = await command(
     'capture',

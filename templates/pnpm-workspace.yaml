@@ -1,4 +1,5 @@
 allowBuilds:
+  '@forgeax/engine-dawn-node': true
   '@forgeax/engine-codec': true
   '@forgeax/engine-fbx': true
   '@forgeax/engine-wgpu-wasm': true

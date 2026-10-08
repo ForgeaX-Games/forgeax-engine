@@ -5,7 +5,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RUNTIME_PATHS = Object.freeze([
-  'packages/runtime/bench-result.json',
   'report/hello-triangle/fps.json',
   'apps/dual-impl-spike/report/texture-4x4.json',
   'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json',
@@ -67,8 +66,7 @@ function lodDeferredPayload(identity) {
     'forced-lod0',
     'all-visible',
     'occlusion-off-on',
-    'page-exhaustion',
-    'delayed-map',
+    'gpu-occlusion-off',
     'world-reorder',
   ].map((caseName) => ({
     case: caseName,
@@ -82,7 +80,7 @@ function lodDeferredPayload(identity) {
     },
   }));
   return {
-    schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v2',
+    schema: 'forgeax::hello-lod-occlusion::gpu-frame-samples::v3',
     identity: lodIdentity,
     warmupSubmits: 32,
     retainedSamples: 128,
@@ -99,10 +97,9 @@ export function writeSoftwareDeferredMetrics({ root = process.cwd(), headSha, ru
   const outputRoot = resolve(root);
   const identity = deferredIdentity({ headSha, runId, runAttempt });
   const payloads = new Map([
-    [RUNTIME_PATHS[0], { ...identity, metric: 'engine-runtime-bench' }],
-    [RUNTIME_PATHS[1], { ...identity, metric: 'fps' }],
-    [RUNTIME_PATHS[2], { ...identity, metric: 'dual-impl-spike' }],
-    [RUNTIME_PATHS[3], lodDeferredPayload(identity)],
+    [RUNTIME_PATHS[0], { ...identity, metric: 'fps' }],
+    [RUNTIME_PATHS[1], { ...identity, metric: 'dual-impl-spike' }],
+    [RUNTIME_PATHS[2], lodDeferredPayload(identity)],
   ]);
   for (const [relativePath, payload] of payloads) {
     const outputPath = resolve(outputRoot, relativePath);

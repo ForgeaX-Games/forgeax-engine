@@ -1,6 +1,6 @@
 import type { Component, World } from '@forgeax/engine-ecs';
 import { classifyEntityField, remapEntityFieldValue } from '@forgeax/engine-ecs/externalization';
-import { componentSchema } from '@forgeax/engine-ecs/internal';
+import { componentDefinition, componentSchema } from '@forgeax/engine-ecs/internal';
 import type {
   ComponentValuesMap,
   LocalEntityId,
@@ -17,6 +17,7 @@ import {
 } from '@forgeax/engine-types';
 import { migrateLegacySceneComponentFields, normalizeLegacySceneAsset } from './legacy.js';
 import type { MountOverride, SceneInstanceMount } from './runtime-types.js';
+import { isPrimitiveScalarFieldType, primitiveJsType } from './state.js';
 
 /** Numeric representation used only inside the Scene runtime. */
 export interface CompiledSceneEntity {
@@ -54,7 +55,7 @@ export interface KeyedSceneCompileContext {
 function fail(reason: string, detail: Record<string, unknown> = {}): Result<never, unknown> {
   return err({
     code: 'asset-package-invalid',
-    expected: 'a keyed SceneAsset with valid entity and instance addresses',
+    expected: 'a keyed SceneAsset with schema-valid fields and entity/instance addresses',
     hint: 'repair the SceneAsset source and recook the asset',
     detail: { reason, ...detail },
   });
@@ -75,6 +76,19 @@ function addressParts(value: unknown): readonly string[] | undefined {
   return value as readonly string[];
 }
 
+/** Author values must survive storage conversion without coercion or wrap. */
+function validPrimitive(type: string, value: unknown): boolean {
+  if (typeof value !== primitiveJsType(type)) return false;
+  if (typeof value !== 'number') return true;
+  if (!Number.isFinite(value)) return false;
+  if (type === 'f32') return Number.isFinite(Math.fround(value));
+  if (type === 'f64') return true;
+  const signed = type.startsWith('i');
+  const bits = type.startsWith('enum') ? 32 : Number(type.slice(1));
+  const bound = 2 ** (bits - (signed ? 1 : 0));
+  return Number.isInteger(value) && value >= (signed ? -bound : 0) && value < bound;
+}
+
 function fieldRemap(
   world: World,
   componentName: string,
@@ -85,6 +99,7 @@ function fieldRemap(
   const token = world.components.resolve(componentName);
   if (token === undefined) return fail('unknown component', { component: componentName });
   const schema = componentSchema(token) as Record<string, string>;
+  const definition = componentDefinition(token);
   const out: Record<string, unknown> = {};
   for (const [fieldName, value] of Object.entries(
     migrateLegacySceneComponentFields(componentName, fields),
@@ -99,6 +114,32 @@ function fieldRemap(
     }
     const kind = classifyEntityField(token as Component, fieldName);
     if (kind === null) {
+      const array = definition.fields[fieldName]?.arrayMeta;
+      const primitive = array?.elementType === 'bool' ? 'u8' : (array?.elementType ?? fieldType);
+      if (isPrimitiveScalarFieldType(primitive)) {
+        const values = array
+          ? Array.isArray(value)
+            ? value
+            : ArrayBuffer.isView(value) && 'length' in value
+              ? Array.from(value as unknown as ArrayLike<unknown>)
+              : undefined
+          : [value];
+        if (
+          values === undefined ||
+          (array?.length !== undefined && values.length !== array.length) ||
+          values.some((item) => !validPrimitive(primitive, item))
+        )
+          return fail('authored component value violates its declared schema', {
+            component: componentName,
+            field: fieldName,
+            type: fieldType,
+            ...(entityKey === undefined ? {} : { entity: entityKey }),
+          });
+        // Typed author arrays become numeric values before the ECS writer;
+        // copying a differently sized view's raw bytes would reinterpret them.
+        out[fieldName] = array ? values : value;
+        continue;
+      }
       out[fieldName] = value;
       continue;
     }
@@ -187,27 +228,26 @@ export function compileKeyedSceneAsset(
 
   const ownKeys = keys.filter((key) => asset.entities[key]?.instance === undefined);
   const instanceKeys = keys.filter((key) => asset.entities[key]?.instance !== undefined);
-  const ownSlotByKey = new Map<string, number>();
-  const instanceSlotByKey = new Map<string, number>();
+  const slotByKey = new Map<string, number>();
   const keyByLocalId = new Map<number, string>();
-  for (let index = 0; index < ownKeys.length; index += 1) {
-    const key = ownKeys[index] as string;
-    ownSlotByKey.set(key, index);
-    keyByLocalId.set(index, key);
-  }
-  for (let index = 0; index < instanceKeys.length; index += 1) {
-    const key = instanceKeys[index] as string;
-    const slot = ownKeys.length + index;
-    instanceSlotByKey.set(key, slot);
+  for (const [slot, key] of [...ownKeys, ...instanceKeys].entries()) {
+    slotByKey.set(key, slot);
     keyByLocalId.set(slot, key);
   }
 
-  const childCompiled = new Map<
+  const instances = new Map<
     string,
-    { handle: Handle<'SceneAsset', 'shared'>; compiled: CompiledSceneResult }
+    {
+      readonly node: SceneEntity;
+      readonly compiled: CompiledSceneResult;
+      mount: SceneInstanceMount;
+    }
   >();
+  const mountKeyByLocalId = new Map<number, string>();
+  let nextMemberFirst = ownKeys.length + instanceKeys.length;
   for (const key of instanceKeys) {
-    const declaration = asset.entities[key]?.instance;
+    const node = asset.entities[key] as SceneEntity;
+    const declaration = node.instance;
     if (
       declaration === undefined ||
       typeof declaration.source !== 'string' ||
@@ -243,121 +283,81 @@ export function compileKeyedSceneAsset(
       childContext,
     );
     if (!compiled.ok) return compiled;
-    childCompiled.set(key, { handle: childHandle.value, compiled: compiled.value });
-  }
-
-  const mountKeyByLocalId = new Map<number, string>();
-  const mounts: SceneInstanceMount[] = [];
-  let nextMemberFirst = ownKeys.length + instanceKeys.length;
-  for (let index = 0; index < instanceKeys.length; index += 1) {
-    const key = instanceKeys[index] as string;
-    const slot = instanceSlotByKey.get(key) as number;
-    const child = childCompiled.get(key) as {
-      handle: Handle<'SceneAsset', 'shared'>;
-      compiled: CompiledSceneResult;
-    };
-    const node = asset.entities[key] as SceneEntity;
-    mountKeyByLocalId.set(slot, key);
-    mounts.push({
-      localId: slot as LocalEntityId,
-      source: Number(child.handle),
-      memberFirst: nextMemberFirst as LocalEntityId,
-      memberCount:
-        child.compiled.asset.entities.length +
-        (child.compiled.asset.mounts?.length ?? 0) +
-        (child.compiled.asset.mounts ?? []).reduce((sum, mount) => sum + mount.memberCount, 0),
-      ...(Object.keys(node.components).length > 0 ? { components: node.components } : {}),
+    const slot = ownKeys.length + instances.size;
+    const memberCount =
+      compiled.value.asset.entities.length +
+      (compiled.value.asset.mounts?.length ?? 0) +
+      (compiled.value.asset.mounts ?? []).reduce((sum, mount) => sum + mount.memberCount, 0);
+    instances.set(key, {
+      node,
+      compiled: compiled.value,
+      mount: {
+        localId: slot as LocalEntityId,
+        source: Number(childHandle.value),
+        memberFirst: nextMemberFirst as LocalEntityId,
+        memberCount,
+      },
     });
-    nextMemberFirst += mounts[index]?.memberCount ?? 0;
+    mountKeyByLocalId.set(slot, key);
+    nextMemberFirst += memberCount;
   }
 
-  const mountByKey = new Map<string, SceneInstanceMount>();
-  for (const mount of mounts)
-    mountByKey.set(mountKeyByLocalId.get(Number(mount.localId)) as string, mount);
-
-  const resolveInChild = (
-    childResult: CompiledSceneResult,
-    value: unknown,
-    _field?: string,
-  ): number | undefined => {
-    const parts = addressParts(value);
-    if (parts === undefined) return undefined;
-    return childResult.resolveAddress(parts);
-  };
-
-  const resolveAddress = (value: unknown, field?: string): number | undefined => {
+  const resolveAddress = (value: unknown): number | undefined => {
     const parts = addressParts(value);
     if (parts === undefined) return undefined;
     const first = parts[0];
     if (first === undefined) return undefined;
-    const own = ownSlotByKey.get(first) ?? instanceSlotByKey.get(first);
+    const own = slotByKey.get(first);
     if (own !== undefined && parts.length === 1) return own;
-    const mount = mountByKey.get(first);
-    if (mount === undefined) return undefined;
-    const child = childCompiled.get(first);
-    if (child === undefined) return undefined;
-    const childSlot = resolveInChild(child.compiled, parts.slice(1), field);
-    return childSlot === undefined ? undefined : (mount.memberFirst as number) + childSlot;
+    const instance = instances.get(first);
+    if (instance === undefined) return undefined;
+    const childSlot = instance.compiled.resolveAddress(parts.slice(1));
+    return childSlot === undefined ? undefined : Number(instance.mount.memberFirst) + childSlot;
   };
 
-  // Instance entities carry their own authored components. They occupy the
-  // mount slot in the private representation, so run the same schema driven
-  // conversion as ordinary entities before any spawn occurs.
-  for (const key of instanceKeys) {
-    const node = asset.entities[key] as SceneEntity;
-    const mount = mountByKey.get(key) as SceneInstanceMount;
-    const convertedFields = Object.fromEntries(
-      Object.entries(node.components).map(([componentName, raw]) => [
-        componentName,
-        fieldRemap(
-          world,
-          componentName,
-          { ...(raw as Record<string, unknown>) },
-          resolveAddress,
-          key,
-        ),
-      ]),
-    ) as Record<string, Result<Record<string, unknown>, unknown>>;
-    const bad = Object.values(convertedFields).find((result) => !result.ok);
-    if (bad !== undefined && !bad.ok) return bad;
-    const components: Record<string, Record<string, unknown>> = {};
-    for (const [componentName, result] of Object.entries(convertedFields)) {
-      if (!result.ok) return result;
-      components[componentName] = result.value;
-    }
-    const index = mounts.findIndex((item) => item.localId === mount.localId);
-    if (index >= 0) {
-      const childOf = components.ChildOf?.parent;
-      // An instance declaration's ChildOf belongs to the private mount slot,
-      // whose deferred parent wiring runs after own entities exist. Keeping it
-      // inside mount.components would remap the parent before that slot is
-      // live and silently lose the authored hierarchy edge.
-      if (typeof childOf === 'number') {
-        const { ChildOf: _ignored, ...mountComponents } = components;
-        void _ignored;
-        mounts[index] = { ...mount, components: mountComponents, parent: childOf as LocalEntityId };
-      } else {
-        mounts[index] = { ...mount, components };
-      }
-    }
-  }
-
-  const converted: CompiledSceneEntity[] = [];
-  for (const key of ownKeys) {
+  const convertComponents = (
+    key: string,
+  ): Result<Record<string, Record<string, unknown>>, unknown> => {
     const node = asset.entities[key] as SceneEntity;
     const components: Record<string, Record<string, unknown>> = {};
     for (const [componentName, raw] of Object.entries(node.components)) {
-      const convertedFields = fieldRemap(
+      const fields = fieldRemap(
         world,
         componentName,
         { ...(raw as Record<string, unknown>) },
         resolveAddress,
         key,
       );
-      if (!convertedFields.ok) return convertedFields;
-      components[componentName] = convertedFields.value;
+      if (!fields.ok) return fields;
+      components[componentName] = fields.value;
     }
-    converted.push({ localId: ownSlotByKey.get(key) as LocalEntityId, components });
+    return ok(components);
+  };
+
+  // Schema conversion completes before spawn; instance ChildOf is deferred until
+  // its mount slot is live, while other components stay on that mount.
+  for (const [key, instance] of instances) {
+    const converted = convertComponents(key);
+    if (!converted.ok) return converted;
+    const components = converted.value;
+    const childOf = components.ChildOf?.parent;
+    if (typeof childOf === 'number') {
+      const { ChildOf: _ignored, ...mountComponents } = components;
+      instance.mount = {
+        ...instance.mount,
+        components: mountComponents,
+        parent: childOf as LocalEntityId,
+      };
+    } else {
+      instance.mount = { ...instance.mount, components };
+    }
+  }
+
+  const converted: CompiledSceneEntity[] = [];
+  for (const key of ownKeys) {
+    const components = convertComponents(key);
+    if (!components.ok) return components;
+    converted.push({ localId: slotByKey.get(key) as LocalEntityId, components: components.value });
   }
 
   // Convert ordered child-relative overrides into the private field patch
@@ -375,13 +375,11 @@ export function compileKeyedSceneAsset(
     const mount = result.asset.mounts?.find((entry) => Number(entry.localId) === target);
     return mount?.components?.[componentName] !== undefined;
   };
-  for (const key of instanceKeys) {
-    const node = asset.entities[key] as SceneEntity;
-    const declaration = node.instance as NonNullable<SceneEntity['instance']>;
-    const mount = mountByKey.get(key) as SceneInstanceMount;
-    const child = childCompiled.get(key) as { compiled: CompiledSceneResult };
+  for (const [key, instance] of instances) {
+    const declaration = instance.node.instance as NonNullable<SceneEntity['instance']>;
+    const { mount, compiled } = instance;
     const childSlot = (target: SceneEntityAddress): number | undefined =>
-      resolveInChild(child.compiled, target, `${key}.instance`);
+      compiled.resolveAddress(target);
     const overrides: MountOverride[] = [];
     for (const override of declaration.overrides ?? []) {
       const target = childSlot(override.target);
@@ -399,7 +397,7 @@ export function compileKeyedSceneAsset(
           `${key}.instance.${override.target.join('.')}`,
         );
         if (!convertedFields.ok) return convertedFields;
-        if (!childHasComponent(child.compiled, target, componentName)) {
+        if (!childHasComponent(compiled, target, componentName)) {
           overrides.push({
             localId: ((mount.memberFirst as number) + target) as LocalEntityId,
             comp: componentName,
@@ -417,12 +415,10 @@ export function compileKeyedSceneAsset(
         }
       }
     }
-    if (overrides.length > 0) {
-      const index = mounts.findIndex((item) => item.localId === mount.localId);
-      const existing = mounts[index];
-      if (index >= 0 && existing !== undefined) mounts[index] = { ...existing, overrides };
-    }
+    if (overrides.length > 0) instance.mount = { ...mount, overrides };
   }
+
+  const mounts = [...instances.values()].map((instance) => instance.mount);
 
   const rootLocalIds: number[] = [
     ...convertedRootLocalIds(converted),
@@ -439,22 +435,18 @@ export function compileKeyedSceneAsset(
       hierarchyParentByLocalId.set(Number(node.localId), parent);
     }
   }
-  for (const mount of mounts) {
+  for (const { mount, compiled } of instances.values()) {
     if (mount.parent !== undefined) {
       hierarchyParentByLocalId.set(Number(mount.localId), mount.parent);
     }
-    const key = mountKeyByLocalId.get(Number(mount.localId));
-    const child = key === undefined ? undefined : childCompiled.get(key);
-    if (child !== undefined) {
-      for (const [childLocalId, childParent] of child.compiled.hierarchyParentByLocalId) {
-        hierarchyParentByLocalId.set(
-          Number(mount.memberFirst) + childLocalId,
-          Number(mount.memberFirst) + childParent,
-        );
-      }
-      for (const childRoot of child.compiled.rootLocalIds) {
-        hierarchyParentByLocalId.set(Number(mount.memberFirst) + childRoot, Number(mount.localId));
-      }
+    for (const [childLocalId, childParent] of compiled.hierarchyParentByLocalId) {
+      hierarchyParentByLocalId.set(
+        Number(mount.memberFirst) + childLocalId,
+        Number(mount.memberFirst) + childParent,
+      );
+    }
+    for (const childRoot of compiled.rootLocalIds) {
+      hierarchyParentByLocalId.set(Number(mount.memberFirst) + childRoot, Number(mount.localId));
     }
     for (const override of mount.overrides ?? []) {
       if (override.comp !== 'ChildOf') continue;

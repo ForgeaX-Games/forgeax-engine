@@ -49,6 +49,10 @@ export function snapshotEngineWorkspace(runtime: EngineWorkspaceRuntime, catalog
     catalogEpoch,
     project: opened ? structuredClone(opened.project) : null,
     projectTarget: target(opened?.target),
+    ...(opened?.phase === undefined ? {} : { projectPhase: opened.phase }),
+    ...(opened?.browserGeneration === undefined
+      ? {}
+      : { browserGeneration: opened.browserGeneration }),
     play: runtime.play
       ? {
           target: target(runtime.play.target),

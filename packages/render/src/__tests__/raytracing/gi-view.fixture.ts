@@ -21,7 +21,7 @@ export async function verifyGiPerspective(fixture: DiffuseGiFixture) {
     {
       kind: 'point' as const,
       position: vec3.create(3, 4, 5),
-      color: vec3.create(1, 1, 1),
+      color: vec3.create(35, 35, 35),
       intensity: 35,
       invRangeSquared: 0,
     },

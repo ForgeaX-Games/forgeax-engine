@@ -43,4 +43,42 @@ describe('material generation cache', () => {
     expect(second).toMatchObject({ ok: true, value: 2 });
     expect(calls).toBe(2);
   });
+  it('keeps a replacement promise when an evicted request fails late', async () => {
+    const cache = new MaterialGenerationCache();
+    await cache.loadWithGeneration('mat-a', ['shader/a'], async (generation) => ({
+      generation,
+      value: 0,
+    }));
+    let rejectOld!: (reason: Error) => void;
+    const first = cache.resolve(
+      'mat-a',
+      'key-a',
+      () =>
+        new Promise((_, reject) => {
+          rejectOld = reject;
+        }),
+    );
+    cache.linkResolved('mat-a', 'key-a');
+    cache.bump('shader/a');
+    const replacement = cache.resolve('mat-a', 'key-a', async () => 2);
+    rejectOld(new Error('late failure'));
+    await expect(first).rejects.toThrow('late failure');
+    expect(cache.resolve('mat-a', 'key-a', async () => 3)).toBe(replacement);
+    expect(cache.getResolvedKey('mat-a')).toBe('key-a');
+  });
+
+  it('replaces dependency membership without evicting on the old dependency', async () => {
+    const cache = new MaterialGenerationCache();
+    for (const dependency of ['shader/old', 'shader/new']) {
+      await cache.loadWithGeneration('mat-a', [dependency], async (generation) => ({
+        generation,
+        value: 0,
+      }));
+    }
+    const first = cache.resolve('mat-a', 'key-a', async () => 1);
+    cache.bump('shader/old');
+    expect(cache.resolve('mat-a', 'key-a', async () => 2)).toBe(first);
+    cache.bump('shader/new');
+    expect(cache.resolve('mat-a', 'key-a', async () => 3)).not.toBe(first);
+  });
 });

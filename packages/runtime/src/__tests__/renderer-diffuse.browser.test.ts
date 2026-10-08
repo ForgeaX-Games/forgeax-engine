@@ -8,7 +8,7 @@ for (const reconstruction of [undefined, 'combined'] as const) {
     expect(adapter).not.toBeNull();
     if (!adapter?.features.has('primitive-index')) ctx.skip('primitive-index unavailable');
     await verifyRendererDiffuse(
-      await commands.prepareRayPathFixture(),
+      await commands.prepareRayPublicationSet(['matte', 'emission']),
       async (name, bytes) => {
         let binary = '';
         for (let offset = 0; offset < bytes.length; offset += 8192)

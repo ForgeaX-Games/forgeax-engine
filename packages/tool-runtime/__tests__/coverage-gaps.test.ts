@@ -32,7 +32,6 @@ import {
 } from '../src/index.js';
 import {
   artifactManifestError as directArtifactManifestError,
-  timingError,
 } from '../src/errors.js';
 import type { ToolContribution, ToolSchema } from '../src/types.js';
 
@@ -200,7 +199,6 @@ describe('tool-runtime uncovered contracts', () => {
     expect(terminalError('run', 'succeeded').code).toBe('tool-run-terminal');
     expect(cleanupError('run', 'failed').code).toBe('tool-cleanup-failed');
     expect(directArtifactManifestError('expected', 'hint', { reason: 'bad' }).code).toBe('tool-artifact-manifest-invalid');
-    expect(timingError('overlap').code).toBe('tool-timing-invalid');
     expect(() => createSnapshotRef({ revision: Number.NaN, digest: 'x' })).toThrow();
   });
 

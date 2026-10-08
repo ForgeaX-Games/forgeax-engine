@@ -685,3 +685,43 @@ it('captures one plugin execution projection for an entire dependency batch', as
     assembly.dispose();
   }
 });
+
+it('joins the pending delivered baseline when the runtime Pack overlay replaces its replica', async () => {
+  const context = await createWorldContext(new World(), []);
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let bodyReads = 0;
+  class CatalogResponse extends Response {
+    override async json() {
+      bodyReads++;
+      return super.json();
+    }
+  }
+  const fetcher = vi.fn(async () => {
+    await held;
+    return new CatalogResponse('[]');
+  });
+  const assets = new AssetRegistry({} as never);
+  const assembly = createAssetRuntimeAssembly(assets, {
+    catalogSource: createCatalogSource({
+      url: 'https://delivered.invalid/pack-index.json',
+      fetch: fetcher,
+    }),
+    fetcher,
+  }).unwrap();
+  const runtime = assembleRuntimePacks(context, assembly, { scopeId: 'test' });
+  try {
+    const enumerated = runtime.catalog.enumerate();
+    release();
+    expect((await enumerated).ok).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(bodyReads).toBe(1);
+    expect(assembly.registry).toBe(assets);
+  } finally {
+    release();
+    await context.fiber.dispose();
+    assembly.dispose();
+  }
+});

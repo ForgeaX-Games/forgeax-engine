@@ -21,7 +21,7 @@ describe('canonical render schema owners', () => {
     expect(Camera.fields.antialias.default).toBe(0);
     expect(Camera.fields.historyVersion.default).toBe(0);
     expect(ANTIALIAS_TAA).toBe(3);
-    expect(Atmosphere.fields.turbidity.type).toBe('f32');
+    expect(Atmosphere.fields.planetRadius.type).toBe('f32');
     expect(Fog.fields.density.type).toBe('f32');
   });
 });

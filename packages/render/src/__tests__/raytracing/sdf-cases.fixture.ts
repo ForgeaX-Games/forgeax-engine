@@ -22,7 +22,11 @@ export async function verifySdfCases(fixture: SdfCardsFixture) {
   const raw = webgpu._internal_getRawDevice(device),
     errors: string[] = [];
   raw?.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
-  const field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
+  const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  };
   const source: SurfaceCardSource = {
     instance: sdfCubeInstance,
     layout: fixture.layout,
@@ -75,7 +79,11 @@ export async function verifySdfCases(fixture: SdfCardsFixture) {
             ...current.instance,
             field:
               current.layout.meshDigest === fixture.hollowLayout.meshDigest
-                ? { ...fixture.hollow, values: Float32Array.from(fixture.hollow.values) }
+                ? {
+                    ...fixture.hollow,
+                    bricks: Uint32Array.from(fixture.hollow.bricks),
+                    values: Float32Array.from(fixture.hollow.values),
+                  }
                 : field,
           },
         ],
@@ -187,7 +195,11 @@ export async function verifySdfCases(fixture: SdfCardsFixture) {
       }),
     ).toBe(CardLookupStatus.stale);
     // Multi-depth cards represent the closed shell cavity, independently of its SDF.
-    const hollow = { ...fixture.hollow, values: Float32Array.from(fixture.hollow.values) };
+    const hollow = {
+      ...fixture.hollow,
+      bricks: Uint32Array.from(fixture.hollow.bricks),
+      values: Float32Array.from(fixture.hollow.values),
+    };
     const hollowInstance = {
       ...sdfCubeInstance,
       uvSets: [],

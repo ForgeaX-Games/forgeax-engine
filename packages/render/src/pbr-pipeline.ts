@@ -1,10 +1,11 @@
+import { atmosphereViewLayoutEntries } from './environment/bindings';
 // pbr-pipeline.ts -- PBR / unlit pipeline-layout factories (M4 round-4 D-5).
 //
 // Anchors:
 //   - plan-strategy D-5 (round-4 REVISED): the PBR pipeline keeps a 4-slot
 //     pipeline layout `[view, material, mesh-array, instances]`. The
 //     material BGL grows from the derived user region by appending the 7
-//     Skylight resources via `mergeSkylightIntoMaterialBgl`. The
+//     Skylight resources via `appendInjection(..., 'ibl')`. The
 //     unlit pipeline keeps its 7-entry material BGL (no Skylight binding
 //     7..12 contamination) so unlit demos don't carry IBL state.
 //   - charter P4: same pipeline layout shape drives Skylight present +
@@ -29,7 +30,6 @@ import type {
   PipelineLayout,
   RhiDevice,
   Sampler,
-  TextureFormat,
   TextureView,
 } from '@forgeax/engine-rhi';
 import {
@@ -88,14 +88,6 @@ export interface PbrPipelineLayoutBundle {
     BindGroupLayout,
     BindGroupLayout,
   ];
-}
-
-/** Derives the Standard PBR attachment list without allocating a closed path. */
-export function standardPbrColorFormats(
-  baseFormat: TextureFormat,
-  fallbackDemand: boolean,
-): readonly TextureFormat[] {
-  return fallbackDemand ? [baseFormat, 'rgba16float'] : [baseFormat];
 }
 
 // ─── Base entries (round-4 SSOT) ────────────────────────────────────────────
@@ -166,13 +158,16 @@ export function buildPbrMaterialUserRegionEntries(
       binding: entry.binding,
       visibility: vertexOnlyBindings.has(entry.binding)
         ? GPU_SHADER_STAGE_VERTEX
-        : entry.texture !== undefined || entry.sampler !== undefined
+        : entry.texture !== undefined ||
+            entry.sampler !== undefined ||
+            entry.externalTexture !== undefined
           ? GPU_SHADER_STAGE_VERTEX | GPU_SHADER_STAGE_FRAGMENT
           : entry.visibility,
       ...(entry.buffer === undefined ? {} : { buffer: entry.buffer }),
       ...(entry.sampler === undefined ? {} : { sampler: entry.sampler }),
       ...(entry.texture === undefined ? {} : { texture: entry.texture }),
       ...(entry.storageTexture === undefined ? {} : { storageTexture: entry.storageTexture }),
+      ...(entry.externalTexture === undefined ? {} : { externalTexture: entry.externalTexture }),
     }),
   );
   // The record path always owns one dynamic material-UBO slot, even when an
@@ -495,6 +490,7 @@ export function materialBindGroupLayoutIdentity(
  * `RhiCaps` (plan D-4 + D-5).
  */
 export interface PbrCaps {
+  readonly atmosphere?: boolean;
   readonly storageBuffer: boolean;
   /**
    * Whether the selected material variant declares the optional extended
@@ -641,6 +637,7 @@ export function buildPbrViewBglEntries(caps: PbrCaps): GPUBindGroupLayoutEntry[]
       texture: { sampleType: 'depth', viewDimension: '2d-array' },
     },
   ];
+  if (caps.atmosphere === true) entries.push(...atmosphereViewLayoutEntries());
   const extendedLighting = caps.extendedLighting ?? true;
   const lowLimitCloudBindings = extendedLighting === false && caps.projectorAvailable === false;
   if (extendedLighting) {
@@ -831,6 +828,8 @@ export function buildPbrPipelineLayouts(
  * `LayoutKind = 'pbr-skin'` upstream.
  */
 export const SKIN_MATERIAL_SHADER_ID = 'forgeax::pbr-skin' as const;
+/** Skinned G-buffer entry for visible-surface passes: writes the uncovered row 0. */
+export const SKIN_UNCOVERED_GBUFFER_ENTRY = 'fs_gbuffer_uncovered' as const;
 export const SHADOW_CASTER_SHADER_ID = 'forgeax::default-shadow-caster' as const;
 
 // Authored Standard templates are published under a unique module id for each
@@ -868,16 +867,6 @@ export function shadowCasterVariantSet(
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([name, value]) => `${name}=${String(value)}`)
     .join('+');
-}
-
-export function isSkinnedShadowCasterVariant(
-  materialShaderId: string | undefined,
-  variantSet: string | undefined,
-): boolean {
-  return (
-    materialShaderId === SHADOW_CASTER_SHADER_ID &&
-    variantSet?.includes('SKINNING_DISABLED=false') === true
-  );
 }
 
 /** Returns true for the engine-shipped standard-PBR material shader family. */

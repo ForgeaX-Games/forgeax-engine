@@ -30,6 +30,7 @@ import type { SkinError } from '@forgeax/engine-skinning';
 import type { ImageError } from '@forgeax/engine-types';
 import type { RhiBackendInstrumentation } from './assembly/backend-contract.js';
 import type { CloudLayerInspection } from './cloud/inspection.js';
+import type { AmbientOcclusionData } from './components/ambient-occlusion.js';
 import type { BarrelDistortionData } from './components/barrel-distortion.js';
 import type {
   Antialias,
@@ -40,6 +41,7 @@ import type {
 } from './components/camera.js';
 import type { DynamicResolutionData } from './components/dynamic-resolution.js';
 import type { LensEffectsSnapshot } from './components/lens-effects.js';
+import type { LensFlareSnapshot } from './components/lens-flare.js';
 import type { ScreenSpaceReflectionData } from './components/screen-space-reflection.js';
 import type { EnvironmentInspection } from './environment/inspection.js';
 import type { GpuDrivenPreparationError } from './errors/gpu-driven.js';
@@ -69,11 +71,15 @@ import type {
   TransmissionInspection,
 } from './inspection-types.js';
 import type { InstanceCollectionInspection } from './instances.js';
+import type { OutputColorSpace, OutputColorSpaceReport } from './output-color-space.js';
 import type { RenderExtent } from './pipeline/render-extent.js';
 import type { PublishedRenderFrameInput, RenderPublicationIdentity } from './publication/contract';
 import type { RenderSceneBounds } from './scene/render-scene-types.js';
 import type { SsrAdmissionIdentity } from './ssr/identity.js';
 import type {
+  FramebufferSnapshotData,
+  FramebufferSnapshotRequest,
+  FramebufferSnapshotTicket,
   RenderTarget,
   RenderTargetDescriptor,
   RenderTargetReadbackData,
@@ -101,7 +107,7 @@ import type {
 } from './mesh-material-bindings.js';
 import type { StandardLightingInspection } from './pipeline/standard-lighting/inspection.js';
 import type { AutoExposureInspection } from './pipeline/standard-output/auto-exposure/inspection.js';
-import type { StandardLutInspection } from './pipeline/standard-output/lut-state.js';
+import type { StandardLutState } from './pipeline/standard-output/lut-state.js';
 import type { StandardProfile } from './pipeline/standard-profile.js';
 import type { PointShadowInspection } from './point-shadow-inspection.js';
 import type { PostProcessError } from './post-process-errors.js';
@@ -153,6 +159,13 @@ export interface CameraOutputSnapshot {
  * POD contract. Keeping it beside the render lifecycle contracts prevents
  * extract from depending on the record implementation owner.
  */
+/** One physical view's extent and, for a StereoCamera eye, which eye it renders. */
+export interface PhysicalViewExtent {
+  readonly width: number;
+  readonly height: number;
+  readonly eye?: import('./components/stereo-camera').StereoEye;
+}
+
 export interface CameraSnapshot {
   readonly projectedDecals?: readonly import('./decals/extract').ProjectedDecalSnapshot[];
   /** Public world-space per-view clipping; captures carry their own detached value. */
@@ -162,6 +175,8 @@ export interface CameraSnapshot {
   readonly entityKey?: number;
   /** Auxiliary logical target; physical views remain renderer-owned. */
   readonly target?: RenderTarget;
+  /** Nonzero `Camera.targetLayer`: the cube face, array layer, or 3D slice written. */
+  readonly targetLayer?: number;
   /** World index supplied by the multi-world extract merge. */
   readonly worldId?: number;
   /** Camera-owned history generation forwarded into the frame plan. */
@@ -179,6 +194,10 @@ export interface CameraSnapshot {
   readonly aspect: number;
   readonly autoAspect?: boolean;
   readonly view?: import('./components/camera-view').CameraViewData;
+  /** Validated StereoCamera facts on the source camera; expanded into two eye views. */
+  readonly stereo?: import('./components/stereo-camera').StereoCameraSnapshot;
+  /** Present only on a derived eye view: its side and off-axis projection term. */
+  readonly eye?: import('./components/stereo-camera').StereoEyeSnapshot;
   readonly near: number;
   readonly far: number;
   /** Camera projection variant used by view and shadow matrix builders. */
@@ -204,6 +223,7 @@ export interface CameraSnapshot {
   readonly bloomScatter: number;
   readonly clearColor: readonly [number, number, number, number];
   /** Optional active-camera SSR authoring fact, copied from the ECS schema. */
+  readonly ambientOcclusion?: AmbientOcclusionData;
   readonly screenSpaceReflection?: ScreenSpaceReflectionData;
   /** Renderer-owned temporal projection used by Standard's TAA producer. */
   readonly temporal?: TemporalView;
@@ -222,6 +242,7 @@ export interface CameraSnapshot {
   /** Optional active-camera barrel projection, copied from the ECS schema. */
   readonly barrelDistortion?: BarrelDistortionData;
   readonly lensEffects?: LensEffectsSnapshot;
+  readonly lensFlare?: LensFlareSnapshot;
 }
 
 /** Stable identity owned by the Standard feature host for output transform. */
@@ -262,6 +283,8 @@ export interface RenderPipelineObservationCapture {
   readonly domain: FrameObservationDomain;
   /** The exact per-frame row projection used by the raster producer. */
   readonly surfaceRecords?: Uint32Array;
+  /** Display encoding captured with a `final-display` copy. */
+  readonly colorSpace?: OutputColorSpace;
   readonly format: TextureFormat;
   readonly device: RhiDevice;
   readonly texture: Texture;
@@ -275,7 +298,7 @@ export interface RenderPipelineObservationCapture {
   readonly bytesPerRow: number;
 }
 
-interface RenderPipelineObservationCaptureOwner {
+export interface RenderPipelineObservationCaptureOwner {
   readonly register: (capture: RenderPipelineObservationCapture) => void;
   readonly consume: (frameNumber: number) => readonly RenderPipelineObservationCapture[];
   readonly drain: () => readonly RenderPipelineObservationCapture[];
@@ -297,6 +320,13 @@ interface RenderPipelineRuntime {
    * declared for topology inspection but do not allocate or copy anything.
    */
   readonly observationCaptureDomains?: readonly FrameObservationDomain[] | undefined;
+  /** Renderer-owned snapshot queue fed by the resolved linear-HDR scene color. */
+  readonly encodeFramebufferSnapshots?:
+    | ((
+        encoder: import('@forgeax/engine-rhi').RhiCommandEncoder,
+        source: import('./targets/framebuffer-snapshot.js').FramebufferSnapshotSource,
+      ) => void)
+    | undefined;
   /** Runtime-owned shader module factory used by built-in graph producers. */
   readonly shaderModuleFactory?: {
     createShaderModule(input: {
@@ -402,6 +432,8 @@ export interface SsrShaderSources {
 
 /** Stable analytic-atmosphere entry-point sources emitted by the shader manifest. */
 export interface AtmosphereShaderSources {
+  readonly luts: string;
+  readonly compose: string;
   readonly ibl: string;
   readonly cube: string;
   readonly background: string;
@@ -507,8 +539,35 @@ export interface Renderer {
     target: RenderTarget,
     request: RenderTargetReadbackRequest,
   ): RenderResult<RenderTargetReadbackTicket, RenderError>;
+  /**
+   * Arm a one-shot copy of a linear-HDR scene-color region into a 2D
+   * `rgba16float` target during the next submitted frame; observe the ticket
+   * on that frame's receipt before sampling the retained target.
+   */
+  requestFramebufferSnapshot(
+    target: RenderTarget,
+    request: FramebufferSnapshotRequest,
+  ): RenderResult<FramebufferSnapshotTicket, RenderError>;
   destroyRenderTarget(target: RenderTarget): RenderResult<void, RenderError>;
+  /**
+   * Wrap a caller-owned external source as a renderer-local material texture.
+   * `gpu-texture` must be created on `nativeDevice()`; `video` is re-imported
+   * every frame (zero-copy into `texture_external` slots when
+   * `caps.externalTexture`, copied otherwise). Bind `handle.source` through a
+   * World shared ref exactly like a CanvasTexture source.
+   */
+  importTexture(
+    input: import('./textures/external-texture').ExternalTextureInput,
+  ): Promise<RenderResult<import('./textures/external-texture').ExternalTexture, RenderError>>;
+  /** The active generation's GPUDevice; absent (structured error) on non-WebGPU backends. */
+  nativeDevice(): RenderResult<GPUDevice, RenderError>;
   setProfile(profile: RenderProfile): RenderResult<void, RenderError>;
+  /**
+   * Request a new display output color space. The surface is reconfigured before the next
+   * draw; `inspect().output.colorSpace` reports the applied space or the structured sRGB
+   * fallback after that draw.
+   */
+  setOutputColorSpace(colorSpace: OutputColorSpace): RenderResult<void, RenderError>;
   state(): RendererState;
   /** Detached bounds from an extracted World or the bound publication source; undefined if unavailable. */
   bounds(world: World | RenderPublicationIdentity, entity: number): RenderSceneBounds | undefined;
@@ -582,13 +641,17 @@ export interface FrameEnvironment {
  * only with the matching FrameReceipt after `receipt.completed` and returns a
  * structured Result error when the generation or frame identity is stale.
  */
-export type FrameObservationDomain = 'linear-hdr' | 'linear-ldr' | 'final-srgb' | 'visible-surface';
+export type FrameObservationDomain =
+  | 'linear-hdr'
+  | 'linear-ldr'
+  | 'final-display'
+  | 'visible-surface';
 
 export function isFrameObservationDomain(value: string): value is FrameObservationDomain {
   return (
     value === 'linear-hdr' ||
     value === 'linear-ldr' ||
-    value === 'final-srgb' ||
+    value === 'final-display' ||
     value === 'visible-surface'
   );
 }
@@ -603,6 +666,7 @@ export type FrameObservationInclude =
 export interface FrameObservationRequest {
   readonly include: readonly FrameObservationInclude[];
   readonly targetReadbacks?: readonly RenderTargetReadbackTicket[];
+  readonly framebufferSnapshots?: readonly FramebufferSnapshotTicket[];
 }
 
 /**
@@ -677,13 +741,19 @@ export interface FrameReceiptObservation {
   /** Receipt-bound volume GPU timing facts; absent when not requested. */
   readonly volumeTimings?: VolumeTimingObservation | undefined;
   readonly targetReadbacks?: readonly RenderTargetReadbackData[];
+  readonly framebufferSnapshots?: readonly FramebufferSnapshotData[];
   /** Independent raw bytes captured from the requested linear/display domains. */
   readonly observations?: readonly FrameDomainObservation[] | undefined;
 }
 
 export type FrameDomainObservation = FrameAttachmentObservation &
   (
-    | { readonly domain: Exclude<FrameObservationDomain, 'visible-surface'> }
+    | { readonly domain: 'linear-hdr' | 'linear-ldr' }
+    | {
+        readonly domain: 'final-display';
+        /** Encoding of the display bytes: the surface color space effective for that frame. */
+        readonly colorSpace: OutputColorSpace;
+      }
     | { readonly domain: 'visible-surface'; readonly records: Uint32Array }
   );
 
@@ -713,12 +783,14 @@ export interface RenderOutputInspection {
   /** Camera-owned auto-exposure facts, detached from GPU state when available. */
   readonly autoExposure?: AutoExposureInspection;
   /** Renderer-owned detached LUT residency and receipt facts. */
-  readonly standardLut?: StandardLutInspection;
+  readonly standardLut?: StandardLutState;
   readonly outputTransform?: typeof STANDARD_OUTPUT_TRANSFORM_FEATURE_ID;
   readonly displayEncoded: boolean;
   readonly intermediateFormat?: TextureFormat;
   /** Concrete surface route committed by configureSurface. */
   readonly surfaceProfile?: 'dual-view' | 'raw-only';
+  /** Requested vs effective output colour space; a fallback carries its structured cause. */
+  readonly colorSpace: OutputColorSpaceReport;
   /** Pass names from the same committed graph as the output facts. */
   readonly graphPassNames: readonly string[];
   /** Detached descriptor for the graph-owned output target, when present. */
@@ -800,9 +872,22 @@ export interface RenderInspection {
   readonly surface: 'available' | 'released';
   readonly profile: RenderProfile;
   readonly capabilities: Readonly<RhiCaps>;
+  readonly limits?: Readonly<Record<string, number>>;
   readonly frame: {
     readonly frameId: number;
     readonly deviceGeneration: number;
+    /** All outstanding receipt continuations; inspection never releases them. */
+    readonly pendingCompletionCount?: number;
+    /** At most eight newest pending receipts, detached from the live owner. */
+    readonly pendingCompletions?: readonly {
+      readonly frameId: number;
+      readonly deviceGeneration: number;
+      readonly presentation: FramePresentation;
+      /** Observed selected submission fence, including an existing timing fence when present. */
+      readonly queue: 'pending' | 'fulfilled' | 'rejected';
+      /** Fallback publication can itself depend on the same queue completion. */
+      readonly reflection: 'pending' | 'fulfilled' | 'rejected' | 'not-required';
+    }[];
   };
   /** Effective output mapping and accepted/LKG identity for the last picture. */
   readonly barrelDistortion: import('./inspection-types').BarrelDistortionInspection;
@@ -895,7 +980,12 @@ export interface RenderInspection {
   readonly environment: EnvironmentInspection;
   readonly temporal: TemporalInspection;
   readonly dynamicResolution?: import('./pipeline/dynamic-resolution').DynamicResolutionInspection;
-  readonly diffuseGi?: import('./raytracing/renderer-diffuse').RayDiffuseInspection;
+  readonly diffuseGi?:
+    | import('./raytracing/renderer-diffuse').RayDiffuseInspection
+    | import('./raytracing/renderer-irradiance-field').IrradianceFieldInspection
+    | import('./raytracing/renderer-screen-probe').ScreenProbeInspection
+    | import('./raytracing/renderer-baked-field').BakedFieldInspection;
+  readonly probePlacement?: import('./raytracing/renderer-probe-placement').ProbePlacementInspection;
   readonly bloom: BloomInspection;
   /** Candidate/accepted/LKG facts for the single extendedLighting topology. */
   readonly extendedLighting: LightInspection;
@@ -1061,6 +1151,17 @@ export const RENDER_GPU_DRIVEN_PREPARE_PHASE_CATALOG = [
   'record/gpu-driven-prepare/plan',
   'record/gpu-driven-prepare/filter',
   'record/gpu-driven-prepare/shadow-views',
+  'record/gpu-driven-prepare/filter/lod',
+  'record/gpu-driven-prepare/filter/lod/projection',
+  'record/gpu-driven-prepare/filter/lod/selection',
+  'record/gpu-driven-prepare/filter/lod/identity',
+  'record/gpu-driven-prepare/shadow-views/caster-classes',
+  'record/gpu-driven-prepare/shadow-views/project-view',
+  'record/gpu-driven-prepare/shadow-views/project-view/cache-update',
+  'record/gpu-driven-prepare/shadow-views/project-view/lod',
+  'record/gpu-driven-prepare/shadow-views/project-view/lod/projection',
+  'record/gpu-driven-prepare/shadow-views/project-view/lod/selection',
+  'record/gpu-driven-prepare/shadow-views/project-view/lod/identity',
 ] as const;
 
 /**
@@ -1071,8 +1172,6 @@ export const RENDER_GPU_DRIVEN_PREPARE_PHASE_CATALOG = [
  * attribution without guessing from RHI command counts.
  */
 export const RENDER_RECORD_PHASE_CATALOG = [
-  'record/occlusion-query-submit',
-  'record/occlusion-global-advance',
   'record/scene-state',
   ...RENDER_SCENE_STATE_PHASE_CATALOG,
   'record/swapchain',
@@ -1091,7 +1190,6 @@ export type RenderRecordPhase = (typeof RENDER_RECORD_PHASE_CATALOG)[number];
 
 export const RENDER_PHASE_CATALOG = [
   'extract',
-  'occlusion-prepare',
   'bind-groups',
   'features',
   'sort',
@@ -1117,6 +1215,13 @@ export interface RendererOptions {
   readonly features?: readonly RenderFeature<unknown>[] | undefined;
   /** Standard profile consumed by the single renderer-owned pipeline. */
   readonly standardProfile?: RenderProfile | undefined;
+  /**
+   * Canvas output colour space (default `'srgb'`). `'display-p3'` configures
+   * the canvas as Display P3 and converts the linear Rec.709 working colour to
+   * P3 in the final Output Transform. A surface that cannot present P3 falls
+   * back to sRGB with a structured `inspect().output.colorSpace` report.
+   */
+  readonly outputColorSpace?: OutputColorSpace | undefined;
   /** Explicit profiler capability shared by App and Render. */
   readonly profiler?: Profiler | undefined;
   /** Explicitly request timestamp-query for receipt-bound GPU profiling. */

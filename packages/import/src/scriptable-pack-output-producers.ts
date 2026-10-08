@@ -2,6 +2,7 @@ import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { ScriptablePackSceneComponent } from '@forgeax/engine-pack/source';
 import { externalizeSceneAsset } from '@forgeax/engine-scene';
 import type {
+  AnimationClip,
   AnimationGraph,
   AssetGuid as AssetGuidType,
   AssetRef,
@@ -20,6 +21,7 @@ import type {
   SceneAsset,
   SkeletonAsset,
   SkinAsset,
+  TerrainAsset,
   TextureAsset,
   TilesetAsset,
   VideoAsset,
@@ -28,12 +30,14 @@ import {
   deriveTextureLayout,
   err,
   ImportError,
+  isMaterialTextureParameterType,
   MATERIAL_TEXTURE_SLOTS,
   ok,
 } from '@forgeax/engine-types';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { packMeshBin } from './mesh-bin.js';
+import { encodeMeshDistanceFieldProduct } from './mesh-distance-field-product';
 import {
   type AssetOutputInput,
   type AssetOutputProducer,
@@ -112,9 +116,7 @@ function materialProduct(input: AssetOutputInput): AssetOutputProduct {
       ? new Set<string>(MATERIAL_TEXTURE_SLOTS)
       : new Set(
           material.parameters
-            .filter(
-              (parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube',
-            )
+            .filter((parameter) => isMaterialTextureParameterType(parameter.type))
             .map((parameter) => parameter.name),
         );
 
@@ -386,6 +388,34 @@ function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
         artifacts: { body: jsonArtifact(pipeline) },
       };
     }
+    case 'navigation-mesh': {
+      return { payload: asset, refs: [], artifacts: { body: jsonArtifact(asset) } };
+    }
+    case 'terrain': {
+      const terrain = asset as TerrainAsset;
+      const dependencies = [
+        ...terrain.grids,
+        ...terrain.layers.flatMap((layer) =>
+          layer.blend === 'height' ? [layer.material, layer.height] : [layer.material],
+        ),
+        ...terrain.sections.flatMap((section) => [
+          section.heightTexture,
+          section.weightTexture,
+          section.material,
+        ]),
+      ];
+      const refs = [...new Set(dependencies)].map((guid) => {
+        const parsed = AssetGuid.parse(guid);
+        if (!parsed.ok) throw parsed.error;
+        return ref(parsed.value, 'terrain');
+      });
+      const body = {
+        ...terrain,
+        heights: Array.from(terrain.heights),
+        weights: Array.from(terrain.weights),
+      };
+      return { payload: terrain, refs, artifacts: { body: jsonArtifact(body) } };
+    }
     case 'tileset': {
       const tileset = asset as TilesetAsset;
       const refs = tileset.atlases.map((atlas, index) => {
@@ -430,12 +460,17 @@ function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
         artifacts: { body: jsonArtifact(skin) },
       };
     }
-    case 'animation-clip':
-      return {
-        payload: asset,
-        refs: [],
-        artifacts: { body: jsonArtifact(asset) },
-      };
+    case 'animation-clip': {
+      const clip = asset as AnimationClip;
+      const refs: AssetRef[] = [];
+      for (const [index, key] of (clip.events ?? []).entries()) {
+        if (key.action.kind === 'method' || key.action.clip === null) continue;
+        const guid = AssetGuid.parse(key.action.clip);
+        if (!guid.ok) throw guid.error;
+        refs.push(ref(guid.value, 'events', index));
+      }
+      return { payload: clip, refs, artifacts: { body: jsonArtifact(clip) } };
+    }
     case 'animation-graph': {
       const graph = asset as AnimationGraph;
       const refs: AssetRef[] = [];
@@ -454,12 +489,15 @@ function ordinaryPodProduct(input: AssetOutputInput): AssetOutputProduct {
     }
     case 'audio': {
       const audio = asset as AudioClipAsset;
+      if (audio.stream)
+        throw new Error(
+          'stream audio is source/Meta-owned; runtime locators cannot be serialized as authored Pack bytes',
+        );
       return {
         payload: {
           kind: audio.kind,
           sourceKey: audio.sourceKey,
           mediaType: audio.mediaType,
-          bytes: audio.bytes.slice(),
         },
         refs: [],
         artifacts: {
@@ -528,9 +566,9 @@ export const materialAssetOutputProducer = createSafeProducer(
   materialProduct,
 );
 
-export const meshAssetDataProducer = createSafeProducer('mesh', 'mesh-data/1', meshDataProduct);
+export const meshAssetDataProducer = meshProducer('mesh-data/1', meshDataProduct);
 
-export const meshAssetOutputProducer = createSafeProducer('mesh', 'mesh-binary/5', meshProduct);
+export const meshAssetOutputProducer = meshProducer('mesh-binary/5', meshProduct);
 export const textureAssetOutputProducer = createSafeProducer(
   'texture',
   'texture-pack/1',
@@ -543,11 +581,11 @@ export function createSceneAssetOutputProducer(
   const schemas = new Map(
     sceneComponents.map((component) => [component.name, component.fields] as const),
   );
-  return createSafeProducer('scene', 'scene-pack/3', (input) => sceneProduct(input, schemas));
+  return createSafeProducer('scene', 'scene-pack/4', (input) => sceneProduct(input, schemas));
 }
 
 export function createPreExternalizedSceneAssetOutputProducer(): AssetOutputProducer {
-  return createSafeProducer('scene', 'scene-pack/3', preExternalizedSceneProduct);
+  return createSafeProducer('scene', 'scene-pack/4', preExternalizedSceneProduct);
 }
 
 export function createAssetOutputProducerRegistry(
@@ -572,14 +610,54 @@ export function createAssetOutputProducerRegistry(
     'audio',
     'particle-effect',
     'ies-profile',
+    'terrain',
+    'navigation-mesh',
   ] as const) {
     registry.register(
       createSafeProducer(
         kind,
-        kind === 'particle-effect' ? 'particle-effect/2' : 'ordinary-pod/1',
+        kind === 'particle-effect'
+          ? 'particle-effect/2'
+          : kind === 'animation-clip'
+            ? 'animation-clip/2'
+            : 'ordinary-pod/1',
         ordinaryPodProduct,
       ),
     );
   }
   return registry;
+}
+
+/** The complete Mesh product, unlike the geometry-only binary encoder, carries derived data. */
+function meshProducer(
+  version: string,
+  produceGeometry: (input: AssetOutputInput) => AssetOutputProduct,
+): AssetOutputProducer {
+  const plain = createSafeProducer('mesh', version, produceGeometry);
+  return {
+    kind: 'mesh',
+    version,
+    produce(input) {
+      if (input.asset.kind !== 'mesh' || input.asset.distanceField === undefined)
+        return plain.produce(input);
+      const sourceMesh = input.asset;
+      return (async () => {
+        try {
+          const attached = await encodeMeshDistanceFieldProduct(sourceMesh);
+          const { distanceField: _, ...mesh } = sourceMesh;
+          const product = produceGeometry({ ...input, asset: mesh });
+          return ok({
+            ...product,
+            payload: {
+              ...product.payload,
+              ...(attached === undefined ? {} : { distanceField: attached.payload }),
+            },
+            artifacts: { ...product.artifacts, ...attached?.artifacts },
+          });
+        } catch (error) {
+          return err(producerError(input, error));
+        }
+      })();
+    },
+  };
 }

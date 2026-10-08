@@ -16,7 +16,8 @@
 // Pattern mirrors scripts/__tests__/grep-gates.test.ts.
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, beforeAll } from 'vitest';
@@ -59,4 +60,24 @@ describe('grep-no-string-view-import', () => {
     expect(r.stderr).toMatch(/\[rerun\] pnpm grep:no-string-view-import/);
     expect(r.stderr).toMatch(/\[hint\] StringView class deleted in feat-20260515/);
   });
+
+  it('detects both import forms through a symlinked source directory', () => {
+    const root = mkdtempSync(resolve(tmpdir(), 'string-view-scan-'));
+    try {
+      const source = resolve(root, 'source');
+      const scan = resolve(root, 'scan');
+      mkdirSync(source);
+      mkdirSync(scan);
+      writeFileSync(resolve(source, 'named.ts'), "import { StringView } from './legacy';\n");
+      writeFileSync(resolve(source, 'path.ts'), "export { legacy } from './string-view';\n");
+      symlinkSync(source, resolve(scan, 'linked'), 'dir');
+      const result = run([scan]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('linked/named.ts:1');
+      expect(result.stderr).toContain('linked/path.ts:1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 });

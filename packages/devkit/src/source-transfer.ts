@@ -19,7 +19,7 @@ import {
   collectAuthorPackClosure,
 } from '@forgeax/engine-pack/build';
 import { AssetGuid, PackageId } from '@forgeax/engine-pack/guid';
-import { scanInventory } from '@forgeax/engine-pack/scanner';
+import { declarationPackageId, scanInventory } from '@forgeax/engine-pack/scanner';
 import { build } from 'vite';
 import { parse, stringify } from 'yaml';
 import {
@@ -221,7 +221,7 @@ async function dependencyCandidate(
 async function cloneMap(closure: AuthorPackClosure): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   for (const declaration of closure.declarations) {
-    const oldNamespace = declaration.value.packageId;
+    const oldNamespace = declarationPackageId(declaration);
     if (oldNamespace) map.set(oldNamespace.toLowerCase(), randomUUID());
   }
   for (const [guid, identity] of closure.identities) {

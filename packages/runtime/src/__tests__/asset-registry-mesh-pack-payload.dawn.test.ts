@@ -62,6 +62,8 @@ const mockCaps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: false,
   float32Filterable: false,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
 };
 

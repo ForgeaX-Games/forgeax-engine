@@ -194,6 +194,30 @@ describe('derived material reflection equality', () => {
     );
   });
 
+  it('reflects arrayed textures as their array view dimensions', async () => {
+    const source = `#define_import_path game::arrayed-reflection
+@group(1) @binding(0) var arraySampler: sampler;
+@group(1) @binding(1) var layers: texture_2d_array<f32>;
+@group(1) @binding(2) var cubes: texture_cube_array<f32>;
+@group(1) @binding(3) var volume: texture_3d<f32>;
+@fragment fn fs_main() -> @location(0) vec4<f32> {
+  return textureSample(layers, arraySampler, vec2<f32>(0.5), 1)
+    + textureSample(cubes, arraySampler, vec3<f32>(1.0, 0.0, 0.0), 1)
+    + textureSample(volume, arraySampler, vec3<f32>(0.5));
+}`;
+    const compiled = await compileShader(source, { id: 'game::arrayed-reflection' });
+
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    const entries = compiled.value.bindings.find((group) => group.label === '@group(1)')?.entries;
+    expect(entries?.map((entry) => entry.texture?.viewDimension)).toEqual([
+      undefined,
+      '2d-array',
+      'cube-array',
+      '3d',
+    ]);
+  });
+
   it('rejects a tampered raw f32 span even when the rounded allocation span is unchanged', async () => {
     const schema = [{ name: 'value', type: 'f32' }] as const;
     const generated = generateParameterModule(schema);

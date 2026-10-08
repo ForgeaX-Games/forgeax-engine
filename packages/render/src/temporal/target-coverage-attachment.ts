@@ -22,7 +22,7 @@ export interface TargetCoverageAttachment {
 }
 
 const COVERAGE_DESCRIPTOR: GraphTextureDescriptor = {
-  format: 'r8unorm',
+  format: 'rgba16float',
   size: 'surface',
   sampleCount: 1,
   usage: GPU_TEXTURE_USAGE_COPY_SRC,
@@ -57,7 +57,7 @@ export function createTargetCoverageAttachment(
   });
 }
 
-/** Rasterize the real Standard draw list into binary output-domain coverage. */
+/** Rasterize output-domain SceneTemporalV1 evidence for reduced radiance. */
 export function addTargetCoveragePass(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
   target: TargetCoverageAttachment,
@@ -75,8 +75,7 @@ export function addTargetCoveragePass(
     // input at this point, so keep this attachment on the opaque lane.
     recordMode: 'opaque',
     passKind: 'temporal',
-    clearColor: [0, 0, 0, 0],
+    clearColor: [0, 0, -1, 3],
     depthLoadOp: 'clear',
-    coverageOnly: true,
   });
 }

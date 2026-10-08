@@ -61,6 +61,7 @@ describe('Replay readback format matrix', () => {
     ['depth32float', '2d'],
     ['depth24plus', '2d'],
     ['rgba8unorm', 'cube'],
+    ['rgba8unorm', '3d'],
   ])('keeps %s/%s in the supported matrix', (format, dimension) => {
     const plan = getTextureReadbackPlan({ format, dimension });
     expect(plan.supported).toBe(true);
@@ -68,7 +69,6 @@ describe('Replay readback format matrix', () => {
 
   it.each([
     ['bc7-rgba-unorm', '2d'],
-    ['rgba8unorm', '3d'],
   ])('returns an explicit unsupported plan for %s/%s', (format, dimension) => {
     const plan = getTextureReadbackPlan({ format, dimension });
     expect(plan.supported).toBe(false);

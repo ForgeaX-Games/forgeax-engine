@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseParticleEffectSourceV3 } from '../code-source-v3.js';
+import { isParticleTopologyRenderer, parseParticleEffectSourceV3 } from '../code-source-v3.js';
 
 const rendererSource = (renderer: unknown) => ({
   schemaVersion: 3,
@@ -54,5 +54,18 @@ describe('Batch B renderer source contract', () => {
 
     expect(parsed).toMatchObject({ ok: true });
     if (parsed.ok) expect(parsed.value.emitters[0]?.renderers[0]).toMatchObject({ enabled: false });
+  });
+
+  it.each([
+    [{ kind: 'billboard', material: 'vfx' }, false],
+    [{ kind: 'mesh', material: 'vfx', mesh: 'cube' }, false],
+    [{ kind: 'ribbon', material: 'vfx', stripKey: 'alive-index', capacity: 32 }, true],
+    [{ kind: 'trail', material: 'vfx', historyLength: 8, capacity: 32 }, true],
+    [{ kind: 'beam', material: 'vfx', endpointField: 'velocity', capacity: 16 }, true],
+  ] as const)('classifies %o as a topology renderer: %s', (renderer, topology) => {
+    const parsed = parseParticleEffectSourceV3(rendererSource(renderer));
+    const value = parsed.ok ? parsed.value.emitters[0]?.renderers[0] : undefined;
+    expect(value).toBeDefined();
+    if (value !== undefined) expect(isParticleTopologyRenderer(value)).toBe(topology);
   });
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // hello-custom-importer headless smoke -- acceptance gate for
 // feat-20260629-importer-self-declared-fold-contract (M5 / w15; AC-01 / AC-09).
 //
@@ -83,7 +84,7 @@ if (!existsSync(packIndexPath)) {
 
 // --- (c) structural: pack-index has a reel-game-blob row ---------------------
 
-const packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+const packIndex = decodeCatalogWire(JSON.parse(readFileSync(packIndexPath, 'utf8'))).unwrap();
 const reelRow = Array.isArray(packIndex)
   ? packIndex.find(
       (row) =>
@@ -124,7 +125,7 @@ console.log(
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(
     `[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`,

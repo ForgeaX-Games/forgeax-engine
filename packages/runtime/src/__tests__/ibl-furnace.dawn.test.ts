@@ -155,16 +155,23 @@ it('records interleaved GPU pass cost with and without multiple-scattering compe
   const timing = {
     gpuPassTiming: { maxPassesPerFrame: 64, maxFramesInFlight: 2, retentionFrames: 8 },
   };
+  const lightweight = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+  const rounds = lightweight ? 2 : 4;
+  const samplesPerRound = lightweight ? 8 : 20;
   const report: Record<string, unknown> = {};
   await withRenderer(compensatedUrl, timing, (on) =>
     withRenderer(singleScatterUrl, timing, async (off) => {
       for (const renderPath of PATHS) {
         const samples = { on: new Map<string, number[]>(), off: new Map<string, number[]>() };
-        for (let round = 0; round < 4; round++)
+        for (let round = 0; round < rounds; round++)
           for (const variant of round % 2 === 0
             ? (['on', 'off'] as const)
             : (['off', 'on'] as const)) {
-            const cost = await measureFurnaceCost(variant === 'on' ? on : off, renderPath, 20);
+            const cost = await measureFurnaceCost(
+              variant === 'on' ? on : off,
+              renderPath,
+              samplesPerRound,
+            );
             if (cost === null) {
               report[renderPath] = 'timestamp-query-unavailable';
               return;

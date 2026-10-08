@@ -7,7 +7,7 @@ import {
 } from './catalog-projection.js';
 import { deriveAssetName } from './deriveAssetName.js';
 import type { PackError } from './errors.js';
-import { parsePackSourceJson, projectDirectPackJson } from './pack-authoring.js';
+import { projectDirectPackJson } from './pack-authoring.js';
 import { resolveAssetSource } from './resolve-asset-source.js';
 import {
   type MetaInventoryDocument,
@@ -235,41 +235,12 @@ async function projectSource(
   const parsed = sourceDeclaration.value;
   const sourcePath = catalogSourcePathFor(cwd, path, sourceIdentityFor);
   if (parsed.schemaVersion === '3.0.0') {
-    const authoring = parsePackSourceJson(parsed);
-    if (!authoring.ok) {
-      return {
-        entries: [],
-        error: {
-          code: 'catalog-meta-schema-invalid',
-          path,
-          message: `v3 Pack parse failed: ${authoring.error.code}`,
-          expected: 'a valid direct or instance v3 Pack document',
-          actual: authoring.error.code,
-          hint: authoring.error.hint,
-          subjects: [path],
-        },
-      };
-    }
-    if (authoring.value.format !== 'direct') return { entries: [] };
-    const projected = projectDirectPackJson(authoring.value);
-    if (!projected.ok) {
-      return {
-        entries: [],
-        error: {
-          code: 'catalog-meta-schema-invalid',
-          path,
-          message: `v3 Pack projection failed: ${projected.error.code}`,
-          expected: 'direct v3 assets to derive stable AssetGuids',
-          actual: projected.error.code,
-          hint: projected.error.hint,
-          subjects: [path],
-        },
-      };
-    }
+    if (parsed.format !== 'direct') return { entries: [] };
+    const projected = projectDirectPackJson(parsed);
     const provenance = { provider: 'pack', version: '3.0.0' } satisfies ProviderProvenance;
     return {
       entries: projectPackageCatalog(
-        projected.value.assets.map((asset, sourceIndex) => ({
+        projected.assets.map((asset, sourceIndex) => ({
           guid: asset.guid,
           kind: asset.kind,
           sourcePath,
@@ -277,9 +248,9 @@ async function projectSource(
           sourceKey: asset.sourceKey,
           refs: asset.refs,
           execution: 'direct' as const,
-          packageId: projected.value.packageId,
+          packageId: projected.packageId,
           provenance,
-          name: deriveAssetName(path, projected.value.assets.length, asset.name),
+          name: deriveAssetName(path, projected.assets.length, asset.name),
         })),
         `${base}/${sourcePath}`,
       ),

@@ -1,29 +1,8 @@
-import { createVisibilityBudget } from './budget';
-
 /** Detached, bounded LOD/occlusion facts for renderer inspection consumers. */
 
-export const LOD_OCCLUSION_INSPECTION_SCHEMA = 'forgeax::lod-occlusion-inspection::v2' as const;
+export const LOD_OCCLUSION_INSPECTION_SCHEMA = 'forgeax::lod-occlusion-inspection::v3' as const;
 export const LOD_OCCLUSION_INSPECTION_MAX_BYTES = 16 * 1024;
 const MAX_INSPECTION_SAMPLES = 64;
-
-export type LodOcclusionInspectionError = {
-  readonly code: string;
-  readonly expected: string;
-  readonly hint: string;
-  readonly detail?: Readonly<Record<string, string | number | boolean>>;
-};
-
-export type LodOcclusionFallback =
-  | { readonly active: false }
-  | {
-      readonly active: true;
-      readonly reason: 'producer-failed' | 'page-exhausted' | 'query-failed' | 'device-loss';
-      readonly error: LodOcclusionInspectionError;
-    };
-
-export type LodOcclusionDegradation =
-  | { readonly active: false }
-  | { readonly active: true; readonly reason: 'all-visible' | 'query-unavailable' };
 
 export interface LodOcclusionInspectionSample {
   readonly primitiveSlot: number;
@@ -47,15 +26,6 @@ export interface LodOcclusionInspectionRow {
     readonly occluded: number;
   };
   readonly lodHistogram: readonly { readonly level: number; readonly count: number }[];
-  /** Map latency for the most recently completed query page (bounded POD). */
-  readonly queryLatencyUs: {
-    readonly median: number;
-    readonly p95: number;
-    readonly last: number;
-  };
-  readonly pagePressure: { readonly used: number; readonly capacity: number };
-  readonly fallback: LodOcclusionFallback;
-  readonly degradation: LodOcclusionDegradation;
   readonly samples: readonly LodOcclusionInspectionSample[];
 }
 
@@ -81,30 +51,19 @@ export interface LodOcclusionWorldInspection {
   readonly attribution: LodOcclusionWorldAttribution;
 }
 
-export interface LodOcclusionInspectionBudget {
-  readonly configuredQueryBudget: number;
-  readonly effectiveQueryBudget: number;
-  readonly settleSubmits: number;
-  readonly retestSubmits: number;
-  readonly expirySubmits: number;
-}
-
 export interface LodOcclusionInspection extends LodOcclusionInspectionRow {
   readonly schema: typeof LOD_OCCLUSION_INSPECTION_SCHEMA;
   /** Atomic identity for the submit that produced every row below. */
   readonly submit: LodOcclusionInspectionSubmit;
-  /** Immutable budget values used by the query and confidence owners. */
-  readonly budget: LodOcclusionInspectionBudget;
   /** Stable attachment identity; array order is never an attribution key. */
   readonly worlds: readonly LodOcclusionWorldInspection[];
 }
 
 export type LodOcclusionInspectionInput = Omit<
   LodOcclusionInspection,
-  'schema' | 'submit' | 'budget' | 'worlds'
+  'schema' | 'submit' | 'worlds'
 > & {
   readonly submit?: LodOcclusionInspectionSubmit;
-  readonly budget?: LodOcclusionInspectionBudget;
   readonly worlds?: readonly LodOcclusionWorldInspectionInput[];
 };
 
@@ -112,31 +71,10 @@ export type LodOcclusionWorldInspectionInput = Omit<LodOcclusionWorldInspection,
   readonly attribution?: LodOcclusionWorldAttribution;
 };
 
-export type LodOcclusionInspectionAction =
-  | { readonly action: 'none' }
-  | { readonly action: 'rebuild'; readonly sourceKey: string; readonly reason: string }
-  | { readonly action: 'cold-cook'; readonly sourceKey: string; readonly reason: string }
-  | { readonly action: 'retry'; readonly sourceKey: string; readonly reason: string };
-
 function nonNegativeInteger(name: string, value: number): number {
   if (!Number.isInteger(value) || value < 0)
     throw new Error(`${name} must be a non-negative integer`);
   return value;
-}
-
-function copyError(error: LodOcclusionInspectionError): LodOcclusionInspectionError {
-  return Object.freeze({
-    code: error.code,
-    expected: error.expected,
-    hint: error.hint,
-    ...(error.detail === undefined ? {} : { detail: Object.freeze({ ...error.detail }) }),
-  });
-}
-
-function copyFallback(fallback: LodOcclusionFallback): LodOcclusionFallback {
-  return fallback.active
-    ? Object.freeze({ ...fallback, error: copyError(fallback.error) })
-    : Object.freeze({ active: false });
 }
 
 function copySamples(
@@ -188,11 +126,6 @@ function copyRow(row: LodOcclusionInspectionRow): LodOcclusionInspectionRow {
     candidates: row.count.candidates,
     visible: row.count.visible,
     occluded: row.count.occluded,
-    median: row.queryLatencyUs.median,
-    p95: row.queryLatencyUs.p95,
-    last: row.queryLatencyUs.last,
-    pageUsed: row.pagePressure.used,
-    pageCapacity: row.pagePressure.capacity,
   }))
     nonNegativeInteger(`inspection.${name}`, value);
   if (
@@ -202,9 +135,6 @@ function copyRow(row: LodOcclusionInspectionRow): LodOcclusionInspectionRow {
     row.slot.slotGeneration < 0
   ) {
     throw new Error('inspection identity values must be non-negative');
-  }
-  if (row.pagePressure.used > row.pagePressure.capacity) {
-    throw new Error('inspection page pressure exceeds capacity');
   }
   return Object.freeze({
     root: Object.freeze({ ...row.root }),
@@ -220,10 +150,6 @@ function copyRow(row: LodOcclusionInspectionRow): LodOcclusionInspectionRow {
         }),
       ),
     ),
-    queryLatencyUs: Object.freeze({ ...row.queryLatencyUs }),
-    pagePressure: Object.freeze({ ...row.pagePressure }),
-    fallback: copyFallback(row.fallback),
-    degradation: Object.freeze({ ...row.degradation }),
     samples: copySamples(row.samples),
   });
 }
@@ -246,16 +172,6 @@ function copyWorlds(
 
 export function inspectLodOcclusion(input: LodOcclusionInspectionInput): LodOcclusionInspection {
   const row = copyRow(input);
-  const defaultBudget = createVisibilityBudget();
-  const budget = input.budget ?? {
-    configuredQueryBudget: defaultBudget.configuredQueryBudget,
-    effectiveQueryBudget: defaultBudget.effectiveQueryBudget,
-    settleSubmits: defaultBudget.settleSubmits,
-    retestSubmits: defaultBudget.retestSubmits,
-    expirySubmits: defaultBudget.expirySubmits,
-  };
-  for (const [name, value] of Object.entries(budget))
-    nonNegativeInteger(`inspection.budget.${name}`, value);
   const submit = input.submit ?? {
     frameId: input.generation,
     build: 'unknown',
@@ -281,7 +197,6 @@ export function inspectLodOcclusion(input: LodOcclusionInspectionInput): LodOccl
     schema: LOD_OCCLUSION_INSPECTION_SCHEMA,
     ...row,
     submit: Object.freeze({ ...submit }),
-    budget: Object.freeze({ ...budget }),
     worlds,
   });
   if (JSON.stringify(inspection).length > LOD_OCCLUSION_INSPECTION_MAX_BYTES) {
@@ -296,18 +211,4 @@ export function serializeLodOcclusionInspection(inspection: LodOcclusionInspecti
     throw new Error(`LOD occlusion inspection exceeds ${LOD_OCCLUSION_INSPECTION_MAX_BYTES} bytes`);
   }
   return serialized;
-}
-
-export function consumeLodOcclusionInspection(
-  inspection: LodOcclusionInspection,
-): LodOcclusionInspectionAction {
-  if (!inspection.fallback.active) return { action: 'none' };
-  const { reason, error } = inspection.fallback;
-  const action =
-    error.code.startsWith('asset-') || reason === 'producer-failed'
-      ? 'rebuild'
-      : reason === 'query-failed' || reason === 'page-exhausted' || reason === 'device-loss'
-        ? 'retry'
-        : 'cold-cook';
-  return { action, sourceKey: inspection.root.sourceKey, reason };
 }

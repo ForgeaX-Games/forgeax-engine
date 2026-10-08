@@ -5,8 +5,9 @@
 // renderer is involved.
 
 import type { AssetError, MeshAsset, Result } from '@forgeax/engine-types';
-import { ASSET_ERROR_HINTS, AssetError as AssetErrorValue, err } from '@forgeax/engine-types';
+import { err } from '@forgeax/engine-types';
 import { FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
+import { geometryError } from './contour';
 
 export interface Vec2Point {
   readonly x: number;
@@ -16,121 +17,11 @@ export interface Vec2Point {
 export type Vec3Point = readonly [number, number, number];
 
 function invalid(field: string, detail: string): Result<MeshAsset, AssetError> {
-  return err(
-    new AssetErrorValue({
-      code: 'asset-parse-failed',
-      expected: `valid procedural geometry input for ${field}`,
-      hint: ASSET_ERROR_HINTS['asset-parse-failed'],
-      detail: { field, value: detail, reason: detail },
-    }),
-  );
+  return err(geometryError(field, detail));
 }
 
 function finitePoint(point: Vec2Point): boolean {
   return Number.isFinite(point.x) && Number.isFinite(point.y);
-}
-
-function cross(a: Vec2Point, b: Vec2Point, c: Vec2Point): number {
-  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-}
-
-function signedArea(points: readonly Vec2Point[]): number {
-  let value = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i] as Vec2Point;
-    const b = points[(i + 1) % points.length] as Vec2Point;
-    value += a.x * b.y - b.x * a.y;
-  }
-  return value / 2;
-}
-
-function onSegment(a: Vec2Point, b: Vec2Point, p: Vec2Point): boolean {
-  return (
-    Math.min(a.x, b.x) <= p.x + 1e-8 &&
-    p.x <= Math.max(a.x, b.x) + 1e-8 &&
-    Math.min(a.y, b.y) <= p.y + 1e-8 &&
-    p.y <= Math.max(a.y, b.y) + 1e-8
-  );
-}
-
-function edgesCross(a: Vec2Point, b: Vec2Point, c: Vec2Point, d: Vec2Point): boolean {
-  const ab = cross(a, b, c);
-  const abD = cross(a, b, d);
-  const cdA = cross(c, d, a);
-  const cdB = cross(c, d, b);
-  if (Math.abs(ab) < 1e-8 && onSegment(a, b, c)) return true;
-  if (Math.abs(abD) < 1e-8 && onSegment(a, b, d)) return true;
-  if (Math.abs(cdA) < 1e-8 && onSegment(c, d, a)) return true;
-  if (Math.abs(cdB) < 1e-8 && onSegment(c, d, b)) return true;
-  return ab > 0 !== abD > 0 && cdA > 0 !== cdB > 0;
-}
-
-function selfIntersects(points: readonly Vec2Point[]): boolean {
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i] as Vec2Point;
-    const b = points[(i + 1) % points.length] as Vec2Point;
-    for (let j = i + 1; j < points.length; j++) {
-      if (j === i || (j + 1) % points.length === i || (i + 1) % points.length === j) continue;
-      const c = points[j] as Vec2Point;
-      const d = points[(j + 1) % points.length] as Vec2Point;
-      if (edgesCross(a, b, c, d)) return true;
-    }
-  }
-  return false;
-}
-
-function insideTriangle(a: Vec2Point, b: Vec2Point, c: Vec2Point, point: Vec2Point): boolean {
-  return cross(a, b, point) >= -1e-8 && cross(b, c, point) >= -1e-8 && cross(c, a, point) >= -1e-8;
-}
-
-/** Ear-clipping triangulation for a simple contour. */
-function triangulate(points: readonly Vec2Point[]): number[] | undefined {
-  const order = points.map((_, index) => index);
-  if (signedArea(points) < 0) order.reverse();
-  const triangles: number[] = [];
-  let guard = 0;
-  while (order.length > 3 && guard++ < points.length * points.length) {
-    let clipped = false;
-    for (let i = 0; i < order.length; i++) {
-      const previous = order[(i + order.length - 1) % order.length] as number;
-      const current = order[i] as number;
-      const next = order[(i + 1) % order.length] as number;
-      if (
-        cross(
-          points[previous] as Vec2Point,
-          points[current] as Vec2Point,
-          points[next] as Vec2Point,
-        ) <= 1e-8
-      )
-        continue;
-      let contains = false;
-      for (const candidate of order) {
-        if (
-          candidate !== previous &&
-          candidate !== current &&
-          candidate !== next &&
-          insideTriangle(
-            points[previous] as Vec2Point,
-            points[current] as Vec2Point,
-            points[next] as Vec2Point,
-            points[candidate] as Vec2Point,
-          )
-        ) {
-          contains = true;
-          break;
-        }
-      }
-      if (contains) continue;
-      triangles.push(previous, current, next);
-      order.splice(i, 1);
-      clipped = true;
-      break;
-    }
-    if (!clipped) return undefined;
-  }
-  if (order.length !== 3) return undefined;
-  triangles.push(order[0] as number, order[1] as number, order[2] as number);
-  return triangles;
 }
 
 function pushVertex(
@@ -151,127 +42,6 @@ function pushVertex(
     uv[1],
   );
   return index;
-}
-
-function pushTriangle(
-  vertices: number[],
-  indices: number[],
-  a: {
-    readonly p: [number, number, number];
-    readonly n: [number, number, number];
-    readonly uv: [number, number];
-  },
-  b: {
-    readonly p: [number, number, number];
-    readonly n: [number, number, number];
-    readonly uv: [number, number];
-  },
-  c: {
-    readonly p: [number, number, number];
-    readonly n: [number, number, number];
-    readonly uv: [number, number];
-  },
-): void {
-  indices.push(
-    pushVertex(vertices, a.p, a.n, a.uv),
-    pushVertex(vertices, b.p, b.n, b.uv),
-    pushVertex(vertices, c.p, c.n, c.uv),
-  );
-}
-
-/** Extrude a simple 2D contour along +Z/-Z, including caps and side walls. */
-export function createExtrusionGeometry(
-  contour: readonly Vec2Point[],
-  depth: number,
-): Result<MeshAsset, AssetError> {
-  if (!Number.isFinite(depth) || depth <= 0) return invalid('depth', 'must be positive and finite');
-  const points =
-    contour.length > 1 &&
-    contour[0]?.x === contour[contour.length - 1]?.x &&
-    contour[0]?.y === contour[contour.length - 1]?.y
-      ? contour.slice(0, -1)
-      : [...contour];
-  if (points.length < 3 || points.some((point) => !finitePoint(point)))
-    return invalid('contour', 'needs at least three finite points');
-  const area = signedArea(points);
-  if (Math.abs(area) < 1e-8) return invalid('contour', 'area must be non-zero');
-  if (selfIntersects(points)) return invalid('contour', 'must not self-intersect');
-  const capTriangles = triangulate(points);
-  if (capTriangles === undefined) return invalid('contour', 'could not be triangulated');
-  const vertices: number[] = [];
-  const indices: number[] = [];
-  const half = depth / 2;
-  for (let i = 0; i < capTriangles.length; i += 3) {
-    const a = points[capTriangles[i] as number] as Vec2Point;
-    const b = points[capTriangles[i + 1] as number] as Vec2Point;
-    const c = points[capTriangles[i + 2] as number] as Vec2Point;
-    pushTriangle(
-      vertices,
-      indices,
-      { p: [a.x, a.y, half], n: [0, 0, 1], uv: [a.x, a.y] },
-      { p: [b.x, b.y, half], n: [0, 0, 1], uv: [b.x, b.y] },
-      { p: [c.x, c.y, half], n: [0, 0, 1], uv: [c.x, c.y] },
-    );
-    pushTriangle(
-      vertices,
-      indices,
-      { p: [c.x, c.y, -half], n: [0, 0, -1], uv: [c.x, c.y] },
-      { p: [b.x, b.y, -half], n: [0, 0, -1], uv: [b.x, b.y] },
-      { p: [a.x, a.y, -half], n: [0, 0, -1], uv: [a.x, a.y] },
-    );
-  }
-  let perimeter = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i] as Vec2Point;
-    const b = points[(i + 1) % points.length] as Vec2Point;
-    perimeter += Math.hypot(b.x - a.x, b.y - a.y);
-  }
-  let distance = 0;
-  for (let i = 0; i < points.length; i++) {
-    const a = points[i] as Vec2Point;
-    const b = points[(i + 1) % points.length] as Vec2Point;
-    const edge = Math.hypot(b.x - a.x, b.y - a.y);
-    const u0 = perimeter === 0 ? 0 : distance / perimeter;
-    const u1 = perimeter === 0 ? 1 : (distance + edge) / perimeter;
-    const nx = b.y - a.y;
-    const ny = -(b.x - a.x);
-    const length = Math.hypot(nx, ny) || 1;
-    const normal: [number, number, number] =
-      area >= 0 ? [nx / length, ny / length, 0] : [-nx / length, -ny / length, 0];
-    if (area >= 0) {
-      pushTriangle(
-        vertices,
-        indices,
-        { p: [a.x, a.y, -half], n: normal, uv: [u0, 0] },
-        { p: [b.x, b.y, -half], n: normal, uv: [u1, 0] },
-        { p: [b.x, b.y, half], n: normal, uv: [u1, 1] },
-      );
-      pushTriangle(
-        vertices,
-        indices,
-        { p: [a.x, a.y, -half], n: normal, uv: [u0, 0] },
-        { p: [b.x, b.y, half], n: normal, uv: [u1, 1] },
-        { p: [a.x, a.y, half], n: normal, uv: [u0, 1] },
-      );
-    } else {
-      pushTriangle(
-        vertices,
-        indices,
-        { p: [a.x, a.y, -half], n: normal, uv: [u0, 0] },
-        { p: [b.x, b.y, half], n: normal, uv: [u1, 1] },
-        { p: [b.x, b.y, -half], n: normal, uv: [u1, 0] },
-      );
-      pushTriangle(
-        vertices,
-        indices,
-        { p: [a.x, a.y, -half], n: normal, uv: [u0, 0] },
-        { p: [a.x, a.y, half], n: normal, uv: [u0, 1] },
-        { p: [b.x, b.y, half], n: normal, uv: [u1, 1] },
-      );
-    }
-    distance += edge;
-  }
-  return meshFromInterleaved(new Float32Array(vertices), new Uint32Array(indices));
 }
 
 /** Sweep a circular profile along a 3D path. */

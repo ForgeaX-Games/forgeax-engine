@@ -27,7 +27,7 @@ import { describe, expectTypeOf, it } from 'vitest';
 // ---- CapturedMethods: all RHI method names that have a RhiCallEvent kind ----
 
 type CapturedMethods =
-  // RhiCommandEncoder methods (12 captured; encodeEmptyComputePass is a
+  // RhiCommandEncoder methods (13 captured; encodeEmptyComputePass is a
   // compound operation recorded as an existing begin/end event pair)
   | 'beginRenderPass'
   | 'beginComputePass'
@@ -37,6 +37,7 @@ type CapturedMethods =
   | 'copyTextureToTexture'
   | 'clearBuffer'
   | 'resolveQuerySet'
+  | 'buildAccelerationStructures'
   | 'pushDebugGroup' // encoder-level, maps to kind 'pushDebugGroup'
   | 'popDebugGroup' // encoder-level, maps to kind 'popDebugGroup'
   | 'insertDebugMarker' // encoder-level, maps to kind 'insertDebugMarker'

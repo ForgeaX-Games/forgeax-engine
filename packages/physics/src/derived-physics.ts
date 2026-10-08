@@ -15,6 +15,7 @@ export type PhysicsVector = readonly [number, number, number];
  * scratch buffer after the call returns.
  */
 export interface VoxelShapeInput {
+  readonly kind?: 'voxel';
   readonly id: string;
   readonly revision: number;
   readonly cells: Int32Array | readonly VoxelCell[];
@@ -28,6 +29,21 @@ export interface VoxelShapeInput {
   readonly collisionGroups?: number;
   readonly solverGroups?: number;
 }
+
+/** Finite column-major matrix, in the same bounded candidate transaction as voxels. */
+export interface HeightfieldShapeInput
+  extends Omit<VoxelShapeInput, 'kind' | 'cells' | 'voxelSize'> {
+  readonly kind: 'heightfield';
+  readonly rows: number;
+  readonly columns: number;
+  readonly heights: Float32Array;
+  readonly scale: PhysicsVector;
+}
+export type DerivedShapeInput = VoxelShapeInput | HeightfieldShapeInput;
+export type NormalizedDerivedShapeInput = DerivedShapeInput & {
+  readonly origin: PhysicsVector;
+  readonly rotation: PhysicsQuaternion;
+};
 
 /** Stable producer identity and revision for one constraint endpoint. */
 export interface PhysicsConstraintBodyDependency {
@@ -105,7 +121,7 @@ export interface DerivedPhysicsCandidateInput {
   readonly revision: number;
   readonly sourceKey: string;
   /** Empty clears derived shapes; ordinary colliders and ECS body lifetime remain independent. */
-  readonly shapes: readonly VoxelShapeInput[];
+  readonly shapes: readonly DerivedShapeInput[];
   readonly seams?: readonly DerivedShapeSeamInput[];
   readonly bodyType?: 'static' | 'dynamic' | 'kinematic';
   readonly massProperties?: PhysicsMassProperties;
@@ -165,15 +181,23 @@ export interface DerivedPhysicsFailure {
 }
 
 /** Public projection of an active local shape. */
-export interface DerivedShapeState {
+export type DerivedShapeState = {
   readonly id: string;
   readonly revision: number;
   readonly entity: number;
-  readonly voxelSize: PhysicsVector;
   readonly origin: PhysicsVector;
   readonly rotation: PhysicsQuaternion;
   readonly generation: number;
-}
+} & (
+  | { readonly voxelSize: PhysicsVector }
+  | {
+      readonly heightfield: {
+        readonly rows: number;
+        readonly columns: number;
+        readonly scale: PhysicsVector;
+      };
+    }
+);
 
 /** Real backend contact observation, including stable shape identity when known. */
 export interface PhysicsContactObservation {
@@ -197,7 +221,7 @@ export interface DerivedPhysicsSnapshot {
     readonly entity: number;
     readonly revision: number;
     readonly sourceKey: string;
-    readonly shapes: readonly VoxelShapeInput[];
+    readonly shapes: readonly DerivedShapeInput[];
     readonly seams?: readonly DerivedShapeSeamInput[];
     readonly bodyType?: 'static' | 'dynamic' | 'kinematic';
     readonly massProperties?: PhysicsMassProperties;
@@ -431,6 +455,52 @@ export function normalizeVoxelShapeInput(input: VoxelShapeInput): Result<
   );
 }
 
+/** Reject holes and malformed matrices before allocating any native collider. */
+export function normalizeHeightfieldShapeInput(
+  input: HeightfieldShapeInput,
+): Result<NormalizedDerivedShapeInput, DerivedPhysicsError> {
+  const invalid = (actual: unknown) =>
+    err(
+      new DerivedPhysicsError(
+        'derived-shape-invalid',
+        'finite hole-free column-major heightfield with positive dimensions and scale',
+        'repair dimensions, samples and pose before candidate preparation',
+        { shapeId: input.id, actual },
+      ),
+    );
+  if (
+    typeof input.id !== 'string' ||
+    !ID_RE.test(input.id) ||
+    !Number.isSafeInteger(input.revision) ||
+    input.revision < 0 ||
+    !Number.isSafeInteger(input.rows) ||
+    !Number.isSafeInteger(input.columns) ||
+    input.rows < 1 ||
+    input.columns < 1 ||
+    (input.rows + 1) * (input.columns + 1) > DERIVED_PHYSICS_LIMITS.maxCellsPerCandidate ||
+    !(input.heights instanceof Float32Array) ||
+    input.heights.length !== (input.rows + 1) * (input.columns + 1) ||
+    input.heights.some((h) => !Number.isFinite(h)) ||
+    !vectorFinite(input.scale, 3) ||
+    input.scale.some((v) => v <= 0)
+  )
+    return invalid(input.id);
+  const origin = input.origin ?? [0, 0, 0];
+  const rotation = normalizedQuaternion(input.rotation ?? [0, 0, 0, 1]);
+  if (!vectorFinite(origin, 3) || !rotation) return invalid(origin);
+  for (const value of [input.friction, input.restitution, input.density])
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) return invalid(value);
+  return ok(
+    Object.freeze({
+      ...input,
+      heights: new Float32Array(input.heights),
+      scale: [...input.scale] as PhysicsVector,
+      origin: [...origin] as PhysicsVector,
+      rotation,
+    }),
+  );
+}
+
 /** Validate explicit mass/inertia values before touching the backend. */
 export function validateMassProperties(
   properties: PhysicsMassProperties | undefined,
@@ -550,7 +620,7 @@ export function cloneDerivedPhysicsInput(
     );
   }
   const seen = new Set<string>();
-  const shapes: VoxelShapeInput[] = [];
+  const shapes: DerivedShapeInput[] = [];
   for (const shape of input.shapes) {
     if (seen.has(shape.id)) {
       return err(
@@ -563,7 +633,10 @@ export function cloneDerivedPhysicsInput(
       );
     }
     seen.add(shape.id);
-    const normalized = normalizeVoxelShapeInput(shape);
+    const normalized =
+      shape.kind === 'heightfield'
+        ? normalizeHeightfieldShapeInput(shape)
+        : normalizeVoxelShapeInput(shape);
     if (!normalized.ok) return normalized;
     shapes.push(normalized.value);
   }
@@ -609,8 +682,10 @@ export function cloneDerivedPhysicsInput(
   const seams = input.seams ?? [];
   const shapeById = new Map(shapes.map((shape) => [shape.id, shape]));
   for (const seam of seams) {
-    const a = shapeById.get(seam.shapeA);
-    const b = shapeById.get(seam.shapeB);
+    const shapeA = shapeById.get(seam.shapeA);
+    const shapeB = shapeById.get(seam.shapeB);
+    const a = shapeA?.kind === 'heightfield' ? undefined : shapeA;
+    const b = shapeB?.kind === 'heightfield' ? undefined : shapeB;
     const aRotation = a?.rotation ?? [0, 0, 0, 1];
     const bRotation = b?.rotation ?? [0, 0, 0, 1];
     const aOrigin = a?.origin ?? [0, 0, 0];
@@ -691,7 +766,11 @@ export function cloneDerivedPhysicsInput(
       }
     }
   }
-  const cellCount = shapes.reduce((sum, shape) => sum + shape.cells.length / 3, 0);
+  const cellCount = shapes.reduce(
+    (sum, shape) =>
+      sum + (shape.kind === 'heightfield' ? shape.heights.length : shape.cells.length / 3),
+    0,
+  );
   if (cellCount > DERIVED_PHYSICS_LIMITS.maxCellsPerCandidate) {
     return err(
       new DerivedPhysicsError(
@@ -744,7 +823,9 @@ export function estimateDerivedPhysicsInputBytes(input: DerivedPhysicsCandidateI
   const shapeBytes = input.shapes.reduce(
     (sum, shape) =>
       sum +
-      (shape.cells instanceof Int32Array ? shape.cells.length / 3 : shape.cells.length) * 32 +
+      (shape.kind === 'heightfield'
+        ? shape.heights.length * 4
+        : (shape.cells instanceof Int32Array ? shape.cells.length / 3 : shape.cells.length) * 32) +
       128,
     0,
   );

@@ -102,77 +102,37 @@ export function createCylinderGeometry(
     }
   }
 
-  // --- top cap ---
-  if (topCap) {
+  // Caps share their geometry; their orientation supplies the normal and winding.
+  for (const [radius, direction] of [
+    [radiusTop, 1],
+    [radiusBottom, -1],
+  ] as const) {
+    if (!(radius > 0)) continue;
     const centerIdx = vIdx;
     const cBase = vIdx * FACTORY_FLOATS_PER_VERTEX;
-    vertices[cBase + 0] = 0;
-    vertices[cBase + 1] = halfHeight;
-    vertices[cBase + 2] = 0;
-    vertices[cBase + 3] = 0;
-    vertices[cBase + 4] = 1;
-    vertices[cBase + 5] = 0;
+    vertices[cBase + 1] = direction * halfHeight;
+    vertices[cBase + 4] = direction;
     vertices[cBase + 6] = 0.5;
     vertices[cBase + 7] = 0.5;
     vIdx++;
     const ringStart = vIdx;
     for (let ix = 0; ix <= rs; ix++) {
-      const u = ix / rs;
-      const theta = u * Math.PI * 2;
+      const theta = (ix / rs) * Math.PI * 2;
       const sinT = Math.sin(theta);
       const cosT = Math.cos(theta);
       const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
-      vertices[base + 0] = radiusTop * sinT;
-      vertices[base + 1] = halfHeight;
-      vertices[base + 2] = radiusTop * cosT;
-      vertices[base + 3] = 0;
-      vertices[base + 4] = 1;
-      vertices[base + 5] = 0;
+      vertices[base + 0] = radius * sinT;
+      vertices[base + 1] = direction * halfHeight;
+      vertices[base + 2] = radius * cosT;
+      vertices[base + 4] = direction;
       vertices[base + 6] = sinT * 0.5 + 0.5;
       vertices[base + 7] = cosT * 0.5 + 0.5;
       vIdx++;
     }
     for (let ix = 0; ix < rs; ix++) {
       indices[iIdx++] = centerIdx;
-      indices[iIdx++] = ringStart + ix;
-      indices[iIdx++] = ringStart + ix + 1;
-    }
-  }
-
-  // --- bottom cap ---
-  if (bottomCap) {
-    const centerIdx = vIdx;
-    const cBase = vIdx * FACTORY_FLOATS_PER_VERTEX;
-    vertices[cBase + 0] = 0;
-    vertices[cBase + 1] = -halfHeight;
-    vertices[cBase + 2] = 0;
-    vertices[cBase + 3] = 0;
-    vertices[cBase + 4] = -1;
-    vertices[cBase + 5] = 0;
-    vertices[cBase + 6] = 0.5;
-    vertices[cBase + 7] = 0.5;
-    vIdx++;
-    const ringStart = vIdx;
-    for (let ix = 0; ix <= rs; ix++) {
-      const u = ix / rs;
-      const theta = u * Math.PI * 2;
-      const sinT = Math.sin(theta);
-      const cosT = Math.cos(theta);
-      const base = vIdx * FACTORY_FLOATS_PER_VERTEX;
-      vertices[base + 0] = radiusBottom * sinT;
-      vertices[base + 1] = -halfHeight;
-      vertices[base + 2] = radiusBottom * cosT;
-      vertices[base + 3] = 0;
-      vertices[base + 4] = -1;
-      vertices[base + 5] = 0;
-      vertices[base + 6] = sinT * 0.5 + 0.5;
-      vertices[base + 7] = cosT * 0.5 + 0.5;
-      vIdx++;
-    }
-    for (let ix = 0; ix < rs; ix++) {
-      indices[iIdx++] = centerIdx;
-      indices[iIdx++] = ringStart + ix + 1;
-      indices[iIdx++] = ringStart + ix;
+      indices[iIdx++] = ringStart + ix + (direction < 0 ? 1 : 0);
+      indices[iIdx++] = ringStart + ix + (direction > 0 ? 1 : 0);
     }
   }
 

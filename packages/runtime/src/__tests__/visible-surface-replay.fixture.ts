@@ -16,6 +16,7 @@ import {
   buildFrameModel,
   decodeTape,
   encodeTape,
+  type FrameModel,
   halfToFloat,
   openReplay,
   replayDeviceRequest,
@@ -29,17 +30,45 @@ import { renderValue } from './standard-gbuffer-replay.fixture';
 
 type Save = (name: string, bytes: Uint8Array) => void | Promise<void>;
 
+function visibleSurfaceViewIds(model: FrameModel): ReadonlySet<string> {
+  const textures = new Set(
+    model.resources
+      .filter(
+        (resource) =>
+          resource.kind === 'texture' &&
+          (resource.descriptor as { desc?: { label?: string } } | null)?.desc?.label ===
+            'visible-surface',
+      )
+      .map((resource) => resource.resourceId),
+  );
+  if (textures.size === 0) throw new Error('missing captured visible surface');
+  return new Set(
+    model.resources
+      .filter(
+        (resource) =>
+          resource.kind === 'texture-view' &&
+          textures.has(
+            (resource.descriptor as { sourceHandleId?: string } | null)?.sourceHandleId ?? '',
+          ),
+      )
+      .map((resource) => resource.resourceId),
+  );
+}
+
 /** A real disocclusion must populate the receiver attachment in the late phase. */
 async function verifyRevealedSurfaceReplay(bytes: Uint8Array, expected: Uint8Array, save: Save) {
   const tape = decodeTape(bytes).unwrap();
   const model = buildFrameModel(tape);
-  const phases = model.passes.filter((pass) => pass.colorAttachmentViewHandleIds.length === 6);
+  const surfaces = visibleSurfaceViewIds(model);
+  const phases = model.passes.filter((pass) =>
+    surfaces.has(pass.colorAttachmentViewHandleIds[6] ?? ''),
+  );
   expect(phases).toHaveLength(2);
   const early = phases[0];
   const late = phases[1];
   const earlyWork = early?.workIndices.at(-1);
   const lateWork = late?.workIndices.at(-1);
-  const identity = late?.colorAttachmentViewHandleIds[5];
+  const identity = late?.colorAttachmentViewHandleIds[6];
   if (earlyWork === undefined || lateWork === undefined || identity === undefined || !late)
     throw new Error('missing early/late receiver work');
   const removed = new Set(late.workIndices.map((index) => model.works[index]?.eventIndex));
@@ -371,7 +400,6 @@ export async function verifyVisibleSurfaceReplay(
       renderer.setProfile({
         ...original,
         renderPath: 'deferred',
-        shadows: 'off',
         visibleSurface: true,
       }),
     );
@@ -411,7 +439,11 @@ export async function verifyVisibleSurfaceReplay(
         world.set(entity, MeshRenderer, { materials: [solid, cutout] }).unwrap();
         for (let i = 0; i < 4; i++) await draw();
         renderValue(requestObservation(['visible-surface']));
+        const maskPending = recorder.captureFrame();
+        (await recorder.frameBoundary()).unwrap();
         const maskReceipt = await draw();
+        (await recorder.frameBoundary()).unwrap();
+        await save(`${lane}-masked.rhitape`, (await maskPending).unwrap().bytes);
         const maskResult = renderValue(
           await renderer.observe(maskReceipt, { include: ['visible-surface'] }),
         );
@@ -421,11 +453,11 @@ export async function verifyVisibleSurfaceReplay(
         const maskRows = Array.from({ length: 4096 }, (_, i) => i).filter(
           (i) => ((maskWords[i * 4 + 3] ?? 0) & 1) !== 0,
         );
+        await save(`${lane}-masked.rgba32uint`, masked.bytes);
+        await save(`${lane}-masked-records.u32`, new Uint8Array(masked.records.buffer));
         expect([...new Set(maskRows.map((i) => maskWords[i * 4]))].sort()).toEqual([3, 4]);
         expect(maskRows.length).toBeGreaterThan(100);
         expect(maskRows.length).toBeLessThan(300);
-        await save(`${lane}-masked.rgba32uint`, masked.bytes);
-        await save(`${lane}-masked-records.u32`, new Uint8Array(masked.records.buffer));
         world.set(entity, MeshRenderer, { materials: [solid, solid] }).unwrap();
         const observation = renderValue(
           await renderer.observe(capturedReceipt, { include: ['visible-surface'] }),
@@ -451,10 +483,11 @@ export async function verifyVisibleSurfaceReplay(
         else expect(live).toEqual(direct);
         const tape = decodeTape(captured.bytes).unwrap();
         const model = buildFrameModel(tape);
+        const surfaces = visibleSurfaceViewIds(model);
         const geometry = model.works
-          .filter((work) => work.attachments?.colorViewHandleIds.length === 6)
+          .filter((work) => surfaces.has(work.attachments?.colorViewHandleIds[6] ?? ''))
           .at(-1);
-        if (geometry === undefined) throw new Error('missing six-target geometry work');
+        if (geometry === undefined) throw new Error('missing visible surface geometry work');
         const adapter = (await webgpu.rhi.requestAdapter()).unwrap();
         const fresh = (
           await adapter.requestDevice(replayDeviceRequest(tape, adapter.features, adapter.limits))
@@ -468,7 +501,7 @@ export async function verifyVisibleSurfaceReplay(
           await openReplay(tape, { device: fresh, createShaderModule: webgpu.createShaderModule })
         ).unwrap();
         try {
-          const resource = geometry.attachments?.colorViewHandleIds[5];
+          const resource = geometry.attachments?.colorViewHandleIds[6];
           if (resource === undefined) throw new Error('missing visible surface attachment');
           const read = (await replay.readResourceAtWork(resource, geometry.workIndex)).unwrap();
           expect(read.bytes).toEqual(live);
@@ -790,7 +823,6 @@ export async function verifyVisibleSurfaceReplay(
       renderer.setProfile({
         ...original,
         renderPath: 'deferred',
-        shadows: 'off',
         visibleSurface: false,
       }),
     );
@@ -810,7 +842,6 @@ export async function verifyVisibleSurfaceReplay(
       renderer.setProfile({
         ...original,
         renderPath: 'deferred',
-        shadows: 'off',
         visibleSurface: true,
       }),
     );
@@ -885,10 +916,14 @@ export async function verifyVisibleSurfaceReplay(
     (await recorder.frameBoundary()).unwrap();
     const cold = await snapshot('recovery-cold');
     (await recorder.frameBoundary()).unwrap();
-    await save('recovery-cold.rhitape', (await recoveryCapture).unwrap().bytes);
+    const recoveryBytes = (await recoveryCapture).unwrap().bytes;
+    await save('recovery-cold.rhitape', recoveryBytes);
     expect(cold.covered).toBe(reused.covered);
     expect(cold.receipt.deviceGeneration).toBeGreaterThan(beforeLoss.deviceGeneration);
-    expect(cold.motion[3]).toBe(1);
+    // Rebuilt GPU Scene rows seed previous = current. The packed lane carries
+    // reactive = 1 plus motion-invalid = 2 until a new submission is accepted.
+    expect(cold.motion[3]).toBe(3);
+    await verifyTemporalReplay('recovery-cold', recoveryBytes, cold.temporalBytes, save);
     for (let i = 0; i < 4; i++) await draw();
     const recovered = await snapshot('recovered');
     expect(recovered.covered).toBe(reused.covered);

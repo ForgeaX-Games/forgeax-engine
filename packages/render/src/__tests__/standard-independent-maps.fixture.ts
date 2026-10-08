@@ -14,8 +14,8 @@ import surfaceSource from '../../../shader/src/default_standard_surface.wgsl?raw
 import abiSource from '../../../shader/src/surface_v1.wgsl?raw';
 import samplingSource from '../../../shader/src/surface-sampling.wgsl?raw';
 import normalSource from '../../../shader/src/tbn.wgsl?raw';
+import { generateParameterModule } from '../../../shader-compiler/src/material/cook';
 import { lowerStandardPhysicalBindings } from '../../../shader-compiler/src/material/lower-standard-contract';
-import { generateParameterModule } from '../../../shader-compiler/src/material/parameter-module';
 import { packMaterialProgramRow } from '../material-row';
 import { buildPbrMaterialUserRegionEntries } from '../pbr-pipeline';
 import { materialStandardTextureMask } from '../render-system-extract';
@@ -40,17 +40,37 @@ const schema = [
   ),
 ];
 const derived = derive(schema);
+// Every texture and alpha-hash block is live; the raster fixture has no ray
+// context and no projection fields in its contract.
+const UNDEFINED = new Set([
+  'RAY_SURFACE_CONTEXT',
+  'TRIPLANAR_PROJECTION_AVAILABLE',
+  'OBJECT_SPACE_NORMAL_AVAILABLE',
+]);
+function preprocess(text: string): string {
+  const live: boolean[] = [];
+  return text
+    .split('\n')
+    .filter((line) => {
+      const ifdef = /^#ifdef\s+(\w+)/.exec(line);
+      if (ifdef) live.push(!UNDEFINED.has(ifdef[1] as string));
+      else if (line.startsWith('#else')) live.push(!(live.pop() as boolean));
+      else if (line.startsWith('#endif')) live.pop();
+      return !line.startsWith('#') && live.every(Boolean);
+    })
+    .join('\n');
+}
 const source = lowerStandardPhysicalBindings(
-  [
-    generateParameterModule(schema),
-    abiSource,
-    samplingSource.replace(/#ifdef RAY_SURFACE_CONTEXT[\s\S]*?#else/g, ''),
-    normalSource,
-    alphaHashSource,
-    surfaceSource,
-  ]
-    .join('\n')
-    .replace(/^#.*$/gm, '') +
+  preprocess(
+    [
+      generateParameterModule(schema),
+      abiSource,
+      samplingSource,
+      normalSource,
+      alphaHashSource,
+      surfaceSource,
+    ].join('\n'),
+  ) +
     `
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
   let p = array<vec2f,3>(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));

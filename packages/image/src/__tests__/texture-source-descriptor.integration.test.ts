@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { describe, expect, it } from 'vitest';
 import { produceTextureSource } from '../texture/importer.js';
 import type { TextureSourceDescriptor } from '../texture/source-descriptor.js';
@@ -40,6 +41,7 @@ describe('texture source descriptor producer contract', () => {
     const descriptor = densityDescriptor();
     const raw = new Uint8Array(BODY_BYTES);
     raw[0] = 17;
+    raw[raw.length >>> 1] = 87;
     raw[raw.length - 1] = 231;
     const readSibling = async (uri: string) => {
       expect(uri).toBe(descriptor.rawSibling);
@@ -57,15 +59,21 @@ describe('texture source descriptor producer contract', () => {
     if (!result.ok) return;
     expect(result.value.guid).toBe(GUID);
     expect(result.value.kind).toBe('texture');
-    expect(result.value.payload).toEqual({
+    const { data, ...metadata } = result.value.payload;
+    expect(metadata).toEqual({
       kind: 'texture',
       shape: descriptor.shape,
       format: descriptor.format,
       colorSpace: 'linear',
       mips: { kind: 'none' },
-      data: raw,
     });
-    expect(result.value.artifacts.body?.bytes).toEqual(raw);
+    expect(data).toBeInstanceOf(Uint8Array);
+    expect(Buffer.compare(data, raw)).toBe(0);
+    const body = result.value.artifacts.body;
+    expect(body).toBeDefined();
+    if (body === undefined) throw new Error('producer must emit the full texture body');
+    expect(body.bytes).toBeInstanceOf(Uint8Array);
+    expect(Buffer.compare(body.bytes, raw)).toBe(0);
     expect(result.value.artifacts.body?.mediaType).toBe('application/x-forgeax-r8');
   });
 
@@ -85,7 +93,11 @@ describe('texture source descriptor producer contract', () => {
       if (!result.ok) continue;
       expect(result.value.guid).toBe(GUID);
       expect(result.value.payload.shape).toEqual(descriptor.shape);
-      expect(result.value.artifacts.body?.bytes).toEqual(raw);
+      const body = result.value.artifacts.body;
+      expect(body).toBeDefined();
+      if (body === undefined) throw new Error('producer must emit the full texture body');
+      expect(body.bytes).toBeInstanceOf(Uint8Array);
+      expect(Buffer.compare(body.bytes, raw)).toBe(0);
     }
   });
 

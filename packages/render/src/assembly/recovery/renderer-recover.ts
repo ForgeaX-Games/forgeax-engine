@@ -20,6 +20,10 @@ import {
   postProcessShaderEntrySignature,
   postProcessShaderPipelineLabel,
 } from '../../fullscreen-post-process-pass';
+import type {
+  GpuPassTimingObservation,
+  GpuPassTimingSession,
+} from '../../record/gpu-pass-timing/index.js';
 import type { PipelineState, RenderSystemInternals } from '../../record/render-context';
 import type {
   RecoveryGraphCandidate,
@@ -49,19 +53,19 @@ import {
   runRecoveryStep,
 } from './recovery-attempt';
 
-type RendererShaderState = {
+export type RendererShaderState = {
   readonly device: RhiDevice;
   shaderInstance: ShaderCatalog | null;
   sharedShaderModuleAdapter: ShaderDeviceAdapterInternal | null;
   sharedImmediateShaderModuleAdapter: ShaderDeviceAdapterInternal | null;
 };
-type PerShaderMaterialLayoutCacheEntry = {
+export type PerShaderMaterialLayoutCacheEntry = {
   readonly source: string;
   readonly paramSchema: readonly ParamSchemaEntry[];
   readonly layoutKind: LayoutKind;
   readonly layout: { materialBgl: BindGroupLayout; pipelineLayout: PipelineLayout } | null;
 };
-type RendererPipelineCacheState = {
+export type RendererPipelineCacheState = {
   materialShaderPipelineCache: Map<string, RenderPipeline>;
   materialShaderManifestEntryCache: Map<string, MaterialShaderManifestEntry>;
   materialShaderVariantResolutionCache: WeakMap<object, Map<string, string | undefined>>;
@@ -79,7 +83,9 @@ type RendererPipelineCacheState = {
     { source: string; contract: MaterialShaderBindingContract }
   >;
 };
-type RendererCandidateState = {
+export type RendererCandidateState = {
+  gpuPassTimingSession?: GpuPassTimingSession | undefined;
+  gpuPassTimingUnavailable?: GpuPassTimingObservation | undefined;
   readonly device: RhiDevice;
   readonly context: RhiCanvasContext;
   readonly scope: DeviceScope;
@@ -93,7 +99,9 @@ type RendererCandidateState = {
   growMeshSsbo: ((neededSlots: number) => MeshSsboGrowResult) | undefined;
   meshSsboState: MeshSsboState | undefined;
 };
-type RendererGenerationBindings = {
+export type RendererGenerationBindings = {
+  readonly gpuPassTimingSession?: GpuPassTimingSession | undefined;
+  readonly gpuPassTimingUnavailable?: GpuPassTimingObservation | undefined;
   readonly gpuStore: GpuResidencyCache;
   readonly dynamicTextureStore: DynamicTextureStore;
   readonly shaderState: RendererShaderState;
@@ -103,7 +111,7 @@ type RendererGenerationBindings = {
   readonly growMeshSsbo: ((neededSlots: number) => MeshSsboGrowResult) | undefined;
   readonly meshSsboState: MeshSsboState | undefined;
 };
-type RendererGeneration = GenerationAggregate<
+export type RendererGeneration = GenerationAggregate<
   RhiDevice,
   RhiCanvasContext,
   PipelineState,
@@ -112,6 +120,9 @@ type RendererGeneration = GenerationAggregate<
 >;
 
 export interface RendererRecoveryDependencies {
+  readonly prepareGpuPassTimingState: (
+    device: RhiDevice,
+  ) => Pick<RendererGenerationBindings, 'gpuPassTimingSession' | 'gpuPassTimingUnavailable'>;
   readonly isDisposed: () => boolean;
   readonly internals: WebGPURendererInternals;
   readonly getActiveDeviceScope: () => DeviceScope;
@@ -185,6 +196,7 @@ export interface RendererRecovery {
 
 export function createRendererRecovery(deps: RendererRecoveryDependencies): RendererRecovery {
   const {
+    prepareGpuPassTimingState,
     isDisposed,
     internals,
     getActiveDeviceScope,
@@ -361,6 +373,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
         candidateGpuStore.destroyAll();
       }
       candidateDynamicTextureStore.destroyAll();
+      candidateState.gpuPassTimingSession?.dispose();
       recoveryScope.abandon();
       if (getCandidateBuildState() === candidateState) setCandidateBuildState(undefined);
       if (getCandidateShaderState() === candidateState.shaderState)
@@ -447,6 +460,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
       return err(cause);
     };
     try {
+      Object.assign(candidateState, prepareGpuPassTimingState(device));
       setRecoveryPhase('rehydrate');
       const preparation = await runRecoveryStep(
         async (attemptToken) => {
@@ -476,7 +490,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
         continuation,
       );
       if (preparation.kind === 'timeout') {
-        recordFailure('rehydrate', preparation.timeout.cause);
+        recordFailure('rehydrate', preparation.error);
         releaseCandidate();
         return err(new RecoverError('recover-device-unavailable'));
       }
@@ -528,7 +542,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
         continuation,
       );
       if (pipeline.kind === 'timeout') {
-        recordFailure('compile-graph', pipeline.timeout.cause);
+        recordFailure('compile-graph', pipeline.error);
         releaseCandidate();
         return err(new RecoverError('recover-device-unavailable'));
       }
@@ -587,6 +601,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
     Object.defineProperties(candidateInternals, {
       assets: { value: assets },
       device: { value: candidateState.device },
+      gpuPassTimingSession: { value: candidateState.gpuPassTimingSession },
       context: { value: candidateState.context },
       deviceScope: { value: candidateState.scope },
       gpuStore: { value: candidateState.gpuStore },
@@ -619,6 +634,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
       getRenderTargetPhysical: { value: () => undefined },
       resolveRenderTargetTextureSource: { value: () => undefined },
       encodeRenderTargetReadbacks: { value: () => undefined },
+      encodeFramebufferSnapshots: { value: undefined },
       getPostProcessParamsBuffer: {
         value: (id: string) => candidatePostProcess.paramsBuffers.get(id),
       },
@@ -689,7 +705,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
     }
     if (graphPreparation.kind === 'ready') {
       recoveryGraphCandidate = graphPreparation.candidate;
-      const candidateGraph = recoveryGraphCandidate.frameState.perFrameGraph;
+      const candidateGraph = recoveryGraphCandidate.frameState.compiledFrameGraph?.targets;
       const candidateGraphTexture = candidateGraph?.getColorTargetTexture('scene-color');
       const candidateGraphView = candidateGraph?.getColorTargetView('scene-color');
       const candidateGraphDescriptor = candidateGraph?.getColorTargetDescriptor('scene-color');
@@ -711,9 +727,8 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
           () => Date.now(),
           continuation,
         );
-        if (graphProbe.kind === 'timeout' || graphProbe.kind === 'error') {
-          const cause = graphProbe.kind === 'timeout' ? graphProbe.timeout.cause : graphProbe.error;
-          recordFailure('compile-graph', cause, {
+        if (graphProbe.kind !== 'value') {
+          recordFailure('compile-graph', graphProbe.error, {
             retryable: true,
             guidance: 'retry',
             owner: 'render-graph',
@@ -780,14 +795,11 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
           () => Date.now(),
           continuation,
         );
-        if (setupCompletion.kind === 'timeout' || setupCompletion.kind === 'error') {
-          recordFailure(
-            'compile-graph',
-            setupCompletion.kind === 'timeout'
-              ? setupCompletion.timeout.cause
-              : setupCompletion.error,
-            { owner: 'gpu-residency', resourceKind: 'texture' },
-          );
+        if (setupCompletion.kind !== 'value') {
+          recordFailure('compile-graph', setupCompletion.error, {
+            owner: 'gpu-residency',
+            resourceKind: 'texture',
+          });
           releaseCandidate();
           return err(new RecoverError('recover-device-unavailable'));
         }
@@ -802,7 +814,20 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
       graphCandidate: recoveryGraphCandidate,
     });
     recoveryRootBundle = preparedRecoveryRoots;
-    const recoveryRootCount = preparedRecoveryRoots.roots.length;
+    const timingSession = candidateState.gpuPassTimingSession;
+    const recoveryRoots = [
+      ...preparedRecoveryRoots.roots,
+      ...(timingSession === undefined
+        ? []
+        : [
+            {
+              kind: 'feature' as const,
+              create: () => timingSession,
+              cleanup: () => timingSession.dispose(),
+            },
+          ]),
+    ];
+    const recoveryRootCount = recoveryRoots.length;
     const candidateGeneration = await runRecoveryStep<RendererGeneration, RhiError>(
       async (attemptToken) => {
         const value = await buildGenerationAggregate<RendererGeneration>({
@@ -811,6 +836,8 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
           context,
           pipeline: candidatePipelineState,
           producerBindings: {
+            gpuPassTimingSession: candidateState.gpuPassTimingSession,
+            gpuPassTimingUnavailable: candidateState.gpuPassTimingUnavailable,
             gpuStore: candidateGpuStore,
             dynamicTextureStore: candidateDynamicTextureStore,
             shaderState: candidateState.shaderState,
@@ -820,7 +847,7 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
             growMeshSsbo: candidateState.growMeshSsbo,
             meshSsboState: candidateState.meshSsboState,
           },
-          roots: preparedRecoveryRoots.roots,
+          roots: recoveryRoots,
         });
         if (attemptToken !== undefined && !attemptToken.isValid('compile-graph', Date.now())) {
           if (value.ok) value.value.scope.abandon();
@@ -853,18 +880,11 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
       () => Date.now(),
       continuation,
     );
-    if (candidateGeneration.kind === 'timeout' || candidateGeneration.kind === 'error') {
+    if (candidateGeneration.kind !== 'value') {
       recordFailure(
         'compile-graph',
-        candidateGeneration.kind === 'timeout'
-          ? candidateGeneration.timeout.cause
-          : candidateGeneration.error,
-        candidateGeneration.kind === 'error'
-          ? {
-              owner: candidateGeneration.error instanceof RhiError ? 'renderer' : 'renderer',
-              resourceKind: 'pipeline',
-            }
-          : {},
+        candidateGeneration.error,
+        candidateGeneration.kind === 'error' ? { owner: 'renderer', resourceKind: 'pipeline' } : {},
       );
       releaseCandidate();
       return err(new RecoverError('recover-device-unavailable'));
@@ -884,9 +904,8 @@ export function createRendererRecovery(deps: RendererRecoveryDependencies): Rend
       () => Date.now(),
       continuation,
     );
-    if (deviceProbe.kind === 'timeout' || deviceProbe.kind === 'error') {
-      const cause = deviceProbe.kind === 'timeout' ? deviceProbe.timeout.cause : deviceProbe.error;
-      recordFailure('compile-graph', cause, {
+    if (deviceProbe.kind !== 'value') {
+      recordFailure('compile-graph', deviceProbe.error, {
         retryable: true,
         guidance: 'retry',
         owner: 'backend',

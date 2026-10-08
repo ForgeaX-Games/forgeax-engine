@@ -28,6 +28,7 @@ export interface StartEngineWorkerOptions {
   readonly build?: string;
   readonly time?: import('@forgeax/engine-ecs').TimePolicy;
   readonly diagnostics?: import('./types').ExecutionDiagnosticsOptions;
+  readonly outputColorSpace?: import('@forgeax/engine-render').OutputColorSpace;
   readonly timeoutMs: number;
   readonly workers: import('./types').ExecutionSelection;
   readonly workerFactory?: () => Worker;
@@ -142,6 +143,9 @@ export async function startEngineWorker(
     ...(options.build !== undefined ? { build: options.build } : {}),
     ...(options.time !== undefined ? { time: options.time } : {}),
     ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+    ...(options.outputColorSpace === undefined
+      ? {}
+      : { outputColorSpace: options.outputColorSpace }),
     workers: options.workers,
   };
   worker.postMessage(init as ExecutionInitMessage, [

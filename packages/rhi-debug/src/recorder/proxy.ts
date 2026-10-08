@@ -5,9 +5,10 @@ import {
   type CreateShaderModuleFn,
   type CreateShaderModuleImmediateFn,
   type DebugRhiInstance,
-  wrap,
-  wrapCreateShaderModule,
-} from '../recorder';
+  recorderDeviceIdentity,
+} from './core';
+import { wrapCreateShaderModule, wrapCreateShaderModuleImmediate } from './shader';
+import { wrap } from './wrap';
 
 export interface RecordableBackend {
   readonly rhi: RhiInstance & {
@@ -36,19 +37,7 @@ export function createRecorderProxy(backend: RecordableBackend): RecorderProxy {
   const wrappedCreateShaderModuleImmediate =
     originalCreateShaderModuleImmediate === undefined
       ? undefined
-      : (device: RhiDevice, desc: { code: string; label?: string | undefined }) => {
-          const realDevice =
-            (device as RhiDevice & { readonly _realDevice?: RhiDevice })._realDevice ?? device;
-          const result = originalCreateShaderModuleImmediate(realDevice, desc);
-          if (!result.ok) return result;
-          const hId = recorder.pushExternalCreateEvent(result.value, 'shaderModule', {
-            kind: 'createShaderModule',
-            handleId: '' as import('../types').HandleId,
-            wgslCode: desc.code,
-          });
-          recorder.registerShaderModule(result.value, hId);
-          return result;
-        };
+      : wrapCreateShaderModuleImmediate(originalCreateShaderModuleImmediate, recorder);
   const acquireCanvasContext = backend.rhi.acquireCanvasContext;
   // Runtime's explicit-RHI seam receives the wrapped singleton as one value.
   // Keep the standalone shader factory enumerable on that value so the
@@ -80,16 +69,23 @@ export function createRecorderProxy(backend: RecordableBackend): RecorderProxy {
             return ok({
               ...context,
               configure(configuration) {
-                const device = (
-                  configuration.device as RhiDevice & {
-                    readonly _realDevice?: RhiDevice;
-                  }
-                )._realDevice;
-                return context.configure({
+                const device = recorderDeviceIdentity(configuration.device);
+                const configured = context.configure({
                   ...configuration,
                   ...(device === undefined ? {} : { device }),
                 });
+                if (configured.ok) {
+                  // The presented color space is what the context reports back, not
+                  // what was requested: a backend without canvas color spaces drops it.
+                  const reported = context.getConfiguration();
+                  recorder.recordCanvasConfiguration({
+                    canvasFormat: configuration.format ?? reported?.format ?? 'bgra8unorm',
+                    canvasColorSpace: reported?.colorSpace === 'display-p3' ? 'display-p3' : 'srgb',
+                  });
+                }
+                return configured;
               },
+              getConfiguration: () => context.getConfiguration(),
             });
           },
         }),
@@ -101,7 +97,7 @@ export function createRecorderProxy(backend: RecordableBackend): RecorderProxy {
       ? {}
       : { createShaderModuleImmediate: wrappedCreateShaderModuleImmediate }),
     unwrapDeviceForSurface(device) {
-      const raw = (device as RhiDevice & { readonly _realDevice?: RhiDevice })._realDevice;
+      const raw = recorderDeviceIdentity(device);
       if (raw !== undefined) return ok(raw);
       return err(
         createRhiDebugError('capture-unavailable', {

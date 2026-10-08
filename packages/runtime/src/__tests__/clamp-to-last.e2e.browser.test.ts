@@ -100,7 +100,8 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
   let canvas: HTMLCanvasElement | undefined;
   let renderer: EngineRenderer | undefined;
 
-  afterEach(() => {
+  afterEach(async () => {
+    await renderer?.dispose();
     renderer = undefined;
     if (canvas !== undefined && canvas.parentNode !== null) {
       canvas.parentNode.removeChild(canvas);
@@ -185,6 +186,8 @@ describe('clamp-to-last e2e browser (m3-w6)', () => {
         environment: { lease: attachment.value },
       });
       expect(drawn.ok).toBe(true);
+      if (!drawn.ok) throw drawn.error;
+      expect((await drawn.value.completed).ok).toBe(true);
     }
 
     const sutAttributable = sutErrors.filter((e) => SUT_ATTRIBUTABLE_RENDER_CODES.has(e.code));

@@ -2,22 +2,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { selectEnvironment } from '../environment/frame';
-import type {
-  AtmosphereParameters,
-  EnvironmentCandidate,
-  FogCandidate,
-} from '../extract/environment';
+import type { EnvironmentCandidate, FogCandidate } from '../extract/environment';
 import { SunCardinalityError } from '../index';
+import { earthAtmosphere } from './atmosphere-fixture';
 
-const atmosphereParameters: AtmosphereParameters = {
-  turbidity: 2,
-  rayleigh: 1,
-  mieCoefficient: 0.005,
-  mieDirectionalG: 0.8,
-  sunAngularRadius: 0.004675,
-  circumsolarStrength: 1,
-  circumsolarWidth: 1,
-};
+const atmosphereParameters = earthAtmosphere;
 
 const image = (entityKey: number, sourceKey: string): EnvironmentCandidate => ({
   kind: 'image',
@@ -113,13 +102,13 @@ describe('Environment and Fog selection (M2)', () => {
   });
 
   it.each([
-    ['turbidity', { turbidity: -1 }],
-    ['rayleigh', { rayleigh: Number.NaN }],
-    ['mieCoefficient', { mieCoefficient: -0.001 }],
-    ['mieDirectionalG', { mieDirectionalG: 1.1 }],
+    ['planetRadius', { planetRadius: -1 }],
+    ['rayleighScaleHeight', { rayleighScaleHeight: Number.NaN }],
+    ['mieScattering', { mieScattering: -0.001 }],
+    ['mieAnisotropy', { mieAnisotropy: 1.1 }],
     ['sunAngularRadius', { sunAngularRadius: Number.POSITIVE_INFINITY }],
-    ['circumsolarStrength', { circumsolarStrength: -0.001 }],
-    ['circumsolarWidth', { circumsolarWidth: 0.1 }],
+    ['multipleScattering', { multipleScattering: -0.001 }],
+    ['absorptionHalfWidth', { absorptionHalfWidth: 0.1 }],
   ] as const)('rejects invalid Atmosphere.%s with field-owned detail', (field, override) => {
     const result = selection(
       [
@@ -142,13 +131,13 @@ describe('Environment and Fog selection (M2)', () => {
   });
 
   it.each([
-    ['turbidity', 1, 20],
-    ['rayleigh', 0, 100],
-    ['mieCoefficient', 0, 100],
-    ['mieDirectionalG', 0, 0.999],
-    ['sunAngularRadius', 0, 1],
-    ['circumsolarStrength', 0, 4],
-    ['circumsolarWidth', 0.25, 4],
+    ['planetRadius', 1, 1e9],
+    ['rayleighScaleHeight', 1, 1e8],
+    ['mieScattering', 0, 1],
+    ['mieAnisotropy', -0.99, 0.99],
+    ['sunAngularRadius', 0, 0.1],
+    ['multipleScattering', 0, 2],
+    ['absorptionHalfWidth', 1, 1e8],
   ] as const)('accepts the documented %s boundaries', (field, minimum, maximum) => {
     for (const value of [minimum, maximum]) {
       const result = selection(
@@ -168,13 +157,13 @@ describe('Environment and Fog selection (M2)', () => {
   });
 
   it.each([
-    ['turbidity', [0, 21]],
-    ['rayleigh', [Number.NEGATIVE_INFINITY, Number.NaN]],
-    ['mieCoefficient', [-Number.MIN_VALUE, Number.POSITIVE_INFINITY]],
-    ['mieDirectionalG', [-Number.MIN_VALUE, 1]],
+    ['planetRadius', [0, 1e9 + 1]],
+    ['rayleighScaleHeight', [Number.NEGATIVE_INFINITY, Number.NaN]],
+    ['mieScattering', [-Number.MIN_VALUE, Number.POSITIVE_INFINITY]],
+    ['mieAnisotropy', [-1, 1]],
     ['sunAngularRadius', [-Number.MIN_VALUE, Number.POSITIVE_INFINITY]],
-    ['circumsolarStrength', [-Number.MIN_VALUE, 4.001]],
-    ['circumsolarWidth', [0.249, 4.001]],
+    ['multipleScattering', [-Number.MIN_VALUE, 2.001]],
+    ['absorptionHalfWidth', [0.999, 1e8 + 1]],
   ] as const)('rejects %s values outside the shared shader domain', (field, values) => {
     for (const value of values) {
       const result = selection(
@@ -205,7 +194,7 @@ describe('Environment and Fog selection (M2)', () => {
           kind: 'atmosphere',
           entityKey: 3,
           sourceKey: 'sky-a',
-          atmosphere: { ...atmosphereParameters, rayleigh: 1.25 },
+          atmosphere: { ...atmosphereParameters, rayleighScaleHeight: 1.25 },
         },
       ],
       [],
@@ -217,8 +206,8 @@ describe('Environment and Fog selection (M2)', () => {
     expect(baseline.value.source).toMatchObject({ atmosphere: atmosphereParameters });
     expect(baseline.value.signature).not.toBe(changed.value.signature);
     expect(baseline.value.signature).toContain('sunAngularRadius');
-    expect(baseline.value.signature).toContain('circumsolarStrength');
-    expect(baseline.value.signature).toContain('circumsolarWidth');
+    expect(baseline.value.signature).toContain('multipleScattering');
+    expect(baseline.value.signature).toContain('absorptionHalfWidth');
   });
 
   it('keeps Fog orthogonal and produces identical direct/clustered frame facts', () => {
@@ -246,12 +235,11 @@ describe('Environment and Fog selection (M2)', () => {
     expect(noFog.value.signature).not.toBe(withFog.value.signature);
   });
 
-  it('keeps record assembly on the immutable FramePlan boundary', () => {
+  it('keeps Standard record assembly off World queries', () => {
     const source = readFileSync(
       fileURLToPath(new URL('../pipeline/standard-pipeline.ts', import.meta.url)),
       'utf8',
     );
-    expect(source).toContain('FramePlan');
     expect(source).not.toMatch(/world\.query\s*\(/);
   });
 });

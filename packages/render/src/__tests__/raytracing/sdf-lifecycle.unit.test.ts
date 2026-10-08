@@ -11,7 +11,11 @@ it('releases partial and completed SDF/card allocations and rejects invalid snap
   const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
   assert(device instanceof RhiNullDevice);
   const fixture = await prepareSdfCardsBaseFixture(),
-    field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
+    field = {
+      ...fixture.field,
+      bricks: Uint32Array.from(fixture.field.bricks),
+      values: Float32Array.from(fixture.field.values),
+    };
   const instance = {
     instanceId: 7,
     geometryId: 9,
@@ -89,7 +93,7 @@ it('releases partial and completed SDF/card allocations and rejects invalid snap
   if (!overBudget.ok) {
     expect(overBudget.error.code).toBe('ray-reference-limit');
     expect(overBudget.error.detail).toEqual({
-      cause: 'capture exceeds texture extent or 256 MiB attachment budget',
+      cause: 'capture exceeds texture extent or attachment byte budget',
     });
   }
   expect(live()).toHaveLength(0);

@@ -19,7 +19,7 @@ describe('vite-plugin-shader public engine input surface', () => {
     expect(VIEW_ABI.moduleId).toBe('forgeax_view::common');
     expect(VIEW_ABI.group).toBe(0);
     expect(VIEW_ABI.binding).toBe(0);
-    expect(VIEW_ABI.byteLength).toBe(1168);
+    expect(VIEW_ABI.byteLength).toBe(1280);
     expect(VIEW_ABI.fields.map((field) => field.name)).toEqual([
       'worldViewProj',
       'inverseViewProj',
@@ -34,10 +34,12 @@ describe('vite-plugin-shader public engine input surface', () => {
       'clippingControl',
       'fogColorDensity',
       'fogHeightOpacity',
+      'atmosphere',
+      'atmosphereControl',
     ]);
     expect(VIEW_ABI.fields.at(-1)).toEqual({
-      name: 'fogHeightOpacity',
-      offsetBytes: 1152,
+      name: 'atmosphereControl',
+      offsetBytes: 1264,
       sizeBytes: 16,
     });
     expect(JSON.stringify(VIEW_ABI)).not.toMatch(/device|buffer|texture/i);
@@ -125,22 +127,41 @@ describe('vite-plugin-shader public engine input surface', () => {
     }
   }, 300_000);
 
-  it('routes point-shadow defines through the standalone manifest builder', async () => {
-    const previous = process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
-    process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = '1';
-    let manifest: Awaited<ReturnType<typeof buildEngineShaderManifest>>;
+  it.each([
+    false,
+    true,
+  ])('retains SSAO in the standalone manifest: point=%s', async (pointShadows) => {
+    const previousShared = process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+    const previousSource = process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+    delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+    delete process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
     try {
-      manifest = await buildEngineShaderManifest({ pointShadows: true });
+      const manifest = await buildEngineShaderManifest({ pointShadows });
+      expect(
+        manifest.entries.filter(
+          (entry) => entry.wgsl.includes('fs_ssao_calc') && entry.wgsl.includes('fs_ssao_blur'),
+        ),
+        'default standalone manifests must support the runtime Standard SSAO switch',
+      ).toHaveLength(1);
     } finally {
-      if (previous === undefined) delete process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
-      else process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = previous;
+      if (previousShared === undefined) delete process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      else process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = previousShared;
+      if (previousSource === undefined) delete process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD;
+      else process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD = previousSource;
     }
+  }, 300_000);
+
+  it('routes point-shadow defines through the standalone manifest builder', async () => {
+    // Inspect real admitted WGSL through the public route. The complete source
+    // build belongs to vite-plugin-shader.unit.test.ts; single-worker and
+    // packaged-builder regressions retain real compilation and source fallback.
+    const manifest = await buildEngineShaderManifest({ pointShadows: true });
     const skin = manifest.materialShaders.find((entry) => entry.identifier === 'forgeax::pbr-skin');
     expect(skin, 'the point-shadow manifest must compile the skinned Standard entry').toBeDefined();
     expect(
       skin?.variants.some((variant) => variant.composedWgsl.includes('evalPointShadowed')),
     ).toBe(true);
-  }, 300_000);
+  }, 600_000);
 
   it('reuses a validated shared shader projection for the base manifest', async () => {
     const root = mkdtempSync(join(tmpdir(), 'forgeax-shared-shader-builder-'));

@@ -10,6 +10,7 @@ import type { RhiCaps } from '@forgeax/engine-rhi';
 import { ChildOf, Children, GlobalTransform } from '@forgeax/engine-scene';
 import { type Asset, err, type Handle, ok, type Result } from '@forgeax/engine-types';
 import { Visibility } from '../components';
+import { stereoEyeCameras } from '../components/stereo-camera';
 import { renderMaterialContext } from '../extract/material-context';
 import type { RenderFeature } from '../features/types';
 import { renderFeatureCameraView } from '../features/view';
@@ -31,6 +32,7 @@ import { registerRenderSourceSystems } from '../scene/source-systems';
 import { getTransparentSortConfig } from '../systems/transparent-sort-config';
 import { renderTargetMaterialSourceIdentity } from '../targets/material-source';
 import { type CanvasTextureSource, isCanvasTextureSource } from '../textures/canvas-texture';
+import { isExternalTextureSource } from '../textures/external-texture';
 import { type PublishedCanvasFrame, publicationCanvasFrames } from './canvas';
 import {
   type RenderPublication,
@@ -57,6 +59,7 @@ export function createRenderPublisher(
   capabilities?: RhiCaps,
   features: readonly RenderFeature<unknown>[] = [],
   targetOwner?: RenderPublicationTargetOwner,
+  limits?: Readonly<Record<string, number>>,
 ) {
   const pendingMeshContent = new Set<Handle<string, 'shared'>>();
   const releaseTransforms = registerRenderSourceSystems(world, assets, {
@@ -219,7 +222,7 @@ export function createRenderPublisher(
           undefined,
           caches,
           {
-            ...(capabilities === undefined ? {} : renderMaterialContext(capabilities)),
+            ...(capabilities === undefined ? {} : renderMaterialContext(capabilities, limits)),
             cull: 'none',
             retainHidden: true,
             renderables: changed.size ? { kind: 'partial', entitiesByWorld: [changed] } : 'none',
@@ -241,7 +244,9 @@ export function createRenderPublisher(
           for (const material of materials) {
             const keys = new Set([
               ...Object.values(material.materialProgramKeys ?? {}),
-              ...(material.materialRay === undefined ? [] : [material.materialRay.programKey]),
+              ...Object.values(material.materialSurfacePrograms ?? {}).map(
+                (program) => program.programKey,
+              ),
               ...Object.values(material.materialSceneIndexProgramKeys ?? {}).map(
                 (program) => program.specializationKey,
               ),
@@ -270,6 +275,12 @@ export function createRenderPublisher(
         for (let i = 0; i < frame.renderables.length; i++) {
           const row = frame.renderables[i] as RenderableSnapshot;
           if (row.skin) return fail('unsupported', 'source GPU skin receipt');
+          if (
+            row.materials.some((material) =>
+              [...(material.textureSources?.values() ?? [])].some(isExternalTextureSource),
+            )
+          )
+            return fail('unsupported', 'renderer-local external texture source');
           const { worldId: _world, entityKey, transform, ...snapshot } = row;
           const template = { snapshot, dispatch: byRenderable.get(i) ?? [] };
           const key = JSON.stringify(template, (_key, value: unknown) =>
@@ -279,7 +290,9 @@ export function createRenderPublisher(
                     name,
                     isCanvasTextureSource(source)
                       ? `canvas:${source.canvasTextureId}`
-                      : renderTargetMaterialSourceIdentity(source),
+                      : isExternalTextureSource(source)
+                        ? `external:${source.externalTextureId}`
+                        : renderTargetMaterialSourceIdentity(source),
                   ])
                 : [...value]
               : ArrayBuffer.isView(value)
@@ -325,9 +338,12 @@ export function createRenderPublisher(
               worlds: [world],
               owner: 0,
               frameNumber: revision + 1,
-              ...(capabilities === undefined ? {} : { caps: capabilities }),
+              ...(capabilities === undefined
+                ? {}
+                : { caps: capabilities, ...(limits === undefined ? {} : { limits }) }),
               views: frame.cameras
                 .filter((camera) => camera.view?.enabled !== false)
+                .flatMap(stereoEyeCameras)
                 .map((camera) => ({
                   ...renderFeatureCameraView(camera),
                   ...(frame.cloudLayer === undefined
@@ -375,7 +391,7 @@ export function createRenderPublisher(
               undefined,
               capabilities === undefined
                 ? undefined
-                : renderMaterialContext(capabilities).materialContext,
+                : renderMaterialContext(capabilities, limits).materialContext,
             );
             publishPrograms([material]);
             for (const dependency of publicationDependencies({

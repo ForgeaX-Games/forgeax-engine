@@ -21,5 +21,6 @@
   "metrics-validate-runtime",
   "metrics-validate",
   "collectathon-boot-e2e",
-  "gpu-pass-timing-contract"
+  "gpu-pass-timing-contract",
+  "view-integration"
 ]

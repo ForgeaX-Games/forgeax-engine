@@ -33,6 +33,7 @@ it.each([
   try {
     const module = device.createShaderModule({
       code: `
+        ${functionSource('brdf.wgsl', 'specularF90')}
         ${functionSource('brdf.wgsl', 'f_schlick')}
         ${functionSource('ibl-shared.wgsl', 'fresnelSchlickRoughness')}
         ${functionSource('ibl-shared.wgsl', 'standardDiffuseWeight')}
@@ -105,6 +106,7 @@ it('roughness Fresnel retains the fifth-power reference across its domain', asyn
   try {
     const module = device.createShaderModule({
       code: `
+      ${functionSource('brdf.wgsl', 'specularF90')}
       ${functionSource('ibl-shared.wgsl', 'fresnelSchlickRoughness')}
       @group(0) @binding(0) var<storage, read_write> result: array<vec4<f32>>;
       @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {

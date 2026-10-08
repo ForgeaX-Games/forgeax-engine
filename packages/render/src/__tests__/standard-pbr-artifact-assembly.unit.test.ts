@@ -8,14 +8,66 @@ import { describe, expect, it } from 'vitest';
 import {
   assembleStandardPbrArtifact,
   resolveMaterialShaderArtifact,
-  resolveStandardPbrArtifact,
 } from '../assembly/material/assembly';
 
+import { ADMIT_EVERY_VARIANT } from '../assembly/shader-prewarm-policy';
 import { buildGpuDrivenPbrReadyModules } from '../assembly/webgpu-pbr-ready';
 
 const source = '@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4(0.0); }';
 
 describe('Standard PBR artifact assembly', () => {
+  it.each([
+    false,
+    true,
+  ])('keeps optional skin warmup only when immediate modules are unavailable (%s)', async (immediate) => {
+    const registry = new ShaderRegistry({ manifestUrl: undefined });
+    const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const labels: string[] = [];
+    const seeds = new Map<string, unknown>();
+    const input = {
+      registry,
+      device,
+      storageBufferCapable: false,
+      asyncCreateShaderModule: async (
+        owner: typeof device,
+        descriptor: { code: string; label?: string | undefined },
+      ) => {
+        labels.push(descriptor.label ?? '');
+        return rhi.createShaderModule(owner, descriptor);
+      },
+      immediateCreateShaderModule: immediate
+        ? () => {
+            throw new Error('unused variant');
+          }
+        : undefined,
+      pbrSkinEntry: { hash: 'skin', wgsl: source, glsl: '', bindings: '[]' },
+      pbrManifestEntry: undefined,
+      pbrSkinManifestEntry: {
+        identifier: 'forgeax::pbr-skin',
+        sourcePath: 'skin.wgsl',
+        composedWgsl: source,
+        paramSchema: '[]',
+        variants: [
+          {
+            definesKey: 'optional',
+            defines: { STORAGE_BUFFER_AVAILABLE: false },
+            composedWgsl: `${source}\n// optional skin`,
+          },
+        ],
+      },
+      extendedLightingShaderAvailable: false,
+      directionalPcssAvailable: false,
+      projectorAvailable: false,
+      seedShaderModule: (label: string, module: unknown) => seeds.set(label, module),
+      admitsVariant: ADMIT_EVERY_VARIANT,
+    };
+    const ready = await buildGpuDrivenPbrReadyModules(input);
+    expect(seeds.get('module-forgeax::pbr-skin')).toBe(ready.pbrSkinModule);
+    expect(labels).toEqual(
+      immediate ? ['pbr-skin'] : ['pbr-skin', 'module-forgeax::pbr-skin#optional'],
+    );
+  });
+
   it('reuses program facts when GPU prewarming rebuilds modules for another device', async () => {
     const registry = new ShaderRegistry({ manifestUrl: undefined });
     const program = registry.materialProgram(source);
@@ -54,6 +106,7 @@ describe('Standard PBR artifact assembly', () => {
         directionalPcssAvailable: false,
         projectorAvailable: false,
         seedShaderModule: (label, module) => seeded.set(label, module),
+        admitsVariant: ADMIT_EVERY_VARIANT,
       });
       const prepared = ready.gpuDrivenPbrPrograms.get('forgeax::default-standard-pbr|color=false');
       expect(prepared?.artifact.program).toBe(program);
@@ -107,6 +160,35 @@ describe('Standard PBR artifact assembly', () => {
       vertexColorAvailable: true,
     });
     expect(artifact?.program.source).toBe(address === 'scene-index' ? 'scene' : 'direct');
+  });
+
+  it('keeps visible-surface selection distinct in the artifact cache', () => {
+    const receipt = createStandardPbrArtifactReceipt();
+    const entry = {
+      program: createMaterialShaderProgram(source),
+      source,
+      paramSchema: [],
+      receipt,
+    };
+    const variants = [false, true].map((visible) => ({
+      definesKey: `VISIBLE_SURFACE_AVAILABLE=${visible}`,
+      defines: { VISIBLE_SURFACE_AVAILABLE: visible },
+      composedWgsl: `${source}\n// visible ${visible}`,
+      receipt,
+    }));
+    const manifest = { identifier: 'authored', variants };
+    const registry = {
+      findMaterialArtifact: () => ({ ok: true, value: entry }),
+      materialProgram: createMaterialShaderProgram,
+      materialShaderManifestEntries: () => [manifest],
+    } as unknown as Parameters<typeof resolveMaterialShaderArtifact>[1];
+    const ordinary = resolveMaterialShaderArtifact('authored', registry, { visibleSurface: false });
+    const visible = resolveMaterialShaderArtifact('authored', registry, { visibleSurface: true });
+    expect(ordinary?.program.source).toContain('visible false');
+    expect(visible?.program.source).toContain('visible true');
+    expect(resolveMaterialShaderArtifact('authored', registry, { visibleSurface: false })).toBe(
+      ordinary,
+    );
   });
 
   it('assembles the rigid registry entry from one receipt producer', () => {
@@ -195,6 +277,55 @@ describe('Standard PBR artifact assembly', () => {
     ).toBeUndefined();
   });
 
+  it.each([
+    'direct',
+    'scene-index',
+  ] as const)('keeps an exact published program that does not consume extra COLOR_0 (%s)', (address) => {
+    const registry = new ShaderRegistry({ manifestUrl: undefined });
+    const key = 'sha256:plain-material-program';
+    const receipt = createStandardPbrArtifactReceipt();
+    registry.installMaterialArtifact(key, { source, paramSchema: [], receipt });
+    const artifact = resolveMaterialShaderArtifact(key, registry, {
+      address,
+      pass: 'forward',
+      vertexColorAvailable: true,
+    });
+    expect(artifact?.program.source).toBe(source);
+    expect(artifact?.receipt).toBe(receipt);
+    expect(artifact?.vertexEntry).toBe(
+      address === 'scene-index' ? receipt.sceneIndexEntry : receipt.directEntry,
+    );
+    expect(artifact?.receipt?.vertexInputs.some((input) => input.semantic === 'color')).toBe(false);
+  });
+
+  it('rejects an exact published program whose required COLOR_0 is absent', () => {
+    const registry = new ShaderRegistry({ manifestUrl: undefined });
+    const key = 'sha256:colored-material-program';
+    registry.installMaterialArtifact(key, {
+      source,
+      paramSchema: [],
+      receipt: createStandardPbrArtifactReceipt(false, true),
+    });
+    expect(
+      resolveMaterialShaderArtifact(key, registry, {
+        address: 'scene-index',
+        vertexColorAvailable: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('keeps an exact published program without a producer receipt unavailable', () => {
+    const registry = new ShaderRegistry({ manifestUrl: undefined });
+    const key = 'sha256:unreceipted-material-program';
+    registry.installMaterialArtifact(key, { source, paramSchema: [] });
+    expect(
+      resolveMaterialShaderArtifact(key, registry, {
+        address: 'scene-index',
+        vertexColorAvailable: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it('selects the published COLOR_0 ABI and keeps colored/plain identities apart', () => {
     const plain = createStandardPbrArtifactReceipt();
     const colored = createStandardPbrArtifactReceipt(false, true);
@@ -231,12 +362,12 @@ describe('Standard PBR artifact assembly', () => {
           ],
         },
       ],
-    } as unknown as Parameters<typeof resolveStandardPbrArtifact>[1];
+    } as unknown as Parameters<typeof resolveMaterialShaderArtifact>[1];
 
-    const coloredArtifact = resolveStandardPbrArtifact('forgeax::default-standard-pbr', shader, {
+    const coloredArtifact = resolveMaterialShaderArtifact('forgeax::default-standard-pbr', shader, {
       vertexColorAvailable: true,
     });
-    const plainArtifact = resolveStandardPbrArtifact('forgeax::default-standard-pbr', shader, {
+    const plainArtifact = resolveMaterialShaderArtifact('forgeax::default-standard-pbr', shader, {
       vertexColorAvailable: false,
     });
 

@@ -283,7 +283,7 @@ export function normalizeAutoExposureFinalReadback(bytes: Uint8Array, format: Te
 } {
   if (format !== 'rgba8unorm' && format !== 'rgba8unorm-srgb'
     && format !== 'bgra8unorm' && format !== 'bgra8unorm-srgb') {
-    throw new Error(`ForgeaX AC-27 final-srgb observation format is not an 8-bit display format: ${format}`);
+    throw new Error(`ForgeaX AC-27 final-display observation format is not an 8-bit display format: ${format}`);
   }
   return {
     bytes: normalizeCanvasReadbackBytes(bytes, format),
@@ -329,7 +329,7 @@ function observationByDomain(observation: FrameReceiptObservation, domain: Domai
 }
 
 function stageFormat(domain: DomainObservation['domain']): 'rgba16float' | 'rgba8unorm-srgb' {
-  return domain === 'final-srgb' ? 'rgba8unorm-srgb' : 'rgba16float';
+  return domain === 'final-display' ? 'rgba8unorm-srgb' : 'rgba16float';
 }
 
 function provenance(options: AutoExposureForgeaxCaptureOptions): AutoExposureAc27ForgeaxProvenance {
@@ -428,7 +428,7 @@ export async function captureAutoExposureForgeax(options: AutoExposureForgeaxCap
     for (let frame = 0; frame < 2; frame += 1) {
       world.update(1 / 60).unwrap();
       if (frame === 1) {
-        const requested = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-srgb']);
+        const requested = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-display']);
         if (requested === undefined || !requested.ok) throw new Error(`ForgeaX AC-27 observation request failed: ${requested === undefined ? 'unavailable' : requested.error.code}`);
       }
       const drawn = renderer.draw({ leases: [attached.value], camera: { lease: attached.value }, environment: { lease: attached.value } });
@@ -438,13 +438,13 @@ export async function captureAutoExposureForgeax(options: AutoExposureForgeaxCap
     if (receipt === undefined) throw new Error('ForgeaX AC-27 did not produce a receipt');
     const completed = await receipt.completed;
     if (!completed.ok) throw new Error(`ForgeaX AC-27 receipt failed: ${completed.error.code}`);
-    const observed = await renderer.observe(receipt, { include: ['linear-hdr', 'linear-ldr', 'final-srgb'] });
+    const observed = await renderer.observe(receipt, { include: ['linear-hdr', 'linear-ldr', 'final-display'] });
     if (!observed.ok) throw new Error(`ForgeaX AC-27 observation failed: ${JSON.stringify({ error: observed.error, passNames: debugHost.perFramePassNames, features: debugHost.renderFeatureDiagnostics?.() })}`);
     const roi = roiFor(options.width, options.height);
     const domains = {
       hdr: observationByDomain(observed.value, 'linear-hdr'),
       ldr: observationByDomain(observed.value, 'linear-ldr'),
-      final: observationByDomain(observed.value, 'final-srgb'),
+      final: observationByDomain(observed.value, 'final-display'),
     };
     const finalRaw = compactRows(domains.final.bytes, domains.final.metadata.bytesPerRow, options.width, options.height, 4);
     const normalizedFinal = normalizeAutoExposureFinalReadback(finalRaw, domains.final.metadata.format);

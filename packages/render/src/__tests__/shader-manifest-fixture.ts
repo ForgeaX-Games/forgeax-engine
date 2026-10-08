@@ -62,28 +62,49 @@ const entries: readonly FixtureEntry[] = [
   },
 ];
 
-const standardPbrVariants = (() => {
+/**
+ * Standard PBR manifest rows for rhi-null renderer fixtures. Every device
+ * prewarms both transmission axes: a low sampled-texture limit selects the
+ * shared-slot variant instead of dropping transmission.
+ */
+export function standardPbrFixtureVariants(composedWgsl: string) {
   const variants = [];
   for (const cluster of [false, true]) {
     for (const storage of [false, true]) {
       for (const vertexColor of [false, true]) {
-        const defines = {
-          CLUSTER_FORWARD_AVAILABLE: cluster,
-          STORAGE_BUFFER_AVAILABLE: storage,
-          VERTEX_COLOR_AVAILABLE: vertexColor,
-        };
-        const sortedDefines = Object.entries(defines).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0,
-        );
-        const definesKey = sortedDefines.every(([, value]) => value)
-          ? ''
-          : sortedDefines.map(([key, value]) => `${key}=${value}`).join('+');
-        variants.push({ definesKey, defines, composedWgsl: pbrWgsl });
+        for (const transmission of [false, true]) {
+          const defines = {
+            CLUSTER_FORWARD_AVAILABLE: cluster,
+            STORAGE_BUFFER_AVAILABLE: storage,
+            TRANSMISSION_AVAILABLE: transmission,
+            VERTEX_COLOR_AVAILABLE: vertexColor,
+          };
+          const sortedDefines = Object.entries(defines).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          );
+          const definesKey = sortedDefines.every(([, value]) => value)
+            ? ''
+            : sortedDefines.map(([key, value]) => `${key}=${value}`).join('+');
+          variants.push({ definesKey, defines, composedWgsl });
+        }
       }
     }
   }
   return variants;
-})();
+}
+
+/** Minimal Standard PBR manifest row for fixtures that build their own manifest. */
+export function standardPbrManifestRow(composedWgsl: string) {
+  return {
+    identifier: 'forgeax::default-standard-pbr',
+    sourcePath: 'fixture://forgeax/default-standard-pbr.wgsl',
+    composedWgsl,
+    paramSchema: JSON.stringify(DEFAULT_STANDARD_PBR_PARAM_SCHEMA),
+    variants: standardPbrFixtureVariants(composedWgsl),
+  };
+}
+
+const standardPbrVariants = standardPbrFixtureVariants(pbrWgsl);
 
 const shadowCasterVariants = (() => {
   const variants = [];

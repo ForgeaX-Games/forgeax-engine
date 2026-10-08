@@ -3,9 +3,17 @@ import type { ExtractedFrame, RenderableSnapshot } from '../render-system-extrac
 
 /** One asset closure for source publication and receiver admission. */
 export function publicationDependencies(
-  row: Pick<RenderableSnapshot, 'assetHandle' | 'materials'>,
+  row: Pick<RenderableSnapshot, 'assetHandle' | 'materials' | 'terrain'>,
 ): Handle<string, 'shared'>[] {
   const handles = new Set<Handle<string, 'shared'>>([row.assetHandle as Handle<string, 'shared'>]);
+  if (row.terrain)
+    for (const handle of [
+      row.terrain.handle,
+      ...row.terrain.grids,
+      ...row.terrain.heightTextures,
+      ...row.terrain.weightTextures,
+    ])
+      handles.add(handle as Handle<string, 'shared'>);
   for (const material of row.materials) {
     for (const handle of [
       material.materialHandle,

@@ -15,9 +15,9 @@ export default defineFeature({
   catalog: 'glTF skin/animation',
   kind: 'headless',
   summary:
-    'An in-code one-joint skinned glTF imports into skeleton, skin and animation-clip assets; joints are stored as name paths that the runtime resolves after spawn, and unsupported interpolation fails instead of being approximated.',
+    'An in-code one-joint skinned glTF imports into skeleton, skin and animation-clip assets; joints are stored as name paths that the runtime resolves after spawn, and valid CUBICSPLINE tangent triplets survive parsing.',
   expect:
-    'The skin payload names its skeleton GUID and joint path root/joint, the skeleton carries conservative animated bounds covering x in [<=1, >=5], the clip is produced, STEP parses, and CUBICSPLINE fails with gltf-animation-cubicspline-unsupported.',
+    'The skin payload names its skeleton GUID and joint path root/joint, the skeleton carries conservative animated bounds covering x in [<=1, >=5], the clip is produced, STEP and valid CUBICSPLINE parse, while missing tangent triplets fail with gltf-animation-sampler-invalid.',
   async run(checks) {
     const imported = await importGltf(skinnedGltf(), SKIN_SUB_ASSETS);
     checks.ok('runImport ok', imported.ok, imported.ok ? undefined : imported.code);
@@ -47,10 +47,25 @@ export default defineFeature({
     checks.ok('STEP interpolation parses', step.ok, step.ok ? undefined : step.error.code);
     checks.equal('one clip parsed', step.ok ? step.value.animationClips.length : undefined, 1);
     const cubic = await parseGltf(skinnedGltf('CUBICSPLINE'), rejectLoader, 'cubic.gltf');
+    checks.ok(
+      'CUBICSPLINE tangent triplets parse',
+      cubic.ok,
+      cubic.ok ? undefined : cubic.error.code,
+    );
+    const sampler = cubic.ok ? cubic.value.animationClips[0]?.channels[0]?.sampler : undefined;
+    checks.equal('CUBICSPLINE is retained', sampler?.interpolation, 'CUBICSPLINE');
+    checks.equal('six VEC3 tangent/value records are retained', sampler?.output.length, 18);
+    const malformed = skinnedGltf('LINEAR');
+    (malformed.animations as { samplers: { interpolation: string }[] }[])[0]?.samplers.forEach(
+      (sampler) => {
+        sampler.interpolation = 'CUBICSPLINE';
+      },
+    );
+    const invalid = await parseGltf(malformed, rejectLoader, 'missing-tangents.gltf');
     checks.equal(
-      'CUBICSPLINE rejected',
-      cubic.ok ? 'ok' : errorCode(cubic.error),
-      'gltf-animation-cubicspline-unsupported',
+      'CUBICSPLINE without tangent triplets is rejected',
+      invalid.ok ? 'ok' : errorCode(invalid.error),
+      'gltf-animation-sampler-invalid',
     );
   },
 });

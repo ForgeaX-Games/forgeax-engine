@@ -1,6 +1,7 @@
 import {
   type GraphAccess,
   type GraphTextureDescriptor,
+  type GraphTextureView,
   type RenderGraphBuilder,
   RenderGraphError,
 } from '@forgeax/engine-render-graph';
@@ -153,6 +154,40 @@ export function addSingleLayerMediumMsaaPairProducer(input: {
 }
 
 /** Inputs shared by the two graph passes owned by the Surface model. */
+export interface SingleLayerMediumNearestTargets {
+  readonly nearestLayer: RenderPipelineTarget;
+  readonly nearestDepth: RenderPipelineTarget;
+}
+
+/**
+ * A lane that admits the medium must already own its nearest targets and the
+ * shared opaque backdrop copy; either missing is a graph construction bug.
+ */
+export function requireSingleLayerMediumInputs(
+  nearestTargets: SingleLayerMediumNearestTargets | undefined,
+  backdrop: GraphTextureView | undefined,
+): Result<
+  { readonly nearestTargets: SingleLayerMediumNearestTargets; readonly backdrop: GraphTextureView },
+  RenderGraphError
+> {
+  if (nearestTargets === undefined || backdrop === undefined) {
+    return err(
+      new RenderGraphError({
+        code: 'resource-descriptor-invalid',
+        expected: 'single-layer medium graph has nearest targets and an opaque backdrop',
+        hint: 'keep the shared transmission backdrop copy ahead of the Surface passes',
+        detail: {
+          resourceLabel: 'single-layer-medium',
+          field: 'backdrop',
+          expected: 'resolved graph texture view',
+          actual: 'missing',
+        },
+      }),
+    );
+  }
+  return ok({ nearestTargets, backdrop });
+}
+
 export interface SingleLayerMediumPassInput {
   readonly graph: RenderGraphBuilder<RenderPipelineFrame>;
   readonly size: GraphTextureDescriptor['size'];

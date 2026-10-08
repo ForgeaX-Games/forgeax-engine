@@ -167,3 +167,4 @@ export type {
   ToolTiming,
   ToolTimingPhase,
 } from './types.js';
+export { TOOL_REALMS } from './types.js';

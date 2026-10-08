@@ -1,6 +1,7 @@
 import type { UiAsset } from './asset.js';
 import type { UiResult } from './errors.js';
 import { uiError } from './errors.js';
+import { isUiLocalization } from './localization/resources.js';
 
 export interface UiLoaderInput {
   readonly guid: string;
@@ -37,9 +38,19 @@ export function createUiLoader(): UiLoader {
       ) {
         return uiError('invalid-asset', 'guid, html, and css are required strings');
       }
+      if (candidate.localization !== undefined && !isUiLocalization(candidate.localization))
+        return uiError(
+          'invalid-asset',
+          'localization must contain i18next JSON resources and a valid fallback namespace',
+        );
       return {
         ok: true,
-        value: { guid: candidate.guid, html: candidate.html, css: candidate.css },
+        value: {
+          guid: candidate.guid,
+          html: candidate.html,
+          css: candidate.css,
+          ...(candidate.localization === undefined ? {} : { localization: candidate.localization }),
+        },
       };
     },
   };

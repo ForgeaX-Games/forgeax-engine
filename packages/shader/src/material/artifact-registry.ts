@@ -27,7 +27,14 @@ export interface MaterialArtifactConflictError {
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  const length = left.length;
+  if (length !== right.length) return false;
+  // Preserve TypedArray.every's detached/out-of-bounds validation without a byte callback.
+  Uint8Array.prototype.values.call(left);
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function equalParamSchema(left: MaterialRuntimeArtifact, right: MaterialRuntimeArtifact): boolean {

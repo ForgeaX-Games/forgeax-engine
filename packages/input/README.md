@@ -102,6 +102,10 @@ detach();
 
 ### mouse（5 读点）
 
+Mouse chords use the `PointerEvent.buttons` mask on intermediate `pointermove`
+events. Held state and both press/release edges survive until the next scan,
+including a press and release that occur between two scans.
+
 | 调用 | 返回 | 语义 |
 |:--|:--|:--|
 | `snap.mouse.position` | `{ x: number; y: number } | undefined` | 最新 canvas-pixel 鼠标坐标；悬停时也更新，不需要按键或 pointer capture；尚未收到鼠标事件时为 `undefined` |
@@ -290,6 +294,8 @@ interface InputBackendSample {
 }
 ```
 
+Acquiring the first W3C or provider lock discards movement accumulated before that boundary. Repeated notifications or clicks while already locked preserve subsequent movement until the next scan.
+
 Frozen into `snap.mouse.pointerLocked` at frame-start. Consumers read `if (snap.mouse.pointerLocked)` to gate look/camera rotation — both facts (`movementDelta` + `pointerLocked`) sit at the same attribute path for single-point indexing (charter F1).
 
 ## 相关包
@@ -327,3 +333,79 @@ snapshot source, and install the connector on a fresh target World.
 If a trace fails, inspect `code`, `expected`, `hint`, and `detail`, repair the
 named input boundary, then create a fresh target. RHI tape replay and game
 replay have different owners and are not input snapshot formats.
+
+## Gamepad feedback
+
+`GamepadFeedback` is an optional World resource under `GAMEPAD_FEEDBACK_KEY`.
+App installs it with the input provider. The frozen scan supplies
+`input.gamepad(index).feedbackTarget` and `dualRumble` independently of
+`connected` and `standardMapping`. A connected unsupported controller still
+works for ordinary input. Capability presence is API evidence; physical
+vibration requires a real-device check.
+
+```ts
+import { Update } from '@forgeax/engine/ecs';
+import {
+  GAMEPAD_FEEDBACK_KEY, INPUT_SNAPSHOT_RESOURCE_KEY,
+  type GamepadFeedback, type InputSnapshot,
+} from '@forgeax/engine/input';
+
+app.world.addSystem(Update, {
+  name: 'fire-feedback', queries: [], after: ['input-frame-start-scan'],
+  fn(world) {
+    const input = world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY);
+    const feedback = world.getResource<GamepadFeedback>(GAMEPAD_FEEDBACK_KEY);
+    const pad = input.gamepad(0);
+    if (pad.feedbackTarget && pad.dualRumble && input.keyboard.justPressed(' ')) {
+      const admitted = feedback.play(pad.feedbackTarget, {
+        durationMs: 120, strongMagnitude: 0.8, weakMagnitude: 0.2,
+      });
+      if (!admitted.ok) console.log(admitted.reason);
+    }
+    for (const result of feedback.readResults()) console.log(result);
+  },
+}).unwrap();
+```
+
+`play` and `stop` enqueue ordered POD intents; an accepted command gets a
+monotonic `id`. Admission returns `invalid`, `capacity` or `disposed` without
+throwing. Parameters are finite, magnitudes are in `[0, 1]`, duration is in
+milliseconds `(0, 10000]`, and native start delay is always zero. A zero-amplitude
+play is a valid silent control. Game code owns shooting, damage and UI patterns.
+
+```mermaid
+sequenceDiagram
+  participant Game as ECS / Engine Worker
+  participant Input as Host input owner
+  participant Native as Browser actuator
+  Game->>Input: bounded play / stop intents
+  Input->>Native: dual-rumble playEffect / reset
+  Native-->>Input: complete / preempted / rejection
+  Input-->>Game: next input sample, POD terminal results
+```
+
+| Contract | Bound / policy |
+|:--|:--|
+| Producer capacity | 32 accepted commands including pending and unpolled results. Poll `readResults()` to release terminal capacity. Invalid/capacity admissions do not consume an id. |
+| Native capacity | 32 unsettled calls per document, at most 8 per connection. Plays reserve a reset slot for every active connection; a connection admits at most 7 pending plays. Busy is explicit. |
+| Native timeout | Duration + 1000 ms for play, 1000 ms for reset. Timed-out native calls retain capacity until they actually settle; unresolved reset blocks further plays on that connection. |
+| Result retention | Host retains 64 results in arrival order, reports evictions through `feedbackLostResults`; producer closes affected pending requests as `result-overflow`. Producer reserves up to 64 total pending/result slots for lifecycle diagnostics while authored admission stays at 32. Diagnostic overflow evicts only a diagnostic and preserves the latest failure plus a loss count; authored terminals survive. No unbounded queue. |
+| Dispatch | Local ECS output dispatches at the next Host input scan. Worker output dispatches on accepted frame/simulation completion; results return in the next admitted input sample. No extra gamepad polling or frame Promise when idle. |
+| Replacement | Latest valid play wins across Apps in the same document. Old commands become `preempted`; late native settlement cannot clear a newer effect. A stop from another owner returns `busy`. |
+| Identity | Target includes attachment, slot index and connection generation. Disconnect events and scan absence invalidate the connection. Control clear, hidden and detach revoke the attachment. Same-string same-slot reconnect cannot reuse an observed generation. |
+| Lifecycle | Hidden, input clear/blur, gate closure, Worker rebuild and owner disposal release only the current owner's effect. Visibility restoration never replays commands. Native hidden-page reset rejection remains observable. |
+| Observation | Closed status SSOT: [gamepad-feedback.ts](src/gamepad-feedback.ts). Command id `0` denotes a bounded lifecycle reset diagnostic; it has no authored command. Native failures retain a bounded name/message string. `preempted` is logical supersession, not proof of physical cessation. |
+| Supported path | Normal browser `vibrationActuator` advertising `dual-rumble` via `effects`, or older `type`. No mapping-based capability inference, XR pulse, trigger rumble, native OS output or motion sensors. |
+
+> [!IMPORTANT]
+> A browser that misses both disconnect events and a sampled absence for an
+> identical replacement device provides no observable identity change. The engine
+> cannot infer that physical swap from `id`. Record this platform limitation in
+> real-device acceptance rather than treating the description as a persistent id.
+
+A custom input provider may expose `feedback` plus `dispatchFeedback` and POD
+sample results. `createGamepadFeedback()` supplies the realm-neutral bounded
+producer: transport drains `drainIntents()` and returns `acceptResults()`.
+Browser native objects and Promises stay in the Host implementation.
+
+Action deadzones are resolved by `deriveActionStates` at frame sampling. `getAxis` and `getVector` consume only those states, and `snapshotFromSample(sample, states, previousSnapshot?)` retains no input configuration. Author configuration changes take effect on the next sample.

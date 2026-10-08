@@ -1,12 +1,9 @@
 import { type ToolJsonSchema, toolJsonSchema } from './json-schema.js';
-import type { ToolContribution, ToolEvidenceKind, ToolExecutor, ToolRealm } from './types.js';
+import type { ToolContribution, ToolDescriptor, ToolEvidenceKind, ToolExecutor } from './types.js';
+import { TOOL_REALMS } from './types.js';
 
-export interface ToolCommandDeclaration {
-  readonly id: string;
-  readonly path?: readonly string[];
-  readonly title: string;
-  readonly summary: string;
-  readonly realm: ToolRealm;
+export interface ToolCommandDeclaration
+  extends Pick<ToolDescriptor, 'id' | 'path' | 'title' | 'summary' | 'realm'> {
   readonly argsSchema?: string;
   readonly resultSchema?: string;
   readonly evidence?: readonly ToolEvidenceKind[];
@@ -98,7 +95,7 @@ export function isToolCommandContract(value: unknown): value is ToolCommandContr
       typeof command.title !== 'string' ||
       !command.title.trim() ||
       typeof command.summary !== 'string' ||
-      !['build', 'host', 'engine', 'frontend'].includes(command.realm)
+      !TOOL_REALMS.includes(command.realm)
     )
       return false;
     const path = command.path ?? command.id.split('.');

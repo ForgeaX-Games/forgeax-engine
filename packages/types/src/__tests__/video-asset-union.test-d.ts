@@ -64,6 +64,9 @@ describe('VideoAsset POD shape (M1 baseline)', () => {
           return 'tileset';
         case 'video':
           return 'video';
+        case 'navigation-mesh':
+        case 'terrain':
+          return 'TerrainAsset';
         case 'particle-effect':
           return 'particle-effect';
       }

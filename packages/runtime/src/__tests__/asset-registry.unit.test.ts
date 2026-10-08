@@ -204,33 +204,33 @@ describe('M3 invalidate(guid) (AC-03) [w6]', () => {
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
     const internal = reg as unknown as {
-      packFileCache: Map<string, unknown>;
+      packFiles: Map<string, unknown>;
       packIndexCache: Map<string, unknown> | undefined;
       invalidate: (guid: string) => void;
     };
 
     try {
       // Prod-load both GUIDs so packIndexCache holds both entries and
-      // packFileCache holds both bodies (keyed by packageUrl).
+      // packFiles holds both bodies (keyed by packageUrl).
       const rt = await reg.loadByGuid<MeshAsset>(parseGuid(targetGuid));
       const rb = await reg.loadByGuid<MeshAsset>(parseGuid(bystanderGuid));
       expect(rt.ok).toBe(true);
       expect(rb.ok).toBe(true);
-      expect(internal.packFileCache.has(targetUrl)).toBe(true);
-      expect(internal.packFileCache.has(bystanderUrl)).toBe(true);
+      expect(internal.packFiles.has(targetUrl)).toBe(true);
+      expect(internal.packFiles.has(bystanderUrl)).toBe(true);
       expect(internal.packIndexCache?.get(targetGuid)).toBeDefined();
       expect(internal.packIndexCache?.get(bystanderGuid)).toBeDefined();
 
       internal.invalidate(targetGuid);
 
       // Targeted clear: target body + index entry gone.
-      expect(internal.packFileCache.has(targetUrl)).toBe(false);
+      expect(internal.packFiles.has(targetUrl)).toBe(false);
       expect(internal.packIndexCache?.get(targetGuid)).toBeUndefined();
 
       // Bystander survives: single-GUID invalidate must not evict unrelated
       // cached bodies/index entries, and keeps the index Map alive (only
       // invalidateAll nukes it to undefined).
-      expect(internal.packFileCache.has(bystanderUrl)).toBe(true);
+      expect(internal.packFiles.has(bystanderUrl)).toBe(true);
       expect(internal.packIndexCache?.get(bystanderGuid)).toBeDefined();
       expect(internal.packIndexCache).not.toBeUndefined();
 
@@ -285,7 +285,7 @@ describe('M3 invalidateAll() (AC-05 + AC-06) [w7]', () => {
     expect(internal.packIndexCache).toBeUndefined();
   });
 
-  it('clears packFileCache and resets packIndexCache to undefined (AC-05, R2-1)', async () => {
+  it('clears packFiles and resets packIndexCache to undefined (AC-05, R2-1)', async () => {
     const originalFetch = globalThis.fetch;
     const reg = makeReg();
     reg.configurePackIndex('/pack-index.json');
@@ -326,7 +326,7 @@ describe('M3 invalidateAll() (AC-05 + AC-06) [w7]', () => {
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
     const internal = reg as unknown as {
-      packFileCache: Map<string, unknown>;
+      packFiles: Map<string, unknown>;
       packIndexCache: Map<string, unknown> | undefined;
       invalidateAll: () => { clearedCount: number };
     };
@@ -335,13 +335,13 @@ describe('M3 invalidateAll() (AC-05 + AC-06) [w7]', () => {
       // Prod load populates both shared caches.
       const r = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
       expect(r.ok).toBe(true);
-      expect(internal.packFileCache.size).toBeGreaterThan(0);
+      expect(internal.packFiles.size).toBeGreaterThan(0);
       expect(internal.packIndexCache).not.toBeUndefined();
 
       internal.invalidateAll();
 
       // Body cache fully cleared.
-      expect(internal.packFileCache.size).toBe(0);
+      expect(internal.packFiles.size).toBe(0);
       // Index cache reset to undefined -- NOT an empty Map. An empty Map would
       // short-circuit resolveCatalogEntry's `=== undefined` re-fetch guard
       // (asset-registry.ts:2878) and reproduce the F17b pollution.
@@ -665,7 +665,7 @@ describe('M3 integration: invalidate reload + generation match (AC-04 + AC-13) [
       (reg as unknown as { invalidate: (g: string) => void }).invalidate(guid);
       expect(reg.lookup(guid)).toBeUndefined();
 
-      // Second load: must re-fetch the pack-file body (not serve packFileCache).
+      // Second load: must re-fetch the pack-file body (not serve packFiles).
       const r2 = await reg.loadByGuid<MeshAsset>(parseGuid(guid));
       expect(r2.ok).toBe(true);
       expect(reg.lookup(guid)).toBeDefined();

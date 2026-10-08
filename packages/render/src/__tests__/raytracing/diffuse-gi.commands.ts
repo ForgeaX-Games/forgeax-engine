@@ -23,6 +23,7 @@ export async function prepareDiffuseGiFixture() {
       'forgeax_ray::traversal',
       'forgeax_pbr::ray_bsdf',
       'forgeax_pbr::brdf',
+      'forgeax_pbr::ibl_shared',
       'forgeax_pbr::lighting_attenuation',
     ].map((id) => [id, sources.get(id).unwrap().source]),
   );
@@ -79,7 +80,7 @@ export async function prepareDiffuseGiFixture() {
     rayMaterials,
     pathKernel,
     layout,
-    field: { ...field, values: Array.from(field.values) },
+    field: { ...field, bricks: Array.from(field.bricks), values: Array.from(field.values) },
   };
 }
 export type DiffuseGiFixture = Awaited<ReturnType<typeof prepareDiffuseGiFixture>>;

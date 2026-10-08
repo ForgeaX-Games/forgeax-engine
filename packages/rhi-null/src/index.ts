@@ -59,7 +59,7 @@ export const rhi: RhiInstance & {
 export { RhiNullAdapter } from './adapter';
 export { acquireCanvasContext, RhiNullCanvasContext } from './canvas-context';
 export { RhiNullCommandEncoder } from './command-encoder';
-export { RhiNullDevice } from './device';
+export { RhiNullDevice, type RhiNullDeviceOptions } from './device';
 export { RhiNullComputePassEncoder, RhiNullRenderPassEncoder } from './pass-encoders';
 export { RhiNullQueue } from './queue';
 export { createShaderModule, createShaderModuleImmediate } from './shader';

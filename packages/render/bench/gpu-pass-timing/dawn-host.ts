@@ -58,7 +58,7 @@ async function installDawn(): Promise<InstalledDawn> {
       : {};
   const hadGpu = Object.hasOwn(navigatorScope, 'gpu');
   const previousGpu = navigatorScope.gpu;
-  const { create, globals } = (await import('webgpu')) as unknown as DawnGlobalsModule;
+  const { create, globals } = (await import('@forgeax/engine-dawn-node')) as unknown as DawnGlobalsModule;
   Object.assign(globalScope, globals);
   if (!hadNavigator) {
     Object.defineProperty(globalScope, 'navigator', {

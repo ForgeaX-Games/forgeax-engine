@@ -19,6 +19,10 @@ export interface BarrelGpuExtent {
 
 export interface BarrelRendererFixtureOptions extends BarrelGpuExtent {
   readonly rhi?: RendererOptions['rhi'];
+  readonly gpuPassTiming?: RendererOptions['gpuPassTiming'];
+  readonly standardProfile?: RendererOptions['standardProfile'];
+  readonly shaderManifestUrl?: string;
+  readonly rhiInstrumentation?: RendererOptions['rhiInstrumentation'];
 }
 
 const TEXTURE_USAGE_COPY_SRC = 0x01;
@@ -37,6 +41,7 @@ export interface BarrelRendererFixture {
   readonly renderTarget: GPUTexture;
   readonly width: number;
   readonly height: number;
+  readonly canvas: HTMLCanvasElement;
 }
 
 function validExtent(value: number): boolean {
@@ -82,9 +87,15 @@ export async function createBarrelRendererFixture(
 
   let renderTarget: GPUTexture | undefined;
   const ensureRenderTarget = (device: GPUDevice, format: GPUTextureFormat): GPUTexture => {
-    if (renderTarget !== undefined) return renderTarget;
+    if (
+      renderTarget !== undefined &&
+      renderTarget.width === canvas.width &&
+      renderTarget.height === canvas.height
+    )
+      return renderTarget;
+    renderTarget?.destroy();
     renderTarget = device.createTexture({
-      size: { width, height, depthOrArrayLayers: 1 },
+      size: { width: canvas.width, height: canvas.height, depthOrArrayLayers: 1 },
       format,
       usage: TEXTURE_USAGE_RENDER_ATTACHMENT | TEXTURE_USAGE_COPY_SRC,
       viewFormats: format === 'rgba8unorm' ? ['rgba8unorm-srgb'] : [],
@@ -116,9 +127,18 @@ export async function createBarrelRendererFixture(
   try {
     host = await constructRuntimeRendererHost(
       canvas,
-      options.rhi === undefined ? {} : { rhi: options.rhi },
       {
-        shaderManifestUrl: BARREL_ENGINE_MANIFEST_URL,
+        ...(options.rhi === undefined ? {} : { rhi: options.rhi }),
+        ...(options.gpuPassTiming === undefined ? {} : { gpuPassTiming: options.gpuPassTiming }),
+        ...(options.standardProfile === undefined
+          ? {}
+          : { standardProfile: options.standardProfile }),
+        ...(options.rhiInstrumentation === undefined
+          ? {}
+          : { rhiInstrumentation: options.rhiInstrumentation }),
+      },
+      {
+        shaderManifestUrl: options.shaderManifestUrl ?? BARREL_ENGINE_MANIFEST_URL,
       },
     );
   } finally {
@@ -126,13 +146,17 @@ export async function createBarrelRendererFixture(
   }
   if (!host.ok) throw host.error;
   if (sharedDevice === undefined) throw new Error('barrel GPU fixture did not capture a device');
+  const capturedDevice = sharedDevice;
   return {
     renderer: host.value.renderer,
     assets: host.value.assets,
     device: sharedDevice,
-    renderTarget: ensureRenderTarget(sharedDevice, 'rgba8unorm'),
+    get renderTarget() {
+      return ensureRenderTarget(capturedDevice, 'rgba8unorm');
+    },
     width,
     height,
+    canvas,
   };
 }
 

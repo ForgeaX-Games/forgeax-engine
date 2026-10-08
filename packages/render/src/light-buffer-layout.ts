@@ -1,17 +1,18 @@
 // @forgeax/engine-render - host-side DirectLightSlot ABI and buffer helpers.
 //
-// Point, Spot, and Rect snapshots share one five-row, 80-byte Cluster slot.
+// Point, Spot, and Rect snapshots share one six-row, 96-byte Cluster slot.
 // The same packer is used by the Cluster producer and every Cluster consumer;
 // this is the only local-light transport.
 
 import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
+import { LIGHTING_CHANNELS_DEFAULT } from './components/lighting-channels';
 import type {
   PointLightSnapshot,
   RectAreaDirectLightSnapshot,
   SpotLightSnapshot,
 } from './render-system-extract';
 // Owns the byte-frozen std430 layout (D-S2). Point, Spot, and Rect all use the
-// same five-row DirectLightSlot; the kind and resource identities are carried
+// same six-row DirectLightSlot; the kind and resource identities are carried
 // by the metadata row. Point uses the angular lanes as neutral values. Spot
 // uses row 3's x/y/z lanes for volume shadow receiver controls and w for the
 // extended-lighting roll angle. Rect uses row 2/3 for its two tangent axes.
@@ -45,10 +46,7 @@ import type {
 export const STORAGE_BUFFER_MIN_REQUIRED = 4;
 
 /** Byte size of one Point/Spot/Rect DirectLightSlot. */
-export const BYTES_PER_DIRECT_LIGHT_SLOT = 80;
-/** std430 slot aliases retained for the WebGPU ready-state sizing table. */
-export const POINT_LIGHT_STD430_BYTES = BYTES_PER_DIRECT_LIGHT_SLOT;
-export const SPOT_LIGHT_STD430_BYTES = BYTES_PER_DIRECT_LIGHT_SLOT;
+export const BYTES_PER_DIRECT_LIGHT_SLOT = 96;
 
 /**
  * Cap gate at createRenderer time: check whether the device has enough
@@ -68,7 +66,7 @@ export const SPOT_LIGHT_STD430_BYTES = BYTES_PER_DIRECT_LIGHT_SLOT;
  * maxStorageBuffersPerShaderStage = 0`). It remains a mesh/instance fallback;
  * local-light frames require the single Cluster storage transport.
  */
-/** Closed direct-light kind carried by the unified five-row slot. */
+/** Closed direct-light kind carried by the unified six-row slot. */
 export const DirectLightSlotKind = {
   POINT: 0,
   SPOT: 1,
@@ -96,14 +94,14 @@ const SPOT_PCF_KERNEL_MAX = 5;
 function spotPcfKernel(value: number | undefined): number {
   return Math.min(SPOT_PCF_KERNEL_MAX, Math.max(1, Math.round(value ?? 3)));
 }
-/** Byte size of the five-row Point/Spot/Rect transport slot. */
+/** Byte size of the six-row Point/Spot/Rect transport slot. */
 export const DIRECT_LIGHT_SLOT_FLOAT_COUNT =
   BYTES_PER_DIRECT_LIGHT_SLOT / Float32Array.BYTES_PER_ELEMENT;
 
-/** Five vec4 rows shared by host packing and the WGSL direct-light consumer. */
+/** Six vec4 rows shared by host packing and the WGSL direct-light consumer. */
 export const DIRECT_LIGHT_SLOT_LAYOUT = {
   byteSize: BYTES_PER_DIRECT_LIGHT_SLOT,
-  rowByteOffsets: [0, 16, 32, 48, 64],
+  rowByteOffsets: [0, 16, 32, 48, 64, 80],
   positionOffset: 0,
   rangeOffset: 12,
   colorOffset: 16,
@@ -119,7 +117,8 @@ export const DIRECT_LIGHT_SLOT_LAYOUT = {
   /** Spot-only roll angle stored in the fourth row's w lane. */
   rollDegByteOffset: 60,
   floatCount: DIRECT_LIGHT_SLOT_FLOAT_COUNT,
-  vec4Count: 5,
+  vec4Count: 6,
+  lightingChannelsByteOffset: 80,
 } as const;
 
 type DirectLightModifierMetadata = {
@@ -137,7 +136,7 @@ function directLightMetadata(value: number | undefined): number {
 }
 
 /**
- * Pack one Point, Spot, or Rect snapshot into the unified five-row slot.
+ * Pack one Point, Spot, or Rect snapshot into the unified six-row slot.
  *
  * Row 0 is position plus inverse range. Row 1 is color plus the first
  * angular/size fact. Row 2 is the primary axis plus the second angular/size
@@ -215,6 +214,7 @@ export function packDirectLightSlot(
       ? snapshot.projectorSlice
       : snapshot.cookieSlice,
   );
+  metadata[20] = snapshot.lightingChannels ?? LIGHTING_CHANNELS_DEFAULT;
   return out;
 }
 

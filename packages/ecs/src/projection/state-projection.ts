@@ -2,7 +2,7 @@ import type { Component } from '../component';
 import { componentId } from '../component';
 import { Entity } from '../entity';
 import { type EntityHandle, encodeEntity, entityIndex } from '../entity-handle';
-import { WorldPoisonedError } from '../errors';
+import { worldPoisonedError } from '../errors/shared-kernel-errors';
 import { PROJECTION_BLOCK_SIZE } from '../storage/change-detection';
 import type { Table } from '../storage/table';
 import type { World } from '../world';
@@ -108,8 +108,8 @@ export function createStateProjection(
       invalid = true;
     },
     read() {
-      if (world.execution.health === 'poisoned')
-        throw new WorldPoisonedError(world.identity, world.execution.fault);
+      const poisoned = worldPoisonedError(world.execution);
+      if (poisoned !== undefined) throw poisoned;
       const token = ++readToken;
       const epoch = owner.getMutationEpoch();
       const structure = owner.getStructureEpoch();
@@ -205,8 +205,8 @@ export function createStateProjection(
       }
       let accepted = false;
       const validate = (): void => {
-        if (world.execution.health === 'poisoned')
-          throw new WorldPoisonedError(world.identity, world.execution.fault);
+        const poisoned = worldPoisonedError(world.execution);
+        if (poisoned !== undefined) throw poisoned;
         if (
           token !== readToken ||
           epoch !== owner.getMutationEpoch() ||

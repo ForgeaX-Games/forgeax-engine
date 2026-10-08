@@ -274,16 +274,9 @@ interface BackBuffer {
   diff: readonly InstanceDirtyRange[] | 'whole';
   candidate: Projection | undefined;
 }
-interface Residency {
+interface Residency
+  extends Omit<InstanceCollectionInspection, keyof InstanceCollectionInfo | 'owner'> {
   readonly frameNumber: number;
-  readonly residentGeneration: number | undefined;
-  readonly lane: InstanceSubmissionLane;
-  readonly uploadRanges: readonly InstanceDirtyRange[];
-  readonly uploadedBytes: number;
-  readonly requestedBytes: number;
-  readonly supportedBytes: number | undefined;
-  readonly backend: InstanceBackendKind;
-  readonly error: InstanceCollectionInspection['error'];
 }
 
 /** Rebuildable renderer projection. All authoring and entity lifetime belong to World. */
@@ -345,16 +338,38 @@ export class InstanceProjectionStore {
       previous?.count === count
         ? previous.generations
         : Uint32Array.from({ length: count }, () => this.nextGeneration++);
+    // A same-size whole rewrite reuses the collection's back buffer: `accept`
+    // swaps it with the old front, so a collection rewritten every frame
+    // ping-pongs two buffers instead of allocating a fresh column per frame
+    // (render-worker GC pressure on animated instance collections).
+    let back = previous?.count === count ? this.backs.get(collectionId) : undefined;
+    let target: Float32Array;
+    if (back !== undefined && back.transforms.length === transforms.length) {
+      back.transforms.set(transforms);
+      target = back.transforms;
+    } else {
+      target = this.own(new Float32Array(transforms));
+      if (previous?.count === count && this.owned.has(previous.transforms)) {
+        back = { transforms: target, diff: 'whole', candidate: undefined };
+        this.backs.set(collectionId, back);
+      } else {
+        back = undefined;
+      }
+    }
     const record: Projection = {
       collectionId,
       world,
       entity,
-      transforms: this.own(new Float32Array(transforms)),
+      transforms: target,
       generations,
       count,
       revision: (previous?.revision ?? 0) + 1,
       sourceEpoch: rows?.epoch,
     };
+    if (back !== undefined) {
+      back.diff = 'whole';
+      back.candidate = record;
+    }
     this.candidates.set(collectionId, record);
     return record;
   }

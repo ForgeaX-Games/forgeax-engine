@@ -37,6 +37,7 @@ import {
   VOLUMETRIC_FOG_PARAMS_BYTES,
 } from '../volume/resources';
 import { resolveVolumeTemporalReset } from '../volume/temporal';
+import { standardPbrManifestRow } from './shader-manifest-fixture';
 
 const MAX_MEMORY_BYTES = 48 * 1024 * 1024;
 
@@ -51,6 +52,7 @@ const VOLUME_MANIFEST = `data:application/json,${encodeURIComponent(
       { hash: 'volume-integrate', wgsl: 'fn volume_integrate() {}', glsl: '', bindings: '' },
       { hash: 'volume-composite', wgsl: 'fn volume_fs() {}', glsl: '', bindings: '' },
     ],
+    materialShaders: [standardPbrManifestRow('f_schlick')],
   }),
 )}`;
 

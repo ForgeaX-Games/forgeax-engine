@@ -163,5 +163,14 @@ describe('glyph-text-layout-system font-cap recovery', () => {
     if (!after.ok) return;
     expect(after.value.vertices.length).not.toBe(oldVertexLength);
     expect(after.value.indices?.length ?? 0).toBeGreaterThan(0);
+    const positions = after.value.attributes.position as Float32Array;
+    const normals = after.value.attributes.normal as Float32Array;
+    expect(positions.length).toBe((after.value.vertices.length / 12) * 3);
+    expect(normals.length).toBe(positions.length);
+    for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+      expect(Array.from(positions.subarray(vertex * 3, vertex * 3 + 3))).toEqual(
+        Array.from(after.value.vertices.subarray(vertex * 12, vertex * 12 + 3)),
+      );
+    }
   });
 });

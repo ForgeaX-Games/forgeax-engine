@@ -1,8 +1,16 @@
-import type { Buffer, RhiCaps, Texture, TextureDescriptor, TextureView } from '@forgeax/engine-rhi';
+import type {
+  Buffer,
+  RhiCaps,
+  Texture,
+  TextureDescriptor,
+  TextureView,
+  Tlas,
+} from '@forgeax/engine-rhi';
 import { CompiledRenderGraphImpl } from './compiled-graph.js';
 import { err, ok, RenderGraphError, type Result } from './errors.js';
 import type { ResolvedColorTargetDescriptor } from './graph.js';
 import {
+  accelerationStructureHandle,
   accessResourceId,
   bufferHandle,
   type CompiledPass,
@@ -27,7 +35,9 @@ import type {
   CompiledResourceDescriptor,
   ComputeGraphPass,
   CopyGraphPass,
+  GraphAccelerationStructure,
   GraphAccess,
+  GraphAccessUsage,
   GraphBuffer,
   GraphBufferAccess,
   GraphBufferDescriptor,
@@ -38,6 +48,7 @@ import type {
   GraphTextureDescriptor,
   GraphTextureView,
   GraphTextureViewDescriptor,
+  ImportedAccelerationStructureDescriptor,
   ImportedBufferDescriptor,
   ImportedTextureDescriptor,
   ImportedTextureViewResolver,
@@ -93,7 +104,8 @@ function textureByteSize(
             format === 'rgba8sint' ||
             format === 'r32float' ||
             format === 'r32uint' ||
-            format === 'r32sint'
+            format === 'r32sint' ||
+            format === 'depth32float'
           ? 4
           : format === 'rg16float' ||
               format === 'rg16uint' ||
@@ -129,6 +141,8 @@ function textureByteSize(
   return bytes;
 }
 
+type ResourceAnalysis = Pick<CompiledResource<unknown>, 'usage' | 'firstUse' | 'lastUse'>;
+
 interface NormalizedRange {
   readonly mipStart: number;
   readonly mipEnd: number;
@@ -142,7 +156,7 @@ interface NormalizedAccess {
   readonly passName: string;
   readonly resourceId: number;
   readonly viewId?: number | undefined;
-  readonly usage: GraphBufferAccess | GraphTextureAccess;
+  readonly usage: GraphAccessUsage;
   readonly read: boolean;
   readonly write: boolean;
   readonly range?: NormalizedRange | undefined;
@@ -191,7 +205,7 @@ function textureUsage(access: GraphTextureAccess): number {
   }
 }
 
-function accessMode(access: GraphBufferAccess | GraphTextureAccess): {
+function accessMode(access: GraphAccessUsage): {
   readonly read: boolean;
   readonly write: boolean;
 } {
@@ -204,6 +218,7 @@ function accessMode(access: GraphBufferAccess | GraphTextureAccess): {
     case 'color-attachment':
     case 'depth-stencil-write':
     case 'copy-dst':
+    case 'acceleration-structure-build':
       return { read: false, write: true };
     default:
       return { read: true, write: false };
@@ -345,6 +360,27 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     return ok(bufferHandle(this.owner, id));
   }
 
+  importAccelerationStructure(
+    label: string,
+    descriptor: ImportedAccelerationStructureDescriptor,
+    resolve: (frame: FrameCtx) => Tlas,
+  ): Result<GraphAccelerationStructure, RenderGraphError> {
+    const writable = this.ensureWritable();
+    if (!writable.ok) return writable;
+    const unique = this.reserveLabel(label);
+    if (!unique.ok) return unique;
+    const id = this.nextId++;
+    this.resources.set(id, {
+      id,
+      label,
+      kind: 'acceleration-structure',
+      origin: 'imported',
+      descriptor: Object.freeze({ ...descriptor }),
+      resolve,
+    });
+    return ok(accelerationStructureHandle(this.owner, id));
+  }
+
   view(
     texture: GraphTexture,
     descriptor: GraphTextureViewDescriptor = {},
@@ -441,12 +477,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     const analyzed = this.analyze(options.device.caps);
     if (!analyzed.ok) return analyzed;
 
-    const allocated = this.allocate(
-      options,
-      analyzed.value.usageByResource,
-      analyzed.value.firstUseByResource,
-      analyzed.value.lastUseByResource,
-    );
+    const allocated = this.allocate(options, analyzed.value.resources);
     if (!allocated.ok) return allocated;
 
     const generation = nextGeneration;
@@ -475,6 +506,10 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         const texture =
           resource.record.kind === 'texture'
             ? (resource.record.descriptor as GraphTextureDescriptor)
+            : undefined;
+        const accelerationStructure =
+          resource.record.kind === 'acceleration-structure'
+            ? resource.record.descriptor
             : undefined;
         const buffer =
           resource.record.kind === 'buffer'
@@ -508,22 +543,27 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
           kind: resource.record.kind,
           origin: resource.record.origin,
           descriptor:
-            texture === undefined
+            accelerationStructure !== undefined
               ? {
-                  kind: 'buffer' as const,
-                  size: buffer?.size ?? 0,
+                  kind: 'acceleration-structure' as const,
+                  maxInstances: accelerationStructure.maxInstances,
                 }
-              : {
-                  kind: 'texture' as const,
-                  format: texture.format,
-                  ...(texture.domain === undefined ? {} : { domain: texture.domain }),
-                  size: texture.size,
-                  width: extent?.width ?? 1,
-                  height: extent?.height ?? 1,
-                  depthOrArrayLayers: extent?.depthOrArrayLayers ?? 1,
-                  mipLevelCount: texture.mipLevelCount ?? 1,
-                  sampleCount: texture.sampleCount ?? 1,
-                },
+              : texture === undefined
+                ? {
+                    kind: 'buffer' as const,
+                    size: buffer?.size ?? 0,
+                  }
+                : {
+                    kind: 'texture' as const,
+                    format: texture.format,
+                    ...(texture.domain === undefined ? {} : { domain: texture.domain }),
+                    size: texture.size,
+                    width: extent?.width ?? 1,
+                    height: extent?.height ?? 1,
+                    depthOrArrayLayers: extent?.depthOrArrayLayers ?? 1,
+                    mipLevelCount: texture.mipLevelCount ?? 1,
+                    sampleCount: texture.sampleCount ?? 1,
+                  },
           firstUse: resource.firstUse,
           lastUse: resource.lastUse,
           derivedUsage: resource.usage,
@@ -602,7 +642,10 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       if (!this.views.has(data.id)) return err(this.foreignHandleError(passName));
       return ok(undefined);
     }
-    if (data.kind !== 'buffer' || !this.resources.has(data.id)) {
+    if (
+      (data.kind !== 'buffer' && data.kind !== 'acceleration-structure') ||
+      !this.resources.has(data.id)
+    ) {
       return err(this.foreignHandleError(passName));
     }
     return ok(undefined);
@@ -611,23 +654,18 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
   private analyze(caps: RhiCaps): Result<
     {
       readonly passes: readonly CompiledPass<FrameCtx>[];
-      readonly usageByResource: ReadonlyMap<number, number>;
-      readonly firstUseByResource: ReadonlyMap<number, number>;
-      readonly lastUseByResource: ReadonlyMap<number, number>;
+      readonly resources: ReadonlyMap<number, ResourceAnalysis>;
     },
     RenderGraphError
   > {
-    const normalizedByPass: NormalizedAccess[][] = [];
-    const usageByResource = new Map<number, number>();
-    const firstUseByResource = new Map<number, number>();
-    const lastUseByResource = new Map<number, number>();
+    const resources = new Map<number, ResourceAnalysis>();
     const compiledPasses: CompiledPass<FrameCtx>[] = [];
     const history: NormalizedAccess[] = [];
 
     for (const resource of this.resources.values()) {
       if (resource.kind !== 'texture' || resource.origin !== 'created') continue;
       const usage = resource.descriptor.usage ?? 0;
-      if (usage !== 0) usageByResource.set(resource.id, usage);
+      if (usage !== 0) resources.set(resource.id, { usage, firstUse: null, lastUse: null });
     }
 
     for (let passIndex = 0; passIndex < this.passes.length; passIndex++) {
@@ -642,20 +680,20 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         normalized.push(item.value);
         const resource = this.resources.get(item.value.resourceId);
         const usage =
-          (resource?.kind === 'texture' && resource.origin === 'created'
-            ? (resource.descriptor.usage ?? 0)
-            : 0) |
-          (resource?.kind === 'buffer'
-            ? bufferUsage(access.usage as GraphBufferAccess)
-            : textureUsage(access.usage as GraphTextureAccess));
-        usageByResource.set(
-          item.value.resourceId,
-          (usageByResource.get(item.value.resourceId) ?? 0) | usage,
-        );
-        if (!firstUseByResource.has(item.value.resourceId)) {
-          firstUseByResource.set(item.value.resourceId, passIndex);
-        }
-        lastUseByResource.set(item.value.resourceId, passIndex);
+          resource?.kind === 'acceleration-structure'
+            ? 0
+            : (resource?.kind === 'texture' && resource.origin === 'created'
+                ? (resource.descriptor.usage ?? 0)
+                : 0) |
+              (resource?.kind === 'buffer'
+                ? bufferUsage(access.usage as GraphBufferAccess)
+                : textureUsage(access.usage as GraphTextureAccess));
+        const previous = resources.get(item.value.resourceId);
+        resources.set(item.value.resourceId, {
+          usage: (previous?.usage ?? 0) | usage,
+          firstUse: previous?.firstUse ?? passIndex,
+          lastUse: passIndex,
+        });
       }
       const conflict = this.validatePassAccesses(pass, normalized);
       if (!conflict.ok) return conflict;
@@ -686,7 +724,6 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
           }
         }
       }
-      normalizedByPass.push(normalized);
       history.push(...normalized);
       compiledPasses.push({
         ...pass,
@@ -698,9 +735,9 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       });
     }
 
-    for (const [resourceId, usage] of usageByResource) {
+    for (const [resourceId, { usage }] of resources) {
       const resource = this.resources.get(resourceId);
-      if (resource?.origin !== 'imported') continue;
+      if (resource?.origin !== 'imported' || resource.kind === 'acceleration-structure') continue;
       if ((resource.descriptor.usage & usage) !== usage) {
         return err(
           new RenderGraphError({
@@ -718,12 +755,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       }
     }
 
-    return ok({
-      passes: compiledPasses,
-      usageByResource,
-      firstUseByResource,
-      lastUseByResource,
-    });
+    return ok({ passes: compiledPasses, resources });
   }
 
   private normalizeAccess(
@@ -737,7 +769,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       return err(this.foreignHandleError(passName));
     }
     const mode = this.accessModeForPass(pass, access);
-    if (data.kind === 'buffer') {
+    if (data.kind === 'buffer' || data.kind === 'acceleration-structure') {
       return ok({ passIndex, passName, resourceId: data.id, usage: access.usage, ...mode });
     }
     if (data.kind !== 'texture-view') return err(this.foreignHandleError(passName));
@@ -833,13 +865,26 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       if (access.usage === 'indirect-read' && !caps.indirectDrawing) {
         return this.capabilityError(pass.name, 'indirect', access);
       }
+      if (
+        (access.usage === 'acceleration-structure-build' ||
+          access.usage === 'acceleration-structure-read') &&
+        !caps.rayQuery.supported
+      ) {
+        return this.capabilityError(pass.name, 'ray-query', access);
+      }
     }
     return ok(undefined);
   }
 
   private capabilityError(
     passName: string,
-    capability: 'compute' | 'storage-buffer' | 'storage-texture' | 'indirect' | 'color-attachments',
+    capability:
+      | 'compute'
+      | 'storage-buffer'
+      | 'storage-texture'
+      | 'indirect'
+      | 'color-attachments'
+      | 'ray-query',
     access?: GraphAccess,
   ): Result<never, RenderGraphError> {
     const resourceId = access === undefined ? undefined : accessResourceId(access);
@@ -909,15 +954,31 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
         );
       }
     }
+    if (pass.pass.kind !== 'copy') {
+      const invalid = accesses.find((access) => access.usage === 'acceleration-structure-build');
+      if (invalid !== undefined) {
+        return err(
+          new RenderGraphError({
+            code: 'access-conflict',
+            expected: `pass '${pass.name}' builds acceleration structures only from a copy pass`,
+            hint: 'record acceleration-structure-build in a copy pass ordered before its readers',
+            detail: { passName: pass.name, usage: invalid.usage },
+          }),
+        );
+      }
+    }
     if (pass.pass.kind === 'copy') {
       const invalid = accesses.find(
-        (access) => access.usage !== 'copy-src' && access.usage !== 'copy-dst',
+        (access) =>
+          access.usage !== 'copy-src' &&
+          access.usage !== 'copy-dst' &&
+          access.usage !== 'acceleration-structure-build',
       );
       if (invalid !== undefined) {
         return err(
           new RenderGraphError({
             code: 'access-conflict',
-            expected: `copy pass '${pass.name}' declares only copy-src/copy-dst accesses`,
+            expected: `copy pass '${pass.name}' declares only copy-src/copy-dst/acceleration-structure-build accesses`,
             hint: 'move shader or attachment work into raster/compute passes',
             detail: { passName: pass.name, usage: invalid.usage },
           }),
@@ -1093,9 +1154,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
 
   private allocate(
     options: RenderGraphCompileOptions,
-    usageByResource: ReadonlyMap<number, number>,
-    firstUseByResource: ReadonlyMap<number, number>,
-    lastUseByResource: ReadonlyMap<number, number>,
+    analyzedResources: ReadonlyMap<number, ResourceAnalysis>,
   ): Result<
     {
       readonly resources: ReadonlyMap<number, CompiledResource<FrameCtx>>;
@@ -1113,7 +1172,12 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
     };
 
     for (const resource of this.resources.values()) {
-      const usage = usageByResource.get(resource.id) ?? 0;
+      const analysis = analyzedResources.get(resource.id) ?? {
+        usage: 0,
+        firstUse: null,
+        lastUse: null,
+      };
+      const { usage } = analysis;
       let texture: Texture | undefined;
       let textureAllocation: GraphTextureAllocation | undefined;
       let buffer: Buffer | undefined;
@@ -1177,9 +1241,7 @@ export class RenderGraphBuilder<FrameCtx extends RenderGraphFrame> {
       }
       compiledResources.set(resource.id, {
         record: resource,
-        usage,
-        firstUse: firstUseByResource.get(resource.id) ?? null,
-        lastUse: lastUseByResource.get(resource.id) ?? null,
+        ...analysis,
         ...(texture === undefined ? {} : { texture, textureAllocation }),
         ...(buffer === undefined ? {} : { buffer }),
       });

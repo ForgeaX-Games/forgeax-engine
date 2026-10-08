@@ -105,10 +105,9 @@ describe('detached renderer inspection', () => {
     expect(inspection.temporal.resources.active).toBeGreaterThan(0);
     expect(inspection.temporal.resources.candidate).toBe(0);
     expect(inspection.lodOcclusion).toMatchObject({
-      schema: 'forgeax::lod-occlusion-inspection::v2',
+      schema: 'forgeax::lod-occlusion-inspection::v3',
       view: { viewRole: 'main', cameraEntity: camera },
       count: { candidates: 0, visible: 0, occluded: 0 },
-      degradation: { active: false },
     });
     expect(inspection.temporalTarget).toMatchObject({
       identity: 'standard-scene-temporal',

@@ -147,15 +147,16 @@ export async function produceSourcePackage(
   const declaredGuids = input.meta.subAssets.map((asset) => asset.guid);
   const cookers = new NativeCookerRegistry();
   for (const cooker of input.cookers ?? []) cookers.register(cooker);
-  const result = await runImport(input.meta, input.registry, input.fs, cookers);
+  const result = await runImport(
+    { ...input.meta, buildPack: false },
+    input.registry,
+    input.fs,
+    cookers,
+  );
   if (!result.ok) {
     // Only output-topology failures describe GUID closure. Preserve the owning
     // import error for missing modules, unreadable sources and conversion failures.
-    if (
-      result.error.code !== 'guid-mismatch' &&
-      result.error.code !== 'import-produced-no-assets' &&
-      result.error.code !== 'source-validation-failed'
-    )
+    if (result.error.code !== 'guid-mismatch' && result.error.code !== 'import-produced-no-assets')
       return result;
     const producedGuids = producedGuidsFromImportFailure(declaredGuids, result.error.detail);
     return {

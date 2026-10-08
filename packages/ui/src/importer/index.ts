@@ -8,9 +8,8 @@ import {
 } from '@forgeax/engine-types';
 import type { UiAsset } from '../asset.js';
 import { classifyUiAuthoring, validateUiAuthoring } from '../authoring/validate.js';
-import { cssAssetUrls } from './css.js';
-import { finalizeUiArtifact } from './finalize.js';
-import { htmlAssetUrls } from './html.js';
+import { isUiLocalization, type UiLocalization } from '../localization/resources.js';
+import { finalizeUiArtifact, uiArtifactMimeType } from './finalize.js';
 
 export { cssAssetUrls, validateCssSource } from './css.js';
 export {
@@ -30,6 +29,7 @@ export interface UiSource {
   readonly guid: string;
   readonly html: string;
   readonly css: string;
+  readonly localization?: UiLocalization;
 }
 
 function importFailure(reason: string): ImportResult<UiAsset> {
@@ -73,18 +73,9 @@ function relativePath(reference: string): string | undefined {
   return out.join('/');
 }
 
-function mimeType(path: string): string {
-  const lower = path.toLowerCase();
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.svg')) return 'image/svg+xml';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.woff2')) return 'font/woff2';
-  if (lower.endsWith('.woff')) return 'font/woff';
-  return 'application/octet-stream';
-}
-
 export function importUiSource(source: UiSource): ImportResult<UiAsset> {
+  if (source.localization !== undefined && !isUiLocalization(source.localization))
+    return importFailure('invalid localization resources');
   const classification = classifyUiAuthoring({
     sourcePath: `${source.guid}.ui.html`,
     html: source.html,
@@ -98,7 +89,12 @@ export function importUiSource(source: UiSource): ImportResult<UiAsset> {
         {
           guid: source.guid,
           kind: 'ui',
-          payload: { guid: source.guid, html: source.html, css: source.css },
+          payload: {
+            guid: source.guid,
+            html: source.html,
+            css: source.css,
+            ...(source.localization === undefined ? {} : { localization: source.localization }),
+          },
           refs: [],
           artifacts: {},
         },
@@ -128,12 +124,14 @@ export function createUiImporter(): {
       const cssRead = await context.readSibling(cssPath);
       if (!cssRead.ok) return importFailure(`missing UI stylesheet companion: ${cssPath}`);
       const cssText = new TextDecoder().decode(cssRead.value);
+      const companions = new Map<string, Uint8Array>();
       const validation = await validateUiAuthoring({
         sourcePath: context.source,
         html: htmlText,
         css: cssText,
         readCompanion: async (path) => {
           const read = await context.readSibling(path);
+          if (read.ok) companions.set(path, read.value);
           return read.ok
             ? { ok: true as const }
             : {
@@ -149,19 +147,59 @@ export function createUiImporter(): {
           return validationFailure(validation.error.detail.diagnostics);
         return importFailure(validation.error.message);
       }
-      const references = [...htmlAssetUrls(htmlText), ...cssAssetUrls(cssText)];
-      const unique = [...new Set(references)];
+      let localization: UiLocalization | undefined;
+      const localizationPath = context.importSettings.localization;
+      if (localizationPath !== undefined) {
+        const path =
+          typeof localizationPath === 'string' ? relativePath(localizationPath) : undefined;
+        if (!path || path !== localizationPath || /[:\\]/.test(path) || !path.endsWith('.json'))
+          return importFailure('importSettings.localization must name a relative JSON companion');
+        const read = await context.readSibling(path);
+        if (!read.ok) return importFailure(`missing UI localization companion: ${path}`);
+        try {
+          if (read.value.byteLength > 1_048_576) throw new Error('resource exceeds 1 MiB');
+          const parsed: unknown = JSON.parse(
+            new TextDecoder('utf-8', { fatal: true }).decode(read.value),
+          );
+          if (!isUiLocalization(parsed))
+            throw new Error(
+              'expected string-valued i18next resources with fallbackLng and defaultNS',
+            );
+          localization = parsed;
+        } catch (error) {
+          return validationFailure([
+            {
+              code: 'ui-localization-invalid',
+              severity: 'error',
+              sourcePath: path,
+              sourceRange: { start: 0, end: 1, line: 1, column: 1 },
+              rule: 'ui-localization-json',
+              expected: 'valid i18next JSON resources, at most 1 MiB and 16 levels',
+              actual: String(error),
+              hint: 'Repair this JSON companion, then reimport the owning UI asset.',
+            },
+          ]);
+        }
+      }
+      const unique = [...new Set(validation.value.references)];
       const artifacts: Record<string, ImportedArtifactBody> = {};
-      const dependencies = [context.source, cssPath];
+      const dependencies = [
+        context.source,
+        cssPath,
+        ...(typeof localizationPath === 'string' ? [localizationPath] : []),
+      ];
       let htmlOut = htmlText;
       let cssOut = cssText;
       for (const reference of unique) {
         const path = relativePath(reference);
         if (path === undefined) return importFailure(`unsafe UI companion URL: ${reference}`);
-        const read = await context.readSibling(path);
-        if (!read.ok) return importFailure(`missing UI companion: ${path}`);
+        const bytes = companions.get(reference.split(/[?#]/, 1)[0] ?? '');
+        if (bytes === undefined) return importFailure(`missing UI companion: ${path}`);
         dependencies.push(path);
-        artifacts[path] = { mediaType: mimeType(path), bytes: read.value };
+        artifacts[path] = {
+          mediaType: uiArtifactMimeType(path) ?? 'application/octet-stream',
+          bytes,
+        };
         const token = `ui-token:${path}`;
         htmlOut = htmlOut.replaceAll(reference, token);
         cssOut = cssOut.replaceAll(reference, token);
@@ -173,7 +211,12 @@ export function createUiImporter(): {
             {
               guid,
               kind: 'ui',
-              payload: { guid, html: htmlOut, css: cssOut },
+              payload: {
+                guid,
+                html: htmlOut,
+                css: cssOut,
+                ...(localization === undefined ? {} : { localization }),
+              },
               refs: [],
               artifacts,
             },

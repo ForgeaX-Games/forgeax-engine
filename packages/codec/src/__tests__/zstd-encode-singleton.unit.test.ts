@@ -1,9 +1,6 @@
-import {
-  _setZstdEncoderImporter,
-  _zstdEncodeInitCount,
-  compressZstd,
-} from '@forgeax/engine-codec/encode';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
+import { _setZstdEncoderImporter, compressZstd } from '@forgeax/engine-codec/encode';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 function makeBytes(size: number): Uint8Array {
   const bytes = new Uint8Array(size);
@@ -23,16 +20,18 @@ afterEach(() => {
 
 describe('zstd encoder deferred-init singleton', () => {
   it('does not initialize until the first compression', () => {
-    _setZstdEncoderImporter();
-    expect(_zstdEncodeInitCount()).toBe(0);
+    const importer = vi.fn(() => createRequire(import.meta.url)('@bokuweb/zstd-wasm'));
+    _setZstdEncoderImporter(importer);
+    expect(importer).not.toHaveBeenCalled();
   });
 
   it('shares one WASM init across concurrent first compressions', async () => {
-    _setZstdEncoderImporter();
+    const importer = vi.fn(() => createRequire(import.meta.url)('@bokuweb/zstd-wasm'));
+    _setZstdEncoderImporter(importer);
     const input = makeBytes(65536);
     const results = await Promise.all(Array.from({ length: 8 }, () => compressZstd(input)));
 
-    expect(_zstdEncodeInitCount()).toBe(1);
+    expect(importer).toHaveBeenCalledTimes(1);
     for (const result of results) {
       expect(result.ok).toBe(true);
       if (!result.ok) throw new Error('zstd compression failed');
@@ -53,11 +52,10 @@ describe('zstd encoder deferred-init singleton', () => {
 
     const first = await compressZstd(makeBytes(8));
     expect(first.ok).toBe(false);
-    expect(_zstdEncodeInitCount()).toBe(1);
+    expect(attempts).toBe(1);
 
     const second = await compressZstd(makeBytes(8));
     expect(second.ok).toBe(true);
     expect(attempts).toBe(2);
-    expect(_zstdEncodeInitCount()).toBe(2);
   });
 });

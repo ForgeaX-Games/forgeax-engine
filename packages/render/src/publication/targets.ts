@@ -7,6 +7,7 @@ import type {
 } from '../targets/contracts';
 import { resolveRenderTargetMaterialSource } from '../targets/material-source';
 import { isCanvasTextureSource, type MaterialTextureSource } from '../textures/canvas-texture';
+import { isExternalTextureSource } from '../textures/external-texture';
 import type { RenderPublicationTemplate } from './contract';
 import { RenderPublicationError } from './contract';
 import type { PreparedRenderPublication } from './receiver';
@@ -56,7 +57,8 @@ export function publicationTargetSources(
   for (const template of templates)
     for (const material of template.snapshot.materials) {
       for (const source of material.textureSources?.values() ?? []) {
-        if (isCanvasTextureSource(source) || sources.has(source)) continue;
+        if (isCanvasTextureSource(source) || isExternalTextureSource(source) || sources.has(source))
+          continue;
         const binding = resolveRenderTargetMaterialSource(source);
         if (binding === undefined)
           throw new RenderPublicationError({
@@ -144,7 +146,8 @@ export class RenderPublicationTargetReceiver {
         if (material.textureSources === undefined) return material;
         const textureSources = new Map<string, MaterialTextureSource>(
           [...material.textureSources].map(([name, token]) => {
-            if (isCanvasTextureSource(token)) return [name, token] as const;
+            if (isCanvasTextureSource(token) || isExternalTextureSource(token))
+              return [name, token] as const;
             const source = sources.get(token);
             if (source === undefined)
               throw new RenderPublicationError({

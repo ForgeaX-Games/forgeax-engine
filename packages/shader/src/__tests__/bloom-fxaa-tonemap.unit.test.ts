@@ -119,7 +119,9 @@ describe('post shader color-domain contract', () => {
     expect(toneOnly).toContain('mapTonemap(source.rgb)');
     expect(toneOnly).not.toContain('encodeOutput(');
     expect(encodeOnly).toContain('return encodeFinal(source.rgb, source.a, in.position);');
-    expect(functionBody(code, 'encodeFinal')).toContain('encodeOutput(linearColor, alpha)');
+    expect(functionBody(code, 'encodeFinal')).toContain(
+      'encodeOutput(linearColor, alpha, params.outputGamut)',
+    );
     expect(functionBody(code, 'encodeFinal')).toContain('ditherUnorm8(encoded.rgb, position.xy)');
     expect(code.indexOf('fn fs_tone_only')).toBeLessThan(code.indexOf('fn fs_encode_only'));
   });

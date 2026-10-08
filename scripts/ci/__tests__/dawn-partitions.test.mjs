@@ -4,7 +4,9 @@ import { test } from 'node:test';
 import {
   DAWN_TEST_PARTITIONS,
   LIGHTWEIGHT_DAWN_TEST_PARTITIONS,
+  runDawnPartitions,
   selectDawnTestPartitions,
+  selectTransmissionSmokeOwner,
   validateDawnPartitionReport,
 } from '../run-dawn-partitions.mjs';
 
@@ -61,7 +63,7 @@ for (const [kind, file, count] of [
   [
     'transmission',
     'packages/render/src/transmission/__tests__/standard-transmission.dawn.test.ts',
-    5,
+    8,
   ],
 ])
   test(`${kind} real test titles are selected and passed exactly once`, () => {
@@ -97,6 +99,82 @@ test('an all-skipped filtered file cannot be a green partition', () => {
     () => validateDawnPartitionReport(report, partitions, partitions[0], new Set()),
     /unexpected result/,
   );
+});
+
+test('unknown or misplaced Smoke owner rejects before native process startup', async () => {
+  await assert.rejects(
+    runDawnPartitions('transmission', {
+      env: { FORGEAX_DAWN_ROSTER_SMOKE: '1' },
+      smokeOwner: 'typo',
+    }),
+    /unknown transmission Smoke owner/,
+  );
+  await assert.rejects(
+    runDawnPartitions('transmission', {
+      env: {},
+      smokeOwner: 'frames',
+    }),
+    /complete transmission declaration/,
+  );
+});
+
+test('transmission Smoke owners conserve all nine real assertions and the direct five-process route', () => {
+  const features = DAWN_TEST_PARTITIONS.transmission;
+  const canonical = { pattern: 'emits the canonical 60-frame Dawn roster receipt', count: 1 };
+  const roster = [...features, canonical];
+  const source = readFileSync(
+    'packages/render/src/transmission/__tests__/standard-transmission.dawn.test.ts',
+    'utf8',
+  );
+  const names = [...source.matchAll(/\bit\(\s*'([^']+)'/g)].map((match) => match[1]);
+  assert.equal(names.length, 9);
+  assert.deepEqual(selectTransmissionSmokeOwner(features), roster);
+  assert.equal(roster.length, 5);
+  assert.deepEqual(selectTransmissionSmokeOwner(features, 'frames'), [canonical]);
+  assert.equal(selectDawnTestPartitions('transmission', {}).length, 4);
+  assert.throws(() => selectTransmissionSmokeOwner(features, 'typo'), /unknown/);
+  const allCovered = new Set();
+  for (const [owner, expected] of [
+    ['features-a', 4],
+    ['features-b', 4],
+    ['frames', 1],
+  ]) {
+    const covered = new Set();
+    for (const partition of selectTransmissionSmokeOwner(features, owner)) {
+      const report = {
+        success: true,
+        testResults: [
+          {
+            assertionResults: names.map((fullName) => ({
+              fullName,
+              status: new RegExp(partition.pattern).test(fullName) ? 'passed' : 'skipped',
+            })),
+          },
+        ],
+      };
+      validateDawnPartitionReport(report, roster, partition, covered);
+      for (const mutate of [
+        (rows) => rows.pop(),
+        (rows) => rows.push(rows[0]),
+        (rows) => {
+          rows.find((row) => row.status === 'passed').status = 'failed';
+        },
+        (rows) => {
+          rows.find((row) => row.status === 'skipped').status = 'passed';
+        },
+      ]) {
+        const corrupted = structuredClone(report);
+        mutate(corrupted.testResults[0].assertionResults);
+        assert.throws(() => validateDawnPartitionReport(corrupted, roster, partition, new Set()));
+      }
+    }
+    assert.equal(covered.size, expected);
+    for (const name of covered) {
+      assert.equal(allCovered.has(name), false, `duplicate owner: ${name}`);
+      allCovered.add(name);
+    }
+  }
+  assert.deepEqual([...allCovered].sort(), names.sort());
 });
 
 test('missing, duplicate, failed, or overlapping assertions fail closed', () => {

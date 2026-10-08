@@ -12,7 +12,10 @@ import {
 import { transmissionBackdropAvailable } from '../assembly/device-feature-admission';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from '../gpu-usage';
 import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
-import { assembleMaterialWithSkylightEntries } from '../ibl/skylight-bind-group';
+import {
+  assembleMaterialWithSkylightEntries,
+  skylightBindGroupResources,
+} from '../ibl/skylight-bind-group';
 import {
   isCanonicalStandardPbrMaterialShader,
   isStandardPbrMaterialShader,
@@ -190,14 +193,7 @@ export function preparedMaterialBindings(
   );
   const completeEntries = assembleMaterialWithSkylightEntries(
     entries,
-    skylightResources ?? {
-      irradianceView: fallback.irradianceView,
-      irradianceSampler: fallback.sampler,
-      prefilterView: fallback.prefilterView,
-      prefilterSampler: fallback.sampler,
-      brdfLutView: fallback.brdfLutView,
-      intensityBuffer: fallback.intensityBuffer,
-    },
+    skylightResources ?? skylightBindGroupResources(fallback),
     transmissionBackdropAvailable(runtime.device.limits.maxSampledTexturesPerShaderStage)
       ? undefined
       : null,

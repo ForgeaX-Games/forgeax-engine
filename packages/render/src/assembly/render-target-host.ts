@@ -3,6 +3,7 @@ import type { RenderError } from '../errors/render';
 import {
   RenderTargetCapabilityMissingError,
   RenderTargetDescriptorInvalidError,
+  RenderTargetLayerInvalidError,
   RenderTargetOperationFailedError,
   RenderTargetStateInvalidError,
 } from '../errors/render';
@@ -11,6 +12,9 @@ import { resolveRenderTargetMipExtent } from '../record/frame-targets';
 import type { RenderResult } from '../render-contract';
 import {
   admitRenderTargetDescriptor,
+  type FramebufferSnapshotData,
+  type FramebufferSnapshotRequest,
+  type FramebufferSnapshotTicket,
   type RenderTarget,
   type RenderTargetAdmissionLimits,
   type RenderTargetDescriptor,
@@ -19,7 +23,12 @@ import {
   type RenderTargetReadbackTicket,
   type RenderTargetTextureSource,
   type RenderTargetTextureSourceOptions,
+  renderTargetLayerCount,
 } from '../targets/contracts';
+import {
+  createFramebufferSnapshotQueue,
+  type FramebufferSnapshotSource,
+} from '../targets/framebuffer-snapshot';
 import {
   createRenderTargetMaterialSource,
   type RenderTargetMaterialSourceBinding,
@@ -57,11 +66,19 @@ export interface RenderTargetHostOptions {
 
 const DEFAULT_LIMITS: RenderTargetAdmissionLimits = {
   maxTextureDimension2D: 8192,
+  maxTextureDimension3D: 2048,
+  maxTextureArrayLayers: 256,
   maxBytesPerTarget: 256 * 1024 * 1024,
   renderableFormats: ['rgba16float', 'rgba8unorm', 'rgba8unorm-srgb'],
   sampleCounts: [1, 4],
   depthFormats: ['depth24plus-stencil8', 'depth32float'],
 };
+
+/** One target layer (cube face, array layer, or 3D slice) written by a frame. */
+export interface RenderTargetLayerWrite {
+  readonly target: RenderTarget;
+  readonly layer: number;
+}
 
 interface ReadbackRecord {
   readonly target: RenderTarget;
@@ -100,12 +117,29 @@ export interface RenderTargetHost {
     receipt: RenderTargetReadbackReceipt,
     tickets: readonly RenderTargetReadbackTicket[],
   ): Promise<RenderResult<readonly RenderTargetReadbackData[], RenderError>>;
+  requestFramebufferSnapshot(
+    target: RenderTarget,
+    request: FramebufferSnapshotRequest,
+  ): RenderResult<FramebufferSnapshotTicket, RenderError>;
+  observeFramebufferSnapshots(
+    receipt: RenderTargetReadbackReceipt,
+    tickets: readonly FramebufferSnapshotTicket[],
+  ): Promise<RenderResult<readonly FramebufferSnapshotData[], RenderError>>;
+  /** @internal Copy pending snapshot regions from a final linear-HDR scene color. */
+  encodeFramebufferSnapshots(encoder: RhiCommandEncoder, source: FramebufferSnapshotSource): void;
   /** @internal Physical target used by the active Standard frame. */
   getPhysicalTarget(target: RenderTarget): RenderTargetPhysical | undefined;
   /** @internal A target write was accepted by the frame's sole queue submission. */
   markTargetSubmitted(target: RenderTarget, physical: RenderTargetPhysical): void;
   /** @internal Add pending target copies to the frame's sole encoder. */
-  encodePendingReadbacks(encoder: RhiCommandEncoder, faces?: readonly number[]): void;
+  /**
+   * Encode pending readbacks. `written` lists the target layers this command
+   * buffer writes; a readback of a written layer copies the candidate.
+   */
+  encodePendingReadbacks(
+    encoder: RhiCommandEncoder,
+    written?: readonly RenderTargetLayerWrite[],
+  ): void;
   destroyRenderTarget(target: RenderTarget): RenderResult<void, RenderError>;
   /** Called immediately before the existing Standard frame is interpreted. */
   beginFrame(): void;
@@ -144,6 +178,18 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
   const submittedPhysicals = new WeakSet<RenderTargetPhysical>();
   const sources = new WeakMap<object, RenderTargetMaterialSourceBinding>();
   const readbacks = new Map<RenderTargetReadbackTicket, ReadbackRecord>();
+  const frameWriters = new Set<RenderTarget>();
+  const markTargetSubmitted = (target: RenderTarget, physical: RenderTargetPhysical): void => {
+    if (candidatePhysical.get(target) === physical) submittedPhysicals.add(physical);
+  };
+  const snapshots = createFramebufferSnapshotQueue({
+    owner,
+    currentGeneration,
+    writablePhysical: (target) => candidatePhysical.get(target) ?? activePhysical.get(target),
+    activePhysical: (target) => activePhysical.get(target),
+    claimedByWriter: (target) => frameWriters.has(target),
+    markWritten: markTargetSubmitted,
+  });
   const report = (error: RenderError) => options.onError?.(error);
   const releasePhysical = (physical: RenderTargetPhysical | undefined, failures: RenderError[]) => {
     const result = destroyRenderTargetPhysical(physical);
@@ -315,9 +361,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
       if (binding === undefined) return undefined;
       const physical = activePhysical.get(binding.target as object);
       if (physical === undefined) return binding;
-      const view =
-        physical.mipViews[binding.view.mipLevel] ??
-        (binding.shape === 'cube' ? physical.view : physical.resolveView);
+      const view = physical.mipViews[binding.view.mipLevel] ?? physical.view;
       if (binding.generation !== physical.generation) return binding;
       return { ...binding, textureView: view };
     },
@@ -366,22 +410,18 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
           }),
         };
       }
+      const layers = renderTargetLayerCount(inspected.value.descriptor);
       if (
-        request.face !== undefined &&
-        (!Number.isInteger(request.face) ||
-          request.face < 0 ||
-          request.face > 5 ||
-          inspected.value.descriptor.shape !== 'cube')
+        request.layer !== undefined &&
+        (!Number.isInteger(request.layer) || request.layer < 0 || request.layer >= layers)
       ) {
         return {
           ok: false,
-          error: new RenderTargetDescriptorInvalidError({
-            field: 'face',
-            value: request.face,
-            expected:
-              inspected.value.descriptor.shape === 'cube'
-                ? 'an integer in [0, 5]'
-                : 'omitted for a 2d target',
+          error: new RenderTargetLayerInvalidError({
+            operation: 'readback',
+            layer: request.layer,
+            shape: inspected.value.descriptor.shape,
+            layerCount: layers,
           }),
         };
       }
@@ -389,7 +429,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
       const extent = resolveRenderTargetMipExtent(inspected.value.descriptor, request.mipLevel);
       const device = options.getDevice?.();
       const buffer = device?.createBuffer({
-        label: `render-target-readback.${request.mipLevel}.${request.face ?? 0}`,
+        label: `render-target-readback.${request.mipLevel}.${request.layer ?? 0}`,
         size:
           Math.ceil((extent.width * bytesPerPixel(inspected.value.descriptor.format)) / 256) *
           256 *
@@ -412,7 +452,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
       const internalTicket = createRenderTargetReadbackTicket(target, {
         deviceGeneration: inspected.value.generation,
         mipLevel: request.mipLevel,
-        ...(request.face === undefined ? {} : { face: request.face }),
+        ...(request.layer === undefined ? {} : { layer: request.layer }),
         width: extent.width,
         height: extent.height,
         bytesPerPixel: bytesPerPixel(inspected.value.descriptor.format),
@@ -523,7 +563,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
           frameId: completed.value.frameId,
           deviceGeneration: completed.value.deviceGeneration,
           mipLevel: completed.value.mipLevel,
-          ...(completed.value.face === undefined ? {} : { face: completed.value.face }),
+          ...(completed.value.layer === undefined ? {} : { layer: completed.value.layer }),
           bytesPerRow: record.ticket.bytesPerRow,
           byteLength: record.ticket.byteLength,
         });
@@ -534,11 +574,19 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
       const destroyed = owner.destroy(target);
       if (!destroyed.ok) return destroyed;
       const failures = releaseTarget(target);
+      snapshots.release(target);
       targets.delete(target);
       return retirementResult(failures);
     },
+    requestFramebufferSnapshot: snapshots.request,
+    observeFramebufferSnapshots: snapshots.observe,
+    encodeFramebufferSnapshots(encoder: RhiCommandEncoder, source: FramebufferSnapshotSource) {
+      if (!disposed) snapshots.encode(encoder, source);
+    },
     beginFrame(): void {
       if (disposed) return;
+      frameWriters.clear();
+      snapshots.beginFrame();
       for (const record of readbacks.values())
         if (record.status === 'encoded') record.status = 'pending';
       for (const target of targets) {
@@ -559,6 +607,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
     ): void {
       if (disposed) return;
       const submittedReadbacks: ReadbackRecord[] = [];
+      if (receipt !== undefined) snapshots.onFrameSubmitted(receipt, completed);
       if (receipt !== undefined) {
         for (const record of readbacks.values()) {
           if (record.status !== 'encoded') continue;
@@ -654,28 +703,27 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
         }),
       );
     },
-    markTargetSubmitted(target: RenderTarget, physical: RenderTargetPhysical): void {
-      if (candidatePhysical.get(target) === physical) submittedPhysicals.add(physical);
-    },
+    markTargetSubmitted,
     getPhysicalTarget(target: RenderTarget): RenderTargetPhysical | undefined {
+      frameWriters.add(target);
       return candidatePhysical.get(target as object) ?? activePhysical.get(target as object);
     },
-    encodePendingReadbacks(encoder: RhiCommandEncoder, faces?: readonly number[]): void {
+    encodePendingReadbacks(
+      encoder: RhiCommandEncoder,
+      written?: readonly RenderTargetLayerWrite[],
+    ): void {
       for (const record of readbacks.values()) {
         if (record.status !== 'pending' || record.allocation === undefined) continue;
-        if (
-          faces !== undefined &&
-          record.ticket.face !== undefined &&
-          !faces.includes(record.ticket.face)
-        ) {
-          continue;
-        }
+        const layer = record.ticket.layer ?? 0;
+        const writtenHere =
+          record.ticket.layer !== undefined &&
+          (written?.some((write) => write.target === record.target && write.layer === layer) ??
+            false);
+        // A newly written face may use its candidate; every other face reads
+        // the accepted complete target while progressive capture continues.
         const candidate = candidatePhysical.get(record.target as object);
         const physical =
-          faces !== undefined &&
-          candidate !== undefined &&
-          record.ticket.face !== undefined &&
-          faces.includes(record.ticket.face)
+          writtenHere && candidate !== undefined
             ? candidate
             : activePhysical.get(record.target as object);
         if (physical === undefined) continue;
@@ -684,7 +732,7 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
           {
             texture: source,
             mipLevel: record.ticket.mipLevel,
-            origin: { x: 0, y: 0, z: record.ticket.face ?? 0 },
+            origin: { x: 0, y: 0, z: layer },
           },
           {
             buffer: record.allocation.buffer,
@@ -725,6 +773,8 @@ export function createRenderTargetHost(options: RenderTargetHostOptions = {}): R
       targets.clear();
       staged.clear();
       readbacks.clear();
+      snapshots.clear();
+      frameWriters.clear();
       for (const failure of failures) report(failure);
     },
   });

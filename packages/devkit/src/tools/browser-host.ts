@@ -32,13 +32,12 @@ import {
   browserLaunchArgs,
   captureBrowserExecutionSurface,
   resolveBrowserExecutable,
+  type SoftwareBrowserOpenOptions,
 } from '../software-capture.js';
 import type { CaptureBackend } from '../types.js';
 import {
   acquireBrowserCarrierPage,
-  type BrowserCarrierAdapter,
   type BrowserCarrierAttachment,
-  type BrowserCarrierRunIdentity,
   type BrowserExecutionTarget,
 } from './display-carrier.js';
 import type { PreviewHostResult } from './preview-host.js';
@@ -80,16 +79,12 @@ export interface ResourcePreviewReportInput {
   readonly oracle: ResourcePreviewReport['oracle'];
 }
 
-export interface BrowserHostOptions {
+export interface BrowserHostOptions
+  extends Pick<
+    SoftwareBrowserOpenOptions,
+    'backend' | 'headless' | 'carrier' | 'carrierRun' | 'carrierGeneration'
+  > {
   readonly publish?: boolean;
-  /** Select the browser adapter lane. `auto` starts on hardware flags. */
-  readonly backend?: CaptureBackend;
-  /** Override the recipe's hidden/visible default for private browser pages. */
-  readonly headless?: boolean;
-  /** Optional already-open display carrier for a visible capture page. */
-  readonly carrier?: BrowserCarrierAdapter;
-  readonly carrierRun?: BrowserCarrierRunIdentity;
-  readonly carrierGeneration?: number;
 }
 
 type BrowserBackendObserved = 'software' | 'hardware' | 'unknown';

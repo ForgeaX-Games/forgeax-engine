@@ -4,23 +4,11 @@ import {
   type ParticleStageResourceAccess,
   type ParticleStageSource,
   parseVfxStageDeclarations,
+  type VfxGpuStageReflection,
 } from '@forgeax/engine-vfx';
 
-export interface ParticleManagedStage {
-  readonly id: string;
-  readonly entry: string;
-  readonly entryPoint: string;
-  readonly domain: 'particle';
-  readonly resources: readonly {
-    readonly name: string;
-    readonly access: ParticleStageResourceAccess;
-  }[];
-  readonly dependsOn: readonly string[];
-  readonly iterationBudget: number;
-}
-
 export interface ParticleManagedStagePlan {
-  readonly stages: readonly ParticleManagedStage[];
+  readonly stages: readonly VfxGpuStageReflection[];
   readonly fingerprint: string;
 }
 

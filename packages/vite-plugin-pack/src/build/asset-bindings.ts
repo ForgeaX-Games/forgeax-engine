@@ -1,6 +1,3 @@
-import type { AuthorInventory } from '@forgeax/engine-pack/build';
-import type { Plugin } from 'vite';
-
 export interface AssetBindingCatalog {
   readonly assets: readonly {
     readonly guid: string;
@@ -11,18 +8,6 @@ export interface AssetBindingCatalog {
     readonly sourceKey: string;
     readonly entityKeys: readonly string[];
   }[];
-}
-
-/** Project the validated author inventory without introducing a second identity store. */
-export function assetBindingCatalogFromInventory(inventory: AuthorInventory): AssetBindingCatalog {
-  return {
-    assets: inventory.declarations.map(({ guid, sourceKey, kind }) => ({ guid, sourceKey, kind })),
-    scenes: inventory.declarations.flatMap((row) =>
-      row.sceneEntityKeys === undefined || row.sceneEntityKeys.length === 0
-        ? []
-        : [{ sourceKey: row.sourceKey, entityKeys: row.sceneEntityKeys }],
-    ),
-  };
 }
 
 function quote(value: unknown): string {
@@ -79,20 +64,4 @@ export function assetBindingDeclarationSource(catalog: AssetBindingCatalog): str
     .join('\n');
   const virtualModule = `declare module 'virtual:forgeax/assets' {\nexport const assets: {\n${assetKeys}\n};\nexport const sceneEntityKeys: {\n${sceneKeys}\n};\nexport function asset<const K extends keyof typeof assets>(sourceKey: K): (typeof assets)[K];\nexport function sceneEntity<const S extends keyof typeof sceneEntityKeys>(sceneSourceKey: S, address: (typeof sceneEntityKeys)[S][number] | readonly [string, ...string[]]): import('@forgeax/engine/types').SceneEntityRef;\n}`;
   return `${virtualModule}\n`;
-}
-
-export function createAssetBindingPlugin(read: () => AssetBindingCatalog): Plugin {
-  const virtualId = 'virtual:forgeax/assets';
-  const resolvedId = `\0${virtualId}`;
-  return {
-    name: 'forgeax-asset-bindings',
-    resolveId(id) {
-      return id === virtualId ? resolvedId : undefined;
-    },
-    load(id) {
-      if (id !== resolvedId && id !== virtualId) return undefined;
-      const catalog = read();
-      return assetBindingModuleSource(catalog);
-    },
-  } satisfies Plugin;
 }

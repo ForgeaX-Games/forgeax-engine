@@ -1,4 +1,5 @@
 import type { RhiDevice, TextureView } from '@forgeax/engine-rhi';
+import { RAY_QUERY_BACKEND_UNSUPPORTED } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
 import { RenderGraphBuilder } from '../builder.js';
 import type { RenderGraphFrame } from '../types.js';
@@ -25,7 +26,10 @@ function caps(storageTexture: boolean): RhiDevice['caps'] {
     rgba16floatRenderable: true,
     rg11b10ufloatRenderable: true,
     float32Filterable: true,
+    textureImport: false,
+    externalTexture: false,
     maxColorAttachments: 8,
+    rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
   };
 }
 

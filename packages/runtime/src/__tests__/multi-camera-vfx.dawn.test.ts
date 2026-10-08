@@ -33,6 +33,7 @@ it.each([false, true])('simulates shared VFX and replays two Dawn camera views (
       canvas,
       shaderManifestUrl: shaderManifestUrl(await buildEngineShaderManifest()),
       publication,
+      warmupFrames: process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 12 : 60,
       cook: cookParticleCodeEffect,
       save: (name, bytes) => writeFileSync(`${directory}/${name}`, bytes),
     });

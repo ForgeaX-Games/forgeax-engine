@@ -1,3 +1,4 @@
+import { RAY_QUERY_FEATURE } from '@forgeax/engine-rhi';
 import type { Tape } from '../protocol/types';
 
 const RECORDED_CAPABILITY_FEATURES = [
@@ -35,6 +36,19 @@ function withoutComments(source: string): string {
     } else if (depth === 0) output += source[i];
   }
   return output;
+}
+
+/** Whether replaying the tape creates or builds acceleration structures. */
+export function usesAccelerationStructures(tape: Tape): boolean {
+  return (
+    tape.bootstrap.some((resource) => resource.kind === 'acceleration-structure') ||
+    tape.events.some(
+      (event) =>
+        event.kind === 'createBlas' ||
+        event.kind === 'createTlas' ||
+        event.kind === 'buildAccelerationStructures',
+    )
+  );
 }
 
 /** Derive descriptor requirements from the captured resources, including bootstrap shaders. */
@@ -76,9 +90,15 @@ export function replayDeviceRequest(
     ([capability, feature]) =>
       tape.header.rhiCaps[capability] === true && adapterFeatures.has(feature),
   ).map(([, feature]) => feature);
+  // Replay-owned per-pass timing needs timestamps even when the capture had none.
+  if (!requiredFeatures.includes('timestamp-query') && adapterFeatures.has('timestamp-query'))
+    requiredFeatures.push('timestamp-query');
   // Do not filter descriptor requirements against adapter support: an
   // unsupported replay must fail admission instead of compiling weaker work.
   requiredFeatures.push(...requiredReplayDescriptorFeatures(tape));
+  // Acceleration structures only exist behind the Ray Query extension feature;
+  // without it the fresh device reports caps.rayQuery unsupported.
+  if (usesAccelerationStructures(tape)) requiredFeatures.push(RAY_QUERY_FEATURE as GPUFeatureName);
   const limitEntries = Object.entries(adapterLimits).filter(
     ([, value]) => Number.isFinite(value) && value >= 0,
   );

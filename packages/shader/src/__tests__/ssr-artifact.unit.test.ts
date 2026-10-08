@@ -51,7 +51,25 @@ const SOURCES = {
   compose: readFileSync(SHADER_PATHS.compose, 'utf8'),
 } as const;
 const GBUFFER = readFileSync(resolve(import.meta.dirname, '../standard-gbuffer.wgsl'), 'utf8');
+const PYRAMID_SAMPLE = readFileSync(
+  resolve(import.meta.dirname, '../depth-pyramid-sample.wgsl'),
+  'utf8',
+);
 const COMMON = readFileSync(resolve(import.meta.dirname, '../common.wgsl'), 'utf8');
+
+const IMPORT_SOURCES = {
+  'forgeax_view::common': COMMON,
+  'forgeax_pbr::gbuffer': GBUFFER,
+  'forgeax_depth_pyramid::sample': PYRAMID_SAMPLE,
+} as const;
+
+const STAGE_IMPORTS: Record<keyof typeof SOURCES, readonly (keyof typeof IMPORT_SOURCES)[]> = {
+  pyramidSeed: ['forgeax_depth_pyramid::sample', 'forgeax_view::common'],
+  pyramidReduce: ['forgeax_depth_pyramid::sample'],
+  trace: ['forgeax_depth_pyramid::sample', 'forgeax_pbr::gbuffer', 'forgeax_view::common'],
+  temporal: ['forgeax_pbr::gbuffer', 'forgeax_view::common'],
+  compose: ['forgeax_pbr::gbuffer', 'forgeax_view::common'],
+};
 
 let compiler: CompilerModule;
 
@@ -64,14 +82,7 @@ beforeAll(async () => {
 async function compile(name: keyof typeof SOURCES): Promise<CompileValue> {
   const result = await compiler.compileShader(SOURCES[name], {
     id: `forgeax_ssr::${name}`,
-    ...(name === 'trace' || name === 'pyramidSeed' || name === 'temporal' || name === 'compose'
-      ? {
-          imports: {
-            'forgeax_view::common': COMMON,
-            ...(name === 'pyramidSeed' ? {} : { 'forgeax_pbr::gbuffer': GBUFFER }),
-          },
-        }
-      : {}),
+    imports: Object.fromEntries(STAGE_IMPORTS[name].map((id) => [id, IMPORT_SOURCES[id]])),
   });
   expect(result.ok, result.ok ? undefined : `${name}: ${result.error?.message}`).toBe(true);
   if (!result.ok || result.value === undefined) throw new Error(`failed to compile ${name}`);
@@ -90,7 +101,7 @@ describe('SSR built-in shader artifacts', () => {
     expect(SOURCES.trace).toContain('SSR_TRACE_MAX_COARSE_STEPS');
     expect(SOURCES.trace).toContain('SSR_TRACE_MAX_REFINE_STEPS');
     expect(SOURCES.trace).toContain('traceScreenRay');
-    expect(SOURCES.trace).toContain('textureLoad(hizPyramid');
+    expect(SOURCES.trace).toContain('textureLoad(depthPyramid');
     expect(SOURCES.trace).toContain('view.ssrParams.w > 0.5');
     expect(SOURCES.temporal).toContain('SsrTemporalParams');
     expect(SOURCES.temporal).toContain('resolvedOutput');
@@ -108,13 +119,7 @@ describe('SSR built-in shader artifacts', () => {
       expect(value.manifestEntry.wgsl).toBe(value.wgsl);
       if (name !== 'compose') expect(value.manifestEntry.glsl ?? '').toBe('');
       expect(value.manifestEntry.hash).toMatch(/^[0-9a-f]{8,64}$/);
-      expect([...value.deps].sort()).toEqual(
-        name === 'pyramidReduce'
-          ? []
-          : name === 'pyramidSeed'
-            ? ['forgeax_view::common']
-            : ['forgeax_pbr::gbuffer', 'forgeax_view::common'],
-      );
+      expect([...value.deps].sort()).toEqual([...STAGE_IMPORTS[name]]);
       expect(JSON.parse(value.manifestEntry.bindings)).toEqual(value.bindings);
     }
   });

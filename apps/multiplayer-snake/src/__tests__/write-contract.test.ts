@@ -81,7 +81,7 @@ describe('Snake replica write contract', () => {
     const authority = await createServerWorld(authorityEndpoint);
     const world = new World();
     await createWorldContext(world, [netPlugin({ endpoint: replicaEndpoint })]);
-    const replica = createReplicaCoordinator(world, snakeProfile, replicaEndpoint);
+    const replica = createReplicaCoordinator(world, snakeProfile);
     world.getResource<NetSession>('net-session').attachReplica(replica, snakeProfile.limits);
     const stateTarget = { dataset: {}, textContent: '' } as unknown as HTMLElement;
     const previousDocument = globalThis.document;
@@ -96,6 +96,7 @@ describe('Snake replica write contract', () => {
       });
     }
 
+    expect(world.getResource<NetSession>('net-session').receiveEvents()).toEqual([]);
     sendJoin(replicaEndpoint);
     expect(authority.world.update(1).ok).toBe(true);
     expect(world.update(1).ok).toBe(true);
@@ -139,8 +140,9 @@ describe('Snake replica write contract', () => {
     const authority = await createServerWorld(authorityEndpoint);
     const world = new World();
     await createWorldContext(world, [netPlugin({ endpoint: replicaEndpoint })]);
-    const replica = createReplicaCoordinator(world, snakeProfile, replicaEndpoint);
+    const replica = createReplicaCoordinator(world, snakeProfile);
     world.getResource<NetSession>('net-session').attachReplica(replica, snakeProfile.limits);
+    expect(world.getResource<NetSession>('net-session').receiveEvents()).toEqual([]);
     sendJoin(replicaEndpoint);
     authority.world.update(1).unwrap();
     world.update(1).unwrap();

@@ -8,9 +8,13 @@ import {
   type RenderSceneBounds,
   renderPublicationTransfers,
 } from '@forgeax/engine-render';
-import { type CaptureFrameOptions, createRhiDebugError } from '@forgeax/engine-rhi-debug';
+import {
+  type CaptureFrameOptions,
+  createRhiDebugError,
+  tapeArtifact,
+} from '@forgeax/engine-rhi-debug';
 import { err, ok } from '@forgeax/engine-types';
-import type { RhiCapture } from '../internal/rhi-capture';
+import { type RhiCapture, toArtifact, uploadRhiTape } from '../internal/rhi-capture';
 import type { EngineToHostMessage, ExecutionFrameMessage, ExecutionInitMessage } from './protocol';
 import type { RenderWorkerInput, RenderWorkerOutput } from './render-worker-protocol';
 import { workerError } from './worker-error';
@@ -31,11 +35,23 @@ export class SourceRenderWorker {
   private resolveReady: (() => void) | undefined;
   private replacementsWithoutFrame = 0;
   private nextRequestId = 0;
+  private latestCompletedTerrainFrame: number | undefined;
   private readonly boundsRequests = new Map<
     number,
     {
       finish(bounds: RenderSceneBounds | undefined): void;
       fail(cause: Error): void;
+    }
+  >();
+  private readonly terrainRequests = new Map<
+    number,
+    {
+      finish(
+        result: import('@forgeax/engine-types').Result<
+          number | undefined,
+          import('@forgeax/engine-types').TerrainError
+        >,
+      ): void;
     }
   >();
   private captureRequest: { id: number; finish(result: CaptureResult): void } | undefined;
@@ -104,6 +120,12 @@ export class SourceRenderWorker {
       worker.onmessage = (event: MessageEvent<RenderWorkerOutput>) => {
         if (this.worker !== worker || this.epoch !== epoch) return;
         const message = event.data;
+        if (message.kind === 'terrain-height-result') {
+          this.terrainRequests
+            .get(message.requestId)
+            ?.finish(message.result.ok ? ok(message.result.value) : err(message.result.error));
+          return;
+        }
         if (message.kind === 'bounds-result') {
           this.boundsRequests.get(message.requestId)?.finish(message.bounds);
           return;
@@ -111,7 +133,9 @@ export class SourceRenderWorker {
         if (message.kind === 'capture-result') {
           if (this.captureRequest?.id === message.requestId)
             this.captureRequest.finish(
-              message.result.ok ? ok(message.result.value) : err(message.result.error),
+              message.result.ok
+                ? ok(toArtifact(tapeArtifact([message.result.value.bytes])))
+                : err(message.result.error),
             );
           return;
         }
@@ -131,6 +155,7 @@ export class SourceRenderWorker {
             message.capabilities,
             this.features,
             this.targets,
+            message.limits,
           );
           ready = true;
           this.resolveReady?.();
@@ -168,6 +193,12 @@ export class SourceRenderWorker {
             return;
           }
           this.replacementsWithoutFrame = 0;
+          if (
+            message.frame.presentation === 'ready' &&
+            (this.latestCompletedTerrainFrame === undefined ||
+              message.frame.frameId > this.latestCompletedTerrainFrame)
+          )
+            this.latestCompletedTerrainFrame = message.frame.frameId;
           if (message.gpuPassTiming !== undefined) {
             this.latestGpuPassTiming = {
               frameId: message.frame.frameId,
@@ -185,6 +216,9 @@ export class SourceRenderWorker {
           ...(this.init.diagnostics?.gpuPassTiming === undefined
             ? {}
             : { gpuPassTiming: this.init.diagnostics.gpuPassTiming }),
+          ...(this.init.outputColorSpace === undefined
+            ? {}
+            : { outputColorSpace: this.init.outputColorSpace }),
           bootstrapUrl: this.init.bootstrapUrl,
           ...(this.init.bootstrapData === undefined
             ? {}
@@ -235,6 +269,66 @@ export class SourceRenderWorker {
       throw cause;
     }
   }
+  queryLatestSubmittedTerrainHeight(
+    request: import('@forgeax/engine-render').SubmittedTerrainHeightRequest,
+  ) {
+    const frameId = this.latestCompletedTerrainFrame;
+    if (frameId === undefined)
+      return Promise.resolve(
+        err({
+          code: 'terrain-query-unavailable' as const,
+          expected: 'a completed ready picture in the current Render Worker session',
+          hint: 'keep dependent gameplay isolated until the new terrain has rendered',
+          detail: { field: 'FrameReceipt' },
+        }),
+      );
+    return this.querySubmittedTerrainHeight(frameId, request);
+  }
+  querySubmittedTerrainHeight(
+    frameId: number,
+    request: import('@forgeax/engine-render').SubmittedTerrainHeightRequest,
+  ): Promise<
+    import('@forgeax/engine-types').Result<
+      number | undefined,
+      import('@forgeax/engine-types').TerrainError
+    >
+  > {
+    const unavailable = (cause: string) =>
+      err({
+        code: 'terrain-query-unavailable' as const,
+        expected: 'a retained successful frame in the active Render Worker session',
+        hint: 'wait for frame completion and query its exact frame ID',
+        detail: { field: 'Worker', actual: cause },
+      });
+    const worker = this.worker;
+    if (worker === undefined || this.terrainRequests.size >= 32)
+      return Promise.resolve(unavailable('session ended or request budget exhausted'));
+    const requestId = ++this.nextRequestId;
+    return new Promise((resolve) => {
+      const finish = (
+        result: import('@forgeax/engine-types').Result<
+          number | undefined,
+          import('@forgeax/engine-types').TerrainError
+        >,
+      ) => {
+        clearTimeout(deadline);
+        this.terrainRequests.delete(requestId);
+        resolve(result);
+      };
+      const deadline = setTimeout(() => finish(unavailable('query deadline exceeded')), 30_000);
+      this.terrainRequests.set(requestId, { finish });
+      try {
+        worker.postMessage({
+          kind: 'terrain-height',
+          requestId,
+          frameId,
+          request,
+        } satisfies RenderWorkerInput);
+      } catch (cause) {
+        finish(unavailable(String(cause)));
+      }
+    });
+  }
   bounds(entity: number): Promise<RenderSceneBounds | undefined> {
     const worker = this.worker;
     if (worker === undefined) return Promise.reject(new Error('Render Worker session ended'));
@@ -266,6 +360,8 @@ export class SourceRenderWorker {
       }
     });
   }
+  readonly upload: RhiCapture['upload'] = uploadRhiTape;
+
   captureFrame(options: CaptureFrameOptions = {}): Promise<CaptureResult> {
     const unavailable = (cause: string): CaptureResult =>
       err(createRhiDebugError('capture-unavailable', { stage: 'capture', cause }));
@@ -327,6 +423,15 @@ export class SourceRenderWorker {
     await this.start(canvas);
   }
   private clear(): void {
+    for (const request of this.terrainRequests.values())
+      request.finish(
+        err({
+          code: 'terrain-query-unavailable',
+          expected: 'an active Render Worker session',
+          hint: 'query after recovery completes',
+          detail: { field: 'Worker' },
+        }),
+      );
     for (const request of this.boundsRequests.values())
       request.fail(new Error('Render Worker session ended'));
     this.captureRequest?.finish(
@@ -341,6 +446,7 @@ export class SourceRenderWorker {
     this.worker?.terminate();
     this.worker = undefined;
     this.latestGpuPassTiming = undefined;
+    this.latestCompletedTerrainFrame = undefined;
     this.publisher?.dispose();
     this.publisher = undefined;
   }

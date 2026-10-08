@@ -1,3 +1,4 @@
+export * from './ambient-occlusion';
 export * from './atmosphere';
 export * from './barrel-distortion';
 export * from './camera';
@@ -14,7 +15,15 @@ export { Layer } from './layer';
 export * from './lens-effects';
 export * from './light-helpers';
 export { LightProbe } from './light-probe';
-export { Lines } from './lines';
+export {
+  type LineCap,
+  LineCapValue,
+  Lines,
+  type LineWidthUnits,
+  LineWidthUnitsValue,
+  lineCapFromU32,
+  lineWidthUnitsFromU32,
+} from './lines';
 export * from './mesh-filter';
 export * from './mesh-renderer';
 export { MotionBlur } from './motion-blur';
@@ -59,6 +68,7 @@ export {
   spritePlaybackModeFromU32,
 } from './sprite-playback-mode';
 export { SpriteRegionOverride } from './sprite-region-override';
+export * from './stereo-camera';
 export {
   decodeSortScope,
   encodeSortScope,

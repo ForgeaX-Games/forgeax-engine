@@ -115,13 +115,13 @@ test('rejects a different product before downloading its archive', async () => {
 test('retries only bounded artifact transport failures', () => {
   assert.deepEqual(RETRY_DELAYS_SECONDS, [0, 5, 15]);
   assert.equal(ARTIFACT_IDLE_TIMEOUT_MS, 120_000);
-  assert.equal(ARTIFACT_REQUEST_TIMEOUT_MS, 180_000);
-  assert.equal(REQUEST_TIMEOUT_MS, 180_000);
+  assert.equal(ARTIFACT_REQUEST_TIMEOUT_MS, 30_000);
+  assert.equal(REQUEST_TIMEOUT_MS, 30_000);
   assert.ok(
     ARTIFACT_REQUEST_TIMEOUT_MS * RETRY_DELAYS_SECONDS.length +
       RETRY_DELAYS_SECONDS.reduce((total, delay) => total + delay * 1000, 0) <
-      15 * 60 * 1000,
-    'all retries must fit inside the shortest artifact consumer job budget',
+      2 * 60 * 1000,
+    'all header-stall retries must fit inside two minutes',
   );
   assert.equal(DOWNLOAD_IDLE_TIMEOUT_MS, 120_000);
   for (const message of [

@@ -78,24 +78,6 @@ const nonNegative = (value: number): number => Math.max(finiteOr(value, 0), 0);
 
 const clamp01 = (value: number): number => Math.min(Math.max(finiteOr(value, 0), 0), 1);
 
-/** Test an endpoint against the undisturbed geometric water plane. */
-export function isBelowSingleLayerMediumPlane(input: {
-  readonly surfacePosition: MediumVector3;
-  readonly geometricNormal: MediumVector3;
-  readonly endpoint: MediumVector3;
-  readonly epsilonMeters?: number;
-}): boolean {
-  const [nx, ny, nz] = input.geometricNormal;
-  const length = Math.hypot(nx, ny, nz);
-  if (!Number.isFinite(length) || length <= 1e-8) return false;
-  const signedDistance =
-    ((input.endpoint[0] - input.surfacePosition[0]) * nx +
-      (input.endpoint[1] - input.surfacePosition[1]) * ny +
-      (input.endpoint[2] - input.surfacePosition[2]) * nz) /
-    length;
-  return Number.isFinite(signedDistance) && signedDistance <= (input.epsilonMeters ?? 0.001);
-}
-
 function vector3(input: MediumVector3 | undefined): MediumVector3 {
   return [nonNegative(input?.[0] ?? 0), nonNegative(input?.[1] ?? 0), nonNegative(input?.[2] ?? 0)];
 }

@@ -50,6 +50,57 @@ export const STANDARD_SAMPLE_REUSE = [
   },
 ] as const;
 
+/**
+ * The minimum-limit Standard transmission variant has no dedicated lanes for
+ * its transmission, thickness, and screen backdrop textures. It rebinds them
+ * into the split scalar-map pairs, so the fixed low-limit layout is unchanged
+ * and a material may use transmission only while those scalar maps are absent.
+ */
+export const STANDARD_SHARED_TRANSMISSION_SLOTS = [
+  { resource: 'transmissionTexture', sampler: 'transmissionSampler', host: 'metallicTexture' },
+  { resource: 'thicknessTexture', sampler: 'thicknessSampler', host: 'roughnessTexture' },
+  { resource: 'transmissionBackdropTexture', host: 'alphaTexture' },
+] as const;
+
+export const STANDARD_SHARED_TRANSMISSION_DEFINE = 'TRANSMISSION_SHARED_SLOTS';
+
+function standardAvailableDefine(field: string): string {
+  return `${field.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}_AVAILABLE`;
+}
+
+/**
+ * Define overrides for the one variant that selects shared transmission slots:
+ * transmission without the projector and extended-lighting lanes, which the
+ * renderer only selects below the dedicated sampled-texture budget.
+ */
+export function standardSharedTransmissionDefines(
+  defines: Readonly<Record<string, boolean>> | undefined,
+): Readonly<Record<string, boolean>> {
+  if (
+    defines?.TRANSMISSION_AVAILABLE !== true ||
+    defines.PROJECTOR_AVAILABLE !== false ||
+    defines.EXTENDED_LIGHTING_AVAILABLE !== false
+  ) {
+    return {};
+  }
+  const overrides: Record<string, boolean> = { [STANDARD_SHARED_TRANSMISSION_DEFINE]: true };
+  for (const slot of STANDARD_SHARED_TRANSMISSION_SLOTS)
+    overrides[standardAvailableDefine(slot.host)] = false;
+  return overrides;
+}
+
+export type StandardSharedTransmissionHost =
+  (typeof STANDARD_SHARED_TRANSMISSION_SLOTS)[number]['host'];
+
+/** Authored scalar maps that occupy a shared transmission slot for this presence mask. */
+export function standardSharedTransmissionConflicts(
+  presenceMask: number,
+): readonly StandardSharedTransmissionHost[] {
+  return STANDARD_SHARED_TRANSMISSION_SLOTS.map((slot) => slot.host).filter(
+    (host) => (presenceMask & (standardTextureBits.get(host) ?? 0)) !== 0,
+  );
+}
+
 /** Presence follows the authored contract, never asynchronous GPU residency. */
 export function standardTextureMask(schema: readonly ParamSchemaEntry[]): number {
   let mask = 0;
@@ -57,6 +108,23 @@ export function standardTextureMask(schema: readonly ParamSchemaEntry[]): number
     if (entry.type === 'texture2d') mask |= standardTextureBits.get(entry.name) ?? 0;
   }
   return mask;
+}
+
+/**
+ * Projection selectors above the sample-reuse selectors. They specialize the
+ * pipeline from authored values, so slot sampling never branches per row.
+ */
+export const STANDARD_TRIPLANAR_PROJECTION_BIT = 2 ** 29;
+export const STANDARD_OBJECT_SPACE_NORMAL_BIT = 2 ** 30;
+
+/** Derive projection selectors from effective `triplanarSpace` / `normalMapSpace` values. */
+export function standardProjectionMask(value: (name: string) => unknown): number {
+  const triplanar = value('triplanarSpace');
+  const normalSpace = value('normalMapSpace');
+  return (
+    (typeof triplanar === 'number' && triplanar > 0.5 ? STANDARD_TRIPLANAR_PROJECTION_BIT : 0) +
+    (typeof normalSpace === 'number' && normalSpace > 0.5 ? STANDARD_OBJECT_SPACE_NORMAL_BIT : 0)
+  );
 }
 
 /** Pack sample reuse into unused high bits of the existing pipeline override. */
@@ -206,6 +274,7 @@ export const DEFAULT_UNLIT_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
   { name: 'baseColor', type: 'color', default: [1, 1, 1, 1] },
   { name: 'alphaCutoff', type: 'f32', default: 0 },
   { name: 'alphaHash', type: 'f32', default: 0 },
+  { name: 'shading', type: 'f32', default: 0 },
   { name: 'baseColorTexture', type: 'texture2d' },
 ];
 

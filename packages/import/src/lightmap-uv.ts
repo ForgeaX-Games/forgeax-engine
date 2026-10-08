@@ -1,6 +1,7 @@
 import { deriveVertexCount, deriveVertexLayoutProjection } from '@forgeax/engine-geometry';
 import {
   err,
+  isTriangleTopology,
   type MeshAsset,
   ok,
   type Result,
@@ -173,7 +174,7 @@ function readUvTriangles(
   }
   const corners: number[] = [];
   for (const submesh of mesh.submeshes) {
-    if (submesh.topology !== 'triangle-list' && submesh.topology !== 'triangle-strip') continue;
+    if (!isTriangleTopology(submesh.topology)) continue;
     const count = mesh.indices === undefined ? submesh.vertexCount : submesh.indexCount;
     const at = (i: number): number =>
       mesh.indices === undefined ? i : (mesh.indices[submesh.indexOffset + i] ?? -1);

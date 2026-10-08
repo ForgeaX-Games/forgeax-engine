@@ -21,12 +21,12 @@ describe('MaterialAsset loadByGuid consumer', () => {
       specializationKey: 'specialization-key',
     });
     if (ready.status === 'Ready') {
-      expectTypeOf(ready.materialGuid).toBeString();
-      expectTypeOf(ready.publicationGeneration).toBeNumber();
-      expectTypeOf(ready.specializationKey).toBeString();
-      expectTypeOf(ready.artifactDigest).toBeString();
-      expectTypeOf(ready.sourceClosure).toEqualTypeOf<readonly string[]>();
-      expectTypeOf(ready.parameterContract).toHaveProperty('parameters');
+      expectTypeOf(ready.record.materialGuid).toBeString();
+      expectTypeOf(ready.record.publicationGeneration).toBeNumber();
+      expectTypeOf(ready.record.specializationKey).toBeString();
+      expectTypeOf(ready.record.artifactDigest).toBeString();
+      expectTypeOf(ready.record.sourceClosure).toEqualTypeOf<readonly string[]>();
+      expectTypeOf(ready.record.parameterContract).toHaveProperty('parameters');
       return;
     }
     switch (ready.error.code) {

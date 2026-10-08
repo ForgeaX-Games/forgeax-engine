@@ -28,7 +28,7 @@ export async function verifyGiRoom(
           {
             kind: 'point',
             position: vec3.create(0, 2, 1),
-            color: vec3.create(1, 1, 1),
+            color: vec3.create(Math.PI * 8, Math.PI * 8, Math.PI * 8),
             intensity: Math.PI * 8,
             invRangeSquared: 0,
           },

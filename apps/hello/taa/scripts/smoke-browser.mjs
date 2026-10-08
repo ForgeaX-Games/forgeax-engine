@@ -35,7 +35,7 @@ const falsifierLightweight = process.env.FORGEAX_TAA_FALSIFIER_PROFILE === 'ci';
 const FEATURE_DOMAIN_NAMES = Object.freeze({
   'linear-hdr': 'linear-HDR',
   'linear-ldr': 'linear-LDR',
-  'final-srgb': 'final-sRGB',
+  'final-display': 'final-sRGB',
 });
 const MAX_VITE_READINESS_TIMEOUT_MS = 180_000;
 const VITE_READINESS_TIMEOUT_MS = Math.min(
@@ -632,7 +632,7 @@ try {
         '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
         '--ignore-gpu-blocklist',
         '--disable-gpu-driver-bug-workarounds',
-        '--disable-dawn-features=disallow_unsafe_apis',
+        '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
         ...explicitLaunchArgs,
       ],
     });
@@ -947,7 +947,7 @@ try {
           sourceSha: sha256File(resolve(REPO_ROOT, 'apps/hello/taa/src/main.ts')),
           buildSha: sha256File(resolve(REPO_ROOT, 'apps/hello/taa/dist/index.html')),
           stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-            id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+            id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
             domain,
             readback: { rawHash: initialOn.pixels.rgbHash, frame: requiredFrames - 1 },
           })),

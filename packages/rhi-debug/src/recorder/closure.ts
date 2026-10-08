@@ -1,332 +1,14 @@
 // @forgeax/engine-rhi-debug/src/recorder/closure -- transitive handle closure owner.
 
+import { EVENT_SEMANTICS } from '../protocol/event-semantics';
 import type { HandleId, RhiCallEvent } from '../types';
 
+/** Handles frame events name; bootstrap creates they reach become prefix seeds. */
 export function _collectFrameReferencedHandleIds(events: readonly RhiCallEvent[]): Set<HandleId> {
   const refs = new Set<HandleId>();
-  for (const e of events) {
-    switch (e.kind) {
-      case 'writeBuffer':
-      case 'clearBuffer':
-      // initialData seeds a pre-arm resource's bytes; its handleId must be
-      // prefix-pulled so the resource's create* event lands in the bootstrap
-      // closure (otherwise the tape references a handle with no create event ->
-      // tape-invalid on deserialize).
-      case 'initialData': {
-        const we = e as { handleId: HandleId };
-        refs.add(we.handleId);
-        break;
-      }
-      case 'setVertexBuffer': {
-        const we = e as { passHandleId: HandleId; bufferHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.bufferHandleId);
-        break;
-      }
-      case 'setIndexBuffer': {
-        const we = e as { passHandleId: HandleId; bufferHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.bufferHandleId);
-        break;
-      }
-      case 'setPipeline': {
-        const we = e as { passHandleId: HandleId; pipelineHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.pipelineHandleId);
-        break;
-      }
-      case 'setComputePipeline': {
-        const we = e as { passHandleId: HandleId; pipelineHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.pipelineHandleId);
-        break;
-      }
-      case 'setBindGroup': {
-        const we = e as { passHandleId: HandleId; bindGroupHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.bindGroupHandleId);
-        break;
-      }
-      case 'draw': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'drawIndexed': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'setViewport': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'setScissorRect': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'setBlendConstant': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'setStencilReference': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'drawIndirect': {
-        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.indirectBufferHandleId);
-        break;
-      }
-      case 'drawIndexedIndirect': {
-        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.indirectBufferHandleId);
-        break;
-      }
-      case 'passPushDebugGroup': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'passPopDebugGroup': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'resetRenderState':
-      case 'passInsertDebugMarker': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'endRenderPass': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'dispatchWorkgroups': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'dispatchWorkgroupsIndirect': {
-        const we = e as { passHandleId: HandleId; indirectBufferHandleId: HandleId };
-        refs.add(we.passHandleId);
-        refs.add(we.indirectBufferHandleId);
-        break;
-      }
-      case 'endComputePass': {
-        const we = e as { passHandleId: HandleId };
-        refs.add(we.passHandleId);
-        break;
-      }
-      case 'submit': {
-        const we = e as { cmdHandleIds: readonly HandleId[] };
-        for (const id of we.cmdHandleIds) refs.add(id);
-        break;
-      }
-      case 'beginRenderPass': {
-        const we = e as {
-          cmdHandleId: HandleId;
-          colorAttachmentViewHandleIds: readonly (HandleId | undefined)[];
-          colorAttachmentResolveTargetHandleIds?: readonly (HandleId | undefined)[];
-          depthStencilViewHandleId?: HandleId;
-          occlusionQuerySetHandleId?: HandleId;
-          timestampQuerySetHandleId?: HandleId;
-        };
-        refs.add(we.cmdHandleId);
-        for (const vhId of we.colorAttachmentViewHandleIds) {
-          if (vhId !== undefined) refs.add(vhId);
-        }
-        for (const vhId of we.colorAttachmentResolveTargetHandleIds ?? []) {
-          if (vhId !== undefined) refs.add(vhId);
-        }
-        if (we.depthStencilViewHandleId !== undefined) refs.add(we.depthStencilViewHandleId);
-        if (we.occlusionQuerySetHandleId !== undefined) refs.add(we.occlusionQuerySetHandleId);
-        if (we.timestampQuerySetHandleId !== undefined) refs.add(we.timestampQuerySetHandleId);
-        break;
-      }
-      case 'beginComputePass': {
-        const we = e as { cmdHandleId: HandleId; timestampQuerySetHandleId?: HandleId };
-        refs.add(we.cmdHandleId);
-        if (we.timestampQuerySetHandleId !== undefined) refs.add(we.timestampQuerySetHandleId);
-        break;
-      }
-      case 'finish': {
-        const we = e as { cmdHandleId: HandleId };
-        refs.add(we.cmdHandleId);
-        break;
-      }
-      case 'pushDebugGroup':
-      case 'popDebugGroup':
-      case 'insertDebugMarker': {
-        const we = e as { cmdHandleId: HandleId };
-        refs.add(we.cmdHandleId);
-        break;
-      }
-      case 'writeTexture': {
-        const we = e as { destination: { textureHandleId: HandleId } };
-        refs.add(we.destination.textureHandleId);
-        break;
-      }
-      case 'copyExternalImageToTexture': {
-        const we = e as { destination: { textureHandleId: HandleId } };
-        refs.add(we.destination.textureHandleId);
-        break;
-      }
-      case 'copyBufferToBuffer': {
-        const we = e as { sourceHandleId: HandleId; destinationHandleId: HandleId };
-        refs.add(we.sourceHandleId);
-        refs.add(we.destinationHandleId);
-        break;
-      }
-      case 'copyBufferToTexture': {
-        const we = e as {
-          source: { bufferHandleId: HandleId };
-          destination: { textureHandleId: HandleId };
-        };
-        refs.add(we.source.bufferHandleId);
-        refs.add(we.destination.textureHandleId);
-        break;
-      }
-      case 'copyTextureToBuffer': {
-        const we = e as {
-          source: { textureHandleId: HandleId };
-          destination: { bufferHandleId: HandleId };
-        };
-        refs.add(we.source.textureHandleId);
-        refs.add(we.destination.bufferHandleId);
-        break;
-      }
-      case 'copyTextureToTexture': {
-        const we = e as {
-          source: { textureHandleId: HandleId };
-          destination: { textureHandleId: HandleId };
-        };
-        refs.add(we.source.textureHandleId);
-        refs.add(we.destination.textureHandleId);
-        break;
-      }
-      case 'createBindGroup':
-      case 'getBindGroupLayout':
-      case 'createPipelineLayout':
-      case 'createRenderPipeline':
-      case 'createComputePipeline':
-      case 'createTextureView': {
-        // An in-frame-created resource may reference a PRE-ARM resource via its
-        // backward edges (e.g. a composite/FXAA bind group built mid-frame that
-        // samples a scratch TextureView created at setup; or an in-frame
-        // createTextureView of a pre-arm texture). Those pre-arm handles are
-        // reachable ONLY through this create* event's backward refs — no usage
-        // event names them directly — so without collecting them here they never
-        // become prefix seeds and the tape deserializes as non-self-contained
-        // (tape-invalid). Collect the edges; getTape's prefixSeedIds
-        // filter then drops entries that are themselves in-frame declared, leaving
-        // only the genuinely pre-arm dependencies to seed the bootstrap closure.
-        for (const ref of _getCreateEventReferencedHandleIds(e)) refs.add(ref);
-        break;
-      }
-      case 'destroyBuffer':
-      case 'destroyTexture':
-      case 'destroyQuerySet':
-        refs.add(e.handleId);
-        break;
-      case 'frameMark':
-      case 'createBuffer':
-      case 'createTexture':
-      case 'createQuerySet':
-      case 'createSampler':
-      case 'createBindGroupLayout':
-      case 'createShaderModule':
-      case 'createCommandEncoder':
-        // Leaf declaration events — no backward references to collect.
-        break;
-      case 'resolveQuerySet':
-        refs.add(e.cmdHandleId);
-        refs.add(e.querySetHandleId);
-        refs.add(e.destinationHandleId);
-        break;
-      case 'beginOcclusionQuery':
-      case 'endOcclusionQuery':
-        refs.add(e.passHandleId);
-        break;
-      default: {
-        // Exhaustiveness guard: if a new RhiCallEvent member is added to the
-        // union without a corresponding handle-collection case, tsc fails here.
-        // This prevents silent omission of handle references (tape-invalid).
-        const _exhaustive: never = e;
-        void _exhaustive;
-        break;
-      }
-    }
-  }
+  for (const event of events)
+    for (const id of EVENT_SEMANTICS[event.kind].read(event)) refs.add(id);
   return refs;
-}
-
-/**
- * @internal
- * Return handleIds referenced by a create* event for transitive closure traversal.
- *
- * The edge set follows D-3 (plan-strategy 2):
- *   - createBindGroup → layoutHandleId + resourceHandleIds
- *   - createPipelineLayout → bglHandleIds
- *   - createRenderPipeline → layoutHandleId (if != 'layout:auto') + vertex/fragmentShaderModuleHandleId (R-1)
- *   - createComputePipeline → layoutHandleId (if != 'layout:auto') + computeShaderModuleHandleId (R-1)
- *   - createTextureView → sourceHandleId
- * Leaf resources (buffer / texture / sampler / BGL / shaderModule) return empty.
- */
-export function _getCreateEventReferencedHandleIds(event: RhiCallEvent): HandleId[] {
-  switch (event.kind) {
-    case 'createBindGroup': {
-      const e = event as { layoutHandleId: HandleId; resourceHandleIds: readonly HandleId[] };
-      return [e.layoutHandleId, ...e.resourceHandleIds];
-    }
-    case 'createPipelineLayout': {
-      const e = event as { bglHandleIds: readonly HandleId[] };
-      return [...e.bglHandleIds];
-    }
-    case 'createRenderPipeline': {
-      const e = event as {
-        layoutHandleId: HandleId;
-        vertexShaderModuleHandleId?: HandleId;
-        fragmentShaderModuleHandleId?: HandleId;
-      };
-      const refs: HandleId[] = [];
-      if (e.layoutHandleId !== 'layout:auto') refs.push(e.layoutHandleId);
-      if (e.vertexShaderModuleHandleId !== undefined) refs.push(e.vertexShaderModuleHandleId);
-      if (e.fragmentShaderModuleHandleId !== undefined) refs.push(e.fragmentShaderModuleHandleId);
-      return refs;
-    }
-    case 'createComputePipeline': {
-      const e = event as { layoutHandleId: HandleId; computeShaderModuleHandleId?: HandleId };
-      const refs: HandleId[] = [];
-      if (e.layoutHandleId !== 'layout:auto') refs.push(e.layoutHandleId);
-      if (e.computeShaderModuleHandleId !== undefined) refs.push(e.computeShaderModuleHandleId);
-      return refs;
-    }
-    case 'createTextureView': {
-      const e = event as { sourceHandleId: HandleId };
-      return [e.sourceHandleId];
-    }
-    case 'getBindGroupLayout':
-      return [(event as { pipelineHandleId: HandleId }).pipelineHandleId];
-    case 'createBuffer':
-    case 'createTexture':
-    case 'createQuerySet':
-    case 'createSampler':
-    case 'createBindGroupLayout':
-    case 'createShaderModule':
-    case 'createCommandEncoder':
-      return [];
-    default:
-      return [];
-  }
 }
 
 /**
@@ -334,7 +16,7 @@ export function _getCreateEventReferencedHandleIds(event: RhiCallEvent): HandleI
  * Compute the transitive closure of handleIds from bootstrapCreates.
  *
  * Starting from the given seed set, recursively walks all referenced handleIds
- * via _getCreateEventReferencedHandleIds. Returns the set of all handleIds
+ * via EVENT_SEMANTICS read edges. Returns the set of all handleIds
  * whose create events must be included in the tape prefix for self-containment.
  *
  * If a referenced handleId is not found in bootstrapCreates, returns
@@ -359,7 +41,7 @@ export function _computeClosure(
       if (inFrameHandleIds.has(current)) continue;
       return { closure, missing: current };
     }
-    const edges = _getCreateEventReferencedHandleIds(createEvent);
+    const edges = EVENT_SEMANTICS[createEvent.kind].read(createEvent);
     for (const target of edges) {
       if (!closure.has(target)) {
         closure.add(target);
@@ -392,7 +74,7 @@ export function _topoSortClosure(
   for (const hId of closure) {
     const event = bootstrapCreates.get(hId);
     if (event === undefined) continue;
-    const edges = _getCreateEventReferencedHandleIds(event);
+    const edges = EVENT_SEMANTICS[event.kind].read(event);
     for (const target of edges) {
       if (closure.has(target)) {
         // hId depends on target

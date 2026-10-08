@@ -175,7 +175,7 @@ function validateBundleStages(report, kind, errors) {
     errors.push(workloadError(kind, 'domain-observation-missing', 'auto and positive-LUT require exactly three domain readbacks'));
     return;
   }
-  const expectedIds = ['linear-hdr', 'linear-ldr', 'final-srgb'];
+  const expectedIds = ['linear-hdr', 'linear-ldr', 'final-display'];
   const hashes = stages.map((stage) => stage?.readback?.rawHash);
   if (stages.some((stage, index) => stage?.id !== expectedIds[index] || stage?.domain !== DOMAINS[index])) {
     errors.push(workloadError(kind, 'domain-set-invalid', 'domain IDs must be the canonical linear-HDR, linear-LDR, final-sRGB order'));

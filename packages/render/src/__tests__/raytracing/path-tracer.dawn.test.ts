@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { it } from 'vitest';
+import { expect, it } from 'vitest';
 import { renderPathGallery, verifyPathLighting } from './path-lighting.fixture';
 import { prepareRayPathFixture } from './path-tracer.commands';
 import { verifyRayPath } from './path-tracer.fixture';
@@ -8,6 +8,13 @@ import { verifySurfaceAndBsdf } from './surface-bsdf.fixture';
 
 it('traces shared materials and replays warm accumulation on a fresh Dawn device', async () => {
   const fixture = await prepareRayPathFixture();
+  const independent = await prepareRayPathFixture();
+  independent.kernel = 'consumer mutation';
+  const material = independent.materials[0];
+  expect(material).toBeDefined();
+  if (material !== undefined) material.publication.program = 'consumer mutation';
+  independent.materials.pop();
+  expect(await prepareRayPathFixture()).toEqual(fixture);
   const result = await verifyRayPath(fixture);
   const dir = process.env.FORGEAX_RAY_EVIDENCE;
   if (dir) {
@@ -73,4 +80,9 @@ it('resolves masked primary and shadow candidates without skipping coplanar surf
 it('resolves external raster receiver rays with shared materials and fresh replay in dawn', async () => {
   const { verifyInitialPathRays } = await import('./path-source.fixture');
   await verifyInitialPathRays(await prepareRayPathFixture());
+}, 120000);
+
+it('separates the diffuse receiver from the full BSDF under an open-sky white furnace', async () => {
+  const { verifyPathReceiver } = await import('./path-receiver.fixture');
+  await verifyPathReceiver(await prepareRayPathFixture());
 }, 120000);

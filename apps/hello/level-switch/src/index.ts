@@ -354,7 +354,7 @@ export async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
         ok: false,
         code: result.error.code,
         detail: {
-          code: result.error.detail.code,
+          code: result.error.code,
           name: result.error.detail.name,
           got: result.error.detail.got,
           valid: [...result.error.detail.valid],

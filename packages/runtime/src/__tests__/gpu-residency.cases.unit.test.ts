@@ -403,6 +403,8 @@ type __MergedKeep =
     rgba16floatRenderable: true,
     rg11b10ufloatRenderable: false,
     float32Filterable: false,
+    textureImport: false,
+    externalTexture: false,
   };
 
   // A registerCube relay that mints sequential cube handles without a registry.

@@ -30,7 +30,7 @@ const MONOREPO_ROOT = resolve(here, '..', '..', '..', '..');
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(`[smoke-0l] FAIL - dawn.node import: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);

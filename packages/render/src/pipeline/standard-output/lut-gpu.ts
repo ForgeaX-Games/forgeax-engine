@@ -4,7 +4,6 @@ import type { RenderGraphBuilder, RenderGraphError } from '@forgeax/engine-rende
 import type {
   BindGroup,
   BindGroupLayout,
-  RenderPipeline,
   RhiDevice,
   Sampler,
   Texture,
@@ -14,6 +13,7 @@ import { err, type Handle, ok, type Result, type TextureAsset } from '@forgeax/e
 import type { GpuResidencyCache, TextureGpuEntry } from '../../device/gpu-residency';
 import type { RenderResourceScope } from '../../publication/resource-scope';
 import type { RenderPipelineFrame, RenderPipelineTarget } from '../../render-pipeline';
+import { addStandardColorStagePass } from './color-transform';
 import {
   admitStandardColorLut,
   createStandardLutSamplerDescriptor,
@@ -21,15 +21,19 @@ import {
   type StandardLutAdmissionErrorCode,
 } from './lut-admission';
 
-export interface StandardLutGpuResources {
+/** Device-lifetime binding cached per sourceKey; per-camera facts extend it. */
+interface CachedLutBinding {
   readonly texture: Texture;
   readonly view: TextureView;
   readonly sampler: Sampler;
-  readonly sourceKey: string;
-  readonly size: number;
-  readonly strength: number;
   readonly bindGroupLayout: BindGroupLayout;
   readonly bindGroup: BindGroup;
+  readonly size: number;
+}
+
+export interface StandardLutGpuResources extends CachedLutBinding {
+  readonly sourceKey: string;
+  readonly strength: number;
 }
 
 export interface StandardLutGraphProjection {
@@ -47,15 +51,6 @@ export interface StandardLutGpuPreparationInput {
   readonly assets: AssetRegistry;
   readonly gpuStore: GpuResidencyCache;
   readonly device: RhiDevice;
-}
-
-interface CachedLutBinding {
-  readonly texture: Texture;
-  readonly view: TextureView;
-  readonly sampler: Sampler;
-  readonly bindGroupLayout: BindGroupLayout;
-  readonly bindGroup: BindGroup;
-  readonly size: number;
 }
 
 const lutBindingCache = new WeakMap<object, Map<string, CachedLutBinding>>();
@@ -184,16 +179,7 @@ export function prepareStandardLutGpu(
     })();
   const cached = cache.get(sourceKey);
   if (cached !== undefined && cached.texture === texture) {
-    return ok({
-      texture,
-      view: cached.view,
-      sampler: cached.sampler,
-      sourceKey,
-      size: cached.size,
-      strength: input.strength,
-      bindGroupLayout: cached.bindGroupLayout,
-      bindGroup: cached.bindGroup,
-    });
+    return ok({ ...cached, sourceKey, strength: input.strength });
   }
   // Recreate the resident view with an explicit 3D descriptor.  This is a
   // live capability check rather than a shape assertion: a device that
@@ -275,38 +261,22 @@ export function prepareStandardLutGpu(
       causeDetail(liveBindGroup.error),
     );
   }
-  cache.set(sourceKey, {
+  const binding: CachedLutBinding = {
     texture,
     view: liveView.value,
     sampler: sampler.value,
     bindGroupLayout: bindGroupLayout.value,
     bindGroup: liveBindGroup.value,
     size: admission.value.extent.width,
-  });
-  return ok({
-    texture,
-    view: liveView.value,
-    sampler: sampler.value,
-    sourceKey,
-    size: admission.value.extent.width,
-    strength: input.strength,
-    bindGroupLayout: bindGroupLayout.value,
-    bindGroup: liveBindGroup.value,
-  });
+  };
+  cache.set(sourceKey, binding);
+  return ok({ ...binding, sourceKey, strength: input.strength });
 }
 
-const LUT_FULLSCREEN_WGSL = /* wgsl */ `
-struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
-@vertex fn lut_vs(@builtin(vertex_index) index: u32) -> VertexOutput {
-  var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(3.0, 1.0), vec2<f32>(-1.0, 1.0));
-  let p = positions[index];
-  return VertexOutput(vec4<f32>(p, 0.0, 1.0), vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
-}
-@group(0) @binding(0) var source: texture_2d<f32>;
-@group(0) @binding(1) var sourceSampler: sampler;
+const LUT_STAGE_WGSL = /* wgsl */ `
 @group(1) @binding(0) var lut: texture_3d<f32>;
 @group(1) @binding(1) var lutSampler: sampler;
-@fragment fn lut_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+@fragment fn color_stage_fs(input: VertexOutput) -> @location(0) vec4<f32> {
   let color = textureSampleLevel(source, sourceSampler, input.uv, 0.0);
   let mapped = textureSampleLevel(lut, lutSampler, clamp(color.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 0.0);
   return vec4<f32>(mix(color.rgb, mapped.rgb, LUT_STRENGTH), color.a);
@@ -319,81 +289,15 @@ export function addStandardColorLutPass(
   output: RenderPipelineTarget,
   lut: StandardLutGraphProjection,
 ): Result<void, RenderGraphError> {
-  let pipeline: RenderPipeline | undefined;
-  let layout: BindGroupLayout | undefined;
-  let sampler: Sampler | undefined;
-  const added = graph.addRasterPass('standard-color-lut', {
-    accesses: [
-      { resource: input.view, usage: 'sampled-read' },
-      { resource: lut.view, usage: 'sampled-read' },
-      { resource: output.view, usage: 'color-attachment' },
-    ],
-    colorAttachments: [
-      {
-        view: output.view,
-        loadOp: 'clear',
-        storeOp: 'store',
-        clearValue: { r: 0, g: 0, b: 0, a: 1 },
-      },
-    ],
-    encode: ({ pass, frame, resources }) => {
-      const factory =
-        frame.runtime.immediateShaderModuleFactory ?? frame.runtime.shaderModuleFactory;
-      if (factory === undefined) throw new Error('standard LUT shader factory unavailable');
-      const source = factory.createShaderModule({
-        code: LUT_FULLSCREEN_WGSL.replace('LUT_STRENGTH', String(lut.strength)),
-        label: 'standard-color-lut',
-      });
-      if (!source.ok) throw source.error;
-      if (layout === undefined) {
-        const created = frame.runtime.device.createBindGroupLayout({
-          label: 'standard-color-lut.bgl',
-          entries: [
-            { binding: 0, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
-            { binding: 1, visibility: 2, sampler: { type: 'filtering' } },
-          ],
-        });
-        if (!created.ok) throw created.error;
-        layout = created.value;
-      }
-      sampler ??= frame.runtime.device
-        .createSampler({ minFilter: 'linear', magFilter: 'linear' })
-        .unwrap();
-      if (pipeline === undefined) {
-        const pipelineLayout = frame.runtime.device.createPipelineLayout({
-          label: 'standard-color-lut.layout',
-          bindGroupLayouts: [layout, lut.bindGroupLayout],
-        });
-        if (!pipelineLayout.ok) throw pipelineLayout.error;
-        const created = frame.runtime.device.createRenderPipeline({
-          label: 'standard-color-lut',
-          layout: pipelineLayout.value,
-          vertex: { module: source.value, entryPoint: 'lut_vs', buffers: [] },
-          fragment: {
-            module: source.value,
-            entryPoint: 'lut_fs',
-            targets: [{ format: output.format as GPUTextureFormat }],
-          },
-          primitive: { topology: 'triangle-list' },
-        });
-        if (!created.ok) throw created.error;
-        pipeline = created.value;
-      }
-      const inputView = resources.textureView(input.view);
-      if (!inputView.ok) throw inputView.error;
-      const bindings = frame.runtime.device.createBindGroup({
-        layout,
-        entries: [
-          { binding: 0, resource: { kind: 'textureView', value: inputView.value } },
-          { binding: 1, resource: { kind: 'sampler', value: sampler as Sampler } },
-        ],
-      });
-      if (!bindings.ok) throw bindings.error;
-      pass.setPipeline(pipeline as RenderPipeline);
-      pass.setBindGroup(0, bindings.value);
-      pass.setBindGroup(1, lut.bindGroup);
-      pass.draw(3, 1, 0, 0);
+  return addStandardColorStagePass(
+    graph,
+    'standard-color-lut',
+    input,
+    output,
+    LUT_STAGE_WGSL.replace('LUT_STRENGTH', String(lut.strength)),
+    {
+      accesses: [{ resource: lut.view, usage: 'sampled-read' }],
+      bind: () => ({ layout: lut.bindGroupLayout, bindGroup: lut.bindGroup }),
     },
-  });
-  return added.ok ? ok(undefined) : added;
+  );
 }

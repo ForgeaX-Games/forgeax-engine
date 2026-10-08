@@ -2,7 +2,11 @@ import type { RhiCanvasContext, Texture, TextureView } from '@forgeax/engine-rhi
 import type { RenderGraphExecutionPhase } from '../render-contract';
 import type { ExtractedLights } from '../render-system-extract';
 import type { RenderTargetDescriptor } from '../targets/contracts';
-import { configureSurface, type PipelineState, type RenderSystemInternals } from './render-context';
+import {
+  configurePipelineSurface,
+  type PipelineState,
+  type RenderSystemInternals,
+} from './render-context';
 
 export function graphExecutionPhase(passName: string): RenderGraphExecutionPhase {
   if (passName.startsWith('shadowCascade')) return 'record/graph-execute/shadow';
@@ -113,11 +117,11 @@ export function acquireSwapChainTarget(
       });
       return null;
     }
-    const configured = configureSurface(
+    const configured = configurePipelineSurface(
       canvasContext,
       configuredDevice?.value ?? internals.device,
-      pipelineState.format,
-      pipelineState.colorAttachmentFormat,
+      pipelineState,
+      internals.outputColorSpace,
     );
     if (!configured.ok) {
       internals.errorRegistry.fire(configured.error);
@@ -128,8 +132,6 @@ export function acquireSwapChainTarget(
       });
       return null;
     }
-    pipelineState.perPassResources.configured = true;
-    (globalThis as Record<string, unknown>).__forgeaxSwapChainFormat = pipelineState.format;
     const retry = canvasContext.getCurrentTexture();
     if (!retry.ok) {
       internals.errorRegistry.fire(retry.error);

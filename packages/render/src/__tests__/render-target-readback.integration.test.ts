@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { rhi } from '@forgeax/engine-rhi-null';
+import { describe, expect, it, vi } from 'vitest';
+import { createRenderTargetHost } from '../assembly/render-target-host';
 import type { RenderTargetDescriptor } from '../targets/contracts';
 import { createRenderTargetOwner } from '../targets/owner';
 import {
@@ -26,6 +28,27 @@ function target() {
 }
 
 describe('RenderTarget receipt-bound readback', () => {
+  it('reads an accepted cube face while another face is progressively written', async () => {
+    const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
+    const host = createRenderTargetHost({ getDevice: () => device, getGeneration: () => 0 });
+    const created = host.createRenderTarget({ ...descriptor, shape: 'cube', width: 9, height: 9 });
+    if (!created.ok) throw created.error;
+    host.beginFrame();
+    const physical = host.getPhysicalTarget(created.value);
+    if (physical === undefined) throw new Error('cube storage missing');
+    host.markTargetSubmitted(created.value, physical);
+    host.onFrameSubmitted();
+    await Promise.resolve();
+    host.beginFrame();
+    const ticket = host.requestTargetReadback(created.value, { mipLevel: 0, layer: 5 });
+    if (!ticket.ok) throw ticket.error;
+    const encoder = device.createCommandEncoder().unwrap();
+    const copy = vi.spyOn(encoder, 'copyTextureToBuffer');
+    host.encodePendingReadbacks(encoder, [{ target: created.value, layer: 0 }]);
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(copy.mock.calls[0]?.[0]).toMatchObject({ texture: physical.texture, origin: { z: 5 } });
+    host.dispose();
+  });
   it('admits a square cube target as six independently addressable faces', () => {
     const owner = createRenderTargetOwner({
       rendererId: Symbol('renderer'),

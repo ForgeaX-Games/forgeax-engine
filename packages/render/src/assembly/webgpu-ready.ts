@@ -1,6 +1,8 @@
 import type { PipelineGroup2Contract } from '@forgeax/engine-shader';
+import { atmosphereAvailable } from '../environment/capability';
 import type { GpuDrivenPbrProgram } from '../gpu-driven/pbr-program';
 import { transmissionBackdropAvailable } from './device-feature-admission';
+import { buildClusterMembershipProducer } from './webgpu-cluster-ready';
 // WebGPU generation-scoped ready-state builder.
 // This owner performs one complete device-generation promotion; it receives
 // policy/adapters and returns a fully prepared PipelineState.
@@ -17,7 +19,6 @@ import { deriveVertexCount, deriveVertexLayoutProjection } from '@forgeax/engine
 import type {
   BindGroupLayout,
   Buffer,
-  ComputePipeline,
   PipelineLayout,
   RenderPipeline,
   Result,
@@ -31,6 +32,7 @@ import type { ManifestEntry } from '@forgeax/engine-types';
 import { handleSlot } from '@forgeax/engine-types';
 import { prewarmDepthOfField } from '../features/depth-of-field/depth-of-field-assembly';
 import { prewarmAtmosphereShaders } from './atmosphere-shader-prewarm';
+import type { RhiBackendPack } from './backend-contract';
 import { selectCloudShadowCompatibleEntry } from './cloud-shadow-entry';
 import { prewarmSsrWithDepthPyramid } from './utility-shader-prewarm';
 
@@ -40,11 +42,7 @@ import type { GpuResidencyCache, MeshGpuHandles } from '../device/gpu-residency'
 import { postProcessShaderModuleLabel } from '../fullscreen-post-process-pass';
 import { GpuBuffer } from '../gpu-resource';
 import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
-import {
-  GPU_TEXTURE_USAGE_COPY_DST,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from '../gpu-texture-usage';
+import { GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING } from '../gpu-texture-usage';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
   GPU_BUFFER_USAGE_INDEX,
@@ -52,18 +50,17 @@ import {
   GPU_BUFFER_USAGE_UNIFORM,
   GPU_BUFFER_USAGE_VERTEX,
 } from '../gpu-usage';
-import { createHdrpClusterMembershipBindGroupLayoutDescriptor } from '../hdrp-buffers';
 import { setIblComposedShaders } from '../ibl/IblPipelineCache';
 import {
   createSkylightFallback,
-  FALLBACK_BYTES_PER_ROW,
   type SkylightFallback,
+  texelFallbackDescriptor,
+  writeTexelFallback,
 } from '../ibl/skylight-bind-group';
 import { type BloomInspection, emptyBloomInspection } from '../inspection-types';
 import type { DeviceScope, RhiErrorListenerRegistry } from '../lifecycle';
 import { assertStorageBufferCap } from '../light-buffer-layout';
 import { buildPbrPipelineLayouts, SKIN_MATERIAL_SHADER_ID } from '../pbr-pipeline';
-import { STANDARD_CLUSTER_MEMBERSHIP_WGSL } from '../pipeline/standard-pipeline';
 import { inspectStandardBloomGraph } from '../pipeline/standard-post';
 import {
   buildLinearLdrMaterialSpecTable,
@@ -92,11 +89,9 @@ import {
   type PipelineState,
   selectSwapChainFormat,
 } from '../render-system';
-import {
-  createSkinPaletteAllocator,
-  type SkinPaletteAllocator,
-} from '../systems/skin-palette-allocator';
+import type { SkinPaletteAllocator } from '../systems/skin-palette-allocator';
 import { createExtendedLightingFallbackResources } from './extended-lighting-fallback';
+import { createLayeredTextureFallbackViews } from './layered-texture-fallback';
 import { invokeDeviceCreateShaderModule } from './material-shader-policy';
 import { prewarmRequiredMaterialShaders } from './material-shader-prewarm';
 import {
@@ -111,11 +106,14 @@ import { runShimStep, runShimSyncStep } from './renderer-helpers';
 import {
   prewarmMaterialShaderVariants,
   STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES,
+  selectBootVariant,
   selectHdrpPbrPrewarmVariants,
   selectProbePrewarmVariants,
   selectStandardPbrTransmissionPrewarmVariants,
+  type VariantPrewarmAdmission,
 } from './shader-prewarm-policy';
 import { createShadowArrayFallbackView } from './shadow-array-fallback';
+import { createSkinPaletteOwner } from './skin-palette-owner';
 import { createTemporalShaderPrewarmer } from './temporal-post-process-prewarm';
 import { buildGpuDrivenPbrReadyLayouts, buildGpuDrivenPbrReadyModules } from './webgpu-pbr-ready';
 import {
@@ -129,26 +127,9 @@ import { prewarmMipmapPipeline } from './webgpu-ready-mipmap';
 import { createReadyPerPassResources } from './webgpu-ready-per-pass';
 
 /**
- * Build the `Renderer.initialization` Promise (D-S3 three-step strict-serial chain).
- *
- * Steps run in order; each rejection short-circuits the chain and the
- * resulting Promise rejects with a structured `RhiError` / `ShaderError`.
- * AI users `await renderer.initialization` once before the first `draw(world)` call;
- * subsequent frames may skip the await (the Promise stays resolved).
- *
- * Step 1 (manifest load): `shader.loadManifest()` populates the runtime
- * registry. Failure = `ShaderError 'manifest-malformed'` /
- * `'shader-not-found'`.
- *
- * Step 2 (pipeline compile): synthesises the PBR pipeline (3 BindGroupLayout
- * + 1 PipelineLayout + 1 ShaderModule + 1 RenderPipeline). Failure =
- * `RhiError 'shader-compile-failed'` / `'feature-not-enabled'` /
- * `'limit-exceeded'`.
- *
- * Step 3 (asset upload): allocates GPU buffers for the builtin cube and
- * triangle meshes via `device.createBuffer` + `queue.writeBuffer`. Failure
- * = `RhiError 'limit-exceeded'` / `'webgpu-runtime-error'` /
- * `'queue-write-buffer-out-of-bounds'`.
+ * Load the manifest, compile pipelines and upload builtins before promoting one
+ * complete device generation. Failure short-circuits initialization with the
+ * owning RHI/Shader error; the first draw requires successful initialization.
  */
 export async function buildReadyWebGPU(
   rhiDevice: RhiDevice,
@@ -161,6 +142,7 @@ export async function buildReadyWebGPU(
         desc: { code: string; label?: string | undefined },
       ) => Promise<Result<ShaderModule, RhiError>>)
     | undefined,
+  immediateCreateShaderModule: RhiBackendPack['createShaderModuleImmediate'],
   errorRegistry: RhiErrorListenerRegistry,
   /**
    * Material shader modules declared by producer features. These are compiled
@@ -228,7 +210,7 @@ export async function buildReadyWebGPU(
   setVolumetricFogShaderSources: (sources: VolumetricFogShaderSources) => void,
   /**
    * Install manifest-owned SSR and depth-pyramid utility sources only after
-   * both bundles compile; SSR is the pyramid's only consumer.
+   * both bundles compile; SSR trace currently reads the pyramid.
    */
   setSsrShaderSources: (sources: SsrShaderSources, pyramid: DepthPyramidShaderSources) => void,
   /** Install manifest-owned atmosphere utility sources only after all modules compile. */
@@ -236,6 +218,8 @@ export async function buildReadyWebGPU(
   setStandardDeferredShaderSources: (
     sources: import('../pipeline/standard-deferred-lighting').StandardDeferredShaderSources,
   ) => void,
+  /** Which material variant module labels this build compiles eagerly. */
+  admitsVariant: VariantPrewarmAdmission,
 ): Promise<PipelineState> {
   // These defaults belong to this renderer generation. They are not in the
   // mesh residency cache or frame graph, so its existing scope must retire them.
@@ -267,6 +251,18 @@ export async function buildReadyWebGPU(
     storageBufferCapable =
       capCheck.ok && !webgl2Downlevel && rhiDevice.caps.storageBuffer && capCheck.value;
   }
+  const atmosphereShaderAvailable = atmosphereAvailable(
+    storageBufferCapable,
+    rhiDevice.limits.maxSampledTexturesPerShaderStage,
+  );
+  const atmosphereFallbackView = atmosphereShaderAvailable
+    ? (() => {
+        const descriptor = texelFallbackDescriptor('atmosphere-neutral-volume', 'rgba8unorm', '3d');
+        const texture = createPersistentTexture(descriptor).unwrap();
+        writeTexelFallback(rhiDevice.queue, texture, descriptor, new Uint8Array(4)).unwrap();
+        return rhiDevice.createTextureView(texture, { dimension: '3d' }).unwrap();
+      })()
+    : undefined;
   const directionalPcssAvailable =
     rhiDevice.caps.backendKind === 'webgpu' || rhiDevice.caps.backendKind === 'wgpu-native';
   const projectorAvailable =
@@ -541,6 +537,7 @@ export async function buildReadyWebGPU(
         const exact = ms.variants.find(
           (v) =>
             v.defines.STORAGE_BUFFER_AVAILABLE === false &&
+            v.defines.ATMOSPHERE_AVAILABLE !== true &&
             v.defines.COVERAGE_ONLY !== true &&
             v.defines.VISIBLE_SURFACE_AVAILABLE !== true &&
             v.defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE !== true &&
@@ -586,6 +583,8 @@ export async function buildReadyWebGPU(
       const exact = ms.variants.find(
         (variant) =>
           variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
+          (!('ATMOSPHERE_AVAILABLE' in variant.defines) ||
+            variant.defines.ATMOSPHERE_AVAILABLE === atmosphereShaderAvailable) &&
           variant.defines.COVERAGE_ONLY !== true &&
           variant.defines.VISIBLE_SURFACE_AVAILABLE !== true &&
           // Scene-index variants bind only GPU Scene tables in slot 3.
@@ -670,11 +669,11 @@ export async function buildReadyWebGPU(
     if (spriteEntry !== undefined) {
       for (const msEntry of registry.materialShaderManifestEntries()) {
         if (msEntry.identifier === 'forgeax::sprite') {
-          const pirFalseVariant = msEntry.variants.find(
-            (v) =>
-              v.defines.PER_INSTANCE_REGION === false &&
-              v.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable,
-          );
+          const pirFalseVariant = selectBootVariant(msEntry, {
+            PER_INSTANCE_REGION: false,
+            STORAGE_BUFFER_AVAILABLE: storageBufferCapable,
+            ATMOSPHERE_AVAILABLE: atmosphereShaderAvailable,
+          });
           if (pirFalseVariant !== undefined) {
             spriteEntry = { ...spriteEntry, wgsl: pirFalseVariant.composedWgsl };
           }
@@ -832,6 +831,7 @@ export async function buildReadyWebGPU(
           const variant = deferred.variants.find(
             (candidate) =>
               candidate.defines.CLUSTER_FORWARD_AVAILABLE === clustered &&
+              (candidate.defines.ATMOSPHERE_AVAILABLE ?? false) === atmosphereShaderAvailable &&
               candidate.defines.EXTENDED_LIGHTING_AVAILABLE === extendedLightingShaderAvailable &&
               candidate.defines.PROJECTOR_AVAILABLE === projectorAvailable &&
               candidate.defines.DIRECTIONAL_PCSS_AVAILABLE === directionalPcssAvailable,
@@ -909,12 +909,14 @@ export async function buildReadyWebGPU(
       storageBufferCapable,
       asyncCreateShaderModule,
       pbrSkinEntry,
+      immediateCreateShaderModule,
       pbrManifestEntry,
       pbrSkinManifestEntry,
       extendedLightingShaderAvailable,
       directionalPcssAvailable,
       projectorAvailable,
       seedShaderModule,
+      admitsVariant,
     });
     pbrSkinModule = gpuDrivenModules.pbrSkinModule;
     gpuDrivenPbrPrograms = gpuDrivenModules.gpuDrivenPbrPrograms;
@@ -924,60 +926,63 @@ export async function buildReadyWebGPU(
     if (pbrVariant !== undefined) {
       seedShaderModule(`module-forgeax::default-standard-pbr#${pbrVariant.definesKey}`, pbrModule);
     }
-    const transmissionCapable =
-      (rhiDevice.limits.maxSampledTexturesPerShaderStage ?? 0) >=
-      STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES;
-    const transmissionVariants = transmissionCapable
-      ? selectStandardPbrTransmissionPrewarmVariants(
-          pbrManifestEntry,
-          storageBufferCapable,
-          directionalPcssAvailable,
-          projectorAvailable,
-          extendedLightingShaderAvailable,
-        )
-      : [];
+    if (immediateCreateShaderModule === undefined) {
+      // Every sampled-texture limit admits Standard transmission: a low-limit
+      // device selects the shared-slot variant through the same variant axes.
+      const transmissionVariants = selectStandardPbrTransmissionPrewarmVariants(
+        pbrManifestEntry,
+        storageBufferCapable,
+        directionalPcssAvailable,
+        projectorAvailable,
+        extendedLightingShaderAvailable,
+        atmosphereShaderAvailable,
+      );
 
-    // HDRP uses the canonical all-true variant key (`''`) and the lazy
-    // material pipeline adapter therefore requests a distinct module label.
-    // Compile every device-capability-matched HDRP variant and seed its exact
-    // label. Color availability is part of the geometry-owned variant axis, so
-    // both colored and no-color HDRP sources must be retained.
-    const prewarmedPbrModules = new Map<string, ShaderModule>([[pbrEntry.wgsl, pbrModule]]);
-    await prewarmMaterialShaderVariants(
-      'forgeax::default-standard-pbr',
-      [
-        ...transmissionVariants,
-        ...selectHdrpPbrPrewarmVariants(
-          pbrManifestEntry,
-          storageBufferCapable,
-          extendedLightingShaderAvailable,
-          transmissionCapable,
-          directionalPcssAvailable,
-          projectorAvailable,
-        ),
-        ...selectProbePrewarmVariants(
-          pbrManifestEntry,
-          storageBufferCapable,
-          extendedLightingShaderAvailable,
-          transmissionCapable,
-          directionalPcssAvailable,
-          projectorAvailable,
-          webgl2Downlevel,
-        ),
-      ],
-      prewarmedPbrModules,
-      (variant, label) =>
-        runShimStep(
-          () =>
-            asyncCreateShaderModule
-              ? asyncCreateShaderModule(rhiDevice, { code: variant.composedWgsl, label })
-              : invokeDeviceCreateShaderModule(rhiDevice, { code: variant.composedWgsl, label }),
-          'shader-compile-failed',
-          `Standard PBR variant ${variant.definesKey || '<default>'} compiled`,
-          'inspect the selected Standard PBR variant WGSL and device.features',
-        ),
-      seedShaderModule,
-    );
+      // HDRP uses the canonical all-true variant key (`''`) and the lazy
+      // material pipeline adapter therefore requests a distinct module label.
+      // Compile every device-capability-matched HDRP variant and seed its exact
+      // label. Color availability is part of the geometry-owned variant axis, so
+      // both colored and no-color HDRP sources must be retained.
+      const prewarmedPbrModules = new Map<string, ShaderModule>([[pbrEntry.wgsl, pbrModule]]);
+      await prewarmMaterialShaderVariants(
+        'forgeax::default-standard-pbr',
+        [
+          ...transmissionVariants,
+          ...selectHdrpPbrPrewarmVariants(
+            pbrManifestEntry,
+            storageBufferCapable,
+            extendedLightingShaderAvailable,
+            true,
+            directionalPcssAvailable,
+            projectorAvailable,
+            atmosphereShaderAvailable,
+          ),
+          ...selectProbePrewarmVariants(
+            pbrManifestEntry,
+            storageBufferCapable,
+            extendedLightingShaderAvailable,
+            true,
+            directionalPcssAvailable,
+            projectorAvailable,
+            webgl2Downlevel,
+            atmosphereShaderAvailable,
+          ),
+        ],
+        prewarmedPbrModules,
+        (variant, label) =>
+          runShimStep(
+            () =>
+              asyncCreateShaderModule
+                ? asyncCreateShaderModule(rhiDevice, { code: variant.composedWgsl, label })
+                : invokeDeviceCreateShaderModule(rhiDevice, { code: variant.composedWgsl, label }),
+            'shader-compile-failed',
+            `Standard PBR variant ${variant.definesKey || '<default>'} compiled`,
+            'inspect the selected Standard PBR variant WGSL and device.features',
+          ),
+        seedShaderModule,
+        admitsVariant,
+      );
+    }
     // M2-07-c: Materials.standard with an explicit renderState reaches the
     // lazy material pipeline path, whose module label includes the requested
     // variant set. Reuse the boot-compiled PBR module only for manifest
@@ -1014,12 +1019,12 @@ export async function buildReadyWebGPU(
     const unlitManifestEntry = [...registry.materialShaderManifestEntries()].find(
       (entry) => entry.identifier === 'forgeax::default-unlit',
     );
-    const coloredUnlitVariant = unlitManifestEntry?.variants.find(
-      (variant) =>
-        variant.defines.VERTEX_COLOR_AVAILABLE === true &&
-        variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
-        variant.defines.COVERAGE_ONLY !== true,
-    );
+    const coloredUnlitVariant = selectBootVariant(unlitManifestEntry, {
+      VERTEX_COLOR_AVAILABLE: true,
+      STORAGE_BUFFER_AVAILABLE: storageBufferCapable,
+      ATMOSPHERE_AVAILABLE: atmosphereShaderAvailable,
+      COVERAGE_ONLY: false,
+    });
     if (coloredUnlitVariant !== undefined && coloredUnlitVariant.composedWgsl !== unlitEntry.wgsl) {
       const coloredUnlitShaderResult = await runShimStep(
         () =>
@@ -1042,12 +1047,12 @@ export async function buildReadyWebGPU(
         coloredUnlitShaderResult.value,
       );
     }
-    const uncoloredUnlitVariant = unlitManifestEntry?.variants.find(
-      (variant) =>
-        variant.defines.VERTEX_COLOR_AVAILABLE === false &&
-        variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
-        variant.defines.COVERAGE_ONLY !== true,
-    );
+    const uncoloredUnlitVariant = selectBootVariant(unlitManifestEntry, {
+      VERTEX_COLOR_AVAILABLE: false,
+      STORAGE_BUFFER_AVAILABLE: storageBufferCapable,
+      ATMOSPHERE_AVAILABLE: atmosphereShaderAvailable,
+      COVERAGE_ONLY: false,
+    });
     if (uncoloredUnlitVariant !== undefined) {
       seedShaderModule(
         `module-forgeax::default-unlit#${uncoloredUnlitVariant.definesKey}`,
@@ -1098,6 +1103,8 @@ export async function buildReadyWebGPU(
       const activeShadowVariants = shadowCasterManifestEntry?.variants.filter(
         (variant) =>
           variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable &&
+          (!('ATMOSPHERE_AVAILABLE' in variant.defines) ||
+            variant.defines.ATMOSPHERE_AVAILABLE === atmosphereShaderAvailable) &&
           typeof variant.defines.SKINNING_DISABLED === 'boolean',
       );
       for (const variant of activeShadowVariants ?? []) {
@@ -1225,11 +1232,11 @@ export async function buildReadyWebGPU(
       const spriteManifestEntry = Array.from(registry.materialShaderManifestEntries()).find(
         (entry) => entry.identifier === 'forgeax::sprite',
       );
-      const regionVariant = spriteManifestEntry?.variants.find(
-        (variant) =>
-          variant.defines.PER_INSTANCE_REGION === true &&
-          variant.defines.STORAGE_BUFFER_AVAILABLE === storageBufferCapable,
-      );
+      const regionVariant = selectBootVariant(spriteManifestEntry, {
+        PER_INSTANCE_REGION: true,
+        STORAGE_BUFFER_AVAILABLE: storageBufferCapable,
+        ATMOSPHERE_AVAILABLE: atmosphereShaderAvailable,
+      });
       if (regionVariant !== undefined) {
         const regionShaderResult = await runShimStep(
           () =>
@@ -1481,6 +1488,7 @@ export async function buildReadyWebGPU(
         buildPbrPipelineLayouts(rhiDevice, {
           storageBuffer: storageBufferCapable,
           extendedLighting: extendedLightingShaderAvailable,
+          atmosphere: atmosphereShaderAvailable,
           projectorAvailable,
           transmissionBackdrop: transmissionBackdropAvailable(
             rhiDevice.limits.maxSampledTexturesPerShaderStage,
@@ -1549,55 +1557,12 @@ export async function buildReadyWebGPU(
     }
   }
 
-  // The storage path can move the repeated light/cluster membership materializer
-  // into the same command buffer as the deferred lighting pass. This is an
-  // optional producer: module or pipeline creation failure leaves the CPU
-  // binner active, and non-storage backends never attempt the path.
-  let hdrpClusterMembershipPipeline: ComputePipeline | null = null;
-  let hdrpClusterMembershipBindGroupLayout: BindGroupLayout | null = null;
-  if (
-    storageBufferCapable &&
-    rhiDevice.caps.compute &&
-    pbrModule !== null &&
-    unlitModule !== null
-  ) {
-    const producerBgl = rhiDevice.createBindGroupLayout(
-      createHdrpClusterMembershipBindGroupLayoutDescriptor(),
+  const { hdrpClusterMembershipPipeline, hdrpClusterMembershipBindGroupLayout } =
+    await buildClusterMembershipProducer(
+      rhiDevice,
+      storageBufferCapable && pbrModule !== null && unlitModule !== null,
+      asyncCreateShaderModule,
     );
-    if (producerBgl.ok) {
-      hdrpClusterMembershipBindGroupLayout = producerBgl.value;
-    }
-    const membershipModule = asyncCreateShaderModule
-      ? await asyncCreateShaderModule(rhiDevice, {
-          code: STANDARD_CLUSTER_MEMBERSHIP_WGSL,
-          label: 'hdrp-cluster-membership',
-        })
-      : await invokeDeviceCreateShaderModule(rhiDevice, {
-          code: STANDARD_CLUSTER_MEMBERSHIP_WGSL,
-          label: 'hdrp-cluster-membership',
-        });
-    if (membershipModule.ok && hdrpClusterMembershipBindGroupLayout !== null) {
-      const producerLayout = rhiDevice.createPipelineLayout({
-        label: 'hdrp-cluster-membership-pl',
-        bindGroupLayouts: [hdrpClusterMembershipBindGroupLayout],
-      });
-      if (producerLayout.ok) {
-        const membershipPipeline = rhiDevice.createComputePipeline({
-          label: 'hdrp-cluster-membership',
-          layout: producerLayout.value,
-          compute: {
-            module: membershipModule.value,
-            entryPoint: 'cs_cluster_membership',
-          },
-        });
-        if (membershipPipeline.ok) {
-          hdrpClusterMembershipPipeline = membershipPipeline.value;
-        }
-      } else {
-        hdrpClusterMembershipBindGroupLayout = null;
-      }
-    }
-  }
 
   const {
     hdrpSkinPipelineLayout: hdrpSkinPipelineLayoutHandle,
@@ -1655,17 +1620,8 @@ export async function buildReadyWebGPU(
   // Its capacity follows the device's full binding-size limit: the 16320-byte
   // per-draw window is only one entity's range within the shared buffer.
   // Storage and uniform devices therefore use their respective binding limits.
-  const skinPaletteLimitKey = storageBufferCapable
-    ? 'maxStorageBufferBindingSize'
-    : 'maxUniformBufferBindingSize';
-  const skinPaletteDeviceLimit = rhiDevice.limits[skinPaletteLimitKey];
-  const SKIN_PALETTE_MAX_BINDING_BYTES =
-    typeof skinPaletteDeviceLimit === 'number' && skinPaletteDeviceLimit > 0
-      ? skinPaletteDeviceLimit
-      : 65536; // WebGPU spec floor for maxUniformBufferBindingSize
-  const skinPaletteAllocatorHandle: SkinPaletteAllocator = createSkinPaletteAllocator(
+  const skinPaletteAllocatorHandle: SkinPaletteAllocator = createSkinPaletteOwner(
     rhiDevice,
-    SKIN_PALETTE_MAX_BINDING_BYTES,
     storageBufferCapable,
   );
 
@@ -2090,46 +2046,21 @@ export async function buildReadyWebGPU(
   );
   if (!shadowSamplerResult.ok) throw shadowSamplerResult.error;
 
+  const fallbackTextureDescriptor = texelFallbackDescriptor('fallback-white-1x1', 'rgba8unorm');
   const fallbackTextureResult = runShimSyncStep(
-    () =>
-      createPersistentTexture({
-        label: 'fallback-white-1x1',
-        size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-        mipLevelCount: 1,
-        sampleCount: 1,
-        dimension: '2d',
-        format: 'rgba8unorm',
-        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-        viewFormats: [],
-        textureBindingViewDimension: undefined,
-      }),
+    () => createPersistentTexture(fallbackTextureDescriptor),
     'webgpu-runtime-error',
     'createTexture (fallback white) succeeded',
     'check device.limits.maxTextureDimension2D',
   );
   if (!fallbackTextureResult.ok) throw fallbackTextureResult.error;
-
-  // The fallback white pixel is a 1x1 RGBA8 sample. The forgeax rhi shim
-  // enforces `bytesPerRow % 256 === 0` regardless of row count (spec
-  // normative for multi-row copies, but the shim is uniformly strict).
-  // Pad the source buffer to a 256-byte row stride; the upload still
-  // writes only 1x1 because the destination size is 1x1.
-  const fallbackPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-  fallbackPixel[0] = 255;
-  fallbackPixel[1] = 255;
-  fallbackPixel[2] = 255;
-  fallbackPixel[3] = 255;
   const fallbackWriteResult = runShimSyncStep(
     () =>
-      queue.writeTexture(
-        {
-          texture: fallbackTextureResult.value,
-          mipLevel: 0,
-          origin: { x: 0, y: 0, z: 0 },
-        },
-        fallbackPixel,
-        { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-        { width: 1, height: 1, depthOrArrayLayers: 1 },
+      writeTexelFallback(
+        queue,
+        fallbackTextureResult.value,
+        fallbackTextureDescriptor,
+        new Uint8Array([255, 255, 255, 255]),
       ),
     'queue-write-buffer-out-of-bounds',
     'queue.writeTexture (fallback white pixel) succeeded',
@@ -2150,7 +2081,12 @@ export async function buildReadyWebGPU(
   if (!fallbackTextureViewResult.ok) throw fallbackTextureViewResult.error;
 
   const extendedLightingFallback = createExtendedLightingFallbackResources(
-    rhiDevice,
+    {
+      createBuffer: createPersistentBuffer,
+      createTexture: createPersistentTexture,
+      createTextureView: rhiDevice.createTextureView.bind(rhiDevice),
+      queue: rhiDevice.queue,
+    },
     extendedLightingShaderAvailable,
   );
 
@@ -2162,38 +2098,25 @@ export async function buildReadyWebGPU(
   // clamps to 0 z=0, still wrong). White-on-missing semantics for baseColor
   // / metallicRoughness slots is preserved by keeping those bound to the
   // shared fallbackTextureView; only the normal slot uses this view.
+  const fallbackNormalTextureDescriptor = texelFallbackDescriptor(
+    'fallback-normal-1x1',
+    'rgba16float',
+  );
   const fallbackNormalTextureResult = runShimSyncStep(
-    () =>
-      createPersistentTexture({
-        label: 'fallback-normal-1x1',
-        size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-        mipLevelCount: 1,
-        sampleCount: 1,
-        dimension: '2d',
-        format: 'rgba16float',
-        usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-        viewFormats: [],
-        textureBindingViewDimension: undefined,
-      }),
+    () => createPersistentTexture(fallbackNormalTextureDescriptor),
     'webgpu-runtime-error',
     'createTexture (fallback normal) succeeded',
     'check device.limits.maxTextureDimension2D',
   );
   if (!fallbackNormalTextureResult.ok) throw fallbackNormalTextureResult.error;
-
-  const fallbackNormalPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-  new Uint16Array(fallbackNormalPixel.buffer).set([0x3800, 0x3800, 0x3c00, 0x3c00]);
+  const fallbackNormalTexel = new Uint16Array([0x3800, 0x3800, 0x3c00, 0x3c00]);
   const fallbackNormalWriteResult = runShimSyncStep(
     () =>
-      queue.writeTexture(
-        {
-          texture: fallbackNormalTextureResult.value,
-          mipLevel: 0,
-          origin: { x: 0, y: 0, z: 0 },
-        },
-        fallbackNormalPixel,
-        { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-        { width: 1, height: 1, depthOrArrayLayers: 1 },
+      writeTexelFallback(
+        queue,
+        fallbackNormalTextureResult.value,
+        fallbackNormalTextureDescriptor,
+        fallbackNormalTexel,
       ),
     'queue-write-buffer-out-of-bounds',
     'queue.writeTexture (fallback normal pixel) succeeded',
@@ -2271,6 +2194,10 @@ export async function buildReadyWebGPU(
   if (!shadowFallbackClearSubmit.ok) throw shadowFallbackClearSubmit.error;
 
   const shadowArrayFallbackTextureView = createShadowArrayFallbackView(
+    rhiDevice,
+    createPersistentTexture,
+  );
+  const layeredTextureFallback = createLayeredTextureFallbackViews(
     rhiDevice,
     createPersistentTexture,
   );
@@ -2536,19 +2463,12 @@ export async function buildReadyWebGPU(
         const targets = f.targets as Array<Record<string, unknown>> | undefined;
         const isHdr = targets?.[0]?.format === HDR_COLOR_ATTACHMENT_FORMAT;
 
-        if (fragModule === spriteModule) {
-          label = isHdr ? 'sprite-pipeline-hdr' : 'sprite-pipeline';
-          if (isHdr) {
-            f.entryPoint = 'fs_main_hdr';
-          }
-        } else if (fragModule === spriteLitModule) {
-          // feat-20260624 M1' / t7: sprite-lit mirrors sprite's HDR
-          // entry swap — `fs_main` (LDR clamped) vs `fs_main_hdr`
-          // (HDR pass-through). Labels keep the same shape.
-          label = isHdr ? 'sprite-lit-pipeline-hdr' : 'sprite-lit-pipeline';
-          if (isHdr) {
-            f.entryPoint = 'fs_main_hdr';
-          }
+        if (fragModule === spriteModule || fragModule === spriteLitModule) {
+          // Sprite and sprite-lit share one HDR entry swap: `fs_main` (LDR
+          // clamped) vs `fs_main_hdr` (HDR pass-through).
+          const prefix = fragModule === spriteModule ? 'sprite' : 'sprite-lit';
+          label = isHdr ? `${prefix}-pipeline-hdr` : `${prefix}-pipeline`;
+          if (isHdr) f.entryPoint = 'fs_main_hdr';
         } else if (fragModule === unlitModule || fragModule === pbrModule) {
           const prefix = fragModule === unlitModule ? 'unlit' : 'standard';
           label = isHdr ? `pbr-pipeline-${prefix}-hdr` : `pbr-pipeline-${prefix}`;
@@ -2564,7 +2484,7 @@ export async function buildReadyWebGPU(
         } else if (fragModule === bloomCompositeModule) {
           label = 'bloom-composite-pipeline';
         } else if (fragModule === ssaoModule) {
-          label = (d.label as string) ?? 'ssao-calc-pipeline';
+          label = 'ssao-calc-pipeline';
         }
 
         d.fragment = f;
@@ -3792,7 +3712,7 @@ export async function buildReadyWebGPU(
               variantSet: undefined,
             },
             attachments: {
-              colorFormats: ['r8unorm'],
+              colorFormats: ['rgba8unorm'],
               depthFormat: undefined,
               sampleCount: 1,
             },
@@ -3951,6 +3871,18 @@ export async function buildReadyWebGPU(
     surfaceProfile: surfaceViewFormats ? 'dual-view' : 'raw-only',
     viewBindGroupLayout: viewBglResult.value,
     extendedLightingAvailable: extendedLightingShaderAvailable,
+    atmosphereAvailable: atmosphereShaderAvailable,
+    viewLinearSampler: rhiDevice
+      .createSampler({
+        label: 'view-linear-clamp',
+        magFilter: 'linear',
+        minFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+        addressModeW: 'clamp-to-edge',
+      })
+      .unwrap(),
+    atmosphereFallbackView,
     projectorAvailable,
     materialBindGroupLayout: materialBglResult.value,
     meshBindGroupLayout: meshArrayBglResult.value,
@@ -3979,6 +3911,7 @@ export async function buildReadyWebGPU(
     // 1x1 depth32float fallback bound at viewBindGroup binding(3).
     shadowFallbackTextureView: shadowFallbackViewResult.value,
     shadowArrayFallbackTextureView,
+    ...layeredTextureFallback,
     ...extendedLightingFallback,
     // feat-20260612-point-light-shadows-urp-hdrp Round-2 F-1: 1x1x6
     // depth32float cube_array fallback bound at viewBindGroup binding(5)

@@ -30,7 +30,18 @@
 // human can take a key without silencing unrelated synthetic input. This is the
 // structural realization of "human wins" without a global takeover policy.
 
+import { ButtonLatch, KeyLatch } from './digital-input';
 import type { InputBackend, InputBackendSample } from './input-snapshot';
+
+function mergeKeyState(
+  base: ReadonlySet<string> | undefined,
+  injected: ReadonlySet<string>,
+  humanOwns: (key: string) => boolean,
+): Set<string> {
+  const merged = new Set(base);
+  for (const key of injected) if (!humanOwns(key)) merged.add(key);
+  return merged;
+}
 
 /** Options controlling the composite merge policy. */
 export interface CompositeBackendOptions {
@@ -164,19 +175,24 @@ export function makeCompositeBackend(
   let leaseGeneration = 0;
 
   // Injected held-state (survives across frames).
-  const heldKeys = new Set<string>();
-  const heldCodes = new Set<string>();
-  const buttons: [boolean, boolean, boolean] = [false, false, false];
-  // Injected per-frame accumulators (drained on each sample()).
-  const upEdges = new Set<string>();
-  const upCodeEdges = new Set<string>();
-  const pressedKeys = new Set<string>();
-  const pressedCodes = new Set<string>();
-  const pressedButtons: [boolean, boolean, boolean] = [false, false, false];
-  const releasedButtons: [boolean, boolean, boolean] = [false, false, false];
+  const keys = new KeyLatch();
+  const codes = new KeyLatch();
+  const mouseButtons = new ButtonLatch();
+  const { held: heldKeys, pressed: pressedKeys, released: upEdges } = keys;
+  const { held: heldCodes, pressed: pressedCodes, released: upCodeEdges } = codes;
+  const { held: buttons, pressed: pressedButtons, released: releasedButtons } = mouseButtons;
   let mvx = 0;
   let mvy = 0;
   let wheel = 0;
+
+  function drainInjectedFrame(): void {
+    keys.clearFrame();
+    codes.clearFrame();
+    mouseButtons.clearFrame();
+    mvx = 0;
+    mvy = 0;
+    wheel = 0;
+  }
 
   function injectionActive(): boolean {
     return (
@@ -189,6 +205,21 @@ export function makeCompositeBackend(
       buttons.some((b) => b) ||
       pressedButtons.some((b) => b) ||
       releasedButtons.some((b) => b)
+    );
+  }
+
+  function humanOwnsKey(base: InputBackendSample, key: string, code: string | undefined): boolean {
+    return (
+      yieldToHuman &&
+      (base.downKeys.has(key) || (code !== undefined && base.downCodes?.has(code) === true))
+    );
+  }
+
+  function humanOwnsCode(base: InputBackendSample, code: string): boolean {
+    const key = keyForCode(code);
+    return (
+      yieldToHuman &&
+      (base.downCodes?.has(code) === true || (key !== undefined && base.downKeys.has(key)))
     );
   }
 
@@ -224,82 +255,26 @@ export function makeCompositeBackend(
     // downKeys: union of human-held and injected-held, minus injected keys the human
     // is also pressing. A yielded injected release is likewise a no-op: emitting its
     // up-edge would incorrectly release the human-held key in the scan system.
-    const downKeys = new Set(base.downKeys);
+    const ownsKey = (key: string) => humanOwnsKey(base, key, codeForKey(key));
+    const ownsCode = (code: string) => humanOwnsCode(base, code);
+    const downKeys = mergeKeyState(base.downKeys, heldKeys, ownsKey);
     const downCodes =
       base.downCodes === undefined && heldCodes.size === 0
         ? undefined
-        : new Set(base.downCodes ?? []);
-    for (const k of heldKeys) {
-      const code = codeForKey(k);
-      if (
-        yieldToHuman &&
-        (base.downKeys.has(k) || (code !== undefined && base.downCodes?.has(code) === true))
-      )
-        continue; // human owns this exact key
-      downKeys.add(k);
-    }
-    for (const code of heldCodes) {
-      const key = keyForCode(code);
-      if (
-        yieldToHuman &&
-        (base.downCodes?.has(code) === true || (key !== undefined && base.downKeys.has(key)))
-      )
-        continue;
-      downCodes?.add(code);
-    }
-
-    // upKeys: union of human up-edges and injected up-edges (one-frame life), except
-    // injected edges for keys that the human still owns under the per-key yield gate.
-    const mergedUp = new Set(base.upKeys);
-    for (const k of upEdges) {
-      const code = codeForKey(k);
-      if (
-        yieldToHuman &&
-        (base.downKeys.has(k) || (code !== undefined && base.downCodes?.has(code) === true))
-      )
-        continue;
-      mergedUp.add(k);
-    }
+        : mergeKeyState(base.downCodes, heldCodes, ownsCode);
+    const mergedUp = mergeKeyState(base.upKeys, upEdges, ownsKey);
     const mergedUpCodes =
       base.upCodes === undefined && upCodeEdges.size === 0
         ? undefined
-        : new Set(base.upCodes ?? []);
-    for (const code of upCodeEdges) {
-      const key = keyForCode(code);
-      if (
-        yieldToHuman &&
-        (base.downCodes?.has(code) === true || (key !== undefined && base.downKeys.has(key)))
-      )
-        continue;
-      mergedUpCodes?.add(code);
-    }
-
+        : mergeKeyState(base.upCodes, upCodeEdges, ownsCode);
     const mergedPressed =
       base.pressedKeys === undefined && pressedKeys.size === 0
         ? undefined
-        : new Set([...(base.pressedKeys ?? []), ...pressedKeys]);
-    if (
-      yieldToHuman &&
-      (base.downKeys.size > 0 || (base.downCodes?.size ?? 0) > 0) &&
-      mergedPressed !== undefined
-    ) {
-      for (const key of pressedKeys) {
-        const code = codeForKey(key);
-        if (base.downKeys.has(key) || (code !== undefined && base.downCodes?.has(code) === true))
-          mergedPressed.delete(key);
-      }
-    }
+        : mergeKeyState(base.pressedKeys, pressedKeys, ownsKey);
     const mergedPressedCodes =
       base.pressedCodes === undefined && pressedCodes.size === 0
         ? undefined
-        : new Set(base.pressedCodes ?? []);
-    if (yieldToHuman && mergedPressedCodes !== undefined) {
-      for (const code of pressedCodes) {
-        const key = keyForCode(code);
-        if (base.downCodes?.has(code) === true || (key !== undefined && base.downKeys.has(key)))
-          mergedPressedCodes.delete(code);
-      }
-    }
+        : mergeKeyState(base.pressedCodes, pressedCodes, ownsCode);
 
     // buttons: OR per slot.
     const mergedButtons: readonly [boolean, boolean, boolean] = [
@@ -347,20 +322,7 @@ export function makeCompositeBackend(
       pointerLocked: base.pointerLocked, // AI never fabricates a lock
     };
 
-    // Drain injected per-frame accumulators (mirrors inner's own drain).
-    upEdges.clear();
-    upCodeEdges.clear();
-    pressedKeys.clear();
-    pressedCodes.clear();
-    pressedButtons[0] = false;
-    pressedButtons[1] = false;
-    pressedButtons[2] = false;
-    releasedButtons[0] = false;
-    releasedButtons[1] = false;
-    releasedButtons[2] = false;
-    mvx = 0;
-    mvy = 0;
-    wheel = 0;
+    drainInjectedFrame();
 
     return out;
   }
@@ -386,27 +348,10 @@ export function makeCompositeBackend(
     // then emit only the releases required to close state that was held
     // across the boundary. This prevents a press/release queued before a
     // revoke from becoming a ghost edge for the next consumer.
-    upEdges.clear();
-    upCodeEdges.clear();
-    pressedKeys.clear();
-    pressedCodes.clear();
-    for (const k of heldKeys) upEdges.add(k);
-    for (const code of heldCodes) upCodeEdges.add(code);
-    heldKeys.clear();
-    heldCodes.clear();
-    pressedButtons[0] = false;
-    pressedButtons[1] = false;
-    pressedButtons[2] = false;
-    releasedButtons[0] = false;
-    releasedButtons[1] = false;
-    releasedButtons[2] = false;
-    if (buttons[0]) releasedButtons[0] = true;
-    if (buttons[1]) releasedButtons[1] = true;
-    if (buttons[2]) releasedButtons[2] = true;
-    buttons[0] = buttons[1] = buttons[2] = false;
-    mvx = 0;
-    mvy = 0;
-    wheel = 0;
+    drainInjectedFrame();
+    keys.releaseAll();
+    codes.releaseAll();
+    mouseButtons.releaseAll();
   };
 
   const beginInjectedLease = (): void => {
@@ -422,6 +367,39 @@ export function makeCompositeBackend(
     clearInjected();
   };
 
+  // Both owner and execution views write the same injected state. Only the
+  // admission predicate differs: execution views also capture a generation.
+  const injectionWriter = (
+    active: () => boolean,
+  ): Pick<CompositeInputLease, 'press' | 'release' | 'setButton' | 'addMovement' | 'addWheel'> => ({
+    press(key) {
+      if (!active()) return;
+      const normalized = normalizeKey(key);
+      keys.press(normalized.key);
+      if (normalized.code !== undefined) codes.press(normalized.code);
+    },
+    release(key) {
+      if (!active()) return;
+      const normalized = normalizeKey(key);
+      if (heldKeys.has(normalized.key)) keys.release(normalized.key);
+      if (normalized.code !== undefined && heldCodes.has(normalized.code))
+        codes.release(normalized.code);
+    },
+    setButton(slot, down) {
+      if (!active()) return;
+      mouseButtons.set(slot, down);
+    },
+    addMovement(dx, dy) {
+      if (!active()) return;
+      mvx += dx;
+      mvy += dy;
+    },
+    addWheel(notches) {
+      if (!active()) return;
+      wheel += notches;
+    },
+  });
+
   const createInjectedLease = (): CompositeInputLease => {
     beginInjectedLease();
     const generation = leaseGeneration;
@@ -429,38 +407,7 @@ export function makeCompositeBackend(
     return {
       sample,
       detach: () => {},
-      press(key) {
-        if (!active()) return;
-        const normalized = normalizeKey(key);
-        if (!heldKeys.has(normalized.key)) pressedKeys.add(normalized.key);
-        heldKeys.add(normalized.key);
-        if (normalized.code !== undefined) {
-          if (!heldCodes.has(normalized.code)) pressedCodes.add(normalized.code);
-          heldCodes.add(normalized.code);
-        }
-      },
-      release(key) {
-        if (!active()) return;
-        const normalized = normalizeKey(key);
-        if (heldKeys.delete(normalized.key)) upEdges.add(normalized.key);
-        if (normalized.code !== undefined && heldCodes.delete(normalized.code))
-          upCodeEdges.add(normalized.code);
-      },
-      setButton(slot, down) {
-        if (!active()) return;
-        if (down && !buttons[slot]) pressedButtons[slot] = true;
-        if (!down && buttons[slot]) releasedButtons[slot] = true;
-        buttons[slot] = down;
-      },
-      addMovement(dx, dy) {
-        if (!active()) return;
-        mvx += dx;
-        mvy += dy;
-      },
-      addWheel(notches) {
-        if (!active()) return;
-        wheel += notches;
-      },
+      ...injectionWriter(active),
       clearInjected() {
         if (active()) clearInjected();
       },
@@ -471,6 +418,8 @@ export function makeCompositeBackend(
   };
 
   return {
+    ...(inner.feedback ? { feedback: inner.feedback } : {}),
+    ...(inner.dispatchFeedback ? { dispatchFeedback: inner.dispatchFeedback.bind(inner) } : {}),
     sample,
     ...lockGate,
     ...inputGate,
@@ -486,38 +435,7 @@ export function makeCompositeBackend(
       inner.detach();
     },
 
-    press(key) {
-      if (leaseRevoked || !inputAllowed) return;
-      const normalized = normalizeKey(key);
-      if (!heldKeys.has(normalized.key)) pressedKeys.add(normalized.key);
-      heldKeys.add(normalized.key);
-      if (normalized.code !== undefined) {
-        if (!heldCodes.has(normalized.code)) pressedCodes.add(normalized.code);
-        heldCodes.add(normalized.code);
-      }
-    },
-    release(key) {
-      if (leaseRevoked || !inputAllowed) return;
-      const normalized = normalizeKey(key);
-      if (heldKeys.delete(normalized.key)) upEdges.add(normalized.key); // held -> emit one up-edge
-      if (normalized.code !== undefined && heldCodes.delete(normalized.code))
-        upCodeEdges.add(normalized.code);
-    },
-    setButton(slot, down) {
-      if (leaseRevoked || !inputAllowed) return;
-      if (down && !buttons[slot]) pressedButtons[slot] = true;
-      if (!down && buttons[slot]) releasedButtons[slot] = true;
-      buttons[slot] = down;
-    },
-    addMovement(dx, dy) {
-      if (leaseRevoked || !inputAllowed) return;
-      mvx += dx;
-      mvy += dy;
-    },
-    addWheel(notches) {
-      if (leaseRevoked || !inputAllowed) return;
-      wheel += notches;
-    },
+    ...injectionWriter(() => inputAllowed && !leaseRevoked),
     clearInjected,
     beginInjectedLease,
     revokeInjectedLease,

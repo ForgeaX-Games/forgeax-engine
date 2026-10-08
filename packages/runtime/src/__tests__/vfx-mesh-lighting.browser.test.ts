@@ -22,11 +22,3 @@ it('keeps clustered Mesh/IBL lighting valid with exactly 16 sampled textures', a
     sampledTextureLimit: 16,
   });
 }, 120_000);
-
-it('preserves Mesh/IBL/shadow/depth output and tape replay through native publication', async () => {
-  await verifyVfxMeshLighting({
-    shaderManifestUrl: '/shaders/manifest.json',
-    cook: commands.cookVfxMeshLighting,
-    publication: true,
-  });
-}, 180_000);

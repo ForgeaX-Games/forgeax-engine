@@ -28,8 +28,12 @@ export async function verifyStandardDeferredParity(
   renderer: Renderer,
   options: {
     readonly skinned?: boolean;
+    readonly visibleSurface?: boolean;
     readonly recorder?: RecorderAttachment;
-    readonly capture?: (tape: EncodedTape, renderPath: 'forward' | 'deferred') => void;
+    readonly capture?: (
+      tape: EncodedTape,
+      renderPath: 'forward' | 'deferred',
+    ) => void | Promise<void>;
     readonly image?: (name: string, bytes: Uint8Array, bytesPerRow: number) => void;
   } = {},
 ) {
@@ -81,6 +85,23 @@ export async function verifyStandardDeferredParity(
       { component: MeshRenderer, data: { materials: [material] } },
     )
     .unwrap();
+  const backdrop = options.visibleSurface
+    ? world
+        .spawn(
+          { component: Transform, data: { pos: [0, 0, -1.5], scale: [1.5, 1.5, 1] } },
+          {
+            component: MeshFilter,
+            data: {
+              assetHandle: world.allocSharedRef('MeshAsset', createBoxGeometry(2, 2, 1).unwrap()),
+            },
+          },
+          {
+            component: MeshRenderer,
+            data: { materials: [world.allocSharedRef('MaterialAsset', baseMaterial)] },
+          },
+        )
+        .unwrap()
+    : undefined;
   let moveSkin: ((x: number) => void) | undefined;
   if (options.skinned) {
     const joint = world.spawn({ component: Transform, data: {} }).unwrap();
@@ -164,7 +185,14 @@ export async function verifyStandardDeferredParity(
     allowDark = false,
     includeAlpha = false,
   ) => {
-    unwrap(renderer.setProfile({ ...original, renderPath, ssao }));
+    unwrap(
+      renderer.setProfile({
+        ...original,
+        renderPath,
+        ssao,
+        ...(options.visibleSurface ? { visibleSurface: renderPath === 'deferred' } : {}),
+      }),
+    );
     const pixels: number[] = [];
     for (let index = 0; index < 8; index++) {
       world.update(1 / 60).unwrap();
@@ -187,7 +215,7 @@ export async function verifyStandardDeferredParity(
       unwrap(await frame.completed);
       if (capture !== undefined && options.recorder !== undefined) {
         (await options.recorder.frameBoundary()).unwrap();
-        options.capture?.((await capture).unwrap(), renderPath);
+        await options.capture?.((await capture).unwrap(), renderPath);
         capturedPaths.add(renderPath);
       }
       if (index !== 7) continue;
@@ -336,6 +364,9 @@ export async function verifyStandardDeferredParity(
     ).toBeLessThanOrEqual(0.025);
     for (let i = 3; i < deferredHdr.length; i += 4) expect(deferredHdr[i]).toBeCloseTo(0.37, 3);
 
+    // The mixed primitive identity control has been captured. The existing
+    // alpha-cutout falsifier now measures only its deliberately clipped receiver.
+    if (backdrop !== undefined) world.despawn(backdrop).unwrap();
     const clipped = world.allocSharedRef('MaterialAsset', {
       ...materialAsset,
       values: { ...baseMaterial.values, baseColor: [0.42, 0.16, 0.07, 0.25], alphaCutoff: 0.5 },

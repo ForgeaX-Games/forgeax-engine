@@ -664,6 +664,7 @@ fn composeColor(input: SingleLayerMediumSurfaceInput, surface: SingleLayerMedium
     orientedNormal,
     input.positionWS,
     sceneViewZ(pixelPosition, view.temporalProjection),
+    0u,
   );
   let directLight = directionalShadow * max(dot(orientedNormal, lightDirection), 0.0) * view.lightColor;
   let light = directLight + sampleMediumDiffuse(orientedNormal, pixelPosition, probeIdentity);

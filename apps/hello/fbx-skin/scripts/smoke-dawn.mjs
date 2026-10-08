@@ -105,7 +105,7 @@ const HUMANOID_FBX = resolve(
 // --- 1. dawn.node binding setup ---
 let create, globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(`[smoke] FAIL - dawn.node import: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -389,7 +389,7 @@ world.addComponent(sceneRoot, {
     // four parallel columns written length-synced at length 1 (D-5, no tail
     // pad; speeds no longer defaults to [1,1,1,1] per D-6).
     clips: [clipHandle],
-    times: new Float32Array([0]),
+    times: new Float64Array([0]),
     weights: new Float32Array([1]),
     speeds: new Float32Array([1]),
     paused: FALSIFY === 'static',

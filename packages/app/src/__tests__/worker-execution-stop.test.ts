@@ -1,3 +1,4 @@
+import { createHostAudioConsumer } from '@forgeax/engine-audio-webaudio';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineToHostMessage } from '../execution/protocol';
 import { workerSelection } from './execution-fixtures';
@@ -85,6 +86,57 @@ describe('Worker ExecutionApp terminal stop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     probes.sessionListeners.length = 0;
+  });
+
+  it('recreates the supplied Host audio owner on rebuild and disposes the old generation', async () => {
+    const owners = Array.from({ length: 2 }, () => ({
+      ...createHostAudioConsumer(),
+      dispose: vi.fn(),
+    }));
+    const factory = vi.fn(() => {
+      const owner = owners[factory.mock.calls.length - 1];
+      if (!owner) throw new Error('unexpected Host generation');
+      return owner;
+    });
+    const result = await createWorkerExecutionApp({
+      canvas: {} as HTMLCanvasElement,
+      appOptions: {
+        execution: { bootstrap: 'https://example.test/game.js', createHostAudio: factory },
+      },
+      capabilities,
+      selection: workerSelection({ render: false, kernels: false }),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    probes.sessionListeners[0]?.({
+      kind: 'rebuilt',
+      previousWorldIdentity: 'worker-world',
+      worldIdentity: 'fresh-world',
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(owners[0]?.dispose).toHaveBeenCalledTimes(1);
+    expect(result.value.execution.report().world.identity).toBe('fresh-world');
+    await result.value.dispose();
+    expect(owners[1]?.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a structured factory failure and releases the started Worker and input owner', async () => {
+    const result = await createWorkerExecutionApp({
+      canvas: {} as HTMLCanvasElement,
+      appOptions: {
+        execution: {
+          bootstrap: 'https://example.test/game.js',
+          createHostAudio: () => {
+            throw new Error('effect factory failed');
+          },
+        },
+      },
+      capabilities,
+      selection: workerSelection({ render: false, kernels: false }),
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'app-plugin-activation-failed' } });
+    expect(probes.inputDetach).toHaveBeenCalledTimes(1);
+    expect(probes.sessionDispose).toHaveBeenCalledTimes(1);
   });
 
   it('cleans every host owner once when stopped while paused and cannot restart', async () => {

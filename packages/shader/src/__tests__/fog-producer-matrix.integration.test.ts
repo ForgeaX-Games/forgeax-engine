@@ -24,8 +24,13 @@ describe('Built-in fog producer matrix', () => {
   it('fogs every blended built-in writer at its own depth', () => {
     for (const file of TRANSLUCENT_WRITERS) {
       const source = shaderSource(file);
-      expect(source, file).toContain('#import forgeax_view::fog::{translucent_fog}');
-      expect(source.match(/translucent_fog\(view,/g)?.length ?? 0, file).toBeGreaterThan(0);
+      expect(source, file).toMatch(
+        /#import forgeax_view::fog::\{translucent_fog(?:_transmission)?\}/,
+      );
+      expect(
+        source.match(/translucent_fog(?:_transmission)?\(view,/g)?.length ?? 0,
+        file,
+      ).toBeGreaterThan(0);
     }
   });
 
@@ -33,7 +38,7 @@ describe('Built-in fog producer matrix', () => {
     for (const file of OPAQUE_ONLY) {
       expect(shaderSource(file), file).not.toContain('forgeax_view::fog');
     }
-    expect(shaderSource('analytic-fog.wgsl')).toContain('view_fog(fog_view,');
+    expect(shaderSource('analytic-fog.wgsl')).toContain('height_fog(fog_view,');
     expect(shaderSource('analytic-fog.wgsl')).toContain('if depth <= 0.0 { discard; }');
   });
 

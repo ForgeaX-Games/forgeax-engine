@@ -640,7 +640,12 @@ describe('CloudLayer resource evidence', () => {
     expect(declared.shadowBytes).toBe(0);
     expect(declared.historyBytes).toBe(0);
     expect(declared.declaredShadowBytes).toBe(128 * 128 * 8);
-    expect(declared.declaredHistoryBytes).toBe(64 * 32 * 6 * 8);
+    expect(declared.declaredHistoryBytes).toBe(32 * 16 * 6 * 8);
+    const odd = inspectCloudLayerResources({
+      generation: 1,
+      history: { ...history, width: 65, height: 33 },
+    });
+    expect(odd.declaredHistoryBytes).toBe(33 * 17 * 6 * 8);
     const measured = inspectCloudLayerResources({
       generation: 1,
       cache,

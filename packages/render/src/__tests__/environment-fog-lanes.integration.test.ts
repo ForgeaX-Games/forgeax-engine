@@ -7,6 +7,7 @@ import { DeviceScope } from '../device/device-scope';
 import { selectEnvironment } from '../environment/frame';
 import { EnvironmentLifecycle } from '../environment/lifecycle';
 import { extractFrames } from '../render-system-extract-tail';
+import { earthAtmosphere } from './atmosphere-fixture';
 
 const frame = selectEnvironment({
   environments: [
@@ -14,15 +15,7 @@ const frame = selectEnvironment({
       kind: 'atmosphere',
       entityKey: 7,
       sourceKey: 'sky-stable',
-      atmosphere: {
-        turbidity: 2,
-        rayleigh: 1,
-        mieCoefficient: 0.005,
-        mieDirectionalG: 0.8,
-        sunAngularRadius: 0.004675,
-        circumsolarStrength: 1,
-        circumsolarWidth: 1,
-      },
+      atmosphere: earthAtmosphere,
     },
   ],
   fogs: [
@@ -44,15 +37,7 @@ describe('Environment and Fog lane graph contract', () => {
     world
       .spawn({
         component: Atmosphere,
-        data: {
-          turbidity: 3,
-          rayleigh: 1.2,
-          mieCoefficient: 0.006,
-          mieDirectionalG: 0.7,
-          sunAngularRadius: 0.01,
-          circumsolarStrength: 1.4,
-          circumsolarWidth: 1.6,
-        },
+        data: { mieScattering: 8e-6, mieAnisotropy: 0.7, absorptionPeakHeight: 23_000 },
       })
       .unwrap();
     world
@@ -69,24 +54,13 @@ describe('Environment and Fog lane graph contract', () => {
     if (extracted.environment.source.kind !== 'atmosphere') {
       throw new Error('expected atmosphere environment source');
     }
-    expect(extracted.environment.source.atmosphere?.turbidity).toBeCloseTo(3);
-    expect(extracted.environment.source.atmosphere?.rayleigh).toBeCloseTo(1.2);
-    expect(extracted.environment.source.atmosphere?.mieCoefficient).toBeCloseTo(0.006);
-    expect(extracted.environment.source.atmosphere?.mieDirectionalG).toBeCloseTo(0.7);
-    expect(extracted.environment.source.atmosphere?.sunAngularRadius).toBeCloseTo(0.01);
-    expect(extracted.environment.source.atmosphere?.circumsolarStrength).toBeCloseTo(1.4);
-    expect(extracted.environment.source.atmosphere?.circumsolarWidth).toBeCloseTo(1.6);
-    const signature = JSON.parse(extracted.environment.signature) as {
-      environments: [{ atmosphere: Record<string, number> }];
-      suns: [{ direction: [number, number, number] }];
-    };
-    expect(signature.environments[0].atmosphere.turbidity).toBeCloseTo(3);
-    expect(signature.environments[0].atmosphere.rayleigh).toBeCloseTo(1.2);
-    expect(signature.environments[0].atmosphere.mieCoefficient).toBeCloseTo(0.006);
-    expect(signature.environments[0].atmosphere.mieDirectionalG).toBeCloseTo(0.7);
-    expect(signature.environments[0].atmosphere.sunAngularRadius).toBeCloseTo(0.01);
-    expect(signature.environments[0].atmosphere.circumsolarStrength).toBeCloseTo(1.4);
-    expect(signature.environments[0].atmosphere.circumsolarWidth).toBeCloseTo(1.6);
+    expect(extracted.environment.source.atmosphere.mieScattering).toBeCloseTo(8e-6, 10);
+    expect(extracted.environment.source.atmosphere.mieAnisotropy).toBeCloseTo(0.7);
+    expect(extracted.environment.source.atmosphere.absorptionPeakHeight).toBe(23_000);
+    expect(extracted.environment.source.atmosphere.groundOrigin).toEqual([0, 0, 0]);
+    expect(extracted.environment.source.atmosphere.capturePosition).toEqual([0, 1, 0]);
+    const signature = JSON.parse(extracted.environment.signature);
+    expect(signature.environments[0].atmosphere).toEqual(extracted.environment.source.atmosphere);
     expect(signature.suns[0].direction).toEqual([0, 1, 0]);
   });
 
@@ -164,15 +138,7 @@ describe('Environment and Fog lane graph contract', () => {
     const atmosphereEntity = world
       .spawn({
         component: Atmosphere,
-        data: {
-          turbidity: 2,
-          rayleigh: 1,
-          mieCoefficient: 0.005,
-          mieDirectionalG: 0.8,
-          sunAngularRadius: 0.004675,
-          circumsolarStrength: 1,
-          circumsolarWidth: 1,
-        },
+        data: {},
       })
       .unwrap();
     world
@@ -193,32 +159,12 @@ describe('Environment and Fog lane graph contract', () => {
     lifecycle.publish(first.value);
     const beforeInvalid = lifecycle.inspect();
 
-    world
-      .set(atmosphereEntity, Atmosphere, {
-        turbidity: -1,
-        rayleigh: 1,
-        mieCoefficient: 0.005,
-        mieDirectionalG: 0.8,
-        sunAngularRadius: 0.004675,
-        circumsolarStrength: 1,
-        circumsolarWidth: 1,
-      })
-      .unwrap();
+    world.set(atmosphereEntity, Atmosphere, { mieScattering: -1 }).unwrap();
     const invalid = extractFrames([world], 0);
     expect(invalid.environmentReady).toBe(false);
     expect(lifecycle.inspect()).toEqual(beforeInvalid);
 
-    world
-      .set(atmosphereEntity, Atmosphere, {
-        turbidity: 3,
-        rayleigh: 1,
-        mieCoefficient: 0.006,
-        mieDirectionalG: 0.7,
-        sunAngularRadius: 0.01,
-        circumsolarStrength: 1,
-        circumsolarWidth: 1,
-      })
-      .unwrap();
+    world.set(atmosphereEntity, Atmosphere, { mieScattering: 8e-6 }).unwrap();
     const corrected = extractFrames([world], 0);
     expect(corrected.environmentReady).toBe(true);
     expect(corrected.environment).toBeDefined();

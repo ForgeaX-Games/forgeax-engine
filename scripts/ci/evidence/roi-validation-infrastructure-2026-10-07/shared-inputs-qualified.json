@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-07T06:13:35.922Z",
+  "baseRevision": "c02945839d91a75856b3d1eeff451658047eb5c7",
+  "source": "base plus infrastructure diff",
+  "node": "v22.23.2",
+  "engineEntries": {
+    "pointShadows": true,
+    "hdrpSsao": true
+  },
+  "command": "FORGEAX_PACKAGE_BUILD_CONCURRENCY=1 FORGEAX_SHADER_COMPILE_WORKERS=1 CARGO_BUILD_JOBS=1 node scripts/build-shared-inputs.mjs",
+  "inputFingerprint": "sha256:e22fc1114d20ad8b947cd1be3fcc8832008cfad5d3416521e77b1f292bbde8f4",
+  "localStrictReuse": true,
+  "transferredStrictReuse": true,
+  "payload": {
+    "path": "shared-build-inputs/shaders/manifest.json",
+    "bytes": 45403514,
+    "sha256": "a8ecba8ccd8bfb97221302cb235b1b4ac88a81c305e392386558babffb95417b",
+    "entries": 67,
+    "materials": 26,
+    "uniqueSources": 3433
+  },
+  "facts": {
+    "schemaVersion": 2,
+    "producer": "repo-build-inputs",
+    "inputFingerprint": "sha256:8af479b65c1f1b54517733471ca70252974a5a0603281e147aa73f944f819c50",
+    "engineShaderCompileCount": 1,
+    "assetCookHitCount": 0,
+    "assetCookMissCount": 0,
+    "assetCookWriteFailureCount": 0,
+    "stageDurationMs": {
+      "producer": 1845619.6
+    }
+  },
+  "limit": "engineShaderCompileCount counts producer execution; no inferred Naga invocation count or aggregate host speedup",
+  "repeat_producer": {
+    "log": "shared-inputs-reuse-final.log",
+    "process_exit": 0,
+    "facts": {
+      "schemaVersion": 2,
+      "producer": "repo-build-inputs",
+      "inputFingerprint": "sha256:8af479b65c1f1b54517733471ca70252974a5a0603281e147aa73f944f819c50",
+      "engineShaderCompileCount": 0,
+      "assetCookHitCount": 0,
+      "assetCookMissCount": 0,
+      "assetCookWriteFailureCount": 0,
+      "stageDurationMs": {
+        "producer": 0
+      }
+    }
+  }
+}

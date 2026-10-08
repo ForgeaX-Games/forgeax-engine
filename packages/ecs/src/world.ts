@@ -71,6 +71,7 @@ import type {
   TimeDeltaInvalidError,
   UniqueRefDoubleReleaseError,
   UniqueRefReleasedError,
+  UniqueRefStaleError,
 } from './errors';
 import {
   ArrayRangeOutOfBoundsError,
@@ -86,8 +87,9 @@ import {
   StaleEntityError,
   validateEnumFieldValues,
   validateNumericFieldValues,
-  WorldPoisonedError,
+  type WorldPoisonedError,
 } from './errors';
+import { worldPoisonedError } from './errors/shared-kernel-errors';
 import {
   createWorldIdentity,
   healthyWorldExecutionState,
@@ -191,6 +193,7 @@ export type EcsError =
   | ManagedArrayInvalidValueError
   | UniqueRefReleasedError
   | UniqueRefDoubleReleaseError
+  | UniqueRefStaleError
   | ManagedBufferOutOfBoundsError
   | ManagedBufferShrinkNotSupportedError
   | FixedSizeMismatchError
@@ -478,17 +481,6 @@ export class World {
     if (this.executionState.health === 'healthy') {
       this.executionState = poisonedWorldExecutionState(this.identity, fault);
     }
-  }
-
-  /**
-   * A poisoned identity is diagnostic evidence, not a mutable recovery path.
-   * Public entity mutation therefore returns the same structured fence as
-   * `update()` instead of allocating a new reservation or touching a partial
-   * row. Recovery remains construction of a fresh World.
-   */
-  private poisonedResult<T>(): Result<T, EcsError> | undefined {
-    if (this.executionState.health !== 'poisoned') return undefined;
-    return err(new WorldPoisonedError(this.identity, this.executionState.fault));
   }
 
   query<
@@ -889,6 +881,13 @@ export class World {
     onRelease?: (payload: T) => void,
   ): Handle<Target, 'unique'> {
     return this.uniqueRefs.alloc(target, payload, onRelease);
+  }
+
+  /** Resolve a live managed payload without exposing its release or mutation owner. */
+  resolveUniqueRef<T>(
+    handle: Handle<string, 'unique'>,
+  ): Result<T, UniqueRefReleasedError | UniqueRefStaleError> {
+    return this.uniqueRefs.resolve<string, T>(handle);
   }
 
   /**
@@ -1613,8 +1612,8 @@ export class World {
     offset: number,
     values: ArrayLike<number>,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     if (isRelationshipTarget(component)) {
       return this.relationshipTargetWriteError(component, 'setArrayRange');
     }
@@ -1709,8 +1708,8 @@ export class World {
     value: Partial<InputShapeOf<S>>,
     markChanged = true,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     if (isRelationshipTarget(component)) return this.relationshipTargetWriteError(component, 'set');
     const record = this.lookupAlive(entity, 'set', component.name);
     if (!record.ok) return record;
@@ -2091,8 +2090,8 @@ export class World {
     entity: EntityHandle,
     componentData: ComponentData<S> & { component: C & WritableComponent<C> },
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     if (
       isRelationshipTarget(componentData.component) &&
       this.relationshipTargetPayloadWrites(componentData.data as Record<string, unknown>)
@@ -2313,8 +2312,8 @@ export class World {
     entity: EntityHandle,
     component: C & WritableComponent<C>,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     if (isRelationshipTarget(component))
       return this.relationshipTargetWriteError(component, 'removeComponent');
     return this.removeComponentCore(entity, component, false);
@@ -2444,8 +2443,8 @@ export class World {
     entity: EntityHandle,
     componentDatas: ComponentData[],
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     const slot = entityIndex(entity);
     const record = this.records[slot];
     if (!record || record.archetypeId !== -1) return ok(undefined);
@@ -2531,9 +2530,8 @@ export class World {
   // ──────────────────────────────────────────────────────────────────────────
 
   private allocateIndex(): number {
-    if (this.executionState.health === 'poisoned') {
-      throw new WorldPoisonedError(this.identity, this.executionState.fault);
-    }
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) throw poisoned;
     const recycled = this.freeIndices.pop();
     if (recycled !== undefined) {
       return recycled;
@@ -2706,7 +2704,11 @@ export class World {
     if (!fieldCols) {
       return out;
     }
-    for (const [fieldName, fieldType] of Object.entries(componentSchema(component))) {
+    const fields = component.fields;
+    for (const fieldName of Object.keys(fields)) {
+      const field = fields[fieldName];
+      if (field === undefined) continue;
+      const fieldType = field.type;
       const col = fieldCols.get(fieldName);
       if (!col) {
         continue;
@@ -2749,7 +2751,7 @@ export class World {
         const resolveR = this.uniqueRefs.resolve<'String'>(toUnique<'String'>(raw as number));
         (out as Record<string, unknown>)[fieldName] = resolveR.ok ? resolveR.value : '';
       } else {
-        const arrayMeta = componentDefinition(component).fields[fieldName]?.arrayMeta;
+        const arrayMeta = field.arrayMeta;
         if (arrayMeta !== undefined) {
           // M1 read path: materialise a fresh TypedArray snapshot each call
           // (D-4 no cache; plan-strategy §2.2 read-only contract). The
@@ -3532,8 +3534,8 @@ export class World {
     }
   ): Result<EntityHandle, EcsError>;
   spawn(...componentDatas: ComponentData[]): Result<EntityHandle, EcsError> {
-    const poisoned = this.poisonedResult<EntityHandle>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     const target = componentDatas.find(
       (data) =>
         isRelationshipTarget(data.component) &&
@@ -3563,15 +3565,15 @@ export class World {
    * ```
    */
   despawn(entity: EntityHandle): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     return this.despawnEntity(entity, false);
   }
 
   /** Despawn every live entity through the normal lifecycle and ref cleanup path. */
   despawnAll(): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     const entities: EntityHandle[] = [];
     for (let index = 0; index < this.records.length; index += 1) {
       const record = this.records[index];
@@ -3597,8 +3599,8 @@ export class World {
     component: Component<string, S>,
     data: Partial<InputShapeOf<S>>,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     return worldAddChild(this, parent, child, component, data);
   }
 
@@ -3607,8 +3609,8 @@ export class World {
     child: EntityHandle,
     component: Component<string, S>,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     return worldRemoveChild(this, parent, child, component);
   }
 
@@ -3618,8 +3620,8 @@ export class World {
     component: Component<string, S>,
     data: Partial<InputShapeOf<S>>,
   ): Result<void, EcsError> {
-    const poisoned = this.poisonedResult<void>();
-    if (poisoned !== undefined) return poisoned;
+    const poisoned = worldPoisonedError(this.executionState);
+    if (poisoned !== undefined) return err(poisoned);
     return worldReparent(this, child, newParent, component, data);
   }
 

@@ -343,27 +343,19 @@ export function createPreviewInspection(
           };
         }
         const runId = `preview-${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
-        const response = await fetch(`/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-forgeax-rhitape' },
-          body: captured.value.bytes as unknown as BodyInit,
-        });
-        const payload: unknown = await response.json();
+        const uploaded = await capture.upload(captured.value, { runId });
         if (
-          !response.ok ||
-          payload === null ||
-          typeof payload !== 'object' ||
-          (payload as { kind?: unknown }).kind !== 'rhi-tape' ||
-          (payload as { digest?: unknown }).digest !== captured.value.digest ||
-          typeof (payload as { path?: unknown }).path !== 'string'
+          !uploaded.ok ||
+          uploaded.value.digest !== captured.value.digest ||
+          typeof uploaded.value.path !== 'string'
         ) {
           return {
             ok: false,
             error: error(
               'rhi-artifact-upload-failed',
-              'the Vite RHI debug provider must accept one raw v7 .rhitape and return its ArtifactRef',
+              'the Vite RHI debug provider must verify one chunked v7 .rhitape and return its ArtifactRef',
               'start the Preview dev host with the RHI debug plugin and retry the capture',
-              { cause: JSON.stringify(payload) },
+              { cause: JSON.stringify(uploaded.ok ? uploaded.value : uploaded.error) },
             ),
           };
         }
@@ -373,7 +365,7 @@ export function createPreviewInspection(
             kind: 'rhi-tape',
             digest: captured.value.digest,
             source: 'rhi.capture',
-            path: (payload as { path: string }).path,
+            path: uploaded.value.path,
           },
         };
       } catch (cause) {
@@ -391,7 +383,6 @@ export function createPreviewInspection(
   };
 
   const host = globalThis as Record<string, unknown>;
-  host[hostKey] = inspection;
   registerCleanup(() => {
     actions.clear();
     reads.clear();

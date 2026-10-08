@@ -20,15 +20,32 @@
       "status": "implemented"
     },
     "rhiDebug": {
-      "riskFamilies": ["alpha-blend"]
+      "riskFamilies": [
+        "alpha-blend"
+      ]
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-transparency-2d smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },
-      "fps": { "enabled": false, "reason": "static demo; alpha ordering is the completed reproduction criterion" },
-      "bench": { "enabled": false, "reason": "static demo; benchmark focus remains on engine packages" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-transparency-2d smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; Bevy example reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "static demo; alpha ordering is the completed reproduction criterion"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "static demo; benchmark focus remains on engine packages"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-transparency-2d smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy example reproduction"
+      }
     }
   },
   "dependencies": {
@@ -43,8 +60,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

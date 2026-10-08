@@ -6,9 +6,11 @@ import {
   createStandardPbrArtifactReceipt,
   GPU_DRIVEN_MATERIAL_ROW_BYTES,
   type ParamSchemaEntry,
+  ShaderRegistry,
 } from '@forgeax/engine-shader';
-import type { MeshAsset } from '@forgeax/engine-types';
+import type { MaterialProgramAbi, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { resolveRendererMaterialShaderArtifact } from '../assembly/material/pipeline-helpers';
 import {
   buildGpuDrivenDraws,
   gpuDrivenMaterialArtifactKey,
@@ -64,9 +66,7 @@ function snapshot(
   };
 }
 
-function geometry(source: {
-  readonly receipt: ReturnType<typeof createStandardPbrArtifactReceipt>;
-}) {
+function geometry(source: { readonly receipt: Pick<MaterialProgramAbi, 'vertexInputs'> }) {
   return {
     identity: 'canonical-pbr-geometry',
     vertexInputs: source.receipt.vertexInputs,
@@ -134,6 +134,22 @@ describe('prepared Standard PBR producer-to-record integration', () => {
     expect(draws[0]?.preparationError?.code).toBe(
       materialShaderId.startsWith('forgeax::') ? 'missing-material-receipt' : undefined,
     );
+  });
+
+  it('retains a published direct-only material on the ordinary lane without a preparation error', () => {
+    const program = artifact();
+    const { sceneIndexEntry: _entry, ...receipt } = program.receipt;
+    const direct: MaterialSnapshot = { ...material(), materialShaderId: 'game::direct-only' };
+    const draws = buildGpuDrivenDraws({
+      mesh: createBoxGeometry(1, 1, 1).unwrap(),
+      materials: [direct],
+      fallbackMaterial: direct,
+      baseSnapshot: snapshot(direct),
+      getMaterialShaderArtifact: () => ({ ...program, receipt }),
+    });
+    expect(draws).toHaveLength(1);
+    expect(draws[0]?.prepared).toBeUndefined();
+    expect(draws[0]?.preparationError).toBeUndefined();
   });
 
   it('requires the published scene-index artifact for a custom surface', () => {
@@ -248,6 +264,46 @@ describe('prepared Standard PBR producer-to-record integration', () => {
       format: 'float32x4',
     });
     expect(draws[0]?.preparationError).toBeUndefined();
+  });
+
+  it('prepares colored geometry with an exact published program that does not consume COLOR_0', () => {
+    const registry = new ShaderRegistry({ manifestUrl: undefined });
+    const directKey = 'sha256:published-plain-direct';
+    const sceneKey = 'sha256:published-plain-scene';
+    const program = artifact();
+    registry.installMaterialArtifact(sceneKey, {
+      source: program.program.source,
+      paramSchema: [],
+      receipt: program.receipt,
+    });
+    const plain: MaterialSnapshot = {
+      ...material(),
+      materialShaderId: directKey,
+      materialProgramKeys: { forward: directKey },
+      materialSceneIndexProgramKeys: {
+        forward: { specializationKey: sceneKey, pass: 'forward' },
+      },
+    };
+    const mesh = createBoxGeometry(1, 1, 1).unwrap();
+    const coloredMesh: MeshAsset = {
+      ...mesh,
+      attributes: { ...mesh.attributes, color: new Float32Array(96) },
+    };
+    const draws = buildGpuDrivenDraws({
+      mesh: coloredMesh,
+      materials: [plain],
+      fallbackMaterial: plain,
+      baseSnapshot: snapshot(plain),
+      getMaterialShaderArtifact: (key, request) =>
+        resolveRendererMaterialShaderArtifact(key, registry, undefined, request),
+    });
+    expect(draws).toHaveLength(1);
+    expect(draws[0]?.preparationError).toBeUndefined();
+    expect(draws[0]?.prepared).toBeDefined();
+    expect(draws[0]?.prepared?.vertexInputs.some((input) => input.semantic === 'color')).toBe(
+      false,
+    );
+    expect(draws[0]?.prepared?.receiptIdentity).toBe(program.receipt.receiptIdentity);
   });
 
   it('keeps colored and colorless receipts on distinct production identities', () => {
@@ -405,6 +461,22 @@ describe('prepared Standard PBR producer-to-record integration', () => {
     if (result.ok) return;
     expect(result.error.code).toBe('missing-material-receipt');
     expect(base.gpuDrivenDraws).toHaveLength(1);
+  });
+
+  it('keeps a direct-only receipt out of GPU Scene admission', () => {
+    const source = artifact();
+    const base = snapshot();
+    const { sceneIndexEntry: _entry, ...directReceipt } = source.receipt;
+    const draw = base.gpuDrivenDraws?.[0];
+    if (draw === undefined) throw new Error('missing fixture draw');
+    const result = resolvePreparedGpuDrivenDraw({
+      snapshot: base,
+      artifact: { ...source, receipt: directReceipt },
+      geometry: geometry(source),
+      generation: directReceipt.generation,
+      draw,
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'missing-material-receipt' } });
   });
 
   it('admits numeric-only Standard PBR without optional texture resources', () => {

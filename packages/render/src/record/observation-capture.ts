@@ -4,7 +4,7 @@ import {
   type Texture,
   type TextureFormat,
 } from '@forgeax/engine-rhi';
-import type { TypedFrameObservationDomain } from '../typed-render-graph-primitives';
+import type { FrameObservationDomain } from '../render-contract';
 import type { RenderSystemRuntime } from './render-context';
 
 /** Record a demanded color copy into the same frame encoder and receipt owner. */
@@ -16,12 +16,13 @@ export function encodeFrameObservationCapture(
     | 'observationCaptureDomains'
     | 'observationFrameId'
     | 'observationGraphGeneration'
+    | 'outputColorSpace'
   > & { readonly deviceGeneration?: number | undefined },
   encoder: RhiCommandEncoder,
   input: {
     readonly texture: Texture;
     readonly format: TextureFormat;
-    readonly domain: TypedFrameObservationDomain;
+    readonly domain: FrameObservationDomain;
     readonly surfaceRecords?: Uint32Array | undefined;
     readonly width: number;
     readonly height: number;
@@ -63,6 +64,9 @@ export function encodeFrameObservationCapture(
       ...(input.surfaceRecords === undefined
         ? {}
         : { surfaceRecords: input.surfaceRecords.slice() }),
+      ...(input.domain === 'final-display'
+        ? { colorSpace: runtime.outputColorSpace?.report.effective ?? 'srgb' }
+        : {}),
       device: runtime.device,
       buffer: created.value,
       frameNumber: runtime.observationFrameId ?? input.frameNumber,

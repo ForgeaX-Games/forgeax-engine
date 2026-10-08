@@ -40,28 +40,28 @@ export interface UiAuthoringClassification {
   readonly diagnostics: readonly ImportDiagnostic[];
 }
 
-export function classifyUiAuthoring(
-  input: Omit<UiAuthoringInput, 'readCompanion'>,
-): UiAuthoringClassification {
+function parseAuthoring(input: Omit<UiAuthoringInput, 'readCompanion'>) {
   const html = parseHtmlAuthoring(input.html, input.sourcePath);
   const css = parseCssAuthoring(input.css, input.sourcePath.replace(/\.html?$/i, '.css'));
-  const diagnostics = [...html.diagnostics, ...css.diagnostics];
-  const category = pickClassification(
-    { category: html.category, blocking: html.category !== 'native' },
-    { category: css.category, blocking: css.category !== 'native' },
-  );
   return {
-    category: category.category,
-    blocking: hasBlockingDiagnostics(diagnostics),
-    diagnostics,
+    category: pickClassification(
+      { category: html.category, blocking: html.category !== 'native' },
+      { category: css.category, blocking: css.category !== 'native' },
+    ).category,
+    diagnostics: [...html.diagnostics, ...css.diagnostics],
+    references: [...html.references, ...css.references],
   };
 }
 
+export function classifyUiAuthoring(
+  input: Omit<UiAuthoringInput, 'readCompanion'>,
+): UiAuthoringClassification {
+  const { category, diagnostics } = parseAuthoring(input);
+  return { category, blocking: hasBlockingDiagnostics(diagnostics), diagnostics };
+}
+
 export async function validateUiAuthoring(input: UiAuthoringInput): Promise<UiAuthoringResult> {
-  const html = parseHtmlAuthoring(input.html, input.sourcePath);
-  const css = parseCssAuthoring(input.css, input.sourcePath.replace(/\.html?$/i, '.css'));
-  const diagnostics: ImportDiagnostic[] = [...html.diagnostics, ...css.diagnostics];
-  const references = [...html.references, ...css.references];
+  const { category, diagnostics, references } = parseAuthoring(input);
   if (input.readCompanion) {
     for (const reference of references) {
       const path = reference.value.split(/[?#]/, 1)[0] ?? '';
@@ -84,10 +84,6 @@ export async function validateUiAuthoring(input: UiAuthoringInput): Promise<UiAu
       }
     }
   }
-  const classification = pickClassification(
-    { category: html.category, blocking: html.category !== 'native' },
-    { category: css.category, blocking: css.category !== 'native' },
-  );
   if (hasBlockingDiagnostics(diagnostics)) {
     return {
       ok: false,
@@ -104,7 +100,7 @@ export async function validateUiAuthoring(input: UiAuthoringInput): Promise<UiAu
     value: {
       html: input.html,
       css: input.css,
-      category: classification.category,
+      category,
       diagnostics,
       references: references.map((entry) => entry.value),
     },

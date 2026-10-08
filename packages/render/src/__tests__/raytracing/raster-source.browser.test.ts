@@ -12,8 +12,11 @@ declare module 'vitest/browser' {
 it('generates receiver rays from real raster attachments and exposes invalid inputs in replay', async () => {
   const published = await loadPublishedRayKernels('/shaders/manifest.json');
   await verifyRasterRaySource(
-    { ...(await commands.prepareRasterRayFixture()), kernel: published.raster },
-    { ...(await commands.prepareRayPathFixture()), kernel: published.transport },
+    {
+      ...(await commands.prepareRasterRayFixture()),
+      kernel: published.raster,
+      transportKernel: published.transport,
+    },
     published.composite,
   );
 }, 120000);

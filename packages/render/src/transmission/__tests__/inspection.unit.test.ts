@@ -10,7 +10,6 @@ import {
   inspectTransmission,
   inspectTransmissionFromAdmission,
   type TransmissionInspectionInput,
-  transmissionInspectionToJson,
 } from '../inspection';
 
 function facts(overrides: Partial<TransmissionCapabilityFacts> = {}): TransmissionCapabilityFacts {
@@ -142,7 +141,7 @@ describe('detached transmission inspection', () => {
         recovery: 'rebuild-required',
       }),
     );
-    const serialized = transmissionInspectionToJson(inspection);
+    const serialized = JSON.stringify(inspection);
     expect(JSON.parse(serialized)).toEqual(inspection);
     expect(serialized).not.toMatch(/texture|view|encoder|queue/i);
     expect(Object.keys(inspection)).toEqual([

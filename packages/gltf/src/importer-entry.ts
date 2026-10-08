@@ -18,7 +18,7 @@ export const meshoptDecoder: GltfBufferViewDecodeCapability = {
  * the Meshopt WASM dependency; hosts opt into this entry when importing files.
  */
 export const gltfImporter = createGltfImporter({
-  decode: meshoptDecoder.decode,
+  meshopt: meshoptDecoder,
 });
 
 export { createGltfImporter } from './gltf-importer.js';

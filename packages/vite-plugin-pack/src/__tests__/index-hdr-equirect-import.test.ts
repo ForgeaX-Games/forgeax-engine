@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import type { PackIndexEntry } from '@forgeax/engine-types';
 import { build as viteBuild } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -62,9 +63,9 @@ beforeAll(async () => {
     },
     plugins: [pluginPack({ roots: [assetsDir], importers: [imageImporter] })],
   });
-  packIndex = JSON.parse(
-    await readFile(join(distDir, 'pack-index.json'), 'utf8'),
-  ) as PackIndexEntry[];
+  packIndex = decodeCatalogWire(
+    JSON.parse(await readFile(join(distDir, 'pack-index.json'), 'utf8')),
+  ).unwrap() as PackIndexEntry[];
 });
 
 afterAll(async () => {

@@ -3,9 +3,13 @@
 #import forgeax_view::fog::{translucent_fog}
 #import forgeax_view::common::{view}
 
-// Portable triangle expansion for square/circle points and independent butt
-// line-list segments and joined line-strip paths. Width uses physical pixels;
-// dash distances use mesh-local units. No native wide primitive state is required.
+// Portable triangle expansion for square/circle points and independent
+// line-list segments and joined line-strip paths. Line width uses physical
+// pixels or world units (style.w carries the projection focal factor, converted
+// per endpoint by its clip w); dash distances use mesh-local units. Round caps
+// extend open ends by the half width and trim every segment end beyond its
+// perpendicular to a circle, which also rounds miter joins without overlap.
+// No native wide primitive state is required.
 
 struct PointsLinesView {
   worldViewProj : mat4x4<f32>,
@@ -45,6 +49,8 @@ struct PointsLinesFragment {
   @builtin(position) position : vec4<f32>,
   @location(0) @interpolate(flat) shape : f32,
   @location(1) @interpolate(linear) sampleCenter : vec2<f32>,
+  @location(6) @interpolate(linear) linePixel : vec2<f32>,
+  @location(7) @interpolate(flat) capRadii : vec2<f32>,
 };
 
 fn clipPixelDelta(clip : vec4<f32>, pixels : vec2<f32>) -> vec2<f32> {
@@ -90,7 +96,14 @@ fn projectLine(input : PointsLinesVertex) -> ProjectedLine {
   return line;
 }
 
-fn expandLine(input : PointsLinesVertex, line : ProjectedLine, widthPx : f32) -> vec4<f32> {
+// Physical-pixel half width at one projected endpoint.
+fn lineHalfWidthPx(clip : vec4<f32>) -> f32 {
+  let halfWidth = pointsLinesView.style.x * 0.5;
+  let worldScale = pointsLinesView.style.w;
+  return select(halfWidth, halfWidth * worldScale / max(clip.w, 0.000001), worldScale > 0.0);
+}
+
+fn expandLine(input : PointsLinesVertex, line : ProjectedLine) -> vec4<f32> {
   let startClip = line.start;
   let endClip = line.end;
   let atEnd = input.corner.x > 0.0;
@@ -112,13 +125,38 @@ fn expandLine(input : PointsLinesVertex, line : ProjectedLine, widthPx : f32) ->
   // Shared bounded miters meet at the same two vertices. Open ends and
   // independent line-list pairs have butt caps. Near-clipped ends have no join.
   var offsetDirection = miter / max(dot(miter, normal), 0.25);
-  if select(line.fractions.x > 0.0, line.fractions.y < 1.0, atEnd) { offsetDirection = normal; }
-  let offset = clipPixelDelta(endpoint, offsetDirection * input.corner.y * (widthPx * 0.5));
+  let clipped = select(line.fractions.x > 0.0, line.fractions.y < 1.0, atEnd);
+  if clipped { offsetDirection = normal; }
+  // An open end repeats its own endpoint as the neighbor (duplicates are collapsed).
+  let endpointLocal = select(input.position, input.otherPosition, atEnd);
+  let open = all(input.neighborDistance.xyz == endpointLocal);
+  let roundCap = pointsLinesView.dash.w > 0.5 && open && !clipped;
+  let capOffset = select(vec2<f32>(0.0, 0.0), axis * input.corner.x, roundCap);
+  let offset = clipPixelDelta(
+    endpoint,
+    (offsetDirection * input.corner.y + capOffset) * lineHalfWidthPx(endpoint),
+  );
   return vec4<f32>(endpoint.xy + offset, endpoint.z, endpoint.w);
 }
 
 fn circleCoverage(sampleCenter : vec2<f32>) -> bool {
   return dot(sampleCenter, sampleCenter) <= 1.0;
+}
+
+// Beyond a segment end's perpendicular, keep only the end's circle. A segment
+// with no projected length becomes one disc of the larger radius.
+fn roundEndCoverage(input : PointsLinesFragment) -> bool {
+  let start = input.segmentPixels.xy;
+  let end = input.segmentPixels.zw;
+  let delta = end - start;
+  let lengthSquared = dot(delta, delta);
+  if lengthSquared <= 0.000001 {
+    return distance(input.linePixel, start) <= max(input.capRadii.x, input.capRadii.y);
+  }
+  let t = dot(input.linePixel - start, delta) / lengthSquared;
+  if t < 0.0 { return distance(input.linePixel, start) <= input.capRadii.x; }
+  if t > 1.0 { return distance(input.linePixel, end) <= input.capRadii.y; }
+  return true;
 }
 
 @vertex
@@ -130,7 +168,7 @@ fn vs_main(input : PointsLinesVertex) -> PointsLinesFragment {
   var clippingPosition = input.position;
   if isLine {
     let line = projectLine(input);
-    output.position = expandLine(input, line, pointsLinesView.style.x);
+    output.position = expandLine(input, line);
     let atEnd = input.corner.x > 0.0;
     clippingPosition = mix(input.position, input.otherPosition, select(line.fractions.x, line.fractions.y, atEnd));
     let length = distance(input.position, input.otherPosition);
@@ -138,6 +176,8 @@ fn vs_main(input : PointsLinesVertex) -> PointsLinesFragment {
     let origin = pointsLinesView.physicalViewport * 0.5;
     output.segmentPixels = vec4<f32>(projectedPixel(line.start) + origin, projectedPixel(line.end) + origin);
     output.segmentDistances = vec4<f32>(startDistance + line.fractions * length, line.start.w, line.end.w);
+    output.linePixel = projectedPixel(output.position) + origin;
+    output.capRadii = vec2<f32>(lineHalfWidthPx(line.start), lineHalfWidthPx(line.end));
   }
   output.clippingPositionWS = (pointsLinesView.model * vec4<f32>(clippingPosition, 1.0)).xyz;
   output.dash = select(vec3<f32>(1.0, 0.0, 0.0), pointsLinesView.dash.xyz, isLine);
@@ -146,15 +186,14 @@ fn vs_main(input : PointsLinesVertex) -> PointsLinesFragment {
   return output;
 }
 
-@fragment
-fn fs_main(input : PointsLinesFragment) -> @location(0) vec4<f32> {
+fn shadePointsLines(input : PointsLinesFragment) -> vec4<f32> {
   applyViewClipping(input.clippingPositionWS, false);
   if input.dash.y > 0.0 {
     let period = input.dash.x + input.dash.y;
     // Project the fragment onto the centerline, not the miter's diagonal edge.
     // Undo perspective interpolation to recover the original local path distance.
     let delta = input.segmentPixels.zw - input.segmentPixels.xy;
-    let t = clamp(dot(input.position.xy - input.segmentPixels.xy, delta) / max(dot(delta, delta), 0.000001), 0.0, 1.0);
+    let t = clamp(dot(input.linePixel - input.segmentPixels.xy, delta) / max(dot(delta, delta), 0.000001), 0.0, 1.0);
     let localT = t * input.segmentDistances.z / max(mix(input.segmentDistances.w, input.segmentDistances.z, t), 0.000001);
     let distance = mix(input.segmentDistances.x, input.segmentDistances.y, localT) + input.dash.z;
     let phase = distance - floor(distance / period) * period;
@@ -170,4 +209,16 @@ fn fs_main(input : PointsLinesFragment) -> @location(0) vec4<f32> {
     discard;
   }
   return vec4<f32>(translucent_fog(view, input.clippingPositionWS, color.rgb, color.a), color.a);
+}
+
+@fragment
+fn fs_main(input : PointsLinesFragment) -> @location(0) vec4<f32> {
+  return shadePointsLines(input);
+}
+
+// Round caps are a separate entry so butt lines compile without the end test.
+@fragment
+fn fs_round(input : PointsLinesFragment) -> @location(0) vec4<f32> {
+  if !roundEndCoverage(input) { discard; }
+  return shadePointsLines(input);
 }

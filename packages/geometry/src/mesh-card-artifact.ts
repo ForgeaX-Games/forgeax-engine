@@ -72,6 +72,19 @@ export function validateMeshCardLayout(layout: MeshCardLayout): Result<void, Ass
   return ok(undefined);
 }
 
+/** Card layouts describe static triangle-list geometry; the producer and every decoder admit them by this rule. */
+export function admitsMeshCardLayout(mesh: {
+  readonly submeshes: readonly { readonly topology?: unknown }[];
+  readonly morphTargets?: unknown;
+  readonly skinIndex?: unknown;
+}): boolean {
+  return (
+    mesh.submeshes.every((section) => section.topology === 'triangle-list') &&
+    mesh.morphTargets === undefined &&
+    mesh.skinIndex === undefined
+  );
+}
+
 /** Pack/DDC owns byte integrity; this codec owns representation version and geometry identity. */
 export function encodeMeshCardLayout(layout: MeshCardLayout): Result<Uint8Array, AssetError> {
   const valid = validateMeshCardLayout(layout);

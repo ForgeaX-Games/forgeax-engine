@@ -45,7 +45,7 @@ describe('animation systems honor real Time.delta (regression: hardcoded 1/60)',
 
     world.update(dt);
 
-    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float32Array };
+    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float64Array };
     expect(ap.times[0]).toBeCloseTo(dt, 5);
   });
 
@@ -73,7 +73,7 @@ describe('animation systems honor real Time.delta (regression: hardcoded 1/60)',
 
     world.update(dt);
 
-    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { nodeTimes: Float32Array };
+    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { nodeTimes: Float64Array };
     expect(ap.nodeTimes[0]).toBeCloseTo(dt, 5);
   });
 });

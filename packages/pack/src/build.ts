@@ -144,7 +144,6 @@ export {
   type LegacyPackInventoryDocument,
   type PackInventoryAsset,
   type PackInventoryDocument,
-  type PackSourceInventoryDocument,
   type ScanInventory,
   type ScanOptions,
   type ScanSourceDeclaration,

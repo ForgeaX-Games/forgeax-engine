@@ -7,6 +7,8 @@ import type { ReceivedCanvasFrame } from './canvas';
 
 /** Owned data in a receiver, or a synchronously borrowed source World. */
 export interface PublishedRenderResources extends AssetReader {
+  /** Current accepted packet revision; an observation of the receiver authority. */
+  readonly revision: number;
   readonly time: TimeResource;
   readonly transparentSort: TransparentSortConfig;
   lookupAsset<T extends Asset>(guid: string): T | undefined;

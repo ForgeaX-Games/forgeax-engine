@@ -1,10 +1,15 @@
-import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   buildMaterialSourceCatalog,
   collectMaterialSources,
   compileShader,
+  createMaterialPackCooker,
 } from '../../../../shader-compiler/src/index';
+
+import {
+  emissionRayMaterial,
+  prepareRayMaterialPublication,
+} from './ray-material-publication.commands';
 
 /** Build-only composition; the GPU fixture receives the same shared decode and View ABI. */
 export async function prepareRasterRayFixture() {
@@ -21,15 +26,6 @@ export async function prepareRasterRayFixture() {
       'forgeax_pbr::brdf',
     ].map((id) => [id, sources.get(id).unwrap().source]),
   );
-  const kernel = (
-    await compileShader(
-      await readFile(
-        new URL('../../../../shader/src/ray-raster-source.wgsl', import.meta.url),
-        'utf8',
-      ),
-      { id: 'raster-ray-source', imports },
-    )
-  ).unwrap().wgsl;
   const raster = (
     await compileShader(
       `
@@ -59,6 +55,11 @@ struct Surface {
       { id: 'raster-ray-fixture', imports },
     )
   ).unwrap().wgsl;
-  return { kernel, raster };
+  const { name, asset, program } = await prepareRayMaterialPublication(
+    'emission',
+    emissionRayMaterial(),
+    createMaterialPackCooker([directory]),
+  );
+  return { raster, material: { name, asset, program } };
 }
 export type RasterRayFixture = Awaited<ReturnType<typeof prepareRasterRayFixture>>;

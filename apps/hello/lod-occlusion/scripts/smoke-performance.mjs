@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setupGpuShim } from '../../triangle/scripts/smoke-helpers.mjs';
 
-export const GPU_FRAME_SAMPLES_SCHEMA = 'forgeax::hello-lod-occlusion::gpu-frame-samples::v2';
+export const GPU_FRAME_SAMPLES_SCHEMA = 'forgeax::hello-lod-occlusion::gpu-frame-samples::v3';
 export const WARMUP_SUBMITS = 32;
 export const RETAINED_SAMPLES_PER_ORDER = 64;
 export const RETAINED_SAMPLES = RETAINED_SAMPLES_PER_ORDER * 2;
@@ -32,9 +33,7 @@ export const BENCHMARK_OCCLUDED = 112;
 // the fixture root plus its two imported levels.
 export const BENCHMARK_LOD_LEVEL_SLOTS = 3;
 export const LOD_PROFILE_PHASES = Object.freeze([
-  'occlusion-prepare',
-  'record/occlusion-query-submit',
-  'record/occlusion-global-advance',
+  'record/gpu-driven-prepare',
   'record/graph-execute',
 ]);
 export const LOD_PROFILE_FRAME_LIMIT = RETAINED_SAMPLES_PER_ORDER / 2;
@@ -44,52 +43,30 @@ export const LOD_PROFILE_EVENT_LIMIT = 16_384;
 const LOD_PROFILE_ENABLED = process.env.FORGEAX_LOD_PROFILE === '1';
 const LOD_PROFILE_DIR = 'profile-captures';
 const OCCLUDER_CALIBRATION_FRAMES = 8;
-// Keep the normal calibration window unchanged, but allow a slower Dawn
-// runner to publish the same two consecutive sentinel observations without
-// allocating another world/device. This is a bounded readiness wait, not a
-// relaxed result: the function still fails closed when the sentinels never
-// settle.
+// Allow a slower Dawn runner to publish the same two consecutive sentinel
+// observations without allocating another world/device. This is a bounded
+// readiness wait, not a relaxed result: calibration still fails closed when
+// the sentinels never settle.
 const OCCLUDER_CALIBRATION_MAX_FRAMES = 32;
-const OCCLUDER_CALIBRATION_HARD_MAX_FRAMES = 128;
+// Two-phase HZB decides occlusion inside each submit; inspection observes it
+// through the asynchronous LOD-selection readback a few submits later. This
+// bounded window covers that readback lag plus two stable observations.
+export const SETTLE_SUBMITS = 16;
 const BENCHMARK_CANDIDATE_SCALE = Object.freeze([0.5, 0.5, 0.5]);
 const BENCHMARK_OCCLUDER_SCALE = Object.freeze([2, 10, 0.1]);
-// Keep a 5 ms margin over the falsifier's 10 ms minimum so scheduler jitter
-// cannot turn a real delayed map into an indistinguishable near-threshold run.
-const DELAYED_MAP_INJECTION_MS = 15;
-const DELAYED_MAP_MIN_OBSERVED_US = 10_000;
 export const FALSIFICATION_CASES = Object.freeze([
   'forced-lod0',
   'all-visible',
   'occlusion-off-on',
-  'page-exhaustion',
-  'delayed-map',
+  'gpu-occlusion-off',
   'world-reorder',
 ]);
-
-/**
- * Derive the calibration readiness window from the renderer's own bounded
- * visibility budget. Slow Dawn runners can need one complete query sweep
- * before the two sentinel results become observable; the extra minimum-frame
- * margin still requires two consecutive settled observations. The hard cap
- * keeps a malformed/custom budget from turning this smoke into an unbounded
- * CI workload.
- */
-export function deriveOccluderCalibrationMaxFrames(settleSubmits) {
-  if (!Number.isSafeInteger(settleSubmits) || settleSubmits <= 0) {
-    return OCCLUDER_CALIBRATION_MAX_FRAMES;
-  }
-  return Math.min(
-    OCCLUDER_CALIBRATION_HARD_MAX_FRAMES,
-    Math.max(OCCLUDER_CALIBRATION_MAX_FRAMES, settleSubmits + OCCLUDER_CALIBRATION_FRAMES),
-  );
-}
 
 const FALSIFICATION_PROTOCOLS = Object.freeze({
   'forced-lod0': { intervention: 'lod-selection-policy', held: ['geometry', 'occlusion', 'view'] },
   'all-visible': { intervention: 'occluder-absence', held: ['geometry', 'lod', 'view'] },
   'occlusion-off-on': { intervention: 'occluder-presence', held: ['geometry', 'lod', 'view'] },
-  'page-exhaustion': { intervention: 'query-page-capacity', held: ['geometry', 'lod', 'view'] },
-  'delayed-map': { intervention: 'map-delay', held: ['geometry', 'lod', 'occlusion', 'view'] },
+  'gpu-occlusion-off': { intervention: 'gpu-occlusion-config', held: ['geometry', 'lod', 'occluder', 'view'] },
   'world-reorder': { intervention: 'world-array-order', held: ['geometry', 'primitive', 'view'] },
 });
 
@@ -410,16 +387,8 @@ export function validatePerformanceEvidence(evidence) {
     return { ...evidence, verdict: 'not-production-ready' };
   }
   const metrics = evidence.metrics;
-  for (const field of [
-    'configuredQueryBudget',
-    'effectiveQueryBudget',
-    'settleSubmits',
-    'retestSubmits',
-    'expirySubmits',
-  ]) {
-    if (!Number.isSafeInteger(metrics[field]) || metrics[field] <= 0) {
-      throw new Error(`performance metric ${field} must be a positive integer`);
-    }
+  if (metrics.settleSubmits !== SETTLE_SUBMITS) {
+    throw new Error(`performance metric settleSubmits must be ${SETTLE_SUBMITS}`);
   }
   const occlusionToggle = falsification.find((entry) => entry.case === 'occlusion-off-on');
   if (occlusionToggle?.verdict === 'pass') {
@@ -441,6 +410,23 @@ export function validatePerformanceEvidence(evidence) {
       );
     }
   }
+  const gpuOcclusionOff = falsification.find((entry) => entry.case === 'gpu-occlusion-off');
+  if (gpuOcclusionOff?.verdict === 'pass') {
+    const offCount = gpuOcclusionOff.evidence?.off?.count;
+    const onCount = gpuOcclusionOff.evidence?.on?.count;
+    if (
+      offCount?.candidates !== BENCHMARK_CANDIDATES ||
+      offCount?.visible !== BENCHMARK_CANDIDATES ||
+      offCount?.occluded !== 0 ||
+      onCount?.candidates !== BENCHMARK_CANDIDATES ||
+      onCount?.visible !== BENCHMARK_VISIBLE ||
+      onCount?.occluded !== BENCHMARK_OCCLUDED
+    ) {
+      throw new Error(
+        'gpu-occlusion-off falsification must lose every occluded instance with HZB off and restore it with HZB on',
+      );
+    }
+  }
   for (const key of [
     'lodCoverage',
     'submittedInstanceRatio',
@@ -448,17 +434,11 @@ export function validatePerformanceEvidence(evidence) {
     'cpuP50Us',
     'cpuP95Us',
     'cpuP95Regression',
-    'queryP50Us',
-    'queryP95Us',
-    'queryMemoryBytes',
   ]) {
     if (!Number.isFinite(metrics[key])) throw new Error(`performance metric ${key} is not finite`);
   }
   if (metrics.cpuP50Us < 0 || metrics.cpuP95Us < metrics.cpuP50Us) {
     throw new Error('CPU p50/p95 metrics are not ordered');
-  }
-  if (metrics.queryP50Us < 0 || metrics.queryP95Us < metrics.queryP50Us || metrics.queryMemoryBytes <= 0) {
-    throw new Error('query latency/memory metrics are invalid');
   }
   const workload = metrics.workload;
   if (
@@ -536,14 +516,17 @@ export function validatePerformanceEvidence(evidence) {
       throw new Error(`performance ${groupName} group is not linked to the locked workload`);
     }
   }
+  if (groups.occlusionOnly.frames !== treatmentInspection.frames) {
+    throw new Error('CPU control and treatment require the same warm-up and retained frame windows');
+  }
   if (
     ['control', 'lodOnly', 'occlusionOnly', 'treatment'].some(
       (groupName) => groups[groupName].frames < metrics.settleSubmits,
     )
   ) {
     // Keep a real but explicitly non-admitting artifact when a bounded probe
-    // has not visited two complete query pages. Four-frame snapshots are
-    // useful diagnostics, but they cannot claim settled workload attribution.
+    // ended before the settle window. Short snapshots are useful diagnostics,
+    // but they cannot claim settled workload attribution.
     return { ...evidence, verdict: 'not-production-ready' };
   }
   if (
@@ -577,13 +560,8 @@ export function validatePerformanceEvidence(evidence) {
   if (Math.abs(metrics.geometryWorkReduction - treatmentInspection.geometryWorkReduction) > 1e-6) {
     throw new Error('geometry-work reduction must be derived from GPU index-work telemetry');
   }
-  for (const [metric, field] of [
-    ['cpuP50Us', 'cpuP50Us'],
-    ['cpuP95Us', 'cpuP95Us'],
-    ['queryP50Us', 'queryP50Us'],
-    ['queryP95Us', 'queryP95Us'],
-  ]) {
-    if (Math.abs(metrics[metric] - treatmentInspection[field]) > 1e-6) {
+  for (const metric of ['cpuP50Us', 'cpuP95Us']) {
+    if (Math.abs(metrics[metric] - treatmentInspection[metric]) > 1e-6) {
       throw new Error(`${metric} must be derived from treatment inspection`);
     }
   }
@@ -593,9 +571,8 @@ export function validatePerformanceEvidence(evidence) {
     }
   }
   // Compare the LOD treatment with the occlusion-only group: both paths carry
-  // the same query transport and occluder cost, so this ratio owns the
-  // incremental LOD CPU work instead of charging fixed occlusion overhead to
-  // LOD. The no-occluder baseline remains the GPU A/B control below.
+  // the same occluder and HZB cost, so this ratio owns the incremental LOD
+  // CPU work instead of charging fixed occlusion overhead to LOD. The no-occluder baseline remains the GPU A/B control below.
   const derivedCpuP95Regression =
     (treatmentInspection.cpuP95Us - groups.occlusionOnly.cpuP95Us) /
     groups.occlusionOnly.cpuP95Us;
@@ -603,11 +580,8 @@ export function validatePerformanceEvidence(evidence) {
     throw new Error('CPU p95 regression must be derived from linked A/B inspection');
   }
   const derivedCpuMedianRegression =
-    (treatmentInspection.cpuP50Us - inspection.baseline.cpuP50Us) /
-    inspection.baseline.cpuP50Us;
-  if (Math.abs(metrics.queryMemoryBytes - treatmentInspection.pagePressure.capacity * 16) > 0) {
-    throw new Error('query memory must be derived from treatment page capacity');
-  }
+    (treatmentInspection.cpuP50Us - groups.occlusionOnly.cpuP50Us) /
+    groups.occlusionOnly.cpuP50Us;
   const baseline = evidence.samples.filter((sample) => sample.condition === 'baseline').map((sample) => sample.gpuFrameUs);
   const treatment = evidence.samples.filter((sample) => sample.condition === 'treatment').map((sample) => sample.gpuFrameUs);
   const baselineMedian = nearestRank(baseline, 0.5);
@@ -675,7 +649,7 @@ async function createBenchmarkFixture(exactBuild) {
   const distRoot = resolve(appRoot, 'dist');
   const packIndexPath = resolve(distRoot, 'pack-index.json');
   const packIndexText = readFileSync(packIndexPath, 'utf8');
-  const packIndex = JSON.parse(packIndexText);
+  const packIndex = decodeCatalogWire(JSON.parse(packIndexText)).unwrap();
   const packageFiles = new Map(packIndex.map((entry) => [entry.packageUrl, resolve(distRoot, entry.packageUrl.slice(1))]));
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (request) => {
@@ -693,13 +667,11 @@ async function createBenchmarkFixture(exactBuild) {
   const { createWorldContext, World } = await import('@forgeax/engine-ecs');
   const { AssetGuid } = await import('@forgeax/engine-pack/guid');
   const { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, renderComponentsPlugin } = await import('@forgeax/engine-render');
-  const { createVisibilityBudget } = await import('@forgeax/engine-render/internal');
   const profileApi = LOD_PROFILE_ENABLED
     ? await import('@forgeax/engine-profiler')
     : undefined;
   const { scenePlugin, Transform } = await import('@forgeax/engine-scene');
   const manifest = readFileSync(resolve(distRoot, 'shaders/manifest.json'), 'utf8');
-  const visibilityBudget = createVisibilityBudget();
   const profiler = profileApi?.createProfiler();
   const rendererOptions = {
     // Keep timestamp-query capability requested at device creation. The
@@ -740,7 +712,7 @@ async function createBenchmarkFixture(exactBuild) {
     throw new Error(`LOD fixture must carry ${BENCHMARK_LOD_LEVEL_SLOTS} levels`);
   }
   // The LOD0-only control keeps one real imported relation so it exercises the
-  // same GPU/query candidate path, but its first transition is below every
+  // same GPU candidate path, but its first transition is below every
   // positive projected height in the locked view. The shared CPU/GPU selector
   // therefore selects root geometry on every frame while retaining valid,
   // strictly decreasing coverage metadata.
@@ -755,7 +727,7 @@ async function createBenchmarkFixture(exactBuild) {
   // The occluder is fixture geometry, not a GPU-driven LOD candidate. Use the
   // unlit path so the capable Standard PBR owner cannot claim this plain mesh
   // on one backend while the CPU semantic producer claims it on another; its
-  // depth write remains the only fact the calibration query needs.
+  // depth write remains the only fact the HZB calibration needs.
   const occluderMaterial = Materials.unlit([0.08, 0.08, 0.08, 1]);
 
   function populateBenchmarkWorld(
@@ -766,9 +738,8 @@ async function createBenchmarkFixture(exactBuild) {
       candidateCount = BENCHMARK_CANDIDATES,
       placement = 'production',
       occluderScale = BENCHMARK_OCCLUDER_SCALE,
-      // Keep production proxy footprints above a Dawn pixel while preserving
-      // the locked world positions; sub-pixel 0.05 cubes produce false zero
-      // occlusion samples on the 200x150 target.
+      // Keep candidate footprints above a Dawn pixel while preserving the
+      // locked world positions on the 200x150 target.
       candidateScale = BENCHMARK_CANDIDATE_SCALE,
     } = {},
   ) {
@@ -832,23 +803,10 @@ async function createBenchmarkFixture(exactBuild) {
     const world = new World();
     await createWorldContext(world, [renderComponentsPlugin(), scenePlugin()]);
     const cameraEntity = populateBenchmarkWorld(world, meshAsset, options);
+    void cameraEntity;
     const attachment = targetRenderer.attach(world);
     if (!attachment.ok) throw attachment.error;
-    let cameraJitter = 0;
-    let cameraGeneration = 0;
-    return {
-      world,
-      lease: attachment.value,
-      // A page-capacity probe must submit fresh view keys while prior pages
-      // are still in flight. A settled camera would reuse the previous query
-      // tickets and never exercise the exhausted-page fallback.
-      touchCamera() {
-        cameraJitter += 0.001;
-        world.set(cameraEntity, Transform, { pos: [0, 0, 12 + cameraJitter] }).unwrap();
-        cameraGeneration += 1;
-        world.set(cameraEntity, Camera, { historyVersion: cameraGeneration }).unwrap();
-      },
-    };
+    return { world, lease: attachment.value };
   }
 
   const treatment = await createBenchmarkWorld(rootMesh.value);
@@ -919,7 +877,9 @@ async function createBenchmarkFixture(exactBuild) {
     profiler,
     profileApi,
     identity,
-    visibilityBudget,
+    configureGpuOcclusion(enabled) {
+      debugDrawHost.configureStandard(enabled ? undefined : { gpuOcclusion: false });
+    },
     releasePrimaryWorld(name) {
       const world = fixture[name];
       if (world === undefined) return;
@@ -960,6 +920,7 @@ async function createBenchmarkFixture(exactBuild) {
 }
 
 async function captureCondition(fixture, condition, order) {
+  const gpuCondition = condition !== 'occlusionOnly';
   const selected = fixture[condition];
   const samples = [];
   const facts = emptyInspectionFacts();
@@ -968,12 +929,12 @@ async function captureCondition(fixture, condition, order) {
   const phaseStartedAt = performance.now();
   logProducerPhase(`condition:${order}:${condition}`, 'start', { totalFrames: total });
   for (let frame = 0; frame < total; frame += 1) {
-    const retainTiming = frame >= WARMUP_SUBMITS;
+    const retainTiming = gpuCondition && frame >= WARMUP_SUBMITS;
     // Timestamp query resources are only needed for retained GPU samples. The
     // option was enabled during bootstrap so the device requests the feature;
     // disabling it for warm-up keeps deferred lavapipe query resources bounded.
     fixture.setGpuTimingCapture(retainTiming);
-    if (frame === WARMUP_SUBMITS && fixture.profiler !== undefined) {
+    if (gpuCondition && frame === WARMUP_SUBMITS && fixture.profiler !== undefined) {
       const started = fixture.profiler.startCapture({
         frameLimit: LOD_PROFILE_FRAME_LIMIT,
         eventLimit: LOD_PROFILE_EVENT_LIMIT,
@@ -993,11 +954,9 @@ async function captureCondition(fixture, condition, order) {
     const cpuFrameUs = cpuElapsed.user + cpuElapsed.system;
     facts.cpuFrameUs.push(cpuFrameUs);
     if (frame >= WARMUP_SUBMITS) facts.retainedCpuFrameUs.push(cpuFrameUs);
-    const queryStart = performance.now();
     const observed = await fixture.renderer.observe(receipt.value, {
       include: retainTiming ? ['timings'] : [],
     });
-    facts.queryWaitUs.push((performance.now() - queryStart) * 1000);
     if (!observed.ok) throw new Error(`renderer observation failed: ${observed.error.code}`);
     assertNoRendererErrors(fixture, `observe:${condition}`);
     const lodSnapshot = inspectLodOcclusion(fixture);
@@ -1008,25 +967,16 @@ async function captureCondition(fixture, condition, order) {
     facts.candidates += inspection.count.candidates;
     facts.visible += inspection.count.visible;
     facts.occluded += inspection.count.occluded;
-    facts.pageUsed += inspection.pagePressure.used;
-    facts.pageCapacity += inspection.pagePressure.capacity;
-    facts.queryMemoryBytes = Math.max(
-      facts.queryMemoryBytes,
-      inspection.pagePressure.capacity * 16,
-    );
     facts.geometryWork += gpu.geometryWork;
     facts.rootGeometryWork += gpu.rootGeometryWork;
     facts.lastBatchCount = gpu.batchCount;
     facts.lastIndirectDrawCount = gpu.indirectDrawCount;
     facts.lastGeometryWork = gpu.geometryWork;
     facts.lastRootGeometryWork = gpu.rootGeometryWork;
-    facts.lastQueryLatency = { ...inspection.queryLatencyUs };
     facts.lastCandidates = inspection.count.candidates;
     facts.lastVisible = inspection.count.visible;
     facts.lastOccluded = inspection.count.occluded;
     facts.lastLodHistogram = inspection.lodHistogram.map((row) => ({ ...row }));
-    facts.lastPagePressure = { ...inspection.pagePressure };
-    if (inspection.fallback.active) facts.fallbackFrames += 1;
     for (const row of inspection.lodHistogram) {
       facts.lodHistogram.set(row.level, (facts.lodHistogram.get(row.level) ?? 0) + row.count);
     }
@@ -1139,11 +1089,9 @@ async function captureGroupInspection(fixture, condition) {
   let previousSettledSignature;
   let stableSettledObservations = 0;
   const phaseStartedAt = performance.now();
-  const totalFrames = fixture.visibilityBudget.settleSubmits;
+  const totalFrames = SETTLE_SUBMITS;
   logProducerPhase(`group:${condition}`, 'start', { totalFrames });
-  // Two complete candidate sweeps are the minimum needed to publish a settled
-  // hidden decision. The floor is derived from the renderer's shared budget.
-  for (let frame = 0; frame < fixture.visibilityBudget.settleSubmits; frame += 1) {
+  for (let frame = 0; frame < SETTLE_SUBMITS; frame += 1) {
     // Keep group diagnostics on the same process-time clock as A/B frames.
     const cpuStart = process.cpuUsage();
     const { inspection } = await drawAndObserve(fixture, [condition]);
@@ -1154,36 +1102,25 @@ async function captureGroupInspection(fixture, condition) {
     facts.candidates += inspection.count.candidates;
     facts.visible += inspection.count.visible;
     facts.occluded += inspection.count.occluded;
-    facts.pageUsed += inspection.pagePressure.used;
-    facts.pageCapacity += inspection.pagePressure.capacity;
-    facts.queryMemoryBytes = Math.max(
-      facts.queryMemoryBytes,
-      inspection.pagePressure.capacity * 16,
-    );
     facts.geometryWork += gpu.geometryWork;
     facts.rootGeometryWork += gpu.rootGeometryWork;
     facts.lastBatchCount = gpu.batchCount;
     facts.lastIndirectDrawCount = gpu.indirectDrawCount;
     facts.lastGeometryWork = gpu.geometryWork;
     facts.lastRootGeometryWork = gpu.rootGeometryWork;
-    facts.lastQueryLatency = { ...inspection.queryLatencyUs };
     facts.lastCandidates = inspection.count.candidates;
     facts.lastVisible = inspection.count.visible;
     facts.lastOccluded = inspection.count.occluded;
     facts.lastLodHistogram = inspection.lodHistogram.map((row) => ({ ...row }));
-    facts.lastPagePressure = { ...inspection.pagePressure };
-    if (inspection.fallback.active) facts.fallbackFrames += 1;
     for (const row of inspection.lodHistogram) {
       facts.lodHistogram.set(row.level, (facts.lodHistogram.get(row.level) ?? 0) + row.count);
     }
-    if (frame + 1 >= fixture.visibilityBudget.settleSubmits - 1) {
+    if (frame + 1 >= SETTLE_SUBMITS - 1) {
       const settledSignature = JSON.stringify({
         candidates: inspection.count.candidates,
         visible: inspection.count.visible,
         occluded: inspection.count.occluded,
         lodHistogram: inspection.lodHistogram,
-        fallback: inspection.fallback,
-        pagePressure: inspection.pagePressure,
       });
       if (settledSignature === previousSettledSignature) {
         stableSettledObservations += 1;
@@ -1207,7 +1144,7 @@ async function captureGroupInspection(fixture, condition) {
   }
   if (stableSettledObservations < 2) {
     throw new Error(
-      `${condition} group did not produce two consecutive stable observations after ${fixture.visibilityBudget.settleSubmits} derived settle submits`,
+      `${condition} group did not produce two consecutive stable observations after ${SETTLE_SUBMITS} settle submits`,
     );
   }
   logProducerPhase(`group:${condition}`, 'done', {
@@ -1226,24 +1163,17 @@ function emptyInspectionFacts() {
     occluded: 0,
     cpuFrameUs: [],
     retainedCpuFrameUs: [],
-    queryWaitUs: [],
     lodHistogram: new Map(),
-    fallbackFrames: 0,
-    pageUsed: 0,
-    pageCapacity: 0,
-    queryMemoryBytes: 0,
     geometryWork: 0,
     rootGeometryWork: 0,
     lastGeometryWork: 0,
     lastRootGeometryWork: 0,
     lastBatchCount: 0,
     lastIndirectDrawCount: 0,
-    lastQueryLatency: { median: 0, p95: 0, last: 0 },
     lastCandidates: 0,
     lastVisible: 0,
     lastOccluded: 0,
     lastLodHistogram: [],
-    lastPagePressure: { used: 0, capacity: 0 },
   };
 }
 
@@ -1261,23 +1191,16 @@ function mergeInspectionFacts(target, source) {
   target.occluded += source.occluded;
   target.cpuFrameUs.push(...source.cpuFrameUs);
   target.retainedCpuFrameUs.push(...source.retainedCpuFrameUs);
-  target.queryWaitUs.push(...source.queryWaitUs);
-  target.fallbackFrames += source.fallbackFrames;
-  target.pageUsed += source.pageUsed;
-  target.pageCapacity += source.pageCapacity;
-  target.queryMemoryBytes = Math.max(target.queryMemoryBytes, source.queryMemoryBytes);
   target.geometryWork += source.geometryWork;
   target.rootGeometryWork += source.rootGeometryWork;
   target.lastGeometryWork = source.lastGeometryWork;
   target.lastRootGeometryWork = source.lastRootGeometryWork;
   target.lastBatchCount = source.lastBatchCount;
   target.lastIndirectDrawCount = source.lastIndirectDrawCount;
-  target.lastQueryLatency = source.lastQueryLatency;
   target.lastCandidates = source.lastCandidates;
   target.lastVisible = source.lastVisible;
   target.lastOccluded = source.lastOccluded;
   target.lastLodHistogram = source.lastLodHistogram;
-  target.lastPagePressure = source.lastPagePressure;
   for (const [level, count] of source.lodHistogram) {
     target.lodHistogram.set(level, (target.lodHistogram.get(level) ?? 0) + count);
   }
@@ -1298,11 +1221,6 @@ function inspectionMetrics(facts) {
     visible: facts.lastVisible,
     occluded: facts.lastOccluded,
     lodHistogram: histogram,
-    fallbackFrames: facts.fallbackFrames,
-    pagePressure: {
-      used: facts.lastPagePressure.used,
-      capacity: facts.lastPagePressure.capacity,
-    },
     lodCoverage: selectedLodCount / facts.lastCandidates,
     submittedInstanceRatio: facts.lastVisible / facts.lastCandidates,
     geometryWorkReduction:
@@ -1316,9 +1234,6 @@ function inspectionMetrics(facts) {
     // of their bounded settling frames.
     cpuP50Us: nearestRank(cpuSamples, 0.5),
     cpuP95Us: nearestRank(cpuSamples, 0.95),
-    queryP50Us: facts.lastQueryLatency.median,
-    queryP95Us: facts.lastQueryLatency.p95,
-    queryMemoryBytes: facts.queryMemoryBytes,
   };
 }
 
@@ -1329,22 +1244,12 @@ function frameRequestFor(fixture, worlds, cameraWorldName = worlds[0]) {
   return { leases, camera: { lease: owner }, environment: { lease: owner } };
 }
 
-async function drawAndObserve(
-  fixture,
-  worlds,
-  { delayMs = 0, delayBeforeObserve = false, cameraWorld = worlds[0] } = {},
-) {
+async function drawAndObserve(fixture, worlds, { cameraWorld = worlds[0] } = {}) {
   for (const worldName of worlds) fixture[worldName].world.update().unwrap();
   const drawn = fixture.renderer.draw(frameRequestFor(fixture, worlds, cameraWorld));
   if (!drawn.ok) throw new Error(`falsification draw failed: ${drawn.error.code}`);
   assertNoRendererErrors(fixture, `falsification draw:${worlds.join(',')}`);
-  if (delayBeforeObserve && delayMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
   await drawn.value.completed;
-  if (!delayBeforeObserve && delayMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
   const observed = await fixture.renderer.observe(drawn.value, { include: [] });
   if (!observed.ok) throw new Error(`falsification observe failed: ${observed.error.code}`);
   assertNoRendererErrors(fixture, `falsification observe:${worlds.join(',')}`);
@@ -1355,13 +1260,13 @@ async function drawAndObserve(
 
 /**
  * Calibrate the authored occluder with the exact imported mesh, camera and
- * proxy-query path used by the production fixture. A central sentinel must
- * settle hidden while the side sentinel remains visible for two consecutive
- * observations. This is a query-path sanity check only; the locked placement
- * still has to satisfy its own measured workload gate.
+ * GPU HZB path used by the production fixture. A central sentinel must settle
+ * hidden while the side sentinel remains visible for two consecutive
+ * observations. This is a sanity check only; the locked placement still has
+ * to satisfy its own measured workload gate.
  */
 async function calibrateOccluder(fixture) {
-  const maxFrames = deriveOccluderCalibrationMaxFrames(fixture.visibilityBudget.settleSubmits);
+  const maxFrames = OCCLUDER_CALIBRATION_MAX_FRAMES;
   let stableFrames = 0;
   let last;
   for (let frame = 0; frame < maxFrames; frame += 1) {
@@ -1370,13 +1275,11 @@ async function calibrateOccluder(fixture) {
     const settled =
       count.candidates === 2 &&
       count.visible === 1 &&
-      count.occluded === 1 &&
-      !result.inspection.fallback.active;
+      count.occluded === 1;
     stableFrames = settled ? stableFrames + 1 : 0;
     last = {
       frameId: result.frameId,
       count,
-      fallback: result.inspection.fallback,
       lodHistogram: result.inspection.lodHistogram,
       frustumStats: fixture.renderer.inspect().frustumStats,
       gpuDriven: inspectLodOcclusion(fixture).gpuDriven,
@@ -1392,7 +1295,6 @@ async function calibrateOccluder(fixture) {
         maxFrames,
         stableFrames,
         count,
-        fallback: result.inspection.fallback,
       });
     }
     if (calibrationFrame >= OCCLUDER_CALIBRATION_FRAMES && stableFrames >= 2) {
@@ -1424,14 +1326,14 @@ async function runFalsifications(fixture, baselineInspection, treatmentInspectio
     // The baseline world is the root-pinned no-occluder leg and the
     // occlusion-only world is its untouched root-pinned occluder counterpart.
     // Run this pair before either world is used by another falsifier so the
-    // on leg starts without confidence history, while avoiding a second device
-    // and its renderer-owned GPU allocations.
+    // on leg starts without HZB visibility history, while avoiding a second
+    // device and its renderer-owned GPU allocations.
     const offFixture = fixture.baseline;
     const onFixture = fixture.occlusionOnly;
     if (offFixture === undefined || onFixture === undefined) {
       throw new Error('occlusion-off-on fixtures are missing');
     }
-    const settleFrames = fixture.visibilityBudget.settleSubmits;
+    const settleFrames = SETTLE_SUBMITS;
     let off;
     for (let index = 0; index < settleFrames; index += 1) {
       off = await drawAndObserve(fixture, ['baseline']);
@@ -1456,13 +1358,12 @@ async function runFalsifications(fixture, baselineInspection, treatmentInspectio
           : 'fail',
       evidence: {
         protocol: FALSIFICATION_PROTOCOLS['occlusion-off-on'],
-        off: { count: off.inspection.count, fallback: off.inspection.fallback },
-        on: { count: on.inspection.count, fallback: on.inspection.fallback },
+        off: { count: off.inspection.count },
+        on: { count: on.inspection.count },
         occluderCalibration: fixture.occluderCalibration,
         control: 'same imported relation workload and authored LOD policy; only occluder presence is changed',
         isolation: 'same renderer; occlusion-only world is untouched before the on leg',
         settleFrames,
-        settleSubmits: fixture.visibilityBudget.settleSubmits,
       },
     });
   } catch (error) {
@@ -1475,15 +1376,13 @@ async function runFalsifications(fixture, baselineInspection, treatmentInspectio
       case: 'forced-lod0',
       verdict:
         forced.inspection.lodHistogram.every((row) => row.level === 0) &&
-        forced.inspection.count.candidates === BENCHMARK_CANDIDATES &&
-        !forced.inspection.fallback.active
+        forced.inspection.count.candidates === BENCHMARK_CANDIDATES
           ? 'pass'
           : 'fail',
       evidence: {
         protocol: FALSIFICATION_PROTOCOLS['forced-lod0'],
         histogram: forced.inspection.lodHistogram,
         count: forced.inspection.count,
-        fallback: forced.inspection.fallback,
         occluderCalibration: fixture.occluderCalibration,
         control: 'same imported relation workload with LOD pinned to level 0; occlusion remains active',
       },
@@ -1501,15 +1400,13 @@ async function runFalsifications(fixture, baselineInspection, treatmentInspectio
       verdict:
         allVisible.inspection.count.candidates > 0 &&
         allVisible.inspection.count.visible === allVisible.inspection.count.candidates &&
-        allVisible.inspection.count.occluded === 0 &&
-        !allVisible.inspection.fallback.active
+        allVisible.inspection.count.occluded === 0
         ? 'pass'
         : 'fail',
       evidence: {
         protocol: FALSIFICATION_PROTOCOLS['all-visible'],
         histogram: allVisible.inspection.lodHistogram,
         count: allVisible.inspection.count,
-        fallback: allVisible.inspection.fallback,
         control: 'same imported relation workload with authored LOD and no occluder',
       },
     });
@@ -1520,95 +1417,46 @@ async function runFalsifications(fixture, baselineInspection, treatmentInspectio
   }
 
   try {
-    // Reuse the already-attached treatment world. Page exhaustion only needs
-    // fresh view keys while prior pages remain in flight; allocating another
-    // attached world would add renderer-owned GPU buffers to the benchmark
-    // process without increasing the transport coverage.
-    const pageFixture = fixture.treatment;
-    if (pageFixture === undefined) throw new Error('page-exhaustion treatment fixture is missing');
-    const receipts = [];
-    // This isolated transport probe submits one real query at a time, so the
-    // bounded pool is exercised without allocating a second stress scene.
-    for (let index = 0; index < 5; index += 1) {
-      pageFixture.touchCamera();
-      pageFixture.world.update().unwrap();
-      const drawn = fixture.renderer.draw(frameRequestFor(fixture, ['treatment']));
-      if (!drawn.ok) throw new Error(`page-exhaustion draw failed: ${drawn.error.code}`);
-      receipts.push(drawn.value);
-    }
-    const inspection = inspectLodOcclusion(fixture).lodOcclusion;
-    if (inspection === undefined) throw new Error('page-exhaustion did not publish inspection');
-    const exhausted =
-      inspection.fallback.active && inspection.fallback.reason === 'page-exhausted';
-    for (const receipt of receipts) {
-      const observed = await fixture.renderer.observe(receipt, { include: [] });
-      if (!observed.ok) throw new Error(`page-exhaustion observe failed: ${observed.error.code}`);
-    }
-    results.push({
-      case: 'page-exhaustion',
-      verdict: exhausted ? 'pass' : 'fail',
-      evidence: {
-        protocol: FALSIFICATION_PROTOCOLS['page-exhaustion'],
-        fallback: inspection.fallback,
-        pagePressure: inspection.pagePressure,
-        submits: receipts.length,
-      },
-    });
-  } catch (error) {
-    results.push(unavailableFalsification('page-exhaustion', error));
-  }
-
-  try {
-    const { setOcclusionRuntimeTestHooks } = await import('@forgeax/engine-render/internal');
-    // The treatment world already owns the real query workload. Reuse it for
-    // the map-delay hook so this falsifier cannot allocate another renderer
-    // attachment merely to wait on one query map.
-    const delayedFixture = fixture.treatment;
-    if (delayedFixture === undefined) throw new Error('delayed-map treatment fixture is missing');
-    let mapDelayHookCalls = 0;
-    let mapDelayReleased = false;
-    setOcclusionRuntimeTestHooks({
-      beforeMap: async () => {
-        mapDelayHookCalls += 1;
-        await new Promise((resolve) => setTimeout(resolve, DELAYED_MAP_INJECTION_MS));
-        mapDelayReleased = true;
-      },
-    });
-    let delayed;
+    // The treatment world keeps its occluder and authored LOD; only the
+    // renderer's Standard `gpuOcclusion` config changes. With two-phase HZB
+    // off no other mechanism may hide an instance, so every occluded count
+    // must come from HZB and return once it is re-enabled.
+    let off;
+    let on;
+    fixture.configureGpuOcclusion(false);
     try {
-      delayed = await drawAndObserve(fixture, ['treatment']);
+      for (let index = 0; index < SETTLE_SUBMITS; index += 1) {
+        off = await drawAndObserve(fixture, ['treatment']);
+      }
     } finally {
-      setOcclusionRuntimeTestHooks(undefined);
+      fixture.configureGpuOcclusion(true);
     }
-    const selected = delayed.inspection.lodHistogram.some((row) => row.level > 0 && row.count > 0);
+    for (let index = 0; index < SETTLE_SUBMITS; index += 1) {
+      on = await drawAndObserve(fixture, ['treatment']);
+    }
+    if (off === undefined || on === undefined) {
+      throw new Error('gpu-occlusion-off did not produce settled observations');
+    }
     results.push({
-      case: 'delayed-map',
+      case: 'gpu-occlusion-off',
       verdict:
-        delayed.inspection.count.candidates === BENCHMARK_CANDIDATES &&
-        selected &&
-        mapDelayHookCalls === 1 &&
-        mapDelayReleased &&
-        delayed.inspection.pagePressure.used > 0 &&
-        delayed.inspection.queryLatencyUs.last >= DELAYED_MAP_MIN_OBSERVED_US &&
-        !delayed.inspection.fallback.active
+        off.inspection.count.candidates === BENCHMARK_CANDIDATES &&
+        off.inspection.count.visible === BENCHMARK_CANDIDATES &&
+        off.inspection.count.occluded === 0 &&
+        on.inspection.count.candidates === BENCHMARK_CANDIDATES &&
+        on.inspection.count.visible === BENCHMARK_VISIBLE &&
+        on.inspection.count.occluded === BENCHMARK_OCCLUDED
           ? 'pass'
           : 'fail',
       evidence: {
-        protocol: FALSIFICATION_PROTOCOLS['delayed-map'],
-        frameId: delayed.frameId,
-        delayMs: DELAYED_MAP_INJECTION_MS,
-        minimumObservedUs: DELAYED_MAP_MIN_OBSERVED_US,
-        delayBeforeObserve: false,
-        mapLatencyUs: delayed.inspection.queryLatencyUs,
-        mapDelayHookCalls,
-        mapDelayReleased,
-        histogram: delayed.inspection.lodHistogram,
-        count: delayed.inspection.count,
-        fallback: delayed.inspection.fallback,
+        protocol: FALSIFICATION_PROTOCOLS['gpu-occlusion-off'],
+        off: { count: off.inspection.count, histogram: off.inspection.lodHistogram },
+        on: { count: on.inspection.count, histogram: on.inspection.lodHistogram },
+        settleFrames: SETTLE_SUBMITS,
       },
     });
   } catch (error) {
-    results.push(unavailableFalsification('delayed-map', error));
+    results.push(unavailableFalsification('gpu-occlusion-off', error));
   }
 
   try {
@@ -1781,19 +1629,13 @@ async function producePerformanceEvidence(exactBuild) {
   fixture.setGpuTimingCapture(false);
   logProducerPhase('fixture', 'ready', {
     elapsedMs: Number((performance.now() - producerStartedAt).toFixed(1)),
-    effectiveQueryBudget: fixture.visibilityBudget.effectiveQueryBudget,
-    settleSubmits: fixture.visibilityBudget.settleSubmits,
-    retestSubmits: fixture.visibilityBudget.retestSubmits,
-    expirySubmits: fixture.visibilityBudget.expirySubmits,
+    settleSubmits: SETTLE_SUBMITS,
   });
   try {
     const calibrationStartedAt = performance.now();
-    const calibrationMaxFrames = deriveOccluderCalibrationMaxFrames(
-      fixture.visibilityBudget.settleSubmits,
-    );
     logProducerPhase('occluder-calibration', 'start', {
       minimumFrames: OCCLUDER_CALIBRATION_FRAMES,
-      maxFrames: calibrationMaxFrames,
+      maxFrames: OCCLUDER_CALIBRATION_MAX_FRAMES,
     });
     fixture.occluderCalibration = await calibrateOccluder(fixture);
     logProducerPhase('occluder-calibration', 'done', {
@@ -1806,10 +1648,16 @@ async function producePerformanceEvidence(exactBuild) {
     const conditionFacts = {
       baseline: emptyInspectionFacts(),
       treatment: emptyInspectionFacts(),
+      occlusionOnly: emptyInspectionFacts(),
     };
+    // CPU admission holds HZB constant. Its control needs exactly the same
+    // warm-up and retained windows as treatment, not the cold 16-frame probe.
+    await fixture.ensureAuxiliaryWorlds();
     const profileCaptures = {};
     for (const order of ['baseline-treatment', 'treatment-baseline']) {
-      const first = order === 'baseline-treatment' ? ['baseline', 'treatment'] : ['treatment', 'baseline'];
+      const first = order === 'baseline-treatment'
+        ? ['baseline', 'occlusionOnly', 'treatment']
+        : ['treatment', 'occlusionOnly', 'baseline'];
       for (const condition of first) {
         const captured = await captureCondition(fixture, condition, order);
         samples.push(...captured.samples);
@@ -1842,7 +1690,7 @@ async function producePerformanceEvidence(exactBuild) {
     const groupInspections = {
       control: baselineInspection,
       lodOnly: await captureGroupInspection(fixture, 'lodOnly'),
-      occlusionOnly: await captureGroupInspection(fixture, 'occlusionOnly'),
+      occlusionOnly: inspectionMetrics(conditionFacts.occlusionOnly),
       treatment: treatmentInspection,
     };
     fixture.releaseAuxiliaryWorld('lodOnly');
@@ -1859,25 +1707,18 @@ async function producePerformanceEvidence(exactBuild) {
       samples,
       metrics: {
         timestampAvailable: true,
-        configuredQueryBudget: fixture.visibilityBudget.configuredQueryBudget,
-        effectiveQueryBudget: fixture.visibilityBudget.effectiveQueryBudget,
-        settleSubmits: fixture.visibilityBudget.settleSubmits,
-        retestSubmits: fixture.visibilityBudget.retestSubmits,
-        expirySubmits: fixture.visibilityBudget.expirySubmits,
+        settleSubmits: SETTLE_SUBMITS,
         lodCoverage: treatmentInspection.lodCoverage,
         submittedInstanceRatio: treatmentInspection.submittedInstanceRatio,
         geometryWorkReduction: treatmentInspection.geometryWorkReduction,
         cpuP50Us: treatmentInspection.cpuP50Us,
         cpuP95Us: treatmentInspection.cpuP95Us,
-        // CPU admission isolates LOD from the fixed occlusion transport cost;
+        // CPU admission isolates LOD from the fixed occlusion cost;
         // GPU timestamps still compare the no-occluder control against the
         // complete treatment so the two features cannot hide each other.
         cpuP95Regression:
           (treatmentInspection.cpuP95Us - groupInspections.occlusionOnly.cpuP95Us) /
           groupInspections.occlusionOnly.cpuP95Us,
-        queryP50Us: treatmentInspection.queryP50Us,
-        queryP95Us: treatmentInspection.queryP95Us,
-        queryMemoryBytes: treatmentInspection.queryMemoryBytes,
         workload: {
           candidates: BENCHMARK_CANDIDATES,
           visible: BENCHMARK_VISIBLE,
@@ -1902,8 +1743,8 @@ async function producePerformanceEvidence(exactBuild) {
       cpuP95Us: evidence.metrics.cpuP95Us,
       cpuP95Regression: evidence.metrics.cpuP95Regression,
       cpuMedianRegression:
-        (evidence.metrics.inspection.treatment.cpuP50Us - evidence.metrics.inspection.baseline.cpuP50Us) /
-        evidence.metrics.inspection.baseline.cpuP50Us,
+        (evidence.metrics.inspection.treatment.cpuP50Us - evidence.metrics.groups.occlusionOnly.cpuP50Us) /
+        evidence.metrics.groups.occlusionOnly.cpuP50Us,
       gpuMedianImprovement: evidence.metrics.gpuMedianImprovement,
       gpuP95Regression: evidence.metrics.gpuP95Regression,
       geometryWorkReduction: evidence.metrics.geometryWorkReduction,

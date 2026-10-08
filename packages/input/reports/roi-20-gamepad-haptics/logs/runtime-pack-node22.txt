@@ -1,0 +1,28 @@
+
+ RUN  v4.1.11 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app
+
+ ❯ |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts (4 tests | 2 failed) 54268ms
+   × installs new ts plugin assets against real native module identities and independent Cordis Fibers 13040ms
+   × consumes inherited ts Mesh and Scene in independent Worlds and restores the anchor in a fresh process 15020ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts > installs new ts plugin assets against real native module identities and independent Cordis Fibers
+Error: Command failed: /opt/homebrew/Cellar/node@22/22.23.2/bin/node /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app/src/__tests__/fixtures/runtime-packs.mjs ts /var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/runtime-pack-recovery-KALl2O/source.json
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts > consumes inherited ts Mesh and Scene in independent Worlds and restores the anchor in a fresh process
+Error: Command failed: /opt/homebrew/Cellar/node@22/22.23.2/bin/node /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app/src/__tests__/fixtures/runtime-pack-scenes.mjs ts /var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/runtime-pack-scene-recovery-0NlmMw/scene.json
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 4 passed (6)
+   Start at  18:27:20
+   Duration  91.55s (transform 39ms, setup 0ms, import 63ms, tests 89.43s, environment 0ms)
+
+undefined
+/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app:
+[ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL] Command failed with exit code 1: vitest run src/__tests__/runtime-packs.integration.test.ts src/__tests__/runtime-pack-tools.integration.test.ts '--maxWorkers=1' '--typecheck.enabled=false'

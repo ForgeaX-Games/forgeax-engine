@@ -36,8 +36,6 @@ interface ResourceToken<T> {
   readonly __resourceType?: T;
 }
 
-export type ResourceValue<Key> = Key extends ResourceToken<infer Value> ? Value : never;
-
 export interface TimePolicy {
   readonly fixedDeltaSeconds?: number;
   readonly maxStepsPerUpdate?: number;

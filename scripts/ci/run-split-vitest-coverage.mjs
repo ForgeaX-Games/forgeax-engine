@@ -26,6 +26,10 @@ const maxGroupConcurrency = 3;
 const maxChildOutputBytes = 64 * 1024 * 1024;
 const serialCoveragePreflights = [
   {
+    project: '@forgeax/engine-render',
+    file: 'packages/render/src/__tests__/docs-gate-green.unit.test.ts',
+  },
+  {
     project: '@forgeax/engine-runtime',
     file: 'packages/runtime/src/__tests__/surface-fixture-types.unit.test.ts',
   },
@@ -43,22 +47,69 @@ const isolatedChildProjects = new Set([
 // Each set runs in its own child and every other child of the same project
 // excludes it, so the file is instrumented exactly once while the rest of the
 // project no longer queues behind it. Weights are the measured child seconds
-// from CI run 36110279881 (heavy runner, two concurrent children).
+// from CI run 36110279881 (heavy runner, two concurrent children), unless noted.
 const isolatedCoverageFileSets = [
   {
+    // Literal5daf instrumented cold Standard/ray program suite crossed30s
+    // in a shared child. Preserve the full file and its original deadlines.
+    project: '@forgeax/engine-shader-compiler',
+    files: [
+      'packages/shader-compiler/src/material/__tests__/pack-program-reuse.integration.test.ts',
+    ],
+    weight: 45,
+  },
+  {
+    // Repository scans keep their existing deadlines without competing with
+    // instrumented imports. The weight is a scheduling estimate, not a receipt.
+    project: '@forgeax/engine-ecs',
+    files: [
+      'packages/ecs/src/__tests__/errors.unit.test.ts',
+      'packages/ecs/src/__tests__/source-scan.unit.test.ts',
+    ],
+    weight: 40,
+  },
+  {
     project: '@forgeax/engine-devkit',
+    // The process-owner test adds cold child startup; its added 20 s weight
+    // is an estimate. All existing case and watchdog deadlines stay intact.
     files: [
       'packages/devkit/src/__tests__/new-project-workers.e2e.test.ts',
       'packages/devkit/src/__tests__/scene-bootstrap.e2e.test.ts',
+      'packages/devkit/src/__tests__/live-dev-process.integration.test.ts',
     ],
-    weight: 270,
+    weight: 290,
+  },
+  {
+    // Run 37342840315 exceeded both 5 s GI fixture budgets while this child
+    // shared eight CPUs with DevKit. Keep the real compiler fixtures exclusive;
+    // this weight is a scheduling estimate, not a measured isolated duration.
+    project: '@forgeax/engine-render',
+    files: [
+      'packages/render/src/__tests__/raytracing/diffuse-gi.unit.test.ts',
+      'packages/render/src/__tests__/raytracing/gi-view.unit.test.ts',
+    ],
+    weight: 20,
   },
   {
     project: '@forgeax/engine-vite-plugin-shader',
-    files: ['packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts'],
+    files: [
+      'packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts',
+      'packages/vite-plugin-shader/src/__tests__/public-surface.unit.test.ts',
+    ],
     weight: 360,
   },
+  {
+    project: '@forgeax/engine-pack',
+    files: ['packages/pack/src/__tests__/material-surface-publication.unit.test.ts'],
+    weight: 40,
+  },
 ];
+
+export function isExclusiveCoverageGroup(group) {
+  // Explicit file sets own repository scans, cold compiler or real Browser work. Do not let
+  // an unrelated instrumented child consume their CPU/memory headroom.
+  return group.files.length > 0;
+}
 // Approximate coverage child seconds per project from CI run 36110279881,
 // net of the isolated file sets above. Unlisted projects measured near the
 // default. The weights drive longest-first launch order and the LPT shard
@@ -786,6 +837,7 @@ async function main() {
       groups: selectedGroups,
       concurrency: groupConcurrency,
       order: options.coverage ? coverageGroupOrder(selectedGroups) : undefined,
+      isExclusive: isExclusiveCoverageGroup,
       runGroupImpl: async (group, index) => {
         const startedAt = Date.now();
         process.stderr.write(

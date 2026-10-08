@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { setupGpuShim } from '../../hello/triangle/scripts/smoke-helpers.mjs';
@@ -10,7 +11,7 @@ mkdirSync(reportDir, { recursive: true });
 const fail = (message, detail = {}) => { const report = { status: 'blocked', backend: 'dawn-node', message, ...detail }; writeFileSync(resolve(reportDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`); throw new Error(message); };
 if (!existsSync(resolve(DIST, 'pack-index.json'))) fail('Preview dist/pack-index.json is missing; run build:app preview first.');
 const packIndexText = readFileSync(resolve(DIST, 'pack-index.json'), 'utf8');
-const packIndex = JSON.parse(packIndexText);
+const packIndex = decodeCatalogWire(JSON.parse(packIndexText)).unwrap();
 const packageFiles = new Map(packIndex.map((entry) => [entry.packageUrl, resolve(DIST, entry.packageUrl.slice(1))]));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (request) => {

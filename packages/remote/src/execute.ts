@@ -40,16 +40,22 @@ import { RemoteError } from './errors';
 // legalizes top-level `await` AND top-level `return` simultaneously.
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as FunctionConstructor;
 
+/** Live eval roots; the introspect document and server options derive from this list. */
 export type ExecuteContext = {
   readonly world: unknown;
   readonly renderer: unknown;
   readonly assets: unknown;
+  /** Host-owned RHI capture capability; undefined when FORGEAX_ENGINE_RHI_DEBUG !== '1'. */
   readonly rhiCapture?: unknown;
+  /** Host-owned simulation operations and realm Context; Remote owns neither. */
   readonly simulation?: unknown;
+  /** Explicit CPU profiler capability; omitted unless the host opts in. */
   readonly profiler?: unknown;
+  /** Structural report provider; remote never imports the App owner. */
   readonly execution?: unknown;
   /** Read-only projection of the live plugin Entry/Fiber tree. */
   readonly plugins?: unknown;
+  /** Resolve modules in the owning Host realm, using the existing eval seam. */
   readonly importModule?: (specifier: string) => Promise<unknown>;
 };
 

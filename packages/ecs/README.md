@@ -95,6 +95,12 @@ barrier. `world.internSharedRef` remains an idempotent producer lookup and does
 not retain on repeated discovery; `world.allocSharedRef` creates an independent
 handle.
 
+`world.allocUniqueRef(tag, payload, onRelease?)` stores the actual owned
+payload. `world.resolveUniqueRef<T>(handle)` reads that same payload and returns
+`unique-ref-released` or `unique-ref-stale` for invalid generations. Component
+replacement, removal and despawn own release; the read API grants no independent
+release or mutation of the store.
+
 The `fields` object is deeply frozen at definition time. A value replacement
 uses the ordinary mutation path:
 

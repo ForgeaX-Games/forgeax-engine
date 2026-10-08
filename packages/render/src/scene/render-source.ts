@@ -3,6 +3,7 @@ import type { Component, EntityHandle, Query, World } from '@forgeax/engine-ecs'
 import { createStateProjection } from '@forgeax/engine-ecs/projection';
 import { ChildOf, GlobalTransform, Mobility, MorphWeights, Transform } from '@forgeax/engine-scene';
 import { Skin } from '@forgeax/engine-skinning';
+import { Terrain } from '@forgeax/engine-terrain';
 import {
   Instances,
   Layer,
@@ -23,6 +24,7 @@ export type GlobalTransformChangeQuery = Query<readonly [typeof GlobalTransform]
 // their edits must not recreate unrelated geometry or its submission history.
 export const RENDERABLE_SOURCE_COMPONENTS = [
   ChildOf,
+  Terrain,
   MeshFilter,
   MeshRenderer,
   Instances,
@@ -86,8 +88,10 @@ export function createRenderSourceState(world: World, additional: readonly Compo
 
 export function isRenderableMember(world: World, entity: number): boolean {
   return (
-    world.hasComponent(entity as EntityHandle, MeshRenderer) &&
+    (world.hasComponent(entity as EntityHandle, Terrain) ||
+      world.hasComponent(entity as EntityHandle, MeshRenderer)) &&
     world.hasComponent(entity as EntityHandle, Transform) &&
-    world.hasComponent(entity as EntityHandle, MeshFilter)
+    (world.hasComponent(entity as EntityHandle, Terrain) ||
+      world.hasComponent(entity as EntityHandle, MeshFilter))
   );
 }

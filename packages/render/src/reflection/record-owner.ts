@@ -18,6 +18,8 @@ import {
   writeAllFaceUniforms,
   writeAllPrefilterUniforms,
 } from '../device/gpu-residency';
+import type { SelectedEnvironmentFrame } from '../environment/frame';
+import { type AtmosphereLease, retainAtmosphere } from '../environment/storage';
 import {
   GPU_TEXTURE_USAGE_COPY_SRC,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT_AND_TEXTURE_BINDING,
@@ -31,6 +33,7 @@ import {
   CUBEMAP_FACE_VERTICES,
   createIblPipelines,
   getOrCreateIblCache,
+  iblPrefilterGroup0Entries,
   PREFILTER_MIP_LEVELS,
 } from '../ibl/IblPipelineCache';
 import type {
@@ -82,6 +85,7 @@ type ProbeGpuResource = {
   diffusePayload: readonly number[];
   captureSceneRevision: string;
   captureStartedFrame: number;
+  atmosphere: AtmosphereLease | undefined;
   lastCompletedFrame: number;
   activeFact?: ReflectionProbeFact;
   index: number;
@@ -391,6 +395,7 @@ export class ReflectionProbeRecordOwner {
     skylight: SkylightSnapshot | undefined = undefined,
     sceneRevision = '',
     skybox?: SkyboxSnapshot,
+    environment?: SelectedEnvironmentFrame,
   ): ReflectionProbeRecordState {
     this.currentFrame = frameId;
     this.refreshFallbackCapabilities(frameId);
@@ -428,7 +433,14 @@ export class ReflectionProbeRecordOwner {
       );
       if (!admission.ok) continue;
       const key = `${fact.worldId}:${fact.entityKey}`;
-      const resource = this.resourceFor(key, fact, acceptedCount, sceneRevision, skylight);
+      const resource = this.resourceFor(
+        key,
+        fact,
+        acceptedCount,
+        sceneRevision,
+        skylight,
+        environment,
+      );
       if (resource === undefined) continue;
       acceptedCount += 1;
       acceptedBytes = admission.acceptedBytes;
@@ -498,30 +510,12 @@ export class ReflectionProbeRecordOwner {
           : this.internals.device.createBindGroup({
               label: `reflection-probe-${resource.index}-pmrem-${step.mipLevel}-${step.faceIndex}`,
               layout: this.shared.prefilterGroup0Bgl,
-              entries: [
-                {
-                  binding: 0,
-                  resource: {
-                    kind: 'buffer',
-                    value: {
-                      buffer: this.shared.faceUniforms,
-                      offset: step.faceIndex * 256,
-                      size: 64,
-                    },
-                  },
-                },
-                {
-                  binding: 1,
-                  resource: {
-                    kind: 'buffer',
-                    value: {
-                      buffer: this.shared.prefilterUniforms,
-                      offset: (step.mipLevel * 6 + step.faceIndex) * 256,
-                      size: 16,
-                    },
-                  },
-                },
-              ],
+              entries: iblPrefilterGroup0Entries(
+                this.shared.faceUniforms,
+                this.shared.prefilterUniforms,
+                step.mipLevel,
+                step.faceIndex,
+              ),
             });
       if (filterGroup0 !== undefined && !filterGroup0.ok) continue;
       resource.pending = { rawCaptureFace, step };
@@ -555,6 +549,8 @@ export class ReflectionProbeRecordOwner {
               projection: 'perspective' as const,
             };
       work.push({
+        atmosphere: resource.atmosphere?.storage,
+        captureGeneration: resource.captureStartedFrame,
         probeIndex: resource.index,
         rawTexture: resource.raw.texture,
         rawCubeView: resource.raw.cubeView,
@@ -684,6 +680,8 @@ export class ReflectionProbeRecordOwner {
         resource.active = resource.candidate;
         resource.activeFact = resource.captureFact;
         resource.lastCompletedFrame = submittedFrame;
+        resource.atmosphere?.release();
+        resource.atmosphere = undefined;
         resource.candidate = resource.spare ?? previous ?? resource.candidate;
         resource.spare = undefined;
       }
@@ -1163,6 +1161,8 @@ export class ReflectionProbeRecordOwner {
   }
 
   private destroyProbeResource(resource: ProbeGpuResource): void {
+    resource.atmosphere?.release();
+    resource.atmosphere = undefined;
     const sets = new Set<ProbeCubeSet>([resource.raw, resource.candidate]);
     if (resource.active !== undefined) sets.add(resource.active);
     if (resource.spare !== undefined) sets.add(resource.spare);
@@ -1181,12 +1181,25 @@ export class ReflectionProbeRecordOwner {
     index: number,
     sceneRevision = '',
     skylight?: SkylightSnapshot,
+    environment?: SelectedEnvironmentFrame,
   ): ProbeGpuResource | undefined {
+    const cache =
+      skylight !== undefined && skylight.equirectHandle !== 0
+        ? getOrCreateIblCache(this.internals.deviceScope)
+        : undefined;
+    const diffuseAvailable =
+      skylight !== undefined &&
+      (skylight.equirectHandle === 0 ||
+        (cache?.irradianceView !== undefined &&
+          cache.prefilterView !== undefined &&
+          cache.brdfLutView !== undefined));
     const diffuse =
       skylight === undefined
         ? [0, 0, 0, index + 1, 0, 0, 0, 1]
         : [
-            ...skylight.color.map((value) => value * skylight.intensity),
+            ...(diffuseAvailable
+              ? skylight.color.map((value) => value * skylight.intensity)
+              : [0, 0, 0]),
             index + 1,
             ...skylight.rotation,
           ];
@@ -1213,6 +1226,11 @@ export class ReflectionProbeRecordOwner {
       // Finish the current bounded cycle. Coalesce newer changes into the next
       // cycle instead of continuously restarting face zero under motion.
       if (settled && existing.pending === undefined && requested) {
+        existing.atmosphere?.release();
+        existing.atmosphere =
+          environment?.source.kind === 'atmosphere'
+            ? retainAtmosphere(this.internals, environment)
+            : undefined;
         existing.captureFact = fact;
         existing.captureSceneRevision = sceneRevision;
         existing.captureStartedFrame = this.currentFrame;
@@ -1302,6 +1320,10 @@ export class ReflectionProbeRecordOwner {
     const resource: ProbeGpuResource = {
       fact,
       captureFact: fact,
+      atmosphere:
+        environment?.source.kind === 'atmosphere'
+          ? retainAtmosphere(this.internals, environment)
+          : undefined,
       diffusePayload: diffuse,
       captureSceneRevision: sceneRevision,
       captureStartedFrame: this.currentFrame,

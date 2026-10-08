@@ -22,7 +22,11 @@
       "types": "./dist/preview/index.d.ts",
       "import": "./dist/preview/index.mjs"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./localization": {
+      "types": "./dist/localization/index.d.ts",
+      "import": "./dist/localization/index.mjs"
+    }
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -39,6 +43,7 @@
   "dependencies": {
     "@forgeax/engine-types": "workspace:*",
     "css-tree": "^3.2.1",
+    "i18next": "26.0.10",
     "parse5": "^7.3.0"
   },
   "devDependencies": {

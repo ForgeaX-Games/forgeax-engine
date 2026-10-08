@@ -410,10 +410,9 @@ describe('user material shader variant manifest', () => {
     );
     expect(clearcoatSchema.map((entry) => entry.name)).not.toContain('transmissionTexture');
     expect(full.composedWgsl).toContain('transmissionTexture');
-    expect(full.composedWgsl).toContain('transmissionBasis0');
+    expect(full.composedWgsl).toContain('objectBasis0');
     expect(full.composedWgsl).toMatch(/@group\(2\)\s*@binding\(0\)/u);
     expect(full.composedWgsl).toMatch(/@group\(3\)\s*@binding\(0\)/u);
-    expect(clearcoat.composedWgsl).not.toContain('transmissionBasis0');
     expect(full.variants.length).toBeGreaterThan(0);
     expect(
       full.variants.every((variant) => variant.composedWgsl.includes('transmissionTexture')),

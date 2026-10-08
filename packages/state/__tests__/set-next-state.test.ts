@@ -53,7 +53,6 @@ describe('setNextState', () => {
     const err = result.error as StateError;
     expect(err.code).toBe('invalid-variant');
     expect(err.detail).toEqual({
-      code: 'invalid-variant',
       name: 'MyState',
       got: invalid,
       valid: ['idle', 'running', 'paused'],
@@ -137,7 +136,6 @@ describe('setNextStateForce', () => {
     const err = result.error as StateError;
     expect(err.code).toBe('invalid-variant');
     expect(err.detail).toEqual({
-      code: 'invalid-variant',
       name: 'MyState',
       got: invalid,
       valid: ['idle', 'running', 'paused'],

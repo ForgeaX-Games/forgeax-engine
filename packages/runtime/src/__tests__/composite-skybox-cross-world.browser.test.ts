@@ -189,12 +189,14 @@ async function readbackAfterComposite(
       environment: { lease: environmentLease },
     });
     if (!r.ok) throw new Error(`renderer.draw frame ${i} failed: ${r.error.code}`);
+    expect((await r.value.completed).ok).toBe(true);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   }
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => setTimeout(resolve, 50));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
+  console.warn('[composite-skybox] phase=completed-frames-readback');
   // Primary: CDP screenshot of the canvas element (compositor-independent).
   try {
     const shot = await page
@@ -249,12 +251,15 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
   let renderer: EngineRenderer | undefined;
   let canvas: HTMLCanvasElement | undefined;
 
-  afterEach(() => {
-    // Browser Mode files share Chromium's GPU process. Do not dispose the
-    // renderer here: that destroys the shared device for the next file.
-    renderer = undefined;
-    if (canvas !== undefined && canvas.parentElement !== null) {
-      canvas.parentElement.removeChild(canvas);
+  afterEach(async () => {
+    try {
+      if (renderer !== undefined) {
+        const disposed = await renderer.dispose();
+        if (!disposed.ok) throw disposed.error;
+      }
+    } finally {
+      renderer = undefined;
+      canvas?.remove();
       canvas = undefined;
     }
   });
@@ -269,6 +274,7 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
     canvas.style.display = 'block';
     document.body.appendChild(canvas);
 
+    console.warn('[composite-skybox] phase=construct-renderer');
     const host = await constructRuntimeRendererHost(
       canvas,
       {},
@@ -358,6 +364,7 @@ describe.skipIf(!browserReady)('composite + skybox + cross-world mesh (ENGINE-fi
     litBox(sceneWorld, [0.15, 0.8, 0.2, 1], 0, 0);
     litBox(sceneWorld, [0.85, 0.15, 0.15, 1], 1.8, 0);
 
+    console.warn('[composite-skybox] phase=composite-frames-and-readback');
     const pixels = await readbackAfterComposite(
       renderer,
       [editorWorld, sceneWorld],

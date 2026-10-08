@@ -63,7 +63,7 @@ export function privateBackend(
     step(inputMap) {
       const sample = detach.backend.sample();
       actions = inputMap === undefined ? undefined : deriveActionStates(sample, inputMap, actions);
-      previous = snapshotFromSample(sample, actions, inputMap, previous);
+      previous = snapshotFromSample(sample, actions, previous);
       return previous;
     },
     key(type, key, code) {

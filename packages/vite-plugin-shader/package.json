@@ -31,7 +31,7 @@
     "@forgeax/engine-shader-compiler": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-vfx-render": "workspace:*",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "peerDependencies": {
     "vite": ">=4"
@@ -39,7 +39,8 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/ws": "^8.5.10",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "@forgeax/engine-naga": "workspace:*"
   },
   "forgeax": {
     "metrics": {

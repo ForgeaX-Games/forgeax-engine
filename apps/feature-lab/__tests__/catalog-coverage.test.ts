@@ -27,6 +27,9 @@ const GATE_PROVED_ROWS = new Set([
   'Explicit Worker World rebuild',
   'Realm bootstrap',
   'Static plugin programs',
+  // Native Host/Worker and producer-served Range fixtures; see README gate routes.
+  'Gamepad feedback',
+  'Long audio windows',
   // Preview and workspace hosts.
   'Tool Preview Host',
   'Resident Host Pack selection',

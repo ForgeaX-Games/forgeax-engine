@@ -29,7 +29,7 @@
   "dependencies": {
     "@forgeax/engine-rhi": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*"

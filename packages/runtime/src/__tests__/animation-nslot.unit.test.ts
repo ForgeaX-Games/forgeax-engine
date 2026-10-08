@@ -32,7 +32,7 @@ describe('AnimationPlayer — variable N-slot (M1 / w1)', () => {
         component: AnimationPlayer,
         data: {
           clips,
-          times: new Float32Array([0, 0, 0, 0, 0, 0]),
+          times: new Float64Array([0, 0, 0, 0, 0, 0]),
           weights: new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]),
           speeds: new Float32Array([1, 1, 1, 1, 1, 1]),
         },

@@ -4,6 +4,8 @@ import { basename, dirname, extname, resolve } from 'node:path';
 import { runCliFbx } from '@forgeax/engine-fbx/cli-fbx';
 import { bakeFont, realGeneratorFactory } from '@forgeax/engine-font/cli-font';
 import { runCliGltf } from '@forgeax/engine-gltf/cli-gltf';
+import { importMeshFile } from '@forgeax/engine-mesh-io';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import {
   createFileSystemPackAuthoringGateway,
   type PackAuthoringMaterializedAsset,
@@ -23,6 +25,7 @@ import type {
 } from './types.js';
 
 const imageExtensions = new Set(['.png', '.jpg', '.jpeg', '.hdr']);
+const meshExtensions = new Set(['.obj', '.stl', '.svg']);
 const gltfExtensions = new Set(['.gltf', '.glb']);
 const fbxExtensions = new Set(['.fbx']);
 const fontExtensions = new Set(['.ttf', '.otf']);
@@ -31,6 +34,11 @@ const ASSET_LIST_MAX_LIMIT = 256;
 
 function failure(error: CommandError): CommandResult<never> {
   return { ok: false, error };
+}
+
+/** Owner failures cross the command boundary as the CommandError fields only (e.g. Pack `actual` stays behind). */
+function ownerFailure({ code, expected, hint, detail }: CommandError): CommandResult<never> {
+  return failure({ code, expected, hint, detail });
 }
 
 async function sourcesAt(path: string): Promise<string[]> {
@@ -233,6 +241,7 @@ export async function assetAddCommand(options: AssetAddOptions): Promise<Command
     const supported = sources.filter((source) => {
       const extension = extname(source).toLowerCase();
       return (
+        meshExtensions.has(extension) ||
         imageExtensions.has(extension) ||
         gltfExtensions.has(extension) ||
         fbxExtensions.has(extension) ||
@@ -242,21 +251,30 @@ export async function assetAddCommand(options: AssetAddOptions): Promise<Command
     if (supported.length === 0) {
       return failure({
         code: 'source-package-importer-missing',
-        expected: 'a .png, .jpg, .jpeg, .hdr, .gltf, .glb, .fbx, .ttf, or .otf source',
+        expected:
+          'a .png, .jpg, .jpeg, .hdr, .gltf, .glb, .fbx, .obj, .stl, .svg, .ttf, or .otf source',
         hint: 'Use a supported built-in importer or add an explicit producer before adding this source.',
         detail: { target },
       });
     }
     const assets: unknown[] = [];
     for (const source of supported) {
-      const result = imageExtensions.has(extname(source).toLowerCase())
-        ? await addImage(source, options.dryRun === true)
-        : gltfExtensions.has(extname(source).toLowerCase())
-          ? await addGltf(source, options.dryRun === true)
-          : fbxExtensions.has(extname(source).toLowerCase())
-            ? await addFbx(source, options.dryRun === true)
-            : await addFont(source, options.dryRun === true);
-      if (!result.ok) return result;
+      const result = meshExtensions.has(extname(source).toLowerCase())
+        ? await importMeshFile(source, options.dryRun === true)
+        : imageExtensions.has(extname(source).toLowerCase())
+          ? await addImage(source, options.dryRun === true)
+          : gltfExtensions.has(extname(source).toLowerCase())
+            ? await addGltf(source, options.dryRun === true)
+            : fbxExtensions.has(extname(source).toLowerCase())
+              ? await addFbx(source, options.dryRun === true)
+              : await addFont(source, options.dryRun === true);
+      if (!result.ok)
+        return failure({
+          code: result.error.code,
+          expected: result.error.expected,
+          hint: result.error.hint,
+          detail: result.error.detail ?? {},
+        });
       assets.push(result.value);
     }
     return { ok: true, value: { root: facts.value.root, assets, dryRun: options.dryRun === true } };
@@ -296,17 +314,6 @@ async function entries(options: ProjectCommandOptions) {
   };
 }
 
-function hasPackSourceSubjects(value: unknown): boolean {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const sources = (value as { readonly sources?: unknown }).sources;
-  if (!Array.isArray(sources)) return false;
-  return sources.some((source) => {
-    if (source === null || typeof source !== 'object' || Array.isArray(source)) return false;
-    const format = (source as { readonly format?: unknown }).format;
-    return format === 'pack.ts' || format === 'direct' || format === 'instance';
-  });
-}
-
 interface PackIndexRow {
   readonly guid?: unknown;
   readonly kind?: unknown;
@@ -336,7 +343,7 @@ function packIndexFailure(
 ): CommandResult<never> {
   return failure({
     code,
-    expected: 'dist/pack-index.json to be a readable array of published asset rows',
+    expected: 'dist/pack-index.json to contain readable published asset rows',
     hint:
       code === 'asset-index-unreadable'
         ? 'Rebuild the project to regenerate dist/pack-index.json, then retry.'
@@ -363,7 +370,15 @@ async function readPackIndexMaterialized(
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as unknown;
+    const decoded = decodeCatalogWire(JSON.parse(raw));
+    if (!decoded.ok) {
+      return packIndexFailure(root, 'asset-index-invalid', {
+        indexPath,
+        code: decoded.error.code,
+        detail: decoded.error.detail,
+      });
+    }
+    parsed = decoded.value;
   } catch (cause) {
     return packIndexFailure(root, 'asset-index-invalid', {
       indexPath,
@@ -449,7 +464,12 @@ async function packSourceList(options: ProjectCommandOptions) {
   if (!facts.ok) return facts;
   const gateway = await packGateway(facts.value);
   if (!gateway.ok) return gateway;
-  return gateway.value.execute({ operation: 'asset.list', requestId: randomUUID() });
+  const listing = await gateway.value.execute({ operation: 'asset.list', requestId: randomUUID() });
+  if (!listing.ok) return listing;
+  return {
+    ok: true as const,
+    value: { root: facts.value.root, gateway: gateway.value, listing: listing.value },
+  };
 }
 
 export async function assetListCommand(
@@ -457,13 +477,9 @@ export async function assetListCommand(
 ): Promise<CommandResult<unknown>> {
   const packSource = await packSourceList(options);
   if (!packSource.ok) {
-    return failure({
-      code: packSource.error.code,
-      expected: packSource.error.expected,
-      hint: packSource.error.hint,
-      detail: packSource.error.detail,
-    });
+    return ownerFailure(packSource.error);
   }
+  const listing = packSource.value.listing;
   const paginate = <T>(items: readonly T[]) => {
     const limit = options.limit ?? ASSET_LIST_DEFAULT_LIMIT;
     const cursor = options.cursor === undefined ? 0 : Number(options.cursor);
@@ -497,19 +513,15 @@ export async function assetListCommand(
       },
     };
   };
-  if (hasPackSourceSubjects(packSource.value)) {
-    const value = packSource.value as {
-      readonly assets?: readonly Readonly<Record<string, unknown>>[];
-      readonly sources?: readonly Readonly<Record<string, unknown>>[];
-    };
-    const assets = (value.assets ?? []).filter(
+  const sources = listing.sources ?? [];
+  if (sources.length > 0) {
+    const assets = (listing.assets ?? []).filter(
       (asset) => options.type === undefined || asset.kind === options.type,
     );
     const page = paginate(assets);
     if (!page.ok) return page;
     const cursor = page.value.page.cursor;
     const limit = page.value.page.limit;
-    const sources = value.sources ?? [];
     const sourcePage = sources.slice(cursor, cursor + limit);
     // Pack exposes two projections through one response. Keep their cursor
     // shared, but size the window by the longer projection so source-only
@@ -522,7 +534,7 @@ export async function assetListCommand(
     return {
       ok: true,
       value: {
-        ...value,
+        ...listing,
         assets: page.value.items,
         sources: sourcePage,
         page: {
@@ -549,42 +561,23 @@ export async function assetVerifyCommand(
 ): Promise<CommandResult<unknown>> {
   const packSource = await packSourceList(options);
   if (!packSource.ok) {
-    return failure({
-      code: packSource.error.code,
-      expected: packSource.error.expected,
-      hint: packSource.error.hint,
-      detail: packSource.error.detail,
-    });
+    return ownerFailure(packSource.error);
   }
-  if (hasPackSourceSubjects(packSource.value)) {
-    const facts = await readProjectFacts(options.root);
-    if (!facts.ok) return facts;
+  const { root, gateway, listing } = packSource.value;
+  if ((listing.sources?.length ?? 0) > 0) {
     // A published Pack row is only an identity projection. Verify the one
     // immutable dist closure before reporting its bytes as available. Keep
     // source-only projects cheap: without a ready output there is no closure
     // to admit and the gateway reports the honest unproduced state.
-    const projectedAssets = isRecord(packSource.value) ? packSource.value.assets : undefined;
-    const hasPublishedOutputs =
-      Array.isArray(projectedAssets) &&
-      projectedAssets.some((asset) => isRecord(asset) && asset.status === 'ready');
-    if (hasPublishedOutputs) {
-      const verifiedDist = await verifyDist(resolve(facts.value.root, 'dist'));
+    if (listing.assets?.some((asset) => asset.status === 'ready') === true) {
+      const verifiedDist = await verifyDist(resolve(root, 'dist'));
       if (!verifiedDist.ok) return verifiedDist;
     }
-    const gateway = await packGateway(facts.value);
-    if (!gateway.ok) return gateway;
-    const verified = await gateway.value.execute({
+    const verified = await gateway.execute({
       operation: 'asset.verify',
       requestId: randomUUID(),
     });
-    return verified.ok
-      ? { ok: true, value: verified.value }
-      : failure({
-          code: verified.error.code,
-          expected: verified.error.expected,
-          hint: verified.error.hint,
-          detail: verified.error.detail,
-        });
+    return verified.ok ? { ok: true, value: verified.value } : ownerFailure(verified.error);
   }
   const result = await entries(options);
   if (!result.ok) return result;
@@ -602,20 +595,12 @@ export async function assetInspectCommand(
 ): Promise<CommandResult<unknown>> {
   const packSource = await packSourceList(options);
   if (!packSource.ok) {
-    return failure({
-      code: packSource.error.code,
-      expected: packSource.error.expected,
-      hint: packSource.error.hint,
-      detail: packSource.error.detail,
-    });
+    return ownerFailure(packSource.error);
   }
-  if (hasPackSourceSubjects(packSource.value) || options.sourceKey !== undefined) {
-    const facts = await readProjectFacts(options.root);
-    if (!facts.ok) return facts;
-    const gateway = await packGateway(facts.value);
-    if (!gateway.ok) return gateway;
+  const { gateway, listing } = packSource.value;
+  if ((listing.sources?.length ?? 0) > 0 || options.sourceKey !== undefined) {
     if (isValidAssetGuidString(options.subject)) {
-      const resolved = await gateway.value.execute({
+      const resolved = await gateway.execute({
         operation: 'asset.resolve',
         requestId: randomUUID(),
         subject: options.subject,
@@ -624,7 +609,7 @@ export async function assetInspectCommand(
         return { ok: true, value: { ...resolved.value, operation: 'asset.inspect' } };
       }
     }
-    const inspected = await gateway.value.execute({
+    const inspected = await gateway.execute({
       operation: 'asset.inspect',
       requestId: randomUUID(),
       subject: options.subject,
@@ -636,12 +621,7 @@ export async function assetInspectCommand(
       (inspected.error.code !== 'pack-source-not-found' &&
         inspected.error.code !== 'pack-source-path-invalid')
     ) {
-      return failure({
-        code: inspected.error.code,
-        expected: inspected.error.expected,
-        hint: inspected.error.hint,
-        detail: inspected.error.detail,
-      });
+      return ownerFailure(inspected.error);
     }
   }
   const result = await entries(options);
@@ -680,12 +660,5 @@ export async function assetResolveCommand(
     ...(options.sourceKey === undefined ? {} : { sourceKey: options.sourceKey }),
     ...(options.require === undefined ? {} : { require: options.require }),
   });
-  return result.ok
-    ? { ok: true, value: result.value }
-    : failure({
-        code: result.error.code,
-        expected: result.error.expected,
-        hint: result.error.hint,
-        detail: result.error.detail,
-      });
+  return result.ok ? { ok: true, value: result.value } : ownerFailure(result.error);
 }

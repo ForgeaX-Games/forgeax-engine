@@ -2,12 +2,11 @@
 // declaration registry (plan-strategy 3.1).
 //
 // Shape (D-4/D-6.1):
-// - string key -> ResourceDescriptor + bufferRole + lifetime
+// - string key -> ResourceDescriptor (kind, bufferRole, lifetime)
 // - duplicate-resource fail-fast across every declaration form
 // - unknown-resource fail-fast at pass binding time
 // - addColorTarget: color target registration with format/size/sample/usage
 
-import type { TextureFormat } from '@forgeax/engine-rhi';
 import {
   type AliasSourceDetail,
   type CapMissingDetail,
@@ -18,13 +17,7 @@ import {
   RenderGraphError,
   type Result,
 } from './errors.js';
-import type {
-  ColorTargetDescriptor,
-  ColorTargetSize,
-  ResourceDescriptor,
-  ResourceLifetime,
-} from './graph.js';
-import type { ColorValueDomain } from './pipeline/color-value-domain.js';
+import type { ColorTargetDescriptor, ResourceDescriptor } from './graph.js';
 
 /** Check the only allocation/view dimension combinations supported by WebGPU. */
 export function isTextureViewDimensionCompatible(
@@ -42,34 +35,21 @@ export function isTextureViewDimensionCompatible(
  * carries the format/size/sample/usage fields (w5); when via
  * addResource it is undefined.
  */
-export interface ColorTargetResourceMeta {
-  readonly format: TextureFormat;
-  readonly size: ColorTargetSize;
+export type ColorTargetResourceMeta = Pick<
+  ColorTargetDescriptor,
+  'format' | 'size' | 'domain' | 'viewFormats'
+> & {
   readonly sample: number;
   readonly usage: number;
-  /** Explicit semantic color domain; never derived from format. */
-  readonly domain?: ColorValueDomain | undefined;
-  /**
-   * Extra texture view formats pre-declared at GPU texture creation. Mirrors
-   * GPUTextureDescriptor.viewFormats. Used by the LDR MSAA path which needs a
-   * `bgra8unorm` storage texture plus a `bgra8unorm-srgb` view of the same
-   * texture for hardware sRGB encoding on store.
-   */
-  readonly viewFormats?: readonly TextureFormat[] | undefined;
-  /**
-   * When set, this resource is an alias of the given source resource.
-   * The compile allocation phase folds the alias into the source's
-   * physical texture (KB-1 MoveNode pattern, D-2).
-   */
-  readonly aliasedFrom?: string | undefined;
-}
+};
 
 export interface ResourceEntry {
   readonly key: string;
   readonly descriptor: ResourceDescriptor;
-  readonly lifetime: ResourceLifetime;
   /** Present when the resource was registered via addColorTarget (w5). */
   readonly colorTarget?: ColorTargetResourceMeta | undefined;
+  /** Alias relationship; allocation metadata belongs to the shared source. */
+  readonly aliasedFrom?: string | undefined;
 }
 
 export class ResourceRegistry {
@@ -79,7 +59,6 @@ export class ResourceRegistry {
     const entry: ResourceEntry = {
       key,
       descriptor,
-      lifetime: descriptor.lifetime,
     };
     return this.register(entry);
   }
@@ -105,7 +84,6 @@ export class ResourceRegistry {
     const entry: ResourceEntry = {
       key: name,
       descriptor: { kind: 'texture', lifetime },
-      lifetime,
       colorTarget: colorTargetMeta,
     };
     return this.register(entry);
@@ -132,16 +110,8 @@ export class ResourceRegistry {
     const entry: ResourceEntry = {
       key: name,
       descriptor: { kind: 'texture', lifetime: 'transient' },
-      lifetime: 'transient',
-      colorTarget: {
-        format: sourceMeta.format,
-        size: sourceMeta.size,
-        sample: sourceMeta.sample,
-        usage: sourceMeta.usage,
-        ...(sourceMeta.domain !== undefined ? { domain: sourceMeta.domain } : {}),
-        ...(sourceMeta.viewFormats !== undefined ? { viewFormats: sourceMeta.viewFormats } : {}),
-        aliasedFrom: source,
-      },
+      colorTarget: sourceMeta,
+      aliasedFrom: source,
     };
     return this.register(entry);
   }

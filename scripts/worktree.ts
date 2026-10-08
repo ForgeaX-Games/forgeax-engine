@@ -2,11 +2,12 @@
 // Complete, disk-conscious bootstrap for an Engine Git worktree.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { lstatSync, mkdirSync, symlinkSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { shareHarness } from './lib/shared-harness.mjs';
 
 const ENGINE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const HARNESS_DIR = '.forgeax-harness';
@@ -30,8 +31,6 @@ export type WorktreeOptions = {
   readonly noSetup: boolean;
   readonly keepOnFailure: boolean;
 };
-
-export type HarnessMode = 'shared' | 'sparse';
 
 function gitOutput(args: readonly string[], cwd: string): string {
   try {
@@ -258,28 +257,12 @@ function initializeSubmodules(targetRoot: string, commonRoot: string, jobs: numb
   }
 }
 
-function initializeHarness(targetRoot: string, commonRoot: string): HarnessMode {
+function initializeHarness(targetRoot: string, commonRoot: string): void {
   const targetHarness = join(targetRoot, HARNESS_DIR);
   if (pathExists(targetHarness)) throw new Error(`harness target already exists: ${targetHarness}`);
-
-  const sharedHarness = join(commonRoot, HARNESS_DIR);
-  if (isGitCheckout(sharedHarness)) {
-    const link = relative(dirname(targetHarness), sharedHarness) || '.';
-    symlinkSync(link, targetHarness, 'dir');
-    return 'shared';
+  if (!shareHarness(targetRoot, commonRoot)) {
+    throw new Error(`cannot mount the primary Harness at ${join(commonRoot, HARNESS_DIR)}`);
   }
-
-  run(
-    'node',
-    ['scripts/sync-harness.mjs'],
-    targetRoot,
-    'materializing sparse .forgeax-harness (docs only; no 23 GiB clone)',
-    { ...BOOTSTRAP_ENV, FORGEAX_HARNESS_SPARSE_DOCS: '1' },
-  );
-  if (!isGitCheckout(targetHarness)) {
-    throw new Error('sparse .forgeax-harness initialization completed without a Git checkout');
-  }
-  return 'sparse';
 }
 
 function installDependencies(targetRoot: string): void {
@@ -315,18 +298,11 @@ function removeCreatedWorktree(root: string, targetRoot: string, branch: string)
   }
 }
 
-function printReady(
-  targetRoot: string,
-  branch: string,
-  harnessMode: HarnessMode,
-  noSetup: boolean,
-): void {
+function printReady(targetRoot: string, branch: string, noSetup: boolean): void {
   console.log('\n[worktree] ready');
   console.log(`  path       ${targetRoot}`);
   console.log(`  branch     ${branch}`);
-  console.log(
-    `  harness    ${harnessMode === 'shared' ? 'shared common clone (no disk copy)' : 'sparse docs clone'}`,
-  );
+  console.log('  harness    shared common clone (no disk copy)');
   console.log(`  setup      ${noSetup ? 'skipped (--no-setup)' : 'dependencies installed'}`);
   if (noSetup) {
     console.log(
@@ -358,7 +334,6 @@ export function createWorktree(argv: readonly string[], sourceRoot = ENGINE_ROOT
     );
   }
 
-  const harnessMode = initializeHarnessPlan(commonRoot);
   const reference = submoduleReference(commonRoot);
   if (options.dryRun) {
     console.log(`[dry-run] git worktree add -b ${branch} ${targetRoot} ${options.from}`);
@@ -367,7 +342,7 @@ export function createWorktree(argv: readonly string[], sourceRoot = ENGINE_ROOT
     );
     if (!options.noSetup)
       console.log('[dry-run] pnpm install --frozen-lockfile --ignore-scripts --prefer-offline');
-    console.log(`[dry-run] harness mode: ${harnessMode}`);
+    console.log(`[dry-run] initialize/mount primary Harness: ${join(commonRoot, HARNESS_DIR)}`);
     return;
   }
 
@@ -388,10 +363,10 @@ export function createWorktree(argv: readonly string[], sourceRoot = ENGINE_ROOT
     );
     created = true;
 
-    const actualHarnessMode = initializeHarness(targetRoot, commonRoot);
+    initializeHarness(targetRoot, commonRoot);
     initializeSubmodules(targetRoot, commonRoot, options.jobs);
     if (!options.noSetup) installDependencies(targetRoot);
-    printReady(targetRoot, branch, actualHarnessMode, options.noSetup);
+    printReady(targetRoot, branch, options.noSetup);
   } catch (error) {
     if (created && !options.keepOnFailure) {
       try {
@@ -408,12 +383,6 @@ export function createWorktree(argv: readonly string[], sourceRoot = ENGINE_ROOT
   } finally {
     removeSignalGuard();
   }
-}
-
-function initializeHarnessPlan(commonRoot: string): HarnessMode {
-  const sharedHarness = join(commonRoot, HARNESS_DIR);
-  if (isGitCheckout(sharedHarness)) return 'shared';
-  return 'sparse';
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

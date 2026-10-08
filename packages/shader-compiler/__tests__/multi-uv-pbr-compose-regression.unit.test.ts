@@ -35,6 +35,8 @@ function loadEngineImports(): Record<string, string> {
   const read = (name: string) => readFileSync(join(srcDir, name), 'utf8');
   return {
     'forgeax_material::displacement': read('standard-displacement.wgsl'),
+    'forgeax_material::terrain_vertex': read('terrain-vertex.wgsl'),
+    'forgeax_material::terrain_surface': read('terrain-surface.wgsl'),
     'forgeax_material::surface_v1': read('surface_v1.wgsl'),
     'forgeax_material::surface_sampling': read('surface-sampling.wgsl'),
     'forgeax_material::default_standard_surface': read('default_standard_surface.wgsl'),
@@ -46,6 +48,11 @@ function loadEngineImports(): Record<string, string> {
     'forgeax_view::common': read('common.wgsl'),
     forgeax_scene_temporal: read('scene-temporal.wgsl'),
     'forgeax_view::fog': read('fog.wgsl'),
+    'forgeax_view::atmosphere': read('view-atmosphere.wgsl'),
+    'forgeax_atmosphere::optics': read('atmosphere-optics.wgsl'),
+    'forgeax_atmosphere::visibility': read('atmosphere-visibility.wgsl'),
+    'forgeax_atmosphere::coordinates': read('atmosphere-coordinates.wgsl'),
+    'forgeax_atmosphere::sampling': read('atmosphere-sampling.wgsl'),
     'forgeax_cloud::layer': read('cloud.wgsl'),
     'forgeax_pbr::brdf': read('brdf.wgsl'),
     'forgeax_pbr::specular_aa': read('specular-aa.wgsl'),
@@ -93,12 +100,13 @@ async function composePbr(file: string, defines: Record<string, boolean> = {}) {
       CLUSTER_FORWARD_AVAILABLE: false,
       TRANSMISSION_AVAILABLE: false,
       GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+      TERRAIN_GEOMETRY_AVAILABLE: false,
       ...defines,
     },
     ...(defines.VISIBLE_SURFACE_AVAILABLE ? { renderEntries: {
       vertex: defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE ? 'vs_scene_index' : 'vs_main',
       fragment: 'fs_gbuffer',
-      colorFormats: ['rgba16float', 'r32uint', 'r32uint', 'r32uint', 'r32uint', 'rgba32uint'],
+      colorFormats: ['rgba16float', 'r32uint', 'r32uint', 'r32uint', 'r32uint', 'r32uint', 'rgba32uint', 'rgba16float'],
     } } : {}),
     generatedParameters: defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE
       ? generateParameterModule(DEFAULT_STANDARD_PBR_PARAM_SCHEMA, {
@@ -235,12 +243,12 @@ describe('built-in standard-PBR single-UV + multi-UV pathway regression (F-3 + F
     );
     // The authored material now carries one UV transform per texture slot;
     // the composed shader resolves each slot through that shared helper.
-    expect(fragmentBody).toMatch(/evaluateStandardSurface\s*\(\s*in\s*,\s*frontFacing\s*\)/);
+    expect(fragmentBody).toMatch(/evaluateStandardSurface\s*\(\s*in\s*,\s*frontFacing\s*,\s*geometricNormal\s*\)/);
     expect(defaultSurface).toMatch(
-      /surfaceUv\s*\(\s*input\s*,\s*materialValue\.baseColorTextureCoordinatesTransform/,
+      /surfaceSample\s*\(\s*baseColorTexture\s*,[^;]*materialValue\.baseColorTextureCoordinatesTransform/,
     );
     expect(defaultSurface).toMatch(
-      /surfaceUv\s*\(\s*input\s*,\s*materialValue\.normalTextureCoordinatesTransform/,
+      /let transform = materialValue\.normalTextureCoordinatesTransform;.*?surfaceUv\s*\(\s*input\s*,\s*transform/s,
     );
   });
 });

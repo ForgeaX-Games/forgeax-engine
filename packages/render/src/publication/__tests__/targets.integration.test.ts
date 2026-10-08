@@ -17,6 +17,7 @@ import { projectAuxiliaryCamerasForView } from '../../render-system-extract';
 import type { RenderTargetDescriptor } from '../../targets/contracts';
 import { resolveRenderTargetMaterialSource } from '../../targets/material-source';
 import { isCanvasTextureSource } from '../../textures/canvas-texture';
+import { isExternalTextureSource } from '../../textures/external-texture';
 import { renderPublicationTransfers } from '../contract';
 import { createRenderPublisher } from '../publisher';
 import { RenderPublicationReceiver } from '../receiver';
@@ -109,7 +110,7 @@ it('maps auxiliary/cube cameras and distinct material targets into the receiver 
   expect(initial.frame.cubeCameras).toHaveLength(1);
   const bindings = initial.frame.renderables.map((row) => {
     const source = row.material.textureSources?.get('baseColorTexture');
-    if (source === undefined || isCanvasTextureSource(source))
+    if (source === undefined || isCanvasTextureSource(source) || isExternalTextureSource(source))
       throw new Error('Missing published target source');
     return resolveRenderTargetMaterialSource(source);
   });

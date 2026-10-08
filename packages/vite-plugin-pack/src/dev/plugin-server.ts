@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { RunImportMeta, StagedImportPublication } from '@forgeax/engine-import';
+import type { ImportPublicationInput, RunImportMeta } from '@forgeax/engine-import';
 import type { CatalogBuildResult, CatalogProducerVisibility } from '@forgeax/engine-pack/build';
 import type { ScanSourceDeclaration } from '@forgeax/engine-pack/scanner';
 import type {
@@ -15,6 +15,7 @@ import {
   createPluginPackFailure,
   type PluginPackFailure,
 } from '../errors.js';
+import type { HttpArtifactCompression } from '../http-artifact.js';
 import type { PluginPackInternalOptions } from '../plugin-contract.js';
 import { projectRuntimeDiagnostics } from '../runtime-diagnostics.js';
 import type { DispatcherServer, MiddlewareDispatcher } from './dispatcher.js';
@@ -86,6 +87,7 @@ export interface PluginServerLike extends DispatcherServer {
 }
 
 export interface PluginServerState {
+  readonly artifactCompression?: HttpArtifactCompression;
   catalogProjection: CatalogBuildResult;
   importedGuids: Set<string>;
   metaPackBodies: Map<string, string>;
@@ -94,7 +96,7 @@ export interface PluginServerState {
 
 export type PluginServerProjectionState = PluginServerState & {
   publicationCandidates: Map<string, AssetPublicationEnvelope>;
-  pendingImportPublications: Map<string, StagedImportPublication>;
+  pendingImportPublications: Map<string, ImportPublicationInput>;
 };
 
 export interface PluginServerCallbacks {
@@ -114,9 +116,7 @@ export interface PluginServerCallbacks {
   ): Promise<PackIndexEntry[]>;
   commitGeneration(candidate: PluginServerProjectionState, signal?: AbortSignal): Promise<void>;
   discardPublications(candidates: ReadonlyMap<string, AssetPublicationEnvelope>): void;
-  discardImportPublications(
-    candidates: ReadonlyMap<string, StagedImportPublication>,
-  ): Promise<void>;
+  discardImportPublications(candidates: Map<string, ImportPublicationInput>): Promise<void>;
   ensureMetaPackBody(
     url: string,
     runtimeBinding?: RuntimeAssetBinding,
@@ -376,7 +376,11 @@ export function createPluginServer(context: PluginServerContext) {
       }
     },
     configureServer: configureServerForGeneration,
-    ready: () => lifecycle.startupReady,
+    async ready() {
+      await lifecycle.startupReady;
+      const state = lifecycle.devSession?.state();
+      if (state?.status === 'failed') throw state.error;
+    },
     rebind,
     runtimeBinding,
     rebuildCatalogInPlace: (filenames: readonly string[]) =>

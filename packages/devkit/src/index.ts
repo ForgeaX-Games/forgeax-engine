@@ -94,6 +94,7 @@ export type {
 export type {
   ArtifactRef,
   CapturedRhiTape,
+  ReplayBackendLease,
   RhiCaptureFrameValue,
   RhiDebugOperationContext,
   RhiDebugOperationDescriptor,

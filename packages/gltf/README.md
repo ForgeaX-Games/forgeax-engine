@@ -79,12 +79,12 @@ This package consumes:
 - Vertex attributes: `POSITION` (VEC3, mandatory), `NORMAL` (VEC3), `TEXCOORD_0` (VEC2), `TANGENT` (VEC4, optional), and `COLOR_0` (see the support matrix below) -- decoded via the accessor SoA path; `INDICES` (U8/U16/U32 scalar — U8 widens to U16; U32 preserved, narrowed to U16 by bridge when maxIndex < 65536)
 - `materials` with metallic-roughness and five KHR physical extensions mapped to pass-based `MaterialAsset` (see MaterialIr table below)
 - `textures` / `images` / `samplers` top-level arrays parsed into `GltfDoc` IR; texture index -> image index -> URI two-hop resolution via `externalLoader`
-- `cameras` of `type: 'perspective'`
+- Source perspective and orthographic cameras; supplied aspect disables auto-aspect, omitted aspect follows the canvas. Omitted perspective far uses the finite Float32 maximum, producing the infinite-far limit through JSON Cook.
 
 ## COLOR_0 importer contract
 
 `COLOR_0` is interpreted only at the glTF importer boundary. The accessor
-decoder in [`src/accessor/`](src/accessor/index.ts) returns a fresh, linear
+decoder in [`src/accessor/`](src/accessor/decode-accessor.ts) returns a fresh, linear
 RGBA `Float32Array`; the parser carries it as `GltfMeshIr.colors0`, and the
 bridge projects it to the canonical `MeshAsset.attributes.color` path. No
 shader location, material flag, or runtime `colors0` identity is introduced
@@ -132,7 +132,7 @@ The complete closed error/detail union remains owned by
 |:--|:--|:--|:--|
 | `name` | `string` | no | From `material.name` |
 | `baseColorFactor` | `[number, number, number, number]` | yes | Defaults to `[1, 1, 1, 1]` |
-| `emissiveFactor` | `[number, number, number]` | no | Defaults to `[0, 0, 0]`; bridge emits `emissiveIntensity=1` |
+| `emissiveFactor` | `[number, number, number]` | no | Defaults to `[0, 0, 0]`; bridge emits `emissiveIntensity=KHR_materials_emissive_strength.emissiveStrength` (default 1) |
 | `baseColorTexture` | `number` (texture index) | no | Resolved via `textures[ti] -> images[si] -> uri` |
 | `emissiveTexture` | `number` (texture index) | no | Resolved via `textures[ti] -> images[si] -> uri`; sampled by the built-in PBR shader |
 | `metallicFactor` | `number` | yes | Defaults to `1.0` |
@@ -172,7 +172,7 @@ only its slot index. Canonical `SceneAsset` nodes carry `MeshFilter` plus an
 empty `MeshRenderer.materials` override vector, so imported defaults remain
 mesh-owned and reimport-safe.
 
-Out of scope (each routed to its own `feat-future-*` anchor in `requirements.md` OOS-1 .. OOS-15): KHR material extensions other than the supported transmission/IOR/volume, clearcoat, anisotropy, sheen, iridescence, specular, and diffuse-transmission paths / morph targets other than the explicit `COLOR_0` deferred signal / orthographic camera / sparse accessors / inspector future fields / pixel-parity vs three.js. Dense interleaved `COLOR_0` is supported; other interleaved accessor consumers retain their existing scope. v1.1 OOS additions (locked by feat-20260518-gltf-instancing-and-name-component): multi-primitive instancing / mesh-level + material-level + scene-level Name (only node.name lands as ECS `Name`) / instancing hard cap / SoA TRS direct-to-GPU pipe / IR-to-GPU direct path / ROTATION BYTE/SHORT normalized encoding / Babylon thin-instances style SoA channel / Bevy multi-tier Name propagation.
+Unsupported required extensions fail; optional unknown extensions remain diagnostics. Morph `COLOR_0` is explicitly rejected. Sparse and interleaved accessors share the decoder across attributes, indices, skin, morph and animation; matrix columns retain glTF four-byte padding. Each accessor is limited to 67,108,864 output components (at most 256 MiB); source ranges are validated before output allocation. Invalid declared attributes fail instead of disappearing. Morph TANGENT uses source VEC3 deltas and canonical VEC4 with zero W delta.
 
 ## Importer sub-asset PODs (7 kinds)
 
@@ -204,16 +204,16 @@ Sample reference: `apps/hello/skin` -- 3 Khronos Fox foxes side-by-side, each ru
 | `gltf-version-unsupported` | `asset.version` is not `'2.0'` |
 | `gltf-buffer-out-of-bounds` | accessor reads past `bufferView.byteLength` |
 | `gltf-extension-unsupported` | `extensionsRequired[]` lists an extension outside the supported allowlist exported as `EXTENSION_ALLOWLIST` (`EXT_mesh_gpu_instancing`, `EXT_meshopt_compression`, `KHR_lights_punctual`, `KHR_texture_transform`, transmission/IOR/volume, clearcoat, anisotropy, sheen, iridescence, specular, diffuse transmission) |
-| `gltf-accessor-type-mismatch` | sparse / morph / interleaved / unknown componentType accessor (4 reasons) |
+| `gltf-accessor-type-mismatch` | invalid layout, sparse overrides or unsupported component/type; inspect the source union |
 | `gltf-texture-load-failed` | `externalLoader` rejected for a texture `uri`; `detail.uri` carries the failing URI; hint: `'check sidecar meta.json + textures/ directory + vite-plugin-pack /__pack/lookup'` |
 | `gltf-meta-missing` | sidecar `<source>.meta.json` is absent next to the `.gltf` / `.glb` source file |
 | `gltf-instancing-count-mismatch` | `EXT_mesh_gpu_instancing` three TRS accessors (`TRANSLATION` / `ROTATION` / `SCALE`) have differing element counts |
 | `gltf-image-mime-unsupported` | `image/mimeType` is neither `image/jpeg` nor `image/png`; `detail.mimeType` carries the failing MIME; hint: `'supported: image/jpeg \| image/png; transcode externally'` |
 | `gltf-skin-joint-count-exceeded` | `skins[j].joints.length > 256` (MAX_JOINTS); hint: `'glTF skin must have <= 256 joints per skin'` |
 | `gltf-skin-joint-name-missing` | glTF node referenced by a skin joint has no `name` field; hint contains skinIndex + jointPathIndex |
-| `gltf-animation-cubicspline-unsupported` | animation sampler uses `CUBICSPLINE` interpolation (OOS-skin-cubicspline) |
+| `gltf-animation-cubicspline-unsupported` | retained external wire code; no longer emitted by this producer |
 | `gltf-morph-unsupported` | animation channel targets morph weights (`path==='weights'`, OOS-skin-morph-anim) |
-| `gltf-color-accessor-unsupported` | `COLOR_0` type/component/normalized combination, sparse input, or morph-target input is deferred |
+| `gltf-color-accessor-unsupported` | unsupported `COLOR_0` type/component/normalized combination or morph-target input |
 | `gltf-color-accessor-malformed` | `COLOR_0` count, finite/range, buffer bounds, or reference validation failed |
 | `gltf-material-physical-invalid` | a clearcoat/anisotropy/sheen/iridescence/specular scalar or color violates its finite glTF range |
 
@@ -233,9 +233,9 @@ When `ImporterRegistry` + `runImport` consumes a glTF source, malformed base64 i
 
 ## Skin & Animation importer (feat-20260523)
 
-> Two submodules: `parse-skin.ts` (skin index dedupe via UUIDv5 + IBM decoding + jointPath derivation) + `parse-animation.ts` (LINEAR/STEP samplers, CUBICSPLINE/morph fail-fast). Called inside `parseGltfWithBin` -> `toAssetPack` which extends sub-asset output from 3 kinds (mesh/material/scene) to 6 (+ skeleton + skin + animation-clip).
+> Two submodules: `parse-skin.ts` (skin index dedupe via UUIDv5 + IBM decoding + jointPath derivation) + `parse-animation.ts` (LINEAR/STEP/CUBICSPLINE TRS and morph-weight samplers). Called inside `parseGltfWithBin` -> `toAssetPack` which extends sub-asset output from 3 kinds (mesh/material/scene) to 6 (+ skeleton + skin + animation-clip).
 
-- **Limitations**: CUBICSPLINE interpolation not supported; morph weight animation not supported; jointPath resolution uses leaf-name first-match (same-name sibling is warn-only).
+- **Animation fidelity**: Cubic output retains incoming tangent, value and outgoing tangent per key. Hermite tangents scale by the interval duration; quaternion results normalize after evaluation without linear-mode sign correction. Numeric cardinality, finite values and strictly increasing nonnegative key times are validated before publication. Morph weights are sampled independently (up to the canonical eight-target limit). Named target paths must resolve uniquely. Cubic translation, scale and morph bounds include their Bezier control-point envelope, rather than only key values.
 - **Animated skin bounds** are producer-authored facts. The primary source is `skins[].extras.forgeax.conservativeAnimatedBounds`; `importSettings.conservativeAnimatedBounds[sourceIndex]` is accepted only when source extras do not provide bounds. The importer publishes the six-float bounds on `SkeletonAsset`. When both sources are absent, the import producer derives a conservative enclosure from mesh influences, inverse bind matrices, node TRS, morph deltas, and every imported animation clip. The shared [animation enclosure contract](../animation/README.md#imported-animation-bounds) covers intervals between keys and convex clip blends. Incomplete or singular inputs keep bounds absent and retain the `cpu-deformation` lane. The raw parser remains a source IR; the importer publishes the derived metadata.
 - **Shadow capsules** are always fitted at import: `fitShadowCapsules` (`@forgeax/engine-skinning`) assigns each vertex to its highest-weight joint, fits one capsule along each joint's principal axis sized to stay inside the surface, and publishes `SkeletonAsset.shadowCapsules` for the `CapsuleShadow` directional shadow ([render README](../render/README.md#capsule-character-shadows)). Joints with too few vertices or a sub-centimetre radius get no capsule; a skeleton with none omits the field.
 
@@ -386,3 +386,51 @@ JSON decoding, GUID lookup, omission and invalid data. The diagnostic
 `scripts/raytracing/gltf/audit-card-import.mjs <source.gltf> <output>` additionally
 runs the full source import and package finalizer, then loads mesh bodies through
 a real HTTP Catalog and reports construction cost plus the exact card byte increment.
+
+## Draco compression
+
+`KHR_draco_mesh_compression` is admitted and projected into ordinary accessor
+buffers before the existing primitive parser. Attribute unique IDs come from
+the extension, while types, normalization and cardinality come from accessors.
+The producer checks decoded indices and accessor shape, retains uncompressed
+attributes/morph data, and never mutates the input document.
+
+| Consumer | Decoder boundary | Failure/recovery |
+|:--|:--|:--|
+| DevKit / CLI | `@forgeax/engine/gltf/node-importer` supplies Meshopt and Draco WASM | repair source and reimport/cold-cook the same GUID |
+| Portable parser | `parseGltf` / `parseGlb` accept `{ draco }`; `createDracoDecoder(factory)` adapts the official module | missing required or compressed-only decoder returns `gltf-draco-decoder-required` |
+| Player | cooked MeshAsset through Catalog | no source-format decoder or WASM dependency in the player-facing import graph |
+
+`createGltfImporter({ meshopt, draco })` accepts the same options as the parser.
+The existing `gltf/importer` entry remains the portable Meshopt provider; the
+Node-specific entry owns filesystem-based Draco WASM loading. Corrupt data,
+invalid ranges, unsupported primitive modes and mismatched decoder output
+return `gltf-draco-decode-failed` with mesh/primitive/range and reason. An optional
+Draco declaration may use complete core accessor buffers when no decoder is
+present; required or compressed-only input never falls through to missing data.
+
+## Optional static mesh visibility fields
+
+Set `importSettings.meshDistanceField` to `{ "voxelSize": 64 }` in the source
+Meta to bake approximate local visibility in source mesh units. There is no
+implicit resolution; choose the spacing for the source scale. Omit the property
+or use `false` to retain the ordinary mesh path without field cooking.
+
+The importer derives one sidedness flag per source section from the glTF
+material, then reuses the native distance-field cooker. The field is an
+asset-local artifact of the same Mesh GUID; binary and JSON publication use the
+same validated loader. Skinned/morphed, non-triangle and BLEND geometry fails
+before publication. MASK geometry remains an approximation without alpha
+coverage; source sidedness is not a claim about arbitrary runtime material
+overrides. LOD meshes receive their own ordinary optional product.
+
+The routine regression uses an independent fixture. The opt-in Sponza sample is
+`FORGEAX_MESH_FIELD_SPONZA=1` with
+`mesh-distance-field.integration.test.ts`; it covers all 103 source sections and
+records size/timing data under `artifacts/raytracing/mesh-distance-field/`.
+
+## Source material fidelity
+
+`KHR_materials_unlit` publishes the ordinary built-in Unlit material program and its own parameter schema. It retains base color/texture, alpha mode/cutoff and double-sided coverage, with no Deferred PBR pass or irrelevant lighting-texture dependencies. `KHR_materials_emissive_strength` multiplies the authored emissive color and texture; its finite nonnegative strength is validated. Both values pass through normal Material Cook, Catalog and runtime loading.
+
+The parity application verifies real source admission, Cook, loaded scene projection, non-key cubic poses, image values and RHI Debug replay. See [mesh-io acceptance](../mesh-io/README.md#implementation-and-acceptance). No extension acceptance alone establishes pixel fidelity.

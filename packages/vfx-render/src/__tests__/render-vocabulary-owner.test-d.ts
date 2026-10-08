@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
-import type { ParticleRendererSourceV3 } from '@forgeax/engine-vfx';
+import type {
+  ParticleRendererSourceV3,
+  ParticleTopologyRendererSourceV3,
+} from '@forgeax/engine-vfx';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   createVfxRenderInspectSnapshot,
@@ -14,8 +17,7 @@ import type {
 import type { VfxStagePlanObservation } from '../feature/stage-plan.js';
 
 type RendererKind = ParticleRendererSourceV3['kind'];
-type TopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;
-type TopologyKind = TopologyRenderer['kind'];
+type TopologyKind = ParticleTopologyRendererSourceV3['kind'];
 type StageOutput = VfxStagePlanObservation['stageOutput'];
 
 const gpuFeatureSource = readFileSync(
@@ -67,12 +69,12 @@ describe('VFX render vocabulary owners', () => {
     expect(normalizedParticleResourcesSource).toContain(
       "type ParticleRendererKind = ParticleRendererSourceV3['kind'];",
     );
-    expect(normalizedGpuFeatureSource).toContain(
-      'type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;',
-    );
-    expect(normalizedParticleResourcesSource).toContain(
-      'type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;',
-    );
+    for (const source of [normalizedGpuFeatureSource, normalizedParticleResourcesSource]) {
+      expect(source).toContain(
+        "type ParticleTopologyKind = ParticleTopologyRendererSourceV3['kind'];",
+      );
+      expect(source).not.toContain('Extract<ParticleRendererSourceV3, { readonly capacity');
+    }
     expect(gpuFeatureSource).toContain('readonly topology: ParticleRendererKind;');
     expect(gpuFeatureSource).toContain('topology: ParticleTopologyKind,');
     expect(particleResourcesSource).toContain('readonly topology: ParticleTopologyKind;');

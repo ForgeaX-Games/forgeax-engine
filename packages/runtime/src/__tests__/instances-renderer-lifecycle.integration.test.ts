@@ -5,6 +5,7 @@ import { RhiNullAdapter, rhi } from '@forgeax/engine-rhi-null';
 import { Transform } from '@forgeax/engine-scene';
 import { ok } from '@forgeax/engine-types';
 import { expect, it } from 'vitest';
+import { standardPbrManifestRow } from '../../../render/src/__tests__/shader-manifest-fixture';
 import { constructRendererHost } from '../../../render/src/construct-renderer';
 
 function requireValue<T>(
@@ -32,6 +33,7 @@ const manifest = `data:application/json,${encodeURIComponent(
         paramSchema: '[]',
         variants: [],
       },
+      standardPbrManifestRow('f_schlick('),
     ],
   }),
 )}`;

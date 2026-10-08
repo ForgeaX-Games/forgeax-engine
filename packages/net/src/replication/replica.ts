@@ -2,8 +2,7 @@ import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
 import { classifyEntityField } from '@forgeax/engine-ecs/externalization';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import type { NetEndpoint } from '../endpoint/endpoint';
-import { decodeReplicationPacket } from './codec';
+import { decodeReplicationPacket, isReplicationDataPacket } from './codec';
 import { NetError } from './errors';
 import type { ReplicationLimits, ReplicationProfile } from './profile';
 import type { ReplicationDataPacket } from './protocol';
@@ -17,7 +16,7 @@ export class ReplicaCoordinator {
   #lastSequence = 0;
   #lastPacketOutcome: 'accepted' | 'duplicate' | 'ignored-old-epoch' = 'accepted';
   #stopped = false;
-  constructor(world: World, profile: ReplicationProfile, _endpoint?: unknown) {
+  constructor(world: World, profile: ReplicationProfile) {
     this.#world = world;
     this.#profile = profile;
   }
@@ -40,11 +39,13 @@ export class ReplicaCoordinator {
       }))
       .sort((a, b) => a.id - b.id);
   }
-  disconnect(): void {}
   /** Remove the last replica baseline when the authority connection closes. */
   clear(): void {
     for (const entity of this.#entities.values()) this.#world.despawn(entity).unwrap();
     this.#entities.clear();
+    this.#epoch = -1;
+    this.#lastSequence = 0;
+    this.#lastTick = 0;
   }
   get stopped(): boolean {
     return this.#stopped;
@@ -55,9 +56,6 @@ export class ReplicaCoordinator {
   /** Report the last accepted, duplicate, or stale-epoch packet decision. */
   get lastPacketOutcome(): 'accepted' | 'duplicate' | 'ignored-old-epoch' {
     return this.#lastPacketOutcome;
-  }
-  getPendingUnresolvedReferences(): number {
-    return 0;
   }
   #entityReferences(value: unknown): readonly unknown[] {
     if (Array.isArray(value) || ArrayBuffer.isView(value)) {
@@ -267,9 +265,8 @@ export class ReplicaCoordinator {
 export function createReplicaCoordinator(
   world: World,
   profile: ReplicationProfile,
-  endpoint?: NetEndpoint,
 ): ReplicaCoordinator {
-  return new ReplicaCoordinator(world, profile, endpoint);
+  return new ReplicaCoordinator(world, profile);
 }
 export function applyReplicationPacket(
   replica: ReplicaCoordinator,
@@ -287,7 +284,7 @@ export function decodeAndApplyReplicationPacket(
   if (!decoded.ok) {
     return err(decoded.error);
   }
-  if (decoded.value.kind !== 'baseline' && decoded.value.kind !== 'delta') {
+  if (!isReplicationDataPacket(decoded.value)) {
     return err(
       new NetError({
         code: 'decode-invalid-payload',

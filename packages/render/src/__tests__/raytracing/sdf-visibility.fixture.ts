@@ -39,7 +39,8 @@ export async function verifyVisibilitySdf(
     })
   ).unwrap();
   const denseArtifact = (await encodeMeshDistanceField(dense)).unwrap();
-  expect(denseArtifact.byteLength).toBeGreaterThan(5_000_000);
+  expect(dense.dimensions.reduce((a, b) => a * b) * 4).toBeGreaterThan(5_000_000);
+  expect(denseArtifact.byteLength).toBeLessThan(5_000_000);
   const denseDecoded = (await decodeMeshDistanceField(denseArtifact, dense.meshDigest)).unwrap();
   const transform = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   const plane: SdfMeshInstance = {

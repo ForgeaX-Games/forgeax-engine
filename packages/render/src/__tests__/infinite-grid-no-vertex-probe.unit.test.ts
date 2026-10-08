@@ -24,7 +24,10 @@ const caps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: true,
   float32Filterable: true,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
+  rayQuery: { supported: false, reason: 'backend-has-no-ray-query' },
 } as const;
 
 function noVertexFeature(): RenderFeature<{ readonly drawCount: number }> {

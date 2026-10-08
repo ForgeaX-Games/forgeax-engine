@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
   chmod,
+  cp,
   lstat,
   mkdir,
   mkdtemp,
@@ -49,7 +51,8 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   await writeFile(
     resolve(root, 'sdk-manifest.json'),
     `${JSON.stringify({
-      schemaVersion: '1.7.0',
+      schemaVersion: '1.9.0',
+      viewCommit: 'view-test',
       sdkVersion: '0.0.0-test',
       engineCommit: 'test',
       requirements: { node: '>=22.13.0', pnpm: '11.7.0', pnpmStoreFormat: 'v11' },
@@ -73,7 +76,7 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
   await writeFile(
     resolve(root, '.forgeax', 'sdk-init.json'),
     `${JSON.stringify({
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       sdkVersion: '0.0.0-test',
       engineCommit: 'test',
       pnpm: '11.7.0',
@@ -160,6 +163,31 @@ async function sdkFixture(failFirstInstall = true, withStore = true): Promise<Sd
     await writeFile(pnpm, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(pnpmScript)} "$@"\n`);
     await chmod(pnpm, 0o755);
   }
+  const toolchain = resolve(root, 'toolchain/cli-runtime');
+  const runtime = resolve(root, '.forgeax/cli-runtime');
+  await mkdir(toolchain, { recursive: true });
+  await mkdir(runtime, { recursive: true });
+  const hash = createHash('sha256');
+  for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    await cp(resolve(template, name), resolve(toolchain, name));
+    await cp(resolve(template, name), resolve(runtime, name));
+    hash.update(await readFile(resolve(toolchain, name)));
+  }
+  await mkdir(resolve(runtime, 'node_modules/@forgeax/engine/dist/bin'), { recursive: true });
+  await writeFile(
+    resolve(runtime, 'node_modules/@forgeax/engine/dist/bin/forgeax.mjs'),
+    'export {};',
+  );
+  const view = resolve(runtime, 'node_modules/@forgeax/view');
+  await mkdir(view, { recursive: true });
+  await writeFile(
+    resolve(view, 'package.json'),
+    JSON.stringify({ name: '@forgeax/view', exports: { './host.pack.json': './host.pack.json' } }),
+  );
+  await writeFile(resolve(view, 'host.pack.json'), '{}');
+  const state = JSON.parse(await readFile(resolve(root, '.forgeax/sdk-init.json'), 'utf8'));
+  state.toolInputsDigest = hash.digest('hex');
+  await writeFile(resolve(root, '.forgeax/sdk-init.json'), JSON.stringify(state));
   process.env.FORGEAX_SDK_ROOT = root;
   process.env.FORGEAX_TEST_INSTALL_STATE = installState;
   process.env.FORGEAX_TEST_FAIL_FIRST_INSTALL = failFirstInstall ? '1' : '0';
@@ -216,6 +244,19 @@ describe('newCommand', () => {
     });
   });
 
+  it('rejects a partial tool runtime even when installation exits successfully', async () => {
+    const sdk = await sdkFixture(false);
+    await rm(resolve(sdk.root, '.forgeax/sdk-init.json'));
+    await rm(resolve(sdk.root, '.forgeax/cli-runtime/node_modules/@forgeax/view'), {
+      recursive: true,
+    });
+    const result = await initCommand({ root: sdk.root });
+    expect(result).toMatchObject({ ok: false, error: { code: 'sdk-init-failed' } });
+    await expect(readFile(resolve(sdk.root, '.forgeax/sdk-init.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('initializes the SDK closure once at the SDK root', async () => {
     const sdk = await sdkFixture(false);
     await rm(resolve(sdk.root, '.forgeax', 'sdk-init.json'));
@@ -245,7 +286,7 @@ describe('newCommand', () => {
       JSON.parse(await readFile(resolve(sdk.root, '.forgeax', 'sdk-init.json'), 'utf8')),
     ).toEqual(
       expect.objectContaining({
-        schemaVersion: '1.0.0',
+        schemaVersion: '2.0.0',
         sdkVersion: '0.0.0-test',
         engineCommit: 'test',
         pnpm: '11.7.0',

@@ -2,6 +2,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import UPNG from 'upng-js';
+import { distanceFieldTexel } from '../../packages/geometry/dist/index.mjs';
 import { CARD_LOOKUP_STRIDE } from '../../packages/render/dist/internal.mjs';
 
 const [directory] = process.argv.slice(2);
@@ -21,14 +22,18 @@ async function png(name, width, height, pixel, scale = 6) {
     new Uint8Array(UPNG.encode([data.buffer], width * scale, height * scale, 0)),
   );
 }
-const field = fixture.field,
+const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  },
   [nx, ny, nz] = field.dimensions;
 await png(
   'sdf-slice',
   nx,
   ny,
   (x, y) => {
-    const d = field.values[(Math.floor(nz / 2) * ny + y) * nx + x];
+    const d = distanceFieldTexel(field, x, y, Math.floor(nz / 2));
     const s = Math.min(1, Math.abs(d) / 0.8);
     return Math.abs(d) < field.spacing * 0.15
       ? [255, 220, 70]

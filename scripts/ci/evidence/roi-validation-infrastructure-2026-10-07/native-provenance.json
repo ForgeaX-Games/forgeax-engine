@@ -1,0 +1,8 @@
+{
+  "inputKey": "a654e1a76f5d6e8d0207986d1e81aec3562594ad50442a13f33aac89d5e36b1e",
+  "nodeHead": "2f5fb632d9d9db9bcb3705bd868de69a6a2ae4e2",
+  "dawnHead": "c5d549e250b9225744929ae860b369cb4304a767",
+  "patchSHA": "bb1dc69fe563a1d77a1024c345caf021615e023ddac4bbf9a71061f23b24400c",
+  "architecture": "arm64",
+  "nativeSHA256": "b42d0ca6ce88da0c21f452600988fcc634d179b1ed39be46c2ee2f236443ab6a"
+}

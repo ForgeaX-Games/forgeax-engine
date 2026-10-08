@@ -20,7 +20,7 @@ function input(kind, backend = 'dawn-node') {
   const stages = kind === 'manual'
     ? []
     : ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-        id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+        id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
         domain,
         readback: { rawHash: hash(String(index + (isAuto ? 1 : 4))), frame: 60 },
         metadata: {

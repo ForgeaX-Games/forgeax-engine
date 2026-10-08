@@ -57,13 +57,6 @@ export function isDepthStencilTextureFormat(format: string): boolean {
 }
 
 export function getTextureReadbackPlan(descriptor: TextureReadbackDescriptor): TextureReadbackPlan {
-  if (descriptor.dimension === '3d') {
-    return {
-      supported: false,
-      format: descriptor.format,
-      reason: '3D texture volume readback is outside the v7 core matrix',
-    };
-  }
   if (/^(bc|etc2|eac|astc)-/.test(descriptor.format)) {
     return {
       supported: false,

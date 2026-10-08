@@ -14,6 +14,7 @@ import type { ObservationUnavailableError, RenderError } from '../errors/render'
 import type { RenderFeature, RenderFeatureDiagnostics } from '../features/types';
 import type { GpuDrivenProductionInspection, LodOcclusionInspection } from '../inspection-types';
 import type { MeshMaterialBindingObservation } from '../mesh-material-bindings';
+import type { OutputColorSpace } from '../output-color-space';
 import type { PublishedRenderFrameInput, RenderPublicationIdentity } from '../publication/contract';
 import type { FrameObservation, FrameObservationOptions } from '../record/frame';
 import type { CurrentGraphTarget, GraphTargetCaptureRequest } from '../record/frame-snapshot';
@@ -37,6 +38,8 @@ import type { RenderSceneInspection } from '../render-system';
 import type { RenderSceneBounds } from '../scene/render-scene-types';
 import type { SurfaceDynamicInputFrame } from '../surface/dynamic-input';
 import type {
+  FramebufferSnapshotRequest,
+  FramebufferSnapshotTicket,
   RenderTarget,
   RenderTargetDescriptor,
   RenderTargetReadbackRequest,
@@ -107,8 +110,17 @@ export interface RendererHostImplementation {
     target: RenderTarget,
     request: RenderTargetReadbackRequest,
   ): RenderResult<RenderTargetReadbackTicket, RenderError>;
+  requestFramebufferSnapshot(
+    target: RenderTarget,
+    request: FramebufferSnapshotRequest,
+  ): RenderResult<FramebufferSnapshotTicket, RenderError>;
   destroyRenderTarget(target: RenderTarget): RenderResult<void, RenderError>;
+  importTexture(
+    input: import('../textures/external-texture').ExternalTextureInput,
+  ): Promise<RenderResult<import('../textures/external-texture').ExternalTexture, RenderError>>;
+  nativeDevice(): RenderResult<GPUDevice, RenderError>;
   setProfile(profile: RenderProfile): RenderResult<void, RenderError>;
+  setOutputColorSpace(colorSpace: OutputColorSpace): RenderResult<void, RenderError>;
   /** Detached world bounds for one record in the last extracted World; undefined if unavailable. */
   bounds(world: World | RenderPublicationIdentity, entity: number): RenderSceneBounds | undefined;
   inspect(): RenderInspection;

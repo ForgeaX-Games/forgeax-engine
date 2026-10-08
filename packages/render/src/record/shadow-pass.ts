@@ -14,7 +14,9 @@ import {
   STANDARD_TEXTURE_MASK_OVERRIDE,
 } from '@forgeax/engine-shader';
 import type { MaterialRenderState, PassSelector } from '@forgeax/engine-types';
+import { isTriangleTopology } from '@forgeax/engine-types';
 import { transmissionBackdropAvailable } from '../assembly/device-feature-admission';
+import { atmosphereBindings } from '../environment/bindings';
 import { gpuDrivenShadowDrawKey } from '../extract/gpu-driven';
 import {
   GPU_DRIVEN_INDIRECT_COMMAND_BYTES,
@@ -28,7 +30,10 @@ import {
 } from '../gpu-driven/shadow-views';
 import type { GpuDrivenView } from '../gpu-driven/view-gpu';
 import type { GpuBuffer } from '../gpu-resource';
-import { assembleMaterialWithSkylightEntries } from '../ibl/skylight-bind-group';
+import {
+  assembleMaterialWithSkylightEntries,
+  skylightBindGroupResources,
+} from '../ibl/skylight-bind-group';
 import {
   buildPbrMaterialUserRegionEntries,
   createPbrSkinMeshBindGroupEntries,
@@ -231,6 +236,7 @@ function ensureTypedShadowViewBg(
           label: variant,
           layout: pipelineState.viewBindGroupLayout,
           entries: [
+            ...atmosphereBindings(pipelineState),
             {
               binding: 0,
               resource: {
@@ -1047,6 +1053,7 @@ export function encodeDirectionalShadowPass(
   pass: RhiRenderPassEncoder,
   cascadeIndex: number,
   drawFeatures?: (view: BindGroup) => void,
+  terrainReceiver?: import('../terrain/shadow-family').TerrainShadowReceiver,
 ): void {
   const directionalIdentity = { kind: 'directional' as const, index: cascadeIndex };
   const pipeline = shadowPipeline(c);
@@ -1146,10 +1153,9 @@ export function encodeDirectionalShadowPass(
     false,
     c.shadowViewPlanesByView?.get(shadowViewIdentityKey(directionalIdentity)),
     c.capsuleShadowDirectional === true,
+    terrainReceiver,
   );
   validateShadowOwnership(c, directionalIdentity, claimedKeys, recordedKeys);
-  c.frameState.directionalShadowCacheRecorded =
-    cascadeIndex === 0 ? true : c.frameState.directionalShadowCacheRecorded;
 }
 
 export function encodePointShadowPass(
@@ -1490,6 +1496,7 @@ export function recordShadowCasterDraws(
   reflected = false,
   viewPlanes?: Float32Array,
   skipCapsuleReady = false,
+  terrainReceiver?: import('../terrain/shadow-family').TerrainShadowReceiver,
 ): ReadonlySet<string> {
   const {
     runtime,
@@ -1525,7 +1532,7 @@ export function recordShadowCasterDraws(
 
     const drawIndices = shadowDrawIndicesBySubmesh(entry.source, entry.mesh);
     const shadowSubmeshes = entry.mesh.submeshes.flatMap((submesh, submeshIndex) => {
-      if (submesh.topology !== 'triangle-list' && submesh.topology !== 'triangle-strip') {
+      if (!isTriangleTopology(submesh.topology)) {
         return [];
       }
       if (matchedMaterialHandles !== null) {
@@ -1609,7 +1616,7 @@ export function recordShadowCasterDraws(
     // Only draw submeshes whose topology is triangle-list or triangle-strip
     // (line-list / point-list submeshes cast no shadow and are skipped).
     for (const { submesh: sm, submeshIndex } of shadowSubmeshes) {
-      if (sm.topology !== 'triangle-list' && sm.topology !== 'triangle-strip') {
+      if (!isTriangleTopology(sm.topology)) {
         continue;
       }
 
@@ -1653,7 +1660,15 @@ export function recordShadowCasterDraws(
       // Each residual keeps its authored shader, entries, state and bindings.
       for (const shadowDispatch of passes) {
         const entryShadowShaderId = shadowDispatch?.materialShaderId;
-        const entryShadowRenderState = shadowRasterState(shadowDispatch?.renderState, reflected);
+        const entryShadowRenderState = shadowRasterState(
+          terrainReceiver !== undefined &&
+            entry.source.terrain !== undefined &&
+            entry.source.worldId === terrainReceiver.worldId &&
+            entry.source.entityKey === terrainReceiver.entityKey
+            ? { ...shadowDispatch?.renderState, cullMode: 'front' }
+            : shadowDispatch?.renderState,
+          reflected,
+        );
         const skinned = entry.source.skin !== undefined;
         let entryShadowPipeline: RenderPipeline | null = shadowPipeline;
         const needsDedicatedPipeline =
@@ -1860,14 +1875,7 @@ function ensureSpotShadowMaterialBg(c: _InternalRenderPipelineContext): BindGrou
     fb !== null
       ? assembleMaterialWithSkylightEntries(
           fallbackEntries,
-          {
-            irradianceView: fb.irradianceView,
-            irradianceSampler: fb.sampler,
-            prefilterView: fb.prefilterView,
-            prefilterSampler: fb.sampler,
-            brdfLutView: fb.brdfLutView,
-            intensityBuffer: fb.intensityBuffer,
-          },
+          skylightBindGroupResources(fb),
           transmissionBackdropAvailable(runtime.device.limits.maxSampledTexturesPerShaderStage)
             ? undefined
             : null,
@@ -1942,14 +1950,7 @@ function ensureGpuDrivenAlphaMaskMaterialBg(
       hint: 'create the merged Standard PBR material resources before recording shadows',
     });
   }
-  const skylightResources = {
-    irradianceView: fallback.irradianceView,
-    irradianceSampler: fallback.sampler,
-    prefilterView: fallback.prefilterView,
-    prefilterSampler: fallback.sampler,
-    brdfLutView: fallback.brdfLutView,
-    intensityBuffer: fallback.intensityBuffer,
-  } satisfies import('../ibl/skylight-bind-group').SkylightBindGroupResources;
+  const skylightResources = skylightBindGroupResources(fallback);
   const deps: PerSubmeshMaterialBgDeps = {
     runtime: c.runtime,
     pipelineState: c.pipelineState,
@@ -1969,6 +1970,10 @@ function ensureGpuDrivenAlphaMaskMaterialBg(
     projection.material,
     projection.materialEntityKey,
     c.world,
+    // The default shadow program uses the canonical Standard layout. The
+    // color alias can compact IBL slots and append physical textures, so its
+    // group cannot be bound to that shadow pipeline even for an opaque draw.
+    'forgeax::default-standard-pbr',
   );
   return bindGroup;
 }
@@ -2007,14 +2012,7 @@ function ensureGpuDrivenCustomShadowMaterialBg(
       hint: 'publish the selected shadow MaterialProgramAbi scene-index resource before recording',
     });
   }
-  const skylightResources = {
-    irradianceView: fallback.irradianceView,
-    irradianceSampler: fallback.sampler,
-    prefilterView: fallback.prefilterView,
-    prefilterSampler: fallback.sampler,
-    brdfLutView: fallback.brdfLutView,
-    intensityBuffer: fallback.intensityBuffer,
-  } satisfies import('../ibl/skylight-bind-group').SkylightBindGroupResources;
+  const skylightResources = skylightBindGroupResources(fallback);
   const deps: PerSubmeshMaterialBgDeps = {
     runtime: c.runtime,
     pipelineState: c.pipelineState,

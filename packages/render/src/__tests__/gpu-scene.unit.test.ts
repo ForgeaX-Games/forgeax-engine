@@ -1,10 +1,19 @@
+import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createRenderReadLease } from '@forgeax/engine-ecs/projection';
 import { type Buffer, type Result, RhiError } from '@forgeax/engine-rhi';
 import { RhiNullCommandEncoder, RhiNullDevice, RhiNullQueue } from '@forgeax/engine-rhi-null';
+import {
+  Mobility,
+  MobilityKindValue,
+  registerPropagateTransforms,
+  Transform,
+} from '@forgeax/engine-scene';
 import { createStandardPbrArtifactReceipt } from '@forgeax/engine-shader';
 import { err } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
+import { Camera, MeshFilter, MeshRenderer, MotionBlur } from '../components';
+import { ShadowCasterClassifier } from '../gpu-driven/shadow-caster-classes';
 import {
   GPU_SCENE_PRIMITIVE_MOTION_INVALID,
   GPU_SCENE_PRIMITIVE_NO_SHADOW_RECEIVE,
@@ -19,6 +28,7 @@ import type {
   MaterialSnapshot,
   RenderableSnapshot,
 } from '../render-system-extract';
+import { extractFrames } from '../render-system-extract-tail';
 import { PersistentRenderScene, RenderScene } from '../scene/render-scene';
 import type { RenderSceneSlot } from '../scene/render-scene-types';
 import { classifySceneDataCoverage } from '../temporal/coverage';
@@ -537,6 +547,124 @@ describe('GpuScene', () => {
     expect(created.scene.inspect().uploadBytes).toBe(
       bytesBefore + 2 * GPU_SCENE_LAYOUTS.transform.stride,
     );
+  });
+
+  it('keeps static shadow changes empty while flushing committed temporal flags', () => {
+    const queue = new RecordingQueue();
+    const device = createDevice(queue);
+    const world = new World();
+    registerPropagateTransforms(world);
+    const spawn = (x: number) =>
+      world
+        .spawn(
+          { component: Transform, data: { pos: [x, 0, 0] } },
+          { component: MeshFilter, data: { assetHandle: HANDLE_CUBE } },
+          { component: MeshRenderer, data: {} },
+          { component: Mobility, data: { kind: MobilityKindValue.static } },
+        )
+        .unwrap();
+    world
+      .spawn(
+        { component: Transform, data: { pos: [0, 0, 5] } },
+        { component: Camera, data: {} },
+        { component: MotionBlur, data: { shutterAngle: 180 } },
+      )
+      .unwrap();
+    const moved = spawn(0);
+    spawn(4);
+    world.update(0).unwrap();
+    const lease = createRenderReadLease(world);
+    const persistent = new PersistentRenderScene({ getDevice: () => device });
+    const draw = () =>
+      persistent.extractComposition(
+        [world],
+        { cameraOwner: 0, resourceOwner: 0 },
+        0,
+        (request) =>
+          extractFrames([world], 0, undefined, undefined, persistent.materialSnapshotCacheStore(), {
+            cull: 'none',
+            retainHidden: true,
+            renderables: request,
+          }),
+        [lease],
+      );
+    try {
+      draw();
+      persistent.prepareTemporalFrame(
+        persistent.compositionSlots().map(({ snapshot }) => snapshot),
+      );
+      expect(persistent.commitTemporalFrame().ok).toBe(true);
+      draw();
+      queue.writes.length = 0;
+      // A real geometry update cuts temporal history on the retained owner.
+      world.set(moved, MeshFilter, { assetHandle: HANDLE_SPHERE }).unwrap();
+      world.update(0).unwrap();
+      draw();
+      const state = persistent.compositionGpuDrivenState();
+      if (state === undefined) throw new Error('expected persistent GPU scene');
+      const classifier = new ShadowCasterClassifier();
+      const initial = classifier.update(persistent.compositionSlots(), state.scene);
+      expect(initial.staticSlots).toHaveLength(2);
+      const flagsOffset = gpuSceneFieldOffset(GPU_SCENE_LAYOUTS.primitive, 'flags');
+      const temporalFlags = GPU_SCENE_PRIMITIVE_REACTIVE | GPU_SCENE_PRIMITIVE_MOTION_INVALID;
+      const primitiveWrites = () =>
+        queue.writes.filter(({ buffer }) => buffer === state.scene.primitiveBuffer);
+      expect(
+        primitiveWrites().some(
+          ({ bytes }) =>
+            (new DataView(bytes.buffer).getUint32(flagsOffset, true) & temporalFlags) !== 0,
+        ),
+      ).toBe(true);
+
+      // A rejected submission must not clear its transient metadata.
+      persistent.prepareTemporalFrame(
+        persistent.compositionSlots().map(({ snapshot }) => snapshot),
+      );
+      persistent.discardTemporalFrame();
+      queue.writes.length = 0;
+      draw();
+      expect(queue.writes).toHaveLength(0);
+      expect(classifier.update(persistent.compositionSlots(), state.scene)).toBe(initial);
+
+      persistent.prepareTemporalFrame(
+        persistent.compositionSlots().map(({ snapshot }) => snapshot),
+      );
+      expect(persistent.commitTemporalFrame().ok).toBe(true);
+      const revision = state.scene.contentRevision;
+      queue.writes.length = 0;
+      draw();
+      expect(primitiveWrites()).toHaveLength(1);
+      expect(queue.writes).toHaveLength(1);
+      const cleared = primitiveWrites()[0];
+      if (cleared === undefined) throw new Error('expected temporal primitive upload');
+      expect(new DataView(cleared.bytes.buffer).getUint32(flagsOffset, true) & temporalFlags).toBe(
+        0,
+      );
+      expect(state.scene.contentRevision).toBeGreaterThan(revision);
+      expect(state.scene.changedSlotsSince(revision)).toEqual([]);
+      expect(state.scene.changedBoundsSince(revision)).toEqual(new Float32Array());
+      expect(classifier.update(persistent.compositionSlots(), state.scene)).toBe(initial);
+
+      // The same owner must still demote an actually moved declared-static caster.
+      const movedSlot = persistent.compositionSlots().find(({ entityKey }) => entityKey === moved);
+      if (movedSlot === undefined) throw new Error('expected moved caster slot');
+      const beforeMove = state.scene.contentRevision;
+      world.set(moved, Transform, { pos: [2, 0, 0] }).unwrap();
+      world.update(0).unwrap();
+      draw();
+      expect(state.scene.changedSlotsSince(beforeMove)).toEqual([movedSlot.slot]);
+      const changed = classifier.update(persistent.compositionSlots(), state.scene);
+      expect(changed.dynamicSlots).toEqual([movedSlot.slot]);
+      expect(changed.staticSlots).toHaveLength(1);
+      const beforeResync = state.scene.contentRevision;
+      persistent.invalidate();
+      draw();
+      expect(state.scene.changedSlotsSince(beforeResync)).toBeUndefined();
+      expect(classifier.update(persistent.compositionSlots(), state.scene).staticSlots).toEqual([]);
+    } finally {
+      lease.dispose();
+      persistent.dispose();
+    }
   });
 
   it('keeps persistent GPU previous transforms unchanged until temporal commit', () => {

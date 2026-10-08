@@ -82,20 +82,6 @@ export interface TransparentSortConfig {
   readonly yzAlpha: number;
 }
 
-/** Extract-stage POD consumed by the transparent-sort owner. */
-export interface TransparentEntry {
-  readonly entityIndex: number;
-  readonly materialHandle: number;
-  readonly layer: number;
-  readonly posX: number;
-  readonly posY: number;
-  readonly posZ: number;
-  readonly pivotY: number;
-  readonly sizeY: number;
-  readonly sortKey?: number | undefined;
-  readonly renderableIndex?: number | undefined;
-}
-
 /** World resource key for `TransparentSortConfig` KV entry. */
 export const TRANSPARENT_SORT_CONFIG_KEY = 'TransparentSortConfig' as const;
 

@@ -1,4 +1,5 @@
 """Exercise the CI language gate against real temporary Git worktrees."""
+import os
 import subprocess
 import sys
 import tempfile
@@ -23,10 +24,11 @@ class AgentDocsEnglishTest(unittest.TestCase):
             subprocess.run(["git", "-C", str(self.root), "add", "--", name], check=True)
         return path
 
-    def gate(self):
+    def gate(self, **environment):
         return subprocess.run(
             [sys.executable, str(GATE), "--root", str(self.root)],
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, encoding="utf-8", check=False,
+            env={**os.environ, **environment},
         )
 
     def test_rejects_nested_entry_docs_and_skill_references(self):
@@ -36,9 +38,16 @@ class AgentDocsEnglishTest(unittest.TestCase):
                 self.write(name, "# \u4e2d\u6587\n")
                 result = self.gate()
                 self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn(name, result.stdout)
+                self.assertIn(str(Path(name)), result.stdout)
                 self.assertIn(":1:3:", result.stdout)
                 self.write(name, "# English\n")
+
+    def test_reports_unicode_violations_with_a_windows_console_encoding(self):
+        self.write("AGENTS.md", "# \u4e2d\u6587\n")
+        result = self.gate(PYTHONIOENCODING="cp1252")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("AGENTS.md:1:3:", result.stdout)
+        self.assertIn("\u4e2d", result.stdout)
 
     def test_preserves_allowed_symbols_and_localized_readmes(self):
         self.write("AGENTS.md", "# English \u03b1 \u2192 \U0001f680\n")

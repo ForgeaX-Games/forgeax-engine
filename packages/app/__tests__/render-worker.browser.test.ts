@@ -7,6 +7,11 @@ declare module 'vitest/browser' {
 import { createApp } from '@forgeax/engine-app';
 import { expect, it } from 'vitest';
 
+const LIGHTWEIGHT = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1';
+const RECOVERY_ENTITIES = LIGHTWEIGHT ? 1000 : 10_000;
+const PRESSURE_ENTITIES = LIGHTWEIGHT ? 1000 : 50_000;
+const PING_SAMPLES = LIGHTWEIGHT ? 20 : 100;
+
 async function expectPicture(canvas: HTMLCanvasElement): Promise<void> {
   const shot = await page.elementLocator(canvas).screenshot({ base64: true });
   const bytes = Uint8Array.from(atob(typeof shot === 'string' ? shot : shot.base64), (character) =>
@@ -67,7 +72,7 @@ it.each([
         workers: { engine: true, render: true, kernels: false },
         bootstrap: new URL('./render-worker-bootstrap.ts', import.meta.url),
         bootstrapPort: channel.port2,
-        bootstrapData: 10_000,
+        bootstrapData: RECOVERY_ENTITIES,
         startupTimeoutMs: 90_000,
         frameTimeoutMs: 30_000,
       },
@@ -116,7 +121,7 @@ it.each([
     await commands.recordRenderWorkerEvidence(command, {
       kind: 'render-worker-recovery',
       command,
-      entities: 10_000,
+      entities: RECOVERY_ENTITIES,
       samples: recoveryPingMs.length,
       pingMax: Math.max(...recoveryPingMs),
       rawPingMs: recoveryPingMs,
@@ -154,7 +159,7 @@ it.each([
 it.each([
   'engine-worker',
   'render-worker',
-] as const)('measures a changing 50k scene with the full Renderer in %s', async (tier) => {
+] as const)('measures a changing scene with the full Renderer in %s', async (tier) => {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
   canvas.style.width = canvas.style.height = '128px';
@@ -167,7 +172,7 @@ it.each([
         execution: {
           workers: { engine: true, render: tier === 'render-worker', kernels: false },
           bootstrap: new URL('./render-worker-bootstrap.ts', import.meta.url),
-          bootstrapData: 50_000,
+          bootstrapData: PRESSURE_ENTITIES,
           bootstrapPort: channel.port2,
           startupTimeoutMs: 90_000,
           frameTimeoutMs: 30_000,
@@ -212,7 +217,7 @@ it.each([
         : execution.report().frame.completed;
     let previousCompleted = completed();
     let rendered = 0;
-    for (let index = 0; index < 100 || rendered < 2; index++) {
+    for (let index = 0; index < PING_SAMPLES || rendered < 2; index++) {
       if (performance.now() - started > 90_000)
         throw new Error('Two pressure publications did not complete');
       await new Promise<void>((resolve, reject) => {
@@ -251,7 +256,7 @@ it.each([
     await commands.recordRenderWorkerEvidence(tier, {
       kind: 'render-publication-pressure',
       tier,
-      entities: 50_000,
+      entities: PRESSURE_ENTITIES,
       moving: 500,
       samples: samples.length,
       pingP50: samples[Math.floor(samples.length * 0.5)],

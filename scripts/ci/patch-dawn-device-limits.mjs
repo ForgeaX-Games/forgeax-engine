@@ -6,7 +6,7 @@
 import { patchDawnAdapterPrototype } from './normalize-dawn-device-limits.mjs';
 
 try {
-  const { globals } = await import('webgpu');
+  const { globals } = await import('@forgeax/engine-dawn-node');
   const patched = patchDawnAdapterPrototype(globals);
   if (!patched) {
     throw new Error(

@@ -13,6 +13,8 @@ export const CHARACTER_COUNT_MAX = 64 as const;
 /** Opt-in sub-texel static clutter that far directional cascades cull. */
 export const DEBRIS_COUNT_MAX = 50_000 as const;
 export const GROUND_HALF_EXTENT = 48 as const;
+/** The low camera stands outside the caster field; its ground reaches past the far plane so no view ray escapes to void. */
+export const LOW_CAMERA_GROUND_HALF_EXTENT = 256 as const;
 export const DIRECTIONAL_CASCADE_COUNT = 4 as const;
 export const SPOT_LIGHT_COUNT = 4 as const;
 /** Opt-in shadowed point lights; each adds six cube-face shadow views. */
@@ -28,6 +30,8 @@ export const OCCASIONAL_PERIOD_MAX = 4_000 as const;
 export const SPAWN_STORM_COUNT_MAX = 1_024 as const;
 /** LOD grid: individual spheres whose root mesh declares two lower levels. */
 export const LOD_GRID_SIDE = 16 as const;
+/** Bound of the opt-in `lodGrid` side override. */
+export const LOD_GRID_SIDE_MAX = 64 as const;
 export const LOD_GRID_SPACING = 1.2 as const;
 export const LOD_SPHERE_RADIUS = 0.5 as const;
 /** Absolute projected-height thresholds for LOD1 and LOD2. */
@@ -36,7 +40,8 @@ export const LOD_OSCILLATION_PERIOD_SECONDS = 2 as const;
 /** Opt-in individual alpha-blended cubes, ordered back-to-front by camera distance. */
 export const TRANSPARENT_COUNT_MAX = 1_024 as const;
 
-export type CameraMode = 'static' | 'orbit';
+/** `low` orbits at eye height outside the caster field, so near casters occlude most of the scene. */
+export type CameraMode = 'static' | 'orbit' | 'low';
 export type RenderPathMode = 'forward' | 'deferred';
 /** How the mover system publishes its rows: per-row range writes or a whole-column `World.set`. */
 export type MoverWriteMode = 'rows' | 'set';
@@ -65,12 +70,16 @@ export interface WorkloadOptions {
   readonly spawnStormCount: number;
   /** LOD sphere grid plus a camera distance that crosses both LOD thresholds. */
   readonly lodOscillate: boolean;
+  /** LOD sphere grid side; 0 spawns no grid. `lodOscillate` alone implies LOD_GRID_SIDE. */
+  readonly lodGridSide: number;
   /** Individual alpha-blended cubes sorted by camera distance. */
   readonly transparentCount: number;
   /** The main camera resolves through TAA. */
   readonly taa: boolean;
   /** Ground, static casters and debris declare `Mobility` static. */
   readonly mobilityStatic: boolean;
+  /** Renderer GPU pass timing is enabled and summarized per pass. */
+  readonly gpuPassTiming: boolean;
 }
 
 export type WorkloadConfigError =
@@ -124,6 +133,12 @@ export type WorkloadConfigError =
     }
   | {
       readonly code: 'workload-mobility-static-invalid';
+      readonly expected: string;
+      readonly hint: string;
+      readonly detail: { readonly value: string };
+    }
+  | {
+      readonly code: 'workload-gpu-timing-invalid';
       readonly expected: string;
       readonly hint: string;
       readonly detail: { readonly value: string };
@@ -183,13 +198,13 @@ export function parseWorkloadOptions(source: URLSearchParams): WorkloadResult<Wo
   const points = parseBounded(source, 'points', 0, 0, POINT_LIGHT_COUNT_MAX);
   if (!points.ok) return points;
   const camera = source.get('camera') ?? 'static';
-  if (camera !== 'static' && camera !== 'orbit') {
+  if (camera !== 'static' && camera !== 'orbit' && camera !== 'low') {
     return {
       ok: false,
       error: {
         code: 'workload-camera-invalid',
-        expected: "camera must be 'static' or 'orbit'",
-        hint: 'Use camera=static for a fixed view or camera=orbit to move the main view every frame.',
+        expected: "camera must be 'static', 'orbit' or 'low'",
+        hint: 'Use camera=static for a fixed view, camera=orbit to move the main view every frame, or camera=low for an occluded eye-height orbit.',
         detail: { value: camera },
       },
     };
@@ -254,6 +269,14 @@ export function parseWorkloadOptions(source: URLSearchParams): WorkloadResult<Wo
       },
     };
   }
+  const lodGrid = parseBounded(
+    source,
+    'lodGrid',
+    lodOscillate === '1' ? LOD_GRID_SIDE : 0,
+    0,
+    LOD_GRID_SIDE_MAX,
+  );
+  if (!lodGrid.ok) return lodGrid;
   const transparent = parseBounded(source, 'transparent', 0, 0, TRANSPARENT_COUNT_MAX);
   if (!transparent.ok) return transparent;
   const taa = source.get('taa') ?? '0';
@@ -280,6 +303,18 @@ export function parseWorkloadOptions(source: URLSearchParams): WorkloadResult<Wo
       },
     };
   }
+  const gpuTiming = source.get('gpuTiming') ?? '0';
+  if (gpuTiming !== '0' && gpuTiming !== '1') {
+    return {
+      ok: false,
+      error: {
+        code: 'workload-gpu-timing-invalid',
+        expected: "gpuTiming must be '0' or '1'",
+        hint: 'Use gpuTiming=1 to record per-pass GPU durations, or omit it; timing queries add GPU work.',
+        detail: { value: gpuTiming },
+      },
+    };
+  }
   return {
     ok: true,
     value: {
@@ -298,9 +333,11 @@ export function parseWorkloadOptions(source: URLSearchParams): WorkloadResult<Wo
       occasionalPeriod: occasionalPeriod.value,
       spawnStormCount: spawnStorm.value,
       lodOscillate: lodOscillate === '1',
+      lodGridSide: lodGrid.value,
       transparentCount: transparent.value,
       taa: taa === '1',
       mobilityStatic: mobilityStatic === '1',
+      gpuPassTiming: gpuTiming === '1',
     },
   };
 }
@@ -490,12 +527,12 @@ export function spawnStormPositions(count: number, frame: number): Float32Array 
 }
 
 /** LOD sphere grid centred on the origin. */
-export function lodGridPositions(): Float32Array {
-  const out = new Float32Array(LOD_GRID_SIDE * LOD_GRID_SIDE * 3);
-  const origin = ((LOD_GRID_SIDE - 1) * LOD_GRID_SPACING) / 2;
-  for (let row = 0; row < LOD_GRID_SIDE; row++) {
-    for (let column = 0; column < LOD_GRID_SIDE; column++) {
-      const index = row * LOD_GRID_SIDE + column;
+export function lodGridPositions(side: number = LOD_GRID_SIDE): Float32Array {
+  const out = new Float32Array(side * side * 3);
+  const origin = ((side - 1) * LOD_GRID_SPACING) / 2;
+  for (let row = 0; row < side; row++) {
+    for (let column = 0; column < side; column++) {
+      const index = row * side + column;
       out[index * 3] = column * LOD_GRID_SPACING - origin;
       out[index * 3 + 1] = LOD_SPHERE_RADIUS + 1;
       out[index * 3 + 2] = row * LOD_GRID_SPACING - origin;
@@ -515,18 +552,26 @@ export function cameraDistanceScale(lodOscillate: boolean, seconds: number): num
 }
 
 /** Camera position and orientation looking at the origin. */
+export function groundHalfExtent(camera: CameraMode): number {
+  return camera === 'low' ? LOW_CAMERA_GROUND_HALF_EXTENT : GROUND_HALF_EXTENT;
+}
+
 export function cameraPose(
   mode: CameraMode,
   seconds: number,
   lodOscillate = false,
 ): { readonly pos: [number, number, number]; readonly quat: Quat } {
-  const angle = mode === 'orbit' ? seconds * 0.25 : 0;
+  const angle = mode === 'static' ? 0 : seconds * 0.25;
+  if (mode === 'low') {
+    const pos: [number, number, number] = [Math.sin(angle) * 56, 1.5, Math.cos(angle) * 56];
+    return { pos, quat: quat.fromLookAt(quat.create(), pos, [0, 1.5, 0], [0, 1, 0]) };
+  }
   const scale = cameraDistanceScale(lodOscillate, seconds);
   const pos: [number, number, number] = [Math.sin(angle) * 34 * scale, 18 * scale, Math.cos(angle) * 34 * scale];
   return { pos, quat: quat.fromLookAt(quat.create(), pos, [0, 0, 0], [0, 1, 0]) };
 }
 
 export function workloadFingerprint(options: WorkloadOptions): string {
-  const identity = `perf-shadow-stress/v${WORKLOAD_VERSION}|seed=${SHADOW_STRESS_SEED}|ground=${GROUND_HALF_EXTENT}|chunk=${STATIC_CHUNK_SIZE}|statics=${options.staticCasterCount}|movers=${options.moverCount}${options.activeMoverCount < options.moverCount ? `|activeMovers=${options.activeMoverCount}` : ''}${options.moverWrite === 'set' ? '|moverWrite=set' : ''}|characters=${options.characterCount}|debris=${options.debrisCount}|points=${options.pointCount}|camera=${options.camera}${options.capsuleShadow ? '|capsuleShadow=1' : ''}${options.renderPath === 'deferred' ? '|renderPath=deferred' : ''}${options.gpuOcclusion ? '' : '|gpuOcclusion=0'}${options.occasionalCount > 0 ? `|occasional=${options.occasionalCount}` : ''}${options.occasionalPeriod !== OCCASIONAL_PERIOD_FRAMES ? `|occasionalPeriod=${options.occasionalPeriod}` : ''}${options.spawnStormCount > 0 ? `|spawnStorm=${options.spawnStormCount}` : ''}${options.lodOscillate ? '|lodOscillate=1' : ''}${options.transparentCount > 0 ? `|transparent=${options.transparentCount}` : ''}${options.taa ? '|taa=1' : ''}${options.mobilityStatic ? '|mobilityStatic=1' : ''}|cascades=${DIRECTIONAL_CASCADE_COUNT}|spots=${SPOT_LIGHT_COUNT}`;
+  const identity = `perf-shadow-stress/v${WORKLOAD_VERSION}|seed=${SHADOW_STRESS_SEED}|ground=${groundHalfExtent(options.camera)}|chunk=${STATIC_CHUNK_SIZE}|statics=${options.staticCasterCount}|movers=${options.moverCount}${options.activeMoverCount < options.moverCount ? `|activeMovers=${options.activeMoverCount}` : ''}${options.moverWrite === 'set' ? '|moverWrite=set' : ''}|characters=${options.characterCount}|debris=${options.debrisCount}|points=${options.pointCount}|camera=${options.camera}${options.capsuleShadow ? '|capsuleShadow=1' : ''}${options.renderPath === 'deferred' ? '|renderPath=deferred' : ''}${options.gpuOcclusion ? '' : '|gpuOcclusion=0'}${options.occasionalCount > 0 ? `|occasional=${options.occasionalCount}` : ''}${options.occasionalPeriod !== OCCASIONAL_PERIOD_FRAMES ? `|occasionalPeriod=${options.occasionalPeriod}` : ''}${options.spawnStormCount > 0 ? `|spawnStorm=${options.spawnStormCount}` : ''}${options.lodOscillate ? '|lodOscillate=1' : ''}${options.lodGridSide !== (options.lodOscillate ? LOD_GRID_SIDE : 0) ? `|lodGrid=${options.lodGridSide}` : ''}${options.transparentCount > 0 ? `|transparent=${options.transparentCount}` : ''}${options.taa ? '|taa=1' : ''}${options.mobilityStatic ? '|mobilityStatic=1' : ''}${options.gpuPassTiming ? '|gpuTiming=1' : ''}|cascades=${DIRECTIONAL_CASCADE_COUNT}|spots=${SPOT_LIGHT_COUNT}`;
   return `${identity}|hash=${fnv1a32(identity)}`;
 }

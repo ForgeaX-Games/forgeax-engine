@@ -58,6 +58,7 @@ import { fileURLToPath } from 'node:url';
 
 import { compileShader } from '@forgeax/engine-shader-compiler';
 import { describe, expect, it } from 'vitest';
+import { loadEngineShaderEntries } from '../engine-inputs/load-engine-shader-entries';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHADER_SRC = resolve(HERE, '..', '..', '..', 'shader', 'src');
@@ -80,17 +81,13 @@ function sha256(text: string): string {
 
 async function composeSpriteWithPir(perInstanceRegion: boolean): Promise<string> {
   const spriteSrc = stripPragmas(readWgsl('sprite.wgsl'));
-  const commonSrc = readWgsl('common.wgsl');
+  const entries = await loadEngineShaderEntries();
   const r = await compileShader(spriteSrc, {
     id: `sprite-pir-${perInstanceRegion}`,
-    imports: {
-      'forgeax_clipping::planes': readWgsl('clipping.wgsl'),
-      'forgeax_view::common': commonSrc,
-      forgeax_scene_temporal: readWgsl('scene-temporal.wgsl'),
-      'forgeax_view::fog': readWgsl('fog.wgsl'),
-    },
+    imports: entries.imports,
     defines: {
       STORAGE_BUFFER_AVAILABLE: true,
+      ATMOSPHERE_AVAILABLE: false,
       PER_INSTANCE_REGION: perInstanceRegion,
     },
   });

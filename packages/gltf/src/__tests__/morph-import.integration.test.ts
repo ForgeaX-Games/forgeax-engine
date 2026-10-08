@@ -108,8 +108,8 @@ describe('real glTF morph import through Pack and AssetRegistry', () => {
     const sceneEntity = Object.values(loadedScene.value.entities)[0];
     expect(sceneEntity?.components.MorphWeights?.weights).toEqual([0, 0]);
     expect(loadedAnimation.value.channels[0]?.property).toBe('weights');
-    expect(Array.from(loadedAnimation.value.channels[0]?.sampler.output ?? [])).toEqual([
-      0, 0.75, 0.25, 0,
-    ]);
+    const channel = loadedAnimation.value.channels[0];
+    if (channel?.property !== 'weights') throw new Error('fixture requires a morph channel');
+    expect(Array.from(channel.sampler.output)).toEqual([0, 0.75, 0.25, 0]);
   });
 });

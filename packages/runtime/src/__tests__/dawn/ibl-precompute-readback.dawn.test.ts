@@ -46,6 +46,8 @@ const mockCaps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: false,
   float32Filterable: false,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
 };
 
@@ -84,8 +86,8 @@ async function composeIblShadersForDawn(): Promise<void> {
   const irradianceSrc = read('ibl-irradiance.wgsl');
   const prefilterSrc = read('ibl-prefilter.wgsl');
   const brdfLutSrc = read('ibl-brdf-lut.wgsl');
-  // ibl-shared is the only #import the per-pass modules reference.
-  const imports = { 'forgeax_pbr::ibl_shared': sharedSrc };
+  // The per-pass modules import ibl-shared, which derives F90 through brdf.
+  const imports = { 'forgeax_pbr::ibl_shared': sharedSrc, 'forgeax_pbr::brdf': read('brdf.wgsl') };
   const [equirectToCube, irradiance, prefilter, brdfLut] = await Promise.all([
     composeShader(equirectSrc, imports, {}),
     composeShader(irradianceSrc, imports, {}),

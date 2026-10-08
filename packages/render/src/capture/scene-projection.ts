@@ -1,4 +1,5 @@
 import type { DispatchEntry, RenderableSnapshot } from '../render-system-extract';
+import { renderableDrawKey } from '../scene/draw-key';
 
 /** One retained index domain for auxiliary views and the display's selected draws. */
 export function projectCaptureScene(
@@ -15,7 +16,7 @@ export function projectCaptureScene(
   for (const [index, row] of retained.renderables.entries()) {
     if (row.authorVisible === false) continue;
     retainedIndices.set(index, renderables.length);
-    identityIndices.set(`${row.worldId}:${row.entityKey}`, renderables.length);
+    identityIndices.set(renderableDrawKey(row), renderables.length);
     renderables.push(row);
   }
   const remap = (
@@ -31,7 +32,7 @@ export function projectCaptureScene(
     captureDispatch: remap(retained.dispatch, (index) => retainedIndices.get(index)),
     displayDispatch: remap(displayDispatch, (index) => {
       const row = visible[index];
-      return row === undefined ? undefined : identityIndices.get(`${row.worldId}:${row.entityKey}`);
+      return row === undefined ? undefined : identityIndices.get(renderableDrawKey(row));
     }),
   };
 }

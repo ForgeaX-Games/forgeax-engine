@@ -123,6 +123,21 @@ describe('check-code-file-lines line counting', () => {
 });
 
 describe('check-code-file-lines scan and CLI contract', () => {
+  it('enumerates a real tracked index above the child-process default buffer', () => {
+    const prefix = Array.from({ length: 3 }, (_, index) => `${index}-${'a'.repeat(228)}`).join('/');
+    const files = Array.from({ length: 1500 }, (_, index) => [`${prefix}/${index}.ts`, 'x\n']);
+    withGitRepo(files, (root) => {
+      const inventory = spawnSync('git', ['ls-files', '--cached', '--stage', '-z'], {
+        cwd: root,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      assert.equal(inventory.status, 0);
+      assert(inventory.stdout.length > 1024 * 1024);
+      const result = runGate(root);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), '[code-file-lines] PASS files=1500 max=4096');
+    });
+  });
   it('includes code files, excludes docs/config/binary files, and keeps sorted output', () => {
     withGitRepo(
       [

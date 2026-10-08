@@ -114,7 +114,7 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.27.2",
     "ws": "^8.20.0",

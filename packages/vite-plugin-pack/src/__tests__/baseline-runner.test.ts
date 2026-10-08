@@ -4,10 +4,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const runner = resolve(repositoryRoot, 'packages/vite-plugin-pack/scripts/m0-baseline-runner.mjs');
+// This fixture checks accounting, not the historical feature's full Git range.
+// A reachable parent keeps the real workspace diff bounded as the repo grows.
+const baselineCommit = execFileSync('git', ['rev-parse', 'HEAD^'], {
+  cwd: repositoryRoot,
+  encoding: 'utf8',
+}).trim();
 const schema = JSON.parse(
   readFileSync(
     resolve(repositoryRoot, 'packages/vite-plugin-pack/scripts/m0-baseline-runner.schema.json'),
@@ -33,10 +39,7 @@ function createBaselineFixture(): string {
     resolve(evidenceDirectory, 'm0-baseline.json'),
     JSON.stringify({
       identity: {
-        // Keep the fixture anchored to a reachable main-branch ancestor. The
-        // previous SHA was a dangling local object and made clean CI checkouts
-        // fail before the runner could exercise its revision fallback.
-        commitSha: 'ce5efaeb4fec8d6000bf89cde7666890ec7b2168',
+        commitSha: baselineCommit,
         sourceFileCount: 42,
         sourceLines: 12589,
         stableFingerprint: '0'.repeat(64),
@@ -87,8 +90,12 @@ function readFrozenM0Baseline(): FrozenM0Baseline {
 }
 
 describe('M0 baseline runner', () => {
+  let baseline: Record<string, unknown>;
+  // These assertions all observe the same immutable fixture and checkout.
+  beforeAll(() => {
+    baseline = runBaseline();
+  }, 15_000);
   it('emits every identity-bound baseline field', () => {
-    const baseline = runBaseline();
     for (const key of schema.required) expect(baseline).toHaveProperty(key);
     expect(baseline.sourceFailureAndStaleOutputAreDistinct).toBe(true);
     expect((baseline.identity as { designMatchesExpected: boolean }).designMatchesExpected).toBe(
@@ -97,7 +104,6 @@ describe('M0 baseline runner', () => {
   });
 
   it('does not turn unknown measurements or historical conflicts into passes', () => {
-    const baseline = runBaseline();
     expect((baseline.behavior as { status: string }).status).toBe('not-measured');
     expect((baseline.coldWarmDdcP95 as { status: string }).status).toBe('not-measured');
     expect((baseline.closeDrain as { status: string }).status).toBe('not-measured');
@@ -110,7 +116,6 @@ describe('M0 baseline runner', () => {
   }, 15_000);
 
   it('compares current source structure with the frozen identity-bound M0 baseline', () => {
-    const baseline = runBaseline();
     const frozen = readFrozenM0Baseline();
     const structural = baseline.structural as { productionFiles: number; productionLines: number };
     expect(frozen.identity.sourceFileCount).toBe(frozen.structural.productionFiles);
@@ -148,6 +153,7 @@ describe('M0 baseline runner', () => {
     expect(['commit-range', 'checked-out-worktree']).toContain(
       (baseline.deletionLedger as { revisionMode: string }).revisionMode,
     );
+    expect(baseline.deletionLedger).toMatchObject({ baseCommit: baselineCommit });
     expect((baseline.structural as { largestFunctionPath: string }).largestFunctionPath).toContain(
       '/packages/vite-plugin-pack/',
     );

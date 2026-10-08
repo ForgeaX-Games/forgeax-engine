@@ -6,7 +6,14 @@ import {
 import type { RenderResult } from '../render-contract';
 
 export type RenderTargetFormat = 'rgba16float' | 'rgba8unorm' | 'rgba8unorm-srgb';
-export type RenderTargetShape = '2d' | 'cube';
+/**
+ * Closed target storage shapes. `3d` is a volume whose writers select one
+ * depth slice; `2d-array` is a layered 2D texture whose writers select one
+ * array layer. Both use {@link RenderTargetDescriptor.depthOrArrayLayers}.
+ */
+export type RenderTargetShape = '2d' | 'cube' | '3d' | '2d-array';
+/** Shapes whose layer count is an authored descriptor fact. */
+export type RenderTargetLayeredShape = '3d' | '2d-array';
 export type RenderTargetMipLevels = 1 | 'full';
 export type RenderTargetSampleCount = 1 | 4;
 export type RenderTargetDepthFormat =
@@ -14,8 +21,7 @@ export type RenderTargetDepthFormat =
   | 'depth32float-stencil8'
   | 'depth32float';
 
-export interface RenderTargetDescriptor {
-  readonly shape: RenderTargetShape;
+interface RenderTargetDescriptorFacts {
   readonly width: number;
   readonly height: number;
   readonly format: RenderTargetFormat;
@@ -24,6 +30,36 @@ export interface RenderTargetDescriptor {
   readonly depth?: RenderTargetDepthFormat;
   readonly sampled: boolean;
   readonly readback: boolean;
+}
+
+/**
+ * Target descriptor. `2d` has one layer and `cube` six; `3d` and `2d-array`
+ * name their depth-slice or array-layer count in `depthOrArrayLayers`.
+ */
+export type RenderTargetDescriptor =
+  | (RenderTargetDescriptorFacts & {
+      readonly shape: '2d' | 'cube';
+      readonly depthOrArrayLayers?: never;
+    })
+  | (RenderTargetDescriptorFacts & {
+      readonly shape: RenderTargetLayeredShape;
+      readonly depthOrArrayLayers: number;
+    });
+
+/**
+ * Writable layer count: array layers for `2d`/`cube`/`2d-array`, depth slices
+ * for `3d`. Writers, readback, and resolution all index `0..count-1`.
+ */
+export function renderTargetLayerCount(descriptor: RenderTargetDescriptor): number {
+  switch (descriptor.shape) {
+    case '2d':
+      return 1;
+    case 'cube':
+      return 6;
+    case '3d':
+    case '2d-array':
+      return descriptor.depthOrArrayLayers;
+  }
 }
 
 declare const RenderTargetBrand: unique symbol;
@@ -50,8 +86,11 @@ export interface RenderTargetTextureSource {
 
 export interface RenderTargetReadbackRequest {
   readonly mipLevel: number;
-  /** Cube array layer to copy; 2D targets accept only the omitted form. */
-  readonly face?: number;
+  /**
+   * Cube face, array layer, or 3D depth slice to copy, in
+   * `[0, renderTargetLayerCount(descriptor) - 1]`. Omitted means layer 0.
+   */
+  readonly layer?: number;
 }
 
 /** One-shot readback request bound to a future matching FrameReceipt. */
@@ -66,13 +105,55 @@ export interface RenderTargetReadbackData {
   readonly frameId: number;
   readonly deviceGeneration: number;
   readonly mipLevel: number;
-  readonly face?: number;
+  readonly layer?: number;
   readonly bytesPerRow: number;
   readonly byteLength: number;
 }
 
+declare const FramebufferSnapshotTicketBrand: unique symbol;
+
+export interface FramebufferSnapshotRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Copy one region of a submitted frame's linear-HDR scene color into a 2D
+ * `rgba16float` RenderTarget. The copy is recorded in the next submitted frame,
+ * after scene features and before post-processing, and the target keeps the
+ * bytes until another writer replaces them.
+ */
+export interface FramebufferSnapshotRequest {
+  /** Source rectangle in the camera's scene-color pixels (internal extent). */
+  readonly region: FramebufferSnapshotRegion;
+  /** Destination texel of the region's top-left corner; omitted means (0, 0). */
+  readonly destination?: { readonly x: number; readonly y: number };
+  /** Camera entity key; required for CameraView frames, omitted selects the display camera. */
+  readonly camera?: number;
+}
+
+/** One-shot snapshot request bound to the next submitted FrameReceipt. */
+export interface FramebufferSnapshotTicket {
+  readonly [FramebufferSnapshotTicketBrand]: 'FramebufferSnapshotTicket';
+}
+
+/** Released by observe after the matching frame completed and the target holds the copy. */
+export interface FramebufferSnapshotData {
+  readonly ticket: FramebufferSnapshotTicket;
+  readonly frameId: number;
+  readonly deviceGeneration: number;
+  readonly camera: number | undefined;
+  readonly region: FramebufferSnapshotRegion;
+  readonly destination: { readonly x: number; readonly y: number };
+  readonly sourceExtent: { readonly width: number; readonly height: number };
+}
+
 export interface RenderTargetAdmissionLimits {
   readonly maxTextureDimension2D: number;
+  readonly maxTextureDimension3D: number;
+  readonly maxTextureArrayLayers: number;
   readonly maxBytesPerTarget: number;
   readonly renderableFormats: readonly RenderTargetFormat[];
   readonly sampleCounts: readonly RenderTargetSampleCount[];
@@ -90,7 +171,7 @@ function mipFactor(mipLevels: RenderTargetMipLevels): number {
 }
 
 function estimatedBytes(descriptor: RenderTargetDescriptor): number {
-  const layers = descriptor.shape === 'cube' ? 6 : 1;
+  const layers = renderTargetLayerCount(descriptor);
   const samples = descriptor.sampleCount;
   const depthBytes =
     descriptor.depth === undefined ? 0 : descriptor.depth === 'depth32float-stencil8' ? 8 : 4;
@@ -101,12 +182,8 @@ function estimatedBytes(descriptor: RenderTargetDescriptor): number {
       layers *
       samples *
       mipFactor(descriptor.mipLevels) +
-      descriptor.width *
-        descriptor.height *
-        depthBytes *
-        layers *
-        samples *
-        mipFactor(descriptor.mipLevels),
+      // One single-layer depth attachment is shared by every layer write.
+      descriptor.width * descriptor.height * depthBytes * samples,
   );
 }
 
@@ -132,18 +209,69 @@ export function admitRenderTargetDescriptor(
   if (!Number.isInteger(descriptor.height) || descriptor.height < 1) {
     return invalid('height', descriptor.height, 'an integer >= 1');
   }
+  const layered = descriptor.shape === '3d' || descriptor.shape === '2d-array';
+  if (!layered && descriptor.depthOrArrayLayers !== undefined) {
+    return invalid(
+      'depthOrArrayLayers',
+      descriptor.depthOrArrayLayers,
+      `omitted for a ${descriptor.shape} target`,
+    );
+  }
   if (
-    descriptor.width > limits.maxTextureDimension2D ||
-    descriptor.height > limits.maxTextureDimension2D
+    layered &&
+    (!Number.isInteger(descriptor.depthOrArrayLayers) || descriptor.depthOrArrayLayers < 1)
   ) {
+    return invalid('depthOrArrayLayers', descriptor.depthOrArrayLayers, 'an integer >= 1');
+  }
+  const maxExtent =
+    descriptor.shape === '3d' ? limits.maxTextureDimension3D : limits.maxTextureDimension2D;
+  if (descriptor.width > maxExtent || descriptor.height > maxExtent) {
     return invalid(
       'extent',
       { width: descriptor.width, height: descriptor.height },
-      `width and height <= ${limits.maxTextureDimension2D}`,
+      `width and height <= ${maxExtent}`,
     );
   }
-  if (descriptor.shape === 'cube' && descriptor.width !== descriptor.height) {
-    return invalid('shape', descriptor.shape, 'cube width === height');
+  switch (descriptor.shape) {
+    case '2d':
+      break;
+    case 'cube':
+      if (descriptor.width !== descriptor.height) {
+        return invalid('shape', descriptor.shape, 'cube width === height');
+      }
+      break;
+    case '2d-array':
+      if (descriptor.depthOrArrayLayers > limits.maxTextureArrayLayers) {
+        return {
+          ok: false,
+          error: new RenderTargetCapabilityMissingError({
+            operation: 'create',
+            requested: String(descriptor.depthOrArrayLayers),
+            capability: 'maxTextureArrayLayers',
+            actual: String(limits.maxTextureArrayLayers),
+          }),
+        };
+      }
+      break;
+    case '3d':
+      if (descriptor.depthOrArrayLayers > limits.maxTextureDimension3D) {
+        return {
+          ok: false,
+          error: new RenderTargetCapabilityMissingError({
+            operation: 'create',
+            requested: String(descriptor.depthOrArrayLayers),
+            capability: 'maxTextureDimension3D',
+            actual: String(limits.maxTextureDimension3D),
+          }),
+        };
+      }
+      if (descriptor.sampleCount !== 1) {
+        return invalid('sampleCount', descriptor.sampleCount, '1 for a 3d target');
+      }
+      if (descriptor.mipLevels !== 1) {
+        return invalid('mipLevels', descriptor.mipLevels, '1 for a 3d target');
+      }
+      break;
   }
   if (!limits.renderableFormats.includes(descriptor.format)) {
     return {

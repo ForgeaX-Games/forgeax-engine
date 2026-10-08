@@ -1,36 +1,13 @@
 import type { QuerySpan } from '@forgeax/engine-ecs';
 import type { SharedSpanBinding } from '@forgeax/engine-ecs/shared';
-
-interface KernelJobMessage {
-  readonly kind: 'kernel-job';
-  readonly moduleUrl: string;
-  readonly binding: SharedSpanBinding;
-  readonly control: Int32Array;
-  readonly status: Int32Array;
-  readonly jobIndex: number;
-}
-
-interface KernelInitMessage {
-  readonly kind: 'kernel-init';
-  readonly ready: Int32Array;
-}
-
-interface KernelPreloadMessage {
-  readonly kind: 'kernel-preload';
-  readonly moduleUrl: string;
-  readonly control: Int32Array;
-  readonly status: Int32Array;
-  readonly jobIndex: number;
-}
+import type { HostToKernelMessage } from './protocol';
 
 interface LoadedKernel {
   readonly run: (spans: readonly QuerySpan[]) => unknown;
 }
 
 const scope = globalThis as unknown as {
-  onmessage:
-    | ((event: MessageEvent<KernelJobMessage | KernelInitMessage | KernelPreloadMessage>) => void)
-    | null;
+  onmessage: ((event: MessageEvent<HostToKernelMessage>) => void) | null;
 };
 
 const loadedKernels = new Map<string, LoadedKernel>();

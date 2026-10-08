@@ -369,4 +369,74 @@ describe('CompositeInputBackend merge semantics', () => {
     const s = c.sample();
     expect(s.pointerEvents?.[0]?.phase).toBe('down');
   });
+  it.each([
+    'owner',
+    'lease',
+  ] as const)('drains %s writes at the same frame and input boundaries', (kind) => {
+    const inner = fakeInner({ focused: false });
+    const backend = makeCompositeBackend(inner, { yieldToHuman: false });
+    const writer = kind === 'owner' ? backend : backend.createInjectedLease();
+    writer.press('KeyW');
+    writer.press('Space');
+    writer.setButton(2, true);
+    writer.addMovement(2, -3);
+    writer.addWheel(4);
+    const first = backend.sample();
+    expect(first.downKeys).toEqual(new Set(['w', ' ']));
+    expect(first.downCodes).toEqual(new Set(['KeyW', 'Space']));
+    expect(first.pressedKeys).toEqual(new Set(['w', ' ']));
+    expect(first.pressedButtons).toEqual([false, false, true]);
+    expect([first.movementX, first.movementY, first.wheelDelta]).toEqual([2, -3, 4]);
+    expect(first.focused).toBe(true);
+    const held = backend.sample();
+    expect(held.pressedKeys).toBeUndefined();
+    expect(held.pressedButtons).toBeUndefined();
+    expect(held.buttons[2]).toBe(true);
+    expect([held.movementX, held.movementY, held.wheelDelta]).toEqual([0, 0, 0]);
+    writer.clearInjected();
+    const cleared = backend.sample();
+    expect(cleared.upKeys).toEqual(new Set(['w', ' ']));
+    expect(cleared.upCodes).toEqual(new Set(['KeyW', 'Space']));
+    expect(cleared.releasedButtons).toEqual([false, false, true]);
+    expect(cleared.downKeys.size).toBe(0);
+    expect(backend.sample().releasedButtons).toBeUndefined();
+    backend.setInputAllowed?.(false);
+    writer.press('KeyA');
+    writer.setButton(0, true);
+    writer.addMovement(7, 8);
+    writer.addWheel(9);
+    const denied = backend.sample();
+    expect(denied.downKeys.size).toBe(0);
+    expect(denied.buttons).toEqual([false, false, false]);
+    expect([denied.movementX, denied.movementY, denied.wheelDelta]).toEqual([0, 0, 0]);
+    expect(inner.sampleCalls()).toBe(5);
+  });
+});
+
+describe('composite press-edge source ownership', () => {
+  it('publishes injected physical press edges for one frame', () => {
+    const backend = makeCompositeBackend(fakeInner());
+    backend.press('KeyW');
+    const first = backend.sample();
+    expect(first.pressedKeys?.has('w')).toBe(true);
+    expect(first.pressedCodes?.has('KeyW')).toBe(true);
+    const second = backend.sample();
+    expect(second.pressedCodes?.has('KeyW') ?? false).toBe(false);
+    expect(second.downCodes?.has('KeyW')).toBe(true);
+  });
+
+  it('keeps a human press edge while suppressing an overlapping injected press', () => {
+    const backend = makeCompositeBackend(
+      fakeInner({
+        downKeys: new Set(['w']),
+        downCodes: new Set(['KeyW']),
+        pressedKeys: new Set(['w']),
+        pressedCodes: new Set(['KeyW']),
+      }),
+    );
+    backend.press('KeyW');
+    const sample = backend.sample();
+    expect([...(sample.pressedKeys ?? [])]).toEqual(['w']);
+    expect([...(sample.pressedCodes ?? [])]).toEqual(['KeyW']);
+  });
 });

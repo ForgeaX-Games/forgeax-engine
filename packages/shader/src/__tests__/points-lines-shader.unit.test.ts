@@ -28,7 +28,7 @@ describe('points-lines triangle expansion shader contract', () => {
 
   it('expands each butt segment independently without native wide primitive state', () => {
     expect(source).toContain('fn expandLine');
-    expect(source).toContain('widthPx');
+    expect(source).toContain('width');
     expect(source).toContain('butt');
     expect(source).toContain('line-list');
     expect(source).not.toMatch(/pointSize|lineWidth/);

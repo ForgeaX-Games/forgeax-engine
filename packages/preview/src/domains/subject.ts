@@ -3,11 +3,46 @@ import type {
   JsonValue,
   ToolContribution,
   ToolDescriptor,
-  ToolExecutionContext,
   ToolSchema,
 } from '@forgeax/engine-tool-runtime';
+import type { PreviewHostMechanisms } from '../host/preview-host.js';
 import { previewHostCapability } from '../host/preview-host.js';
 import type { PreviewSubjectKind } from '../kit/presentation.js';
+
+/** Mechanisms sampled once by the existing preview Host session. */
+export type ResourcePreviewInput = Pick<
+  PreviewHostMechanisms,
+  'assets' | 'renderer' | 'runId' | 'artifacts'
+>;
+
+export async function loadResourceSubject(
+  guid: string,
+  input: ResourcePreviewInput,
+  kind: PreviewSubjectKind,
+) {
+  if (input.assets === undefined)
+    return subjectFailure(
+      'resource-preview-subject-invalid',
+      'resource preview host to expose the existing AssetRegistry',
+      { phase: 'asset-registry', runId: input.runId },
+    );
+  const loaded = await input.assets.loadByGuid<Record<string, unknown>>(guid);
+  if (!loaded.ok)
+    return assetLoadFailure(
+      `AssetRegistry.loadByGuid to resolve the requested ${kind}`,
+      input.runId,
+      loaded.error,
+    );
+  return {
+    ok: true as const,
+    value: {
+      guid,
+      asset: loaded.value,
+      ...(loaded.digest === undefined ? {} : { digest: loaded.digest }),
+      ...(loaded.ownerFacts === undefined ? {} : { ownerFacts: loaded.ownerFacts }),
+    },
+  };
+}
 
 export interface ResourcePreviewArgs {
   readonly guid: string;
@@ -109,8 +144,6 @@ export function subjectDescriptor(
   };
 }
 
-export type SubjectExecutor = (args: ResourcePreviewArgs, context: ToolExecutionContext) => unknown;
-
 export interface ResourceSubjectFailure {
   readonly ok: false;
   readonly error: {
@@ -192,20 +225,4 @@ export function nativePreviewPlugin(
       );
     },
   };
-}
-
-export async function failUnboundSubject(
-  kind: PreviewSubjectKind,
-  args: ResourcePreviewArgs,
-  context: ToolExecutionContext,
-): Promise<unknown> {
-  const host = context.require(previewHostCapability);
-  if (!host.ok) return host;
-  return host.value.withSession(async (mechanisms) => ({
-    ...subjectFailure(
-      'resource-preview-subject-invalid',
-      `${kind} asset ${args.guid} to be bound by its owner before rendering`,
-      { phase: 'subject-binding', runId: mechanisms.runId },
-    ),
-  }));
 }

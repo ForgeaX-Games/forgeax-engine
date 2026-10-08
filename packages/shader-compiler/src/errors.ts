@@ -1,27 +1,23 @@
-// @forgeax/engine-shader-compiler/errors — re-export shim over @forgeax/engine-naga.
+// @forgeax/engine-shader-compiler/errors — one ShaderError surface for build-time callers.
 //
-// feat-20260511-naga-rhi-wgpu-merge (plan-strategy D-P4) moved the ShaderError
-// class + 4 factory helpers + Result<T, E> + wrapShaderError adapter down into
-// @forgeax/engine-naga (which is now the upstream owner of the wasm boundary). This
-// file is a pure re-export to keep @forgeax/engine-shader-compiler's public surface
-// stable for AI users (charter proposition 5 consistent abstraction:
-// `import { compileFailed, err, ok, ShaderError, ... } from '@forgeax/engine-shader-compiler'`
-// continues to work byte-for-byte).
-//
-// The closed ShaderErrorCode 4-member union remains imported from
-// @forgeax/engine-types (the SSOT): +0 breaking points to the error model (AC-09).
+// The ShaderError class and its runtime factories are owned by
+// @forgeax/engine-shader; the build-time Naga factories (compileFailed /
+// initFailed) by @forgeax/engine-naga; the closed code/detail unions by
+// @forgeax/engine-types. This file only forwards them.
 
 export {
   compileFailed,
   err,
   initFailed,
-  manifestMalformed,
   ok,
   type Result,
   type ResultErr,
   type ResultOk,
+} from '@forgeax/engine-naga';
+export {
+  manifestMalformed,
   ShaderError,
   type ShaderErrorCode,
   type ShaderErrorDetail,
   shaderNotFound,
-} from '@forgeax/engine-naga';
+} from '@forgeax/engine-shader';

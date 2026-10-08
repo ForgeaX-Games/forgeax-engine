@@ -20,3 +20,12 @@ describe('Standard ambient occlusion consumer contract', () => {
     expect(code).toContain('return pow(clamp(textureSampleLevel(');
   });
 });
+
+it('keeps material and environment AO independent from the opt-in direct AO lane', () => {
+  const code = source('standard-deferred-lighting');
+  expect(code).toContain('lanes : vec4<f32>');
+  expect(code).toContain('occlusion : vec4<f32>');
+  expect(code).toContain('let ao = response.a * screenAo;');
+  expect(code).toContain('mix(1.0, screenAo, clamp(params.occlusion.x, 0.0, 1.0))');
+  expect(code).toContain('(environment.diffuse + environment.specular) * ao + direct * directAo');
+});

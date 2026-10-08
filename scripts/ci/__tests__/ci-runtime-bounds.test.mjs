@@ -4,6 +4,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
+import {
+  MESH_IO_LOGICAL_FRAMES,
+  meshIoFrameIndices,
+} from '../../../apps/parity/mesh-io/src/frame-profile.ts';
 
 const taaCarrierModule = pathToFileURL(resolve('apps/hello/taa/scripts/smoke-carrier.mjs')).href;
 
@@ -25,10 +29,61 @@ const realGpuWorkflow = readFileSync(
 );
 const benchWorkflow = readFileSync(resolve('.github/workflows/bench.yml'), 'utf8');
 const packageManifest = readFileSync(resolve('package.json'), 'utf8');
+test('source typecheck and lifecycle gates survive removal from the artifact barrier', () => {
+  const core = workflow.split('  core-build:\n')[1].split(/\n {2}[\w-]+:\n/)[0];
+  const primary = workflow.slice(
+    workflow.indexOf('  primary-pnpm:'),
+    workflow.indexOf('  coverage-pnpm-shard:'),
+  );
+  const fullTypecheck = JSON.parse(packageManifest).scripts.typecheck.split(' && ');
+  assert.equal(fullTypecheck.length, 3);
+  assert.ok(core.includes(fullTypecheck[0]));
+  for (const command of fullTypecheck.slice(1)) {
+    assert.ok(primary.includes(command), `required primary gate lost ${command}`);
+    assert.ok(!core.includes(command), `artifact fanout still waits for ${command}`);
+  }
+  for (const name of [
+    'CI execution and process lifecycle regression',
+    'Canonical kit staging recovery regression',
+  ]) {
+    assert.ok(primary.includes(`- name: ${name}`));
+    assert.ok(!core.includes(`- name: ${name}`));
+    assert.equal(workflow.split(`- name: ${name}`).length, 2);
+  }
+  assert.ok(
+    primary.indexOf('- name: Prepare verified CI inputs') <
+      primary.indexOf('- name: Script and app source typecheck'),
+  );
+  assert.ok(
+    primary.indexOf('- name: Multiplayer snake process E2E') <
+      primary.indexOf('- name: Canonical kit staging recovery regression'),
+  );
+});
+
 test('local Dawn entrypoint uses the complete shared gate', () => {
   const command = JSON.parse(packageManifest).scripts['test:dawn'];
   assert.match(command, /node scripts\/ci\/run-dawn-gate\.mjs$/);
   assert.doesNotMatch(command, /FORGEAX_DAWN_LIGHTWEIGHT/);
+});
+
+test('local Dawn preparation preserves explicit package concurrency', () => {
+  const preparation = JSON.parse(packageManifest).scripts['test:dawn'].split(' && ')[0];
+  for (const [configured, expected] of [
+    [undefined, '2'],
+    ['1', '1'],
+    ['3', '3'],
+  ]) {
+    const env = { ...process.env };
+    delete env.FORGEAX_PACKAGE_BUILD_CONCURRENCY;
+    if (configured !== undefined) env.FORGEAX_PACKAGE_BUILD_CONCURRENCY = configured;
+    const result = spawnSync(
+      'sh',
+      ['-c', `pnpm() { printf "%s" "$FORGEAX_PACKAGE_BUILD_CONCURRENCY"; }; ${preparation}`],
+      { env, encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, expected);
+  }
 });
 
 const vitestConfig = readFileSync(resolve('vitest.config.ts'), 'utf8');
@@ -234,6 +289,7 @@ test('vitest-browser splits the full browser suite into bounded fresh processes'
   assert.match(browserShard, /NODE_OPTIONS: --max-old-space-size=4096/);
   assert.match(browserShard, /--group-size=8/);
   assert.match(browserShard, /matrix:\n(?:\s*#.*\n)*\s+shard: \[0, 1, 2, 3\]/);
+  assert.match(browserShard, /max-parallel: 4\n/);
   assert.match(browserShard, /--shard-index=\$\{\{ matrix\.shard \}\}/);
   assert.match(browserShard, /--shard-count=4/);
   assert.match(browserShard, /FORGEAX_BROWSER_CI_LIGHTWEIGHT: '1'/);
@@ -470,7 +526,7 @@ test('primary pin reachability restores every independently prepared submodule',
 test('Dawn heavy renderer lanes keep only lifecycle work fresh', () => {
   assert.match(
     packageManifest,
-    /"test:dawn": "FORGEAX_PACKAGE_BUILD_CONCURRENCY=2 pnpm build:engine &&/,
+    /"test:dawn": "FORGEAX_PACKAGE_BUILD_CONCURRENCY=\$\{FORGEAX_PACKAGE_BUILD_CONCURRENCY:-2\} pnpm build:engine &&/,
     'the local Dawn gate must use a bounded package-only engine build',
   );
   assert.doesNotMatch(
@@ -518,7 +574,7 @@ test('Dawn heavy renderer lanes keep only lifecycle work fresh', () => {
     dawnJob,
     /--input-fingerprint .*needs\.shared-app-inputs\.outputs\.input_fingerprint/,
   );
-  assert.match(dawnJob, /timeout-minutes: 25/);
+  assert.match(dawnJob, /timeout-minutes: 27/);
   assert.match(dawnJob, /shard: \[1, 2, 3, 4\]/);
   assert.match(dawnJob, /--shard "\$\{\{ matrix\.shard \}\}\/4"/);
   assert.match(vitestConfig, /from '\.\/scripts\/ci\/dawn-gate-roster\.mjs'/);
@@ -526,7 +582,10 @@ test('Dawn heavy renderer lanes keep only lifecycle work fresh', () => {
   assert.match(vitestConfig, /\.\.\.\(RUNNING_DAWN_COMPACT \? \[\] : DAWN_COMPACT_TEST_FILES\)/);
   assert.match(dawnJob, /FORGEAX_DAWN_LIGHTWEIGHT: ['"]1['"]/);
   assert.match(dawnJob, /NODE_OPTIONS: --max-old-space-size=4096/);
-  assert.match(dawnJob, /run: node scripts\/ci\/run-dawn-gate\.mjs --shard/);
+  assert.match(
+    dawnJob,
+    /run: >-\s+node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+node scripts\/ci\/run-dawn-gate\.mjs --shard/,
+  );
   assert.match(dawnJob, /uses: \.\/\.github\/actions\/prepare-xdg-runtime/);
   assert.match(dawnPartitionRunner, /runBrowserCommand/);
   assert.match(dawnPartitionRunner, /--testNamePattern/);
@@ -1098,7 +1157,10 @@ test('Dawn project uses one worker to protect the shared software Vulkan backend
 test('Dawn PR roster and RenderScene perf keep CI workloads bounded', () => {
   const dawnStart = workflow.indexOf('  vitest-dawn:\n');
   const dawn = workflow.slice(dawnStart, workflow.indexOf('  vitest-dawn-required:\n', dawnStart));
-  assert.match(dawn, /run: node scripts\/ci\/run-dawn-gate\.mjs --shard/);
+  assert.match(
+    dawn,
+    /run: >-\s+node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+node scripts\/ci\/run-dawn-gate\.mjs --shard/,
+  );
 
   const coverageStart = workflow.indexOf('  coverage-perf:\n');
   const coverage = workflow.slice(
@@ -1123,7 +1185,7 @@ test('cold Ubuntu smoke and browser jobs keep their real runtime budget', () => 
   assert.match(smokeFleet, /timeout-minutes: 60/);
   assert.match(smokeFleet, /prepare-ci-inputs\.mjs --consumer smoke-fleet/);
   assert.match(inputPreparationSource, /timeoutMs = 20 \* 60_000/);
-  assert.match(inputPreparationSource, /const deadline = Date\.now\(\) \+ 60_000;/);
+  assert.match(inputPreparationSource, /const deadline = Date\.now\(\) \+ 120_000;/);
   assert.match(smokeFleet, /- name: Run authoritative Dawn roster shard\n\s+timeout-minutes: 45/);
   assert.match(smokeFleet, /DAWN_SMOKE_ENTRY_TIMEOUT_MS: 300000/);
   assert.match(
@@ -1162,7 +1224,7 @@ test('cold Ubuntu smoke and browser jobs keep their real runtime budget', () => 
   assert.match(vitestBrowserShard, /timeout-minutes: 45/);
 });
 
-test('the VFX GPU benchmark has one owner after the smoke fleet releases the device', () => {
+test('the VFX GPU benchmark has one metric owner independent of Smoke ordering', () => {
   const smokeStart = workflow.indexOf('  smoke-fleet:\n');
   const smokeFleet = workflow.slice(
     smokeStart,
@@ -1175,8 +1237,8 @@ test('the VFX GPU benchmark has one owner after the smoke fleet releases the dev
     metricsStart,
     workflow.indexOf('  collectathon-boot-e2e:\n', metricsStart),
   );
-  assert.match(metrics, /needs: \[[^\]]*smoke-fleet[^\]]*\]/);
-  assert.match(metrics, /needs\.smoke-fleet\.result == 'success'/);
+  assert.doesNotMatch(metrics, /needs: \[[^\]]*smoke-fleet[^\]]*\]/);
+  assert.doesNotMatch(metrics, /needs\.smoke-fleet\./);
   assert.match(metrics, /run: pnpm metrics:run/);
 
   const artifactContract = JSON.parse(
@@ -1186,7 +1248,7 @@ test('the VFX GPU benchmark has one owner after the smoke fleet releases the dev
     (entry) => entry.jobIdentity === 'metrics-validate',
   );
   assert.ok(metricsTiming);
-  assert.ok(metricsTiming.allowedNonArtifactPrerequisites.includes('smoke-fleet'));
+  assert.equal(metricsTiming.allowedNonArtifactPrerequisites.includes('smoke-fleet'), false);
 });
 
 test('self-hosted setup-node steps do not transfer the pnpm store archive', () => {
@@ -1255,6 +1317,12 @@ test('every CI checkout uses the producer product commit', () => {
   assert.ok(checkouts.length > 0);
   for (const checkout of checkouts) {
     const inputs = checkout.split(/\n {6}-|\n {2}\S/)[0];
+    if (inputs.includes('repository: ForgeaX-Games/forgeax-view')) {
+      assert.match(inputs, /ref: \$\{\{ steps\.view-pin\.outputs\.sha \}\}/);
+      assert.match(inputs, /path: tools\/view/);
+      assert.match(workflow, /git rev-parse HEAD:tools\/view/);
+      continue;
+    }
     assert.match(
       inputs,
       /ref: \$\{\{ env\.EXPECTED_PRODUCT_SHA \}\}/,
@@ -1274,4 +1342,36 @@ test('the 60-frame visibility oracle bounds shadow texels and does not overlap t
     readFileSync(resolve('apps/hello/entity-visibility/__tests__/visibility.dawn.test.ts'), 'utf8'),
     /retry: 0/,
   );
+});
+
+test('ordinary CI never expands a shard matrix beyond four', () => {
+  const matrices = [...workflow.matchAll(/^\s+(?:shard|group): \[([^\]\n]+)\]/gm)];
+  assert.ok(matrices.length >= 4, 'inspect every ordinary test matrix');
+  for (const [, values] of matrices) {
+    assert.ok(values.split(',').length <= 4, `matrix exceeds four shards: ${values}`);
+  }
+});
+
+test('Mesh CI sampling retains the full trajectory and exact captured pose', () => {
+  const full = meshIoFrameIndices(false);
+  const bounded = meshIoFrameIndices(true);
+  assert.equal(full.length, 60);
+  assert.equal(bounded.length, 16);
+  assert.equal(new Set(bounded).size, bounded.length);
+  assert.deepEqual(
+    bounded,
+    [...bounded].sort((a, b) => a - b),
+  );
+  assert.ok(bounded.every((frame) => full.includes(frame)));
+  assert.equal(bounded[0], full[0]);
+  assert.equal(bounded.at(-1), full.at(-1));
+  assert.equal(bounded.at(-1), MESH_IO_LOGICAL_FRAMES - 1);
+  assert.ok(bounded.some((frame) => frame < 30));
+  assert.ok(bounded.some((frame) => frame >= 30));
+  // Keep every retained cubic-pose oracle and the exact final geometry-readback pose.
+  const pose = (frame) => {
+    const time = (2 * (frame + 0.371)) / MESH_IO_LOGICAL_FRAMES;
+    return 0.6 * (time / 2) * (1 - time / 2);
+  };
+  assert.equal(pose(bounded.at(-1)), pose(full.at(-1)));
 });

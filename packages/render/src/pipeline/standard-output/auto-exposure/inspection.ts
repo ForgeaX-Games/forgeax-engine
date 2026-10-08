@@ -13,7 +13,7 @@ export interface AutoExposureInvalidParameterDetail {
 }
 
 export interface AutoExposureCapabilityUnavailableDetail {
-  readonly capability: 'compute' | 'storage-buffer' | 'float-filterable';
+  readonly capability: 'compute' | 'storage-buffer';
   readonly generation: number;
 }
 

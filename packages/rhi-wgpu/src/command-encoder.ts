@@ -16,12 +16,14 @@ import {
   type ComputePassDescriptor,
   ok,
   type QuerySet,
+  RAY_QUERY_BACKEND_UNSUPPORTED,
   type RenderPassDescriptor,
   type Result,
   type RhiCommandEncoder,
   type RhiComputePassEncoder,
   type RhiError,
   type RhiRenderPassEncoder,
+  rayQueryUnsupported,
 } from '@forgeax/engine-rhi';
 import { unwrapBuffer } from './buffer';
 import { commandEncoderFinished, featureNotEnabledError, webgpuRuntimeError } from './errors';
@@ -303,6 +305,10 @@ class RhiWgpuCommandEncoderImpl implements RhiCommandEncoder {
   insertDebugMarker(markerLabel: string): void {
     if (this.raw.insertDebugMarker === undefined) return;
     this.raw.insertDebugMarker.call(this.raw, markerLabel);
+  }
+
+  buildAccelerationStructures(): Result<void, RhiError> {
+    return rayQueryUnsupported('buildAccelerationStructures', RAY_QUERY_BACKEND_UNSUPPORTED);
   }
 
   finish(): Result<CommandBuffer, RhiError> {

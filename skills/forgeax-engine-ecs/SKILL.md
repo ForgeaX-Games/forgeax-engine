@@ -69,6 +69,12 @@ await context.fiber.restart();
 Fiber determines whether an ECS contribution exists; `world.update(deltaSeconds)` still runs schedules, queries, SoA
 access, and Commands directly. Do not query Context inside systems or register per-entity/per-frame data as services.
 
+## Saved paths and distance following
+
+Install `pathPlugin()` from `@forgeax/engine/path` in the World realm. Author `Path` and `PathFollower` in an ordinary keyed SceneAsset and deliver it through Pack/GUID. `FixedUpdate` advances signed world-unit distance before Scene propagation. For physics entities choose desired motion, add `DesiredPathPose`, and consume it in the existing motor.
+
+Use [`packages/path/README.md`](../../packages/path/README.md) for axes, scale, reimport and closed error recovery. Validate with its independent accuracy and World performance gates; use [`apps/perf/path-follow`](../../apps/perf/path-follow) for actual Pack/browser and RHI evidence.
+
 ## Shared Kernel
 
 ```ts

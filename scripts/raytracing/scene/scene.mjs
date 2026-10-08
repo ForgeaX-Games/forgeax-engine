@@ -1,7 +1,11 @@
 // One scene snapshot feeds raster capture, software GI and independent exact PT.
 export function sceneSnapshot(prepared, options = {}) {
   const { resolution = 256, light = 1, wall = 'red', cameraX = 0 } = options;
-  const field = { ...prepared.field, values: Float32Array.from(prepared.field.values) };
+  const field = {
+    ...prepared.field,
+    bricks: Uint32Array.from(prepared.field.bricks),
+    values: Float32Array.from(prepared.field.values),
+  };
   const boxes = [
     ['white', [0, -3.15, 0], [3.3, 0.15, 3.3], 0],
     ['white', [0, 0, -3.15], [3.3, 3.15, 0.15], 0],
@@ -46,7 +50,7 @@ export function sceneSnapshot(prepared, options = {}) {
     {
       kind: 'point',
       position: new Float32Array([0, 2.1, 0.7]),
-      color: new Float32Array([1, 1, 1]),
+      color: new Float32Array([35 * light, 35 * light, 35 * light]),
       intensity: 35 * light,
       invRangeSquared: 0,
     },

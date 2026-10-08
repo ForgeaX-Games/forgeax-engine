@@ -78,6 +78,7 @@ export {
   DEFAULT_UNLIT_PARAM_SCHEMA,
   PARTICLE_MESH_SURFACE_PARAM_SCHEMA,
   STANDARD_BASE_PARAM_SCHEMA,
+  STANDARD_OBJECT_SPACE_NORMAL_BIT,
   STANDARD_PBR_ALPHA_CUTOFF_DEFAULT,
   STANDARD_PBR_ARTIFACT_RECEIPT,
   STANDARD_PBR_SKIN_ARTIFACT_RECEIPT,
@@ -86,10 +87,17 @@ export {
   STANDARD_PHYSICAL_TEXTURE_FIELDS,
   STANDARD_PIPELINE_PARAM_SCHEMA,
   STANDARD_SAMPLE_REUSE,
+  STANDARD_SHARED_TRANSMISSION_DEFINE,
+  STANDARD_SHARED_TRANSMISSION_SLOTS,
   STANDARD_TEXTURE_MASK_OVERRIDE,
+  STANDARD_TRIPLANAR_PROJECTION_BIT,
   type StandardPhysicalTextureField,
+  type StandardSharedTransmissionHost,
   standardPhysicalTextureFields,
+  standardProjectionMask,
   standardSampleReuseMask,
+  standardSharedTransmissionConflicts,
+  standardSharedTransmissionDefines,
   standardTextureMask,
 } from './material-schemas.js';
 export {
@@ -438,8 +446,7 @@ export function createBuiltinMaterialAsset(kind: BuiltinMaterialKind): MaterialA
  * Shared luminance epsilon floor for the extended Reinhard tone-map
  * (feat-20260519-tonemap-reinhard-mvp / D-O3).
  *
- * Both the TS port at `packages/runtime/src/systems/tonemap.ts` and the WGSL
- * fragment stage in `packages/shader/src/tonemap.wgsl` apply
+ * The WGSL fragment stage in `packages/shader/src/tonemap.wgsl` applies
  * `max(Y, TONEMAP_LUMINANCE_EPSILON)` before dividing the luminance ratio.
  * The floor keeps the divisor finite at degenerate inputs (`Y = 0` from black
  * pixels, `Y < 0` from rare numerical artefacts). Single SSOT here so a
@@ -450,6 +457,7 @@ export function createBuiltinMaterialAsset(kind: BuiltinMaterialKind): MaterialA
  */
 export const TONEMAP_LUMINANCE_EPSILON = 1e-5;
 
+export * from './cloud-programs';
 export {
   createMaterialShaderProgram,
   type MaterialShaderProgram,
@@ -464,4 +472,4 @@ export {
   rayMaterialFailure,
   rayMaterialNeedsCoverage,
 } from './material/ray-program';
-export { TONEMAP_SHADER_MODE, type TonemapShaderMode } from './tonemap.js';
+export { TONEMAP_PARAMS_LAYOUT, TONEMAP_SHADER_MODE, type TonemapShaderMode } from './tonemap.js';

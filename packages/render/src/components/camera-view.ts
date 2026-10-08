@@ -11,6 +11,15 @@ export const CameraView = defineComponent('CameraView', {
 });
 export type CameraViewData = ShapeOf<SchemaOf<typeof CameraView>>;
 
+/** The implicit full-screen view of a StereoCamera without CameraView. */
+export const CAMERA_VIEW_DEFAULTS: CameraViewData = Object.freeze({
+  viewport: new Float32Array([0, 0, 1, 1]),
+  order: 0,
+  resolutionScale: 1,
+  updateInterval: 1,
+  enabled: true,
+});
+
 export function cameraViewExtent(view: CameraViewData, width: number, height: number) {
   const [x = Number.NaN, y = Number.NaN, w = Number.NaN, h = Number.NaN] = view.viewport;
   if (

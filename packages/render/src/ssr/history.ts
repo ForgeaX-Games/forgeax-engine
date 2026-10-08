@@ -251,6 +251,11 @@ export class SsrHistoryOwner {
       : resources;
   }
 
+  /** The begun frame awaiting `commitFrame` / `abortFrame`; the only candidate copy. */
+  get candidate(): SsrHistoryCandidate | undefined {
+    return this.activeCandidate;
+  }
+
   get resources(): SsrHistoryResources {
     if (this.activeResources === undefined) throw new Error('SSR history resources are retired.');
     return this.activeResources;

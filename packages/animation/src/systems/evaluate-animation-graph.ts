@@ -30,9 +30,20 @@
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, SystemHandle, World } from '@forgeax/engine-ecs';
 import { defineSystem, Time, Update } from '@forgeax/engine-ecs';
+import { worldRead } from '@forgeax/engine-ecs/world-read';
 import type { AnimationClip, AnimationGraph, Handle } from '@forgeax/engine-types';
+import { resolveAnimationMask } from '../animation-mask';
 import { AnimationPlayer } from '../animation-player';
+import { AnimationBlendError } from '../blend-errors';
+import {
+  clearPlaybackIntervals,
+  type PlaybackInterval,
+  playbackInterval,
+  sampleTime,
+  stageGraphIntervals,
+} from '../playback-interval';
 import { resolveAnimationAsset } from '../resolve-animation-asset';
+import { collectTimelineEvents } from '../timeline';
 import { ADVANCE_ANIMATION_PLAYER_SYSTEM } from './advance-animation-player';
 
 /**
@@ -54,33 +65,16 @@ export type AnimationPayloadLookup = (
 interface PlayerGraphColumns {
   readonly graph: number;
   readonly nodeWeights: Float32Array;
-  readonly nodeTimes: Float32Array;
+  readonly nodeTimes: Float64Array;
   readonly nodeSpeeds: Float32Array;
+  readonly nodeMasks: Uint32Array;
   readonly paused: boolean;
   readonly looping: boolean;
 }
 
 /** Read `arr[i]` when in range, else the default (missing per-node knobs default). */
-function readAt(arr: Float32Array, i: number, dflt: number): number {
+function readAt(arr: ArrayLike<number>, i: number, dflt: number): number {
   return i >= 0 && i < arr.length ? (arr[i] ?? dflt) : dflt;
-}
-
-/**
- * Wrap / clamp an advanced time against a clip duration -- byte-for-byte the same
- * rule advanceAnimationPlayer applies (looping = modulo into [0, duration);
- * non-looping = clamp to [0, duration]). Shared logic so eval and advance agree
- * on the seek-time domain (D-7).
- */
-function wrapTime(time: number, duration: number, looping: boolean): number {
-  if (duration <= 0) return time;
-  if (looping) {
-    let wrapped = time % duration;
-    if (wrapped < 0) wrapped += duration;
-    return wrapped;
-  }
-  if (time > duration) return duration;
-  if (time < 0) return 0;
-  return time;
 }
 
 /**
@@ -94,6 +88,7 @@ export function evaluateAnimationGraph(
   dt: number,
   lookup: AnimationPayloadLookup = () => undefined,
 ): void {
+  clearPlaybackIntervals(world);
   const query = world.query({ with: [AnimationPlayer] }).unwrap();
 
   const entities: EntityHandle[] = [];
@@ -117,12 +112,12 @@ function evaluateOneEntity(
   lookup: AnimationPayloadLookup,
 ): void {
   const entity = entityRaw as EntityHandle;
+  // Direct playback needs only this scalar probe, not every variable graph column.
+  const graphRaw = world[worldRead].getFieldValue(entity, AnimationPlayer, 'graph');
+  if (graphRaw === undefined || graphRaw === 0) return;
   const apRes = world.get(entity, AnimationPlayer);
   if (!apRes.ok) return;
   const ap = apRes.value as unknown as PlayerGraphColumns;
-
-  const graphRaw = ap.graph;
-  if (graphRaw === 0) return; // no graph -> direct-write path, untouched.
 
   const graphLookup = resolveAssetHandle<AnimationGraph>(
     world,
@@ -133,12 +128,31 @@ function evaluateOneEntity(
 
   const nodes = graph.nodes;
   if (nodes.length === 0) return; // construction rejects empty graphs; guard anyway.
+  if (ap.nodeMasks.length > nodes.length) {
+    throw new AnimationBlendError('animation-player-mask-length-mismatch', {
+      entity: entityRaw,
+      field: 'nodeMasks',
+      expectedLength: nodes.length,
+      actualLength: ap.nodeMasks.length,
+    });
+  }
+  for (let i = 0; i < ap.nodeMasks.length; i++) {
+    const handle = ap.nodeMasks[i] ?? 0;
+    if (handle === 0) continue;
+    if (nodes[i]?.type !== 'clip') {
+      throw new AnimationBlendError('animation-mask-invalid', {
+        reason: 'nodeMasks may only name clip nodes',
+        index: i,
+      });
+    }
+    resolveAnimationMask(world, handle);
+  }
 
   // Collect clip leaves (ascending node index) and resolve every clip BEFORE any
   // write (AC-11: a dangling handle must not leave a dirty pose).
   const clipNodeIndices: number[] = [];
   const clipHandles: Handle<'AnimationClip', 'shared'>[] = [];
-  const clipDurations: number[] = [];
+  const clips: AnimationClip[] = [];
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
     if (node === undefined || node.type !== 'clip') continue;
@@ -154,7 +168,7 @@ function evaluateOneEntity(
     const handle = clipLookup.value.handle;
     clipNodeIndices.push(i);
     clipHandles.push(handle);
-    clipDurations.push(clipLookup.value.asset.duration);
+    clips.push(clipLookup.value.asset);
   }
 
   // Post-order effective-weight evaluation from the root (incoming influence 1).
@@ -187,25 +201,38 @@ function evaluateOneEntity(
 
   // Advance each clip node's seek-time (D-7: eval owns the time). Persist the full
   // per-node time column so it stays bounded frame-to-frame.
-  const newNodeTimes = new Float32Array(nodes.length);
+  const newNodeTimes = new Float64Array(nodes.length);
   for (let i = 0; i < nodes.length; i++) newNodeTimes[i] = readAt(ap.nodeTimes, i, 0);
+  const intervals: PlaybackInterval[] = [];
   for (let k = 0; k < clipNodeIndices.length; k++) {
     // biome-ignore lint/style/noNonNullAssertion: parallel to clipNodeIndices
     const nodeIndex = clipNodeIndices[k]!;
     // biome-ignore lint/style/noNonNullAssertion: parallel to clipNodeIndices
-    const duration = clipDurations[k]!;
+    const clip = clips[k]!;
     const current = readAt(ap.nodeTimes, nodeIndex, 0);
     const speed = readAt(ap.nodeSpeeds, nodeIndex, 0);
-    const advanced = ap.paused ? current : current + speed * dt;
-    newNodeTimes[nodeIndex] = wrapTime(advanced, duration, ap.looping);
+    const interval = playbackInterval(
+      clip,
+      clipHandles[k] ?? 0,
+      k,
+      current,
+      ap.paused ? 0 : speed * dt,
+      ap.looping,
+    );
+    intervals.push(interval);
+    newNodeTimes[nodeIndex] = sampleTime(interval.to, clip.duration, ap.looping);
   }
 
   // Spread one derived slot per clip leaf into the variable columns; speeds[]=0
   // parks the time so advance does not re-advance it (D-7).
   const slotCount = clipNodeIndices.length;
-  const times = new Float32Array(slotCount);
+  const times = new Float64Array(slotCount);
   const weights = new Float32Array(slotCount);
   const speeds = new Float32Array(slotCount);
+  const masks =
+    ap.nodeMasks.length === 0
+      ? []
+      : clipNodeIndices.map((nodeIndex) => ap.nodeMasks[nodeIndex] ?? 0);
   for (let k = 0; k < slotCount; k++) {
     // biome-ignore lint/style/noNonNullAssertion: parallel to clipNodeIndices
     const nodeIndex = clipNodeIndices[k]!;
@@ -214,11 +241,18 @@ function evaluateOneEntity(
     speeds[k] = 0;
   }
 
+  // Validate bounded effects before committing graph clocks. Pose publication remains deferred.
+  collectTimelineEvents(
+    entity,
+    intervals.filter((_, slot) => (weights[slot] ?? 0) > 0),
+  );
+  stageGraphIntervals(world, entity, intervals);
   world.set(entity, AnimationPlayer, {
     clips: clipHandles,
     times,
     weights,
     speeds,
+    masks,
     nodeTimes: newNodeTimes,
   });
 }

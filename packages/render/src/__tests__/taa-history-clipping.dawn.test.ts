@@ -13,6 +13,7 @@ import {
   GPU_BUFFER_USAGE_COPY_SRC,
   GPU_BUFFER_USAGE_MAP_READ,
   GPU_BUFFER_USAGE_STORAGE,
+  GPU_BUFFER_USAGE_UNIFORM,
 } from '../gpu-usage';
 import type { RenderFrameState } from '../record/frame-snapshot';
 import {
@@ -195,6 +196,10 @@ fn probeClip(current : vec3<f32>, neighbors : array<vec3<f32>, 8>, history : vec
       ],
     })
     .unwrap();
+  const temporalParams = device
+    .createBuffer({ size: 32, usage: GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST })
+    .unwrap();
+  device.queue.writeBuffer(temporalParams, 0, new Uint8Array(32)).unwrap();
   const neighborhoodLayout = device
     .createBindGroupLayout({
       entries: [
@@ -209,6 +214,12 @@ fn probeClip(current : vec3<f32>, neighbors : array<vec3<f32>, 8>, history : vec
           visibility: GPU_SHADER_STAGE_COMPUTE,
           texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
         },
+        { binding: 8, visibility: GPU_SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+        {
+          binding: 11,
+          visibility: GPU_SHADER_STAGE_COMPUTE,
+          texture: { sampleType: 'unfilterable-float', viewDimension: '2d' },
+        },
       ],
     })
     .unwrap();
@@ -219,6 +230,8 @@ fn probeClip(current : vec3<f32>, neighbors : array<vec3<f32>, 8>, history : vec
         { binding: 0, resource: { kind: 'textureView', value: diagonalView } },
         { binding: 1, resource: { kind: 'sampler', value: sampler } },
         { binding: 6, resource: { kind: 'textureView', value: temporalView } },
+        { binding: 8, resource: { kind: 'buffer', value: { buffer: temporalParams } } },
+        { binding: 11, resource: { kind: 'textureView', value: temporalView } },
       ],
     })
     .unwrap();
@@ -286,6 +299,8 @@ fn probeClip(current : vec3<f32>, neighbors : array<vec3<f32>, 8>, history : vec
           { binding: 0, resource: { kind: 'textureView', value: footprintView } },
           { binding: 1, resource: { kind: 'sampler', value: sampler } },
           { binding: 6, resource: { kind: 'textureView', value: temporalView } },
+          { binding: 8, resource: { kind: 'buffer', value: { buffer: temporalParams } } },
+          { binding: 11, resource: { kind: 'textureView', value: temporalView } },
         ],
       })
       .unwrap();
@@ -319,6 +334,7 @@ fn probeClip(current : vec3<f32>, neighbors : array<vec3<f32>, 8>, history : vec
   } finally {
     device.destroyBuffer(output).unwrap();
     device.destroyBuffer(readback).unwrap();
+    device.destroyBuffer(temporalParams).unwrap();
     device.destroyTexture(texture).unwrap();
     device.destroyTexture(diagonal).unwrap();
     device.destroyTexture(footprint).unwrap();

@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -46,7 +47,10 @@ describe('Surface Pack publication', () => {
       for (const program of cooked.programs) {
         const artifact = draft.artifacts[program.artifact.path];
         expect(artifact?.bytes.byteLength).toBeGreaterThan(0);
-        expect(artifact?.bytes).toEqual(new Uint8Array(program.artifact.bytes));
+        expect(
+          Buffer.from(artifact?.bytes ?? []).equals(Buffer.from(program.artifact.bytes)),
+          program.artifact.path,
+        ).toBe(true);
       }
       expect(
         cooked.resolved.passes?.find((pass) => pass.name === 'shadow-caster')?.program,

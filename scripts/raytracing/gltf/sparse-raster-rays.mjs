@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 import { writeReferencePng } from '../../../apps/shared/png-codec.mjs';
 import {
   createRayReferenceQuery,

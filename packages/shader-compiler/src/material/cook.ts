@@ -20,6 +20,7 @@ import {
   derive,
   deriveMaterialDynamicInputLayout,
   err,
+  inferMaterialParameterKind,
   type MaterialError,
   type MaterialParameterProjection,
   ok,
@@ -27,8 +28,8 @@ import {
   validateMaterialOutputs,
 } from '@forgeax/engine-types';
 import { compareMaterialBindings } from '../compare-param-schema.js';
+import { type CompileResult, compileShader } from '../compile.js';
 import { ShaderError } from '../errors.js';
-import { type CompileResult, compileShader } from '../index.js';
 import {
   compareDerivedMaterialInterface,
   validateSceneIndexStorage,
@@ -70,6 +71,11 @@ export interface MaterialCookedPass {
   readonly layoutIdentity: string;
   /** Producer ABI for a supported Standard pass, if both entries exist. */
   readonly abi?: MaterialShaderArtifactReceipt;
+  /**
+   * Whether the composed Surface reads `SurfaceInput.vertexColor`. Omitted
+   * for programs without a Surface slot, whose consumption is unknown.
+   */
+  readonly readsVertexColor?: boolean;
 }
 
 export type GeneratedMaterialParameterProjection = MaterialParameterProjection;
@@ -178,6 +184,8 @@ function wgslType(parameter: ParamSchemaEntry): string {
       return 'texture_depth_2d';
     case 'texture_cube_array':
       return 'texture_cube_array<f32>';
+    case 'texture_external':
+      return 'texture_external';
     case 'sampler':
     case 'sampler_comparison':
       return 'sampler';
@@ -223,10 +231,10 @@ export function generateParameterModule(
   const resourceBindings = derived.resourceBindings ?? [];
   const fields = schema
     .flatMap((parameter) => {
-      if (isNumericParameter(parameter)) {
+      if (inferMaterialParameterKind(parameter) === 'numeric') {
         return [`  ${parameter.name} : ${wgslType(parameter)},`];
       }
-      if (isTextureParameter(parameter)) {
+      if (inferMaterialParameterKind(parameter) === 'texture') {
         const coordinates = coordinateRecords.find((record) => record.parameter === parameter.name);
         if (coordinates === undefined) return [];
         return [
@@ -317,21 +325,6 @@ export function generateParameterModule(
     }
   }
   return `${lines.join('\n')}\n`;
-}
-
-function isNumericParameter(parameter: ParamSchemaEntry): boolean {
-  return ['f32', 'i32', 'u32', 'vec2', 'vec3', 'vec4', 'color'].includes(parameter.type);
-}
-
-function isTextureParameter(parameter: ParamSchemaEntry): boolean {
-  return [
-    'texture2d',
-    'texture2d_array',
-    'texture3d',
-    'texture_cube',
-    'texture_depth_2d',
-    'texture_cube_array',
-  ].includes(parameter.type);
 }
 
 function vertexInputFormat(type: string): string | undefined {
@@ -779,6 +772,12 @@ export async function cookMaterialAsset(
     includeResources: false,
   });
   const cooked: MaterialCookedPass[] = [];
+  const materialHasSceneIndex =
+    resolvedAsset.passes?.some((pass) => {
+      if (pass.program.module === 'forgeax::default-shadow-caster') return false;
+      const source = request.sources.get(pass.program.module);
+      return source.ok && sceneIndexEntry(source.value.source) !== undefined;
+    }) === true;
 
   for (const pass of resolvedAsset.passes ?? []) {
     const tags = pass.renderState?.tags as Readonly<Record<string, unknown>> | undefined;
@@ -809,18 +808,21 @@ export async function cookMaterialAsset(
     }
     const dynamicInputLayout = dynamicInput?.ok ? dynamicInput.value : undefined;
     const shadowTemplate = pass.program.module === 'forgeax::default-shadow-caster';
-    const sceneSurfaceTemplate =
+    const standardSurfaceTemplate =
       standardTemplate ||
-      mediumSurfaceTemplate ||
       (shadowTemplate &&
         (pass.program.moduleSlots?.surface !== undefined ||
           resolvedAsset.passes?.some((entry) => isStandardRootModule(entry.program.module)) ===
             true));
+    const sceneSurfaceTemplate =
+      standardSurfaceTemplate || mediumSurfaceTemplate || (shadowTemplate && materialHasSceneIndex);
     const usesSurfaceSlot = sourceRecord.value.slots.includes('surface');
     let composedSource: Result<string, MaterialError>;
     let imports: Result<Readonly<Record<string, string>>, MaterialError>;
     let sourceClosure: readonly string[];
     let sourceClosureDigest: string;
+    let composedSurfaceModule: string | undefined;
+    let readsVertexColor: boolean | undefined;
     if (usesSurfaceSlot) {
       const selectedSurfaceModule =
         pass.program.moduleSlots?.surface ?? resolved.value.asset.surface?.module;
@@ -849,6 +851,8 @@ export async function cookMaterialAsset(
       imports = ok(surface.value.imports);
       sourceClosure = surface.value.sourceClosure;
       sourceClosureDigest = surface.value.sourceClosureDigest;
+      composedSurfaceModule = surface.value.surfaceModule;
+      readsVertexColor = surface.value.readsVertexColor;
     } else {
       composedSource = applyModuleSlots(
         source,
@@ -878,6 +882,7 @@ export async function cookMaterialAsset(
     const sourceDeclaresSceneIndex = sceneIndexEntry(composedSource.value) !== undefined;
     const visibleItemsBinding = 2;
     const customSceneProgram =
+      context.capability !== 'uniform-fallback' &&
       sourceDeclaresSceneIndex &&
       !standardTemplate &&
       pass.program.module !== 'forgeax::default-shadow-caster';
@@ -947,32 +952,11 @@ export async function cookMaterialAsset(
           : lowerStandardPhysicalBindings(sourceForEntry, schema.value)
         : sourceForEntry;
     const sourceHasSceneIndexEntry = sceneIndexEntry(loweredSource) !== undefined;
-    let generatedSceneModule = generatedModuleForEntry;
-    if (sourceHasSceneIndexEntry && customSceneProgram) {
-      try {
-        generatedSceneModule = generateParameterModule(schema.value, {
-          sceneIndex: true,
-          ...(mediumSurfaceTemplate ? { sceneIndexDeclarations: false } : {}),
-          sceneRowStride: GPU_DRIVEN_MATERIAL_ROW_BYTES,
-          ...(needsGeneratedVisibleItems ? { visibleItemsBinding } : {}),
-        });
-      } catch (error) {
-        return err(
-          sceneIndexAbiError(
-            error instanceof Error ? error.message : String(error),
-            derived.totalBytes,
-            GPU_DRIVEN_MATERIAL_ROW_BYTES,
-            'bg-overflow',
-            pass.program.module,
-          ),
-        );
-      }
-    }
     const compileImports =
-      generatedSceneModule !== generatedModule &&
+      generatedModuleForEntry !== generatedModule &&
       loweredSource.includes('forgeax_material::parameters') &&
       !/@group\s*\(\s*1\s*\)\s*@binding\s*\(\s*46\s*\)/.test(loweredSource)
-        ? { ...importsForEntry, 'forgeax_material::parameters': generatedSceneModule }
+        ? { ...importsForEntry, 'forgeax_material::parameters': generatedModuleForEntry }
         : importsForEntry;
     const effectiveClosureImports =
       usesInlineGeneratedModule && generatedModuleForEntry !== generatedModule
@@ -1001,12 +985,16 @@ export async function cookMaterialAsset(
     const compileDefines = {
       ...lowerMaterialVariantContext(context),
       ...loweredContract.value.defines,
+      ...(shadowTemplate && composedSurfaceModule === 'forgeax_material::opaque_surface'
+        ? { OPAQUE_SHADOW_COVERAGE_AVAILABLE: true }
+        : {}),
       ...(request.vertexColorAvailable === undefined
         ? {}
         : { VERTEX_COLOR_AVAILABLE: request.vertexColorAvailable }),
     };
     const compileSceneSurface =
-      context.capability === 'storage-buffer' &&
+      context.geometry !== 'terrain' &&
+      context.capability !== 'uniform-fallback' &&
       sceneSurfaceTemplate &&
       sourceHasSceneIndexEntry &&
       derived.totalBytes <= GPU_DRIVEN_MATERIAL_ROW_BYTES;
@@ -1082,12 +1070,11 @@ export async function cookMaterialAsset(
       return err(mapCookErrorToAuthoredSource(compiled.error, source, loweredSource));
     }
     // A scene-index receipt promises an actual second entry, not merely a
-    // string found in the source. Validate that entry through the same
-    // composed closure and defines before publication; otherwise a disabled,
-    // malformed or stale scene variant could silently fall back to direct.
-    const compiledSceneIndexEntry = sceneIndexEntry(compiled.value.wgsl);
+    // string found in the source. Compile the authored declaration with the
+    // scene selector; the direct selector may remove the entire scene entry.
+    // Both native table families share bindings and cannot coexist in a module.
     let sceneCompiled: CompileResult | undefined;
-    if (compileSceneSurface) {
+    if (compileSceneSurface || customSceneProgram) {
       const sceneResult = await compile(sceneLoweredSource, {
         id: `${pass.program.module}::${pass.name}::scene-index`,
         renderEntries: {
@@ -1104,30 +1091,8 @@ export async function cookMaterialAsset(
         return err(mapCookErrorToAuthoredSource(sceneResult.error, source, sceneLoweredSource));
       }
       sceneCompiled = sceneResult.value;
-    } else if (customSceneProgram && compiledSceneIndexEntry !== undefined) {
-      const sceneResult = await compile(loweredSource, {
-        id: `${pass.program.module}::${pass.name}::scene-index`,
-        renderEntries: {
-          vertex: compiledSceneIndexEntry,
-          ...(fragmentEntry === undefined ? {} : { fragment: fragmentEntry }),
-          ...(pass.outputs === undefined
-            ? {}
-            : { colorFormats: pass.outputs.map((output) => output.format) }),
-        },
-        imports: compileImports,
-        defines: compileDefines,
-      });
-      if (!sceneResult.ok) {
-        return err(mapCookErrorToAuthoredSource(sceneResult.error, source, loweredSource));
-      }
-      sceneCompiled = sceneResult.value;
     }
-    const declaredSceneIndexEntry =
-      customSceneProgram && compiledSceneIndexEntry !== undefined
-        ? compiledSceneIndexEntry
-        : sceneCompiled === undefined
-          ? undefined
-          : 'vs_scene_index';
+    const declaredSceneIndexEntry = sceneCompiled === undefined ? undefined : 'vs_scene_index';
     const hasSceneIndexEntry = sceneCompiled !== undefined;
     const relocatedTextures = new Set(
       standardTemplate || shadowTemplate ? standardPhysicalTextureFields(schema.value) : [],
@@ -1225,7 +1190,7 @@ export async function cookMaterialAsset(
           }),
         );
       }
-    } else if (sceneSurfaceTemplate && hasSceneIndexEntry && !mediumSurface) {
+    } else if (standardSurfaceTemplate && hasSceneIndexEntry && !mediumSurface) {
       const storageFailure = validateSceneIndexStorage(
         derived,
         {
@@ -1299,6 +1264,75 @@ export async function cookMaterialAsset(
         );
       }
     }
+    if (abi === undefined && standardSurfaceTemplate && !mediumSurface) {
+      const standardAbi = createStandardPbrArtifactReceipt(
+        context.geometry === 'skinned',
+        request.vertexColorAvailable === true,
+      );
+      const publishedSurface = surfaceProgramAbi(resolved.value.asset);
+      abi = createMaterialProgramArtifactReceipt({
+        schema: schema.value,
+        ...(publishedSurface === undefined ? {} : { surface: publishedSurface }),
+        directEntry: pass.program.vertexEntry ?? 'vs_main',
+        vertexInputs: materialVertexInputs(
+          compiled.value.wgsl,
+          pass.program.vertexEntry ?? 'vs_main',
+        ),
+        ...(standardAbi.alphaMask === undefined ? {} : { alphaMask: standardAbi.alphaMask }),
+        ...(standardAbi.skinPaletteAddress === undefined
+          ? {}
+          : { skinPaletteAddress: standardAbi.skinPaletteAddress }),
+      });
+    }
+    if (abi === undefined && context.geometry === 'terrain') {
+      abi = createMaterialProgramArtifactReceipt({
+        schema: schema.value,
+        directEntry: pass.program.vertexEntry ?? 'vs_main',
+        vertexInputs: materialVertexInputs(
+          compiled.value.wgsl,
+          pass.program.vertexEntry ?? 'vs_main',
+        ),
+      });
+    }
+    if (
+      abi === undefined &&
+      (pass.program.module === 'forgeax_material::unlit' ||
+        pass.program.module === 'forgeax::default-unlit')
+    ) {
+      const vertexInputs = materialVertexInputs(
+        compiled.value.wgsl,
+        pass.program.vertexEntry ?? 'vs_main',
+      );
+      const palette = compiled.value.reflection.boundGlobals.find(
+        (global) => global.group === 2 && global.binding === 1,
+      );
+      const usesSkin = vertexInputs.some((input) => input.semantic === 'skinIndex');
+      if (usesSkin && palette?.elementStride !== 64) {
+        return err(
+          new ShaderError({
+            code: 'shader-compile-failed',
+            expected: 'the reflected Unlit joint palette with a 64-byte matrix stride',
+            message: `invalid reflected palette stride: ${palette?.elementStride}`,
+            hint: 'repair the producer vertex and palette declarations before publication',
+          }),
+        );
+      }
+      abi = createMaterialProgramArtifactReceipt({
+        schema: schema.value,
+        directEntry: pass.program.vertexEntry ?? 'vs_main',
+        vertexInputs,
+        ...(usesSkin && palette?.elementStride !== undefined
+          ? {
+              skinPaletteAddress: {
+                group: palette.group,
+                binding: palette.binding,
+                stride: palette.elementStride,
+              },
+            }
+          : {}),
+      });
+    }
+
     cooked.push({
       pass: pass.name,
       context,
@@ -1318,6 +1352,7 @@ export async function cookMaterialAsset(
       ...(sceneCompiled === undefined ? {} : { sceneCompile: sceneCompiled }),
       layoutIdentity: derived.layoutIdentity,
       ...(abi === undefined ? {} : { abi }),
+      ...(readsVertexColor === undefined ? {} : { readsVertexColor }),
     });
   }
 

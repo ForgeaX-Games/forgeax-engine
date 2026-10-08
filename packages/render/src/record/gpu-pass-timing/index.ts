@@ -34,4 +34,4 @@ export type {
   GpuPassTimingSession,
   GpuPassTimingSessionOptions,
 } from './session.js';
-export { createGpuPassTimingSession } from './session.js';
+export { createGpuPassTimingSession, prepareGpuPassTimingSession } from './session.js';

@@ -13,10 +13,12 @@ import { forgeaxShader } from '@forgeax/engine-vite-plugin-shader';
 import { targetProfileImporter } from '../apps/game-capability-lab/assets/plugins/target-profile-importer';
 import { gameCapabilityAssetRoots } from '../apps/preview/src/template-asset-roots';
 import { renderWorkerCommands } from '../packages/app/__tests__/render-worker.commands';
+import { pcmRangeFixture } from '../packages/audio-webaudio/src/__tests__/support/pcm-range-fixture';
 import { websocketListenerCommands } from '../packages/net-websocket/__tests__/support/ws-listener-commands';
 import { diffuseGiCommands } from '../packages/render/src/__tests__/raytracing/diffuse-gi.commands';
 import { rayPathCommands } from '../packages/render/src/__tests__/raytracing/path-tracer.commands';
 import { sdfCardsCommands } from '../packages/render/src/__tests__/raytracing/sdf-cards.commands';
+import { generatedLodCommands } from '../packages/runtime/src/__tests__/generated-lod.server';
 import { materialPublicationCommands } from '../packages/runtime/src/__tests__/material-publication.commands';
 import { vfxMeshLightingCommands } from '../packages/runtime/src/__tests__/vfx-mesh-lighting.commands';
 import { createMaterialPackCooker } from '../packages/shader-compiler/src/index';
@@ -24,6 +26,7 @@ import browserLaunch from '../scripts/ci/browser-launch.json' with { type: 'json
 import materialContractInventory from '../scripts/material-contract-inventory.json' with {
   type: 'json',
 };
+import { externalTextureMaterialFixture } from '../scripts/test/external-texture-material-fixture';
 import { materialProgramFixture } from '../scripts/test/material-program-fixture';
 import { weaponSpiritMaterialFixture } from '../scripts/test/weapon-spirit-material-fixture';
 import { playwrightWithBackgroundPages } from './vitest-browser-provider';
@@ -150,9 +153,11 @@ export function createBrowserProject() {
           ...previewExternalRoots,
         ];
   const plugins = [
+    pcmRangeFixture(),
     materialProgramFixture(),
     materialProgramFixture(true),
     materialProgramFixture(true, true),
+    externalTextureMaterialFixture(),
     weaponSpiritMaterialFixture(),
     weaponSpiritMaterialFixture(true),
     forgeaxShader({ engineEntries: { pointShadows: true, hdrpSsao: true }, materialPackages }),
@@ -184,8 +189,12 @@ export function createBrowserProject() {
     resolve: {
       alias: [...createRenderSourceAliases(), ...createRhiDebugSourceAliases()],
     },
-    plugins,
+    // File-only discovery uses this project's actual include/exclude rules;
+    // it must not initialize renderer or asset publications.
+    plugins: process.argv.includes('list') && process.argv.includes('--filesOnly') ? [] : plugins,
     server: {
+      // Loop state is not a browser source; test discovery exclusions do not filter Vite watches.
+      watch: { ignored: ['**/.forgeax-harness/**'] },
       fs: { allow: [rootDir] },
       ...(process.env.FORGEAX_BROWSER_CROSS_ORIGIN_ISOLATED === '1'
         ? {
@@ -215,6 +224,9 @@ export function createBrowserProject() {
         'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts',
       ],
       exclude: [
+        // These owners publish native artifacts, never Browser source tests.
+        'packages/wgpu-wasm/target/**',
+        'packages/dawn-node/.native-build/**',
         '**/.forgeax-harness/**',
         '**/node_modules/**',
         '**/dist/**',
@@ -237,11 +249,15 @@ export function createBrowserProject() {
       },
       browser: {
         enabled: true,
+        // Keep headed screenshots at their authored size instead of scaling
+        // the test iframe to fit Vitest's preview panel.
+        ui: false,
         commands: {
           ...renderWorkerCommands,
           ...websocketListenerCommands,
           ...vfxMeshLightingCommands,
           ...materialPublicationCommands,
+          ...generatedLodCommands,
           ...rayPathCommands,
           ...sdfCardsCommands,
           ...diffuseGiCommands,

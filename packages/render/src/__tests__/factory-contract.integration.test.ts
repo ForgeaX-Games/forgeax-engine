@@ -391,6 +391,56 @@ describe('factory contract', () => {
     renderer.dispose();
   });
 
+  it.each([
+    ['unknown', 'driver reset', 'device-lost'],
+    ['unknown', 'device destroyed by the driver', 'device-lost'],
+    ['destroyed', 'intentional teardown', 'disposed'],
+  ] as const)('preserves native loss %s in an outstanding frame receipt', async (reason, message, code) => {
+    const loss = deferred<{ readonly reason: 'unknown' | 'destroyed'; readonly message: string }>();
+    const queued = deferred<void>();
+    const lossSpy = vi.spyOn(RhiNullDevice.prototype, 'lost', 'get').mockReturnValue(loss.promise);
+    let queueSpy: ReturnType<typeof vi.spyOn> | undefined;
+    let renderer: Awaited<ReturnType<typeof constructRenderer>> | undefined;
+    try {
+      renderer = await constructRenderer(
+        { width: 64, height: 64, getContext: () => null },
+        { rhi },
+        { shaderManifestUrl: manifestUrl() },
+      );
+      expect((await renderer.initialization).ok).toBe(true);
+      queueSpy = vi
+        .spyOn(RhiNullQueue.prototype, 'onSubmittedWorkDone')
+        .mockReturnValue(queued.promise);
+      const world = new World();
+      const attached = renderer.attach(world);
+      if (!attached.ok) throw attached.error;
+      expect(world.update().ok).toBe(true);
+      const lease = attached.value;
+      const frame = renderer.draw({ leases: [lease], camera: { lease }, environment: { lease } });
+      if (!frame.ok) throw frame.error;
+      if (frame.value === undefined) throw new Error('Missing frame receipt');
+      loss.resolve({ reason, message });
+      const completed = await frame.value.completed;
+      expect(completed.ok).toBe(false);
+      if (completed.ok) throw new Error('A lost-device frame must fail');
+      expect(completed.error).toMatchObject({
+        code: 'device-operation-failed',
+        detail: {
+          operation: 'complete-frame',
+          cause: {
+            code,
+            detail: { code, detail: `device.lost: ${reason}; ${message}` },
+          },
+        },
+      });
+    } finally {
+      queued.resolve();
+      await renderer?.dispose();
+      queueSpy?.mockRestore();
+      lossSpy.mockRestore();
+    }
+  });
+
   it('rejects the removed Standard reflection-probe profile field at the Renderer boundary', async () => {
     const renderer = await constructRenderer(
       { width: 64, height: 64, getContext: () => null },
@@ -405,6 +455,53 @@ describe('factory contract', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('frame-input-invalid');
     renderer.dispose();
+  });
+
+  it('accepts a volumetric fog budget through setProfile and snapshots the caller config', async () => {
+    const renderer = await constructRenderer(
+      { width: 64, height: 64, getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    const volumetricFog = { quality: 'low' as const, depth: 48 as const, tileSize: 16 as 4 | 16 };
+    try {
+      expect(renderer.setProfile({ ...DEFAULT_STANDARD_PROFILE, volumetricFog }).ok).toBe(true);
+      volumetricFog.tileSize = 4;
+      expect(renderer.inspect().profile.volumetricFog).toEqual({
+        quality: 'low',
+        depth: 48,
+        tileSize: 16,
+      });
+      const rejected = renderer.setProfile({
+        ...DEFAULT_STANDARD_PROFILE,
+        volumetricFog: {
+          quality: 'low',
+          depth: 0,
+          tileSize: 16,
+        },
+      } as unknown as Parameters<typeof renderer.setProfile>[0]);
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error.code).toBe('frame-input-invalid');
+      expect(renderer.inspect().profile.volumetricFog?.depth).toBe(48);
+    } finally {
+      await renderer.dispose();
+    }
+  });
+
+  it('accepts GPU occlusion changes through the public Renderer profile', async () => {
+    const renderer = await constructRenderer(
+      { width: 64, height: 64, getContext: () => null },
+      { rhi },
+      { shaderManifestUrl: manifestUrl() },
+    );
+    try {
+      for (const gpuOcclusion of [false, true]) {
+        expect(renderer.setProfile({ ...DEFAULT_STANDARD_PROFILE, gpuOcclusion }).ok).toBe(true);
+        expect(renderer.inspect().profile.gpuOcclusion).toBe(gpuOcclusion);
+      }
+    } finally {
+      renderer.dispose();
+    }
   });
 
   it('projects stable output and observation identity without pixel payloads', async () => {

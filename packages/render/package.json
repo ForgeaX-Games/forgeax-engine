@@ -26,10 +26,10 @@
     "bench:json": "FORGEAX_BENCH=fast vitest bench --run --outputJson bench-result.json"
   },
   "dependencies": {
+    "@forgeax/engine-terrain": "workspace:*",
     "@forgeax/engine-assets-runtime": "workspace:*",
     "@forgeax/engine-audio-webaudio": "workspace:*",
     "@forgeax/engine-profiler": "workspace:*",
-    "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
     "@forgeax/engine-graphics-extras": "workspace:*",
@@ -45,7 +45,8 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
+    "@forgeax/engine-codec": "workspace:*",
     "@forgeax/engine-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-rhi-null": "workspace:*",

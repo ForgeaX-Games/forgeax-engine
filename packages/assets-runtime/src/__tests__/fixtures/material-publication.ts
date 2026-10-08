@@ -13,7 +13,7 @@ import {
   type MaterialSurfaceDeclaration,
   type MaterialValue,
 } from '@forgeax/engine-types';
-import type { MaterialPublication } from '../../material/loader.js';
+import type { MaterialPublication, MaterialReady } from '../../material/loader.js';
 
 export const MATERIAL_CONTEXT: MaterialCookRasterContext = {
   backend: 'webgpu',
@@ -37,7 +37,7 @@ export function materialRecordFixture(
     surface?: MaterialSurfaceDeclaration;
     contexts?: readonly MaterialCookRasterContext[];
   } = {},
-): CookedMaterialRecord {
+): MaterialReady['record'] {
   const guid = options.guid ?? '019f0000-0000-7000-8000-000000000701';
   const generation = options.generation ?? 7;
   const passes = options.passes ?? [{ name: 'Forward', program: { module: 'game::ready' } }];
@@ -121,7 +121,9 @@ export function materialRecordFixture(
     },
   };
 }
-export function materialPublicationFixture(record = materialRecordFixture()): MaterialPublication {
+export function materialPublicationFixture(
+  record: CookedMaterialRecord = materialRecordFixture(),
+): MaterialPublication {
   return {
     guid: record.guid,
     record,

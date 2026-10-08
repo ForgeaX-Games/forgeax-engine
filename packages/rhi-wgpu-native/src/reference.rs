@@ -1,6 +1,11 @@
 //! Bounded world-space opaque query transport. Inputs are the u32 words of the
 //! portable reference's captured storage buffers; acceleration structures are
 //! rebuilt on a fresh native device. This is scene re-execution, not native tape replay.
+use crate::acceleration::{
+    build_acceleration_structures, create_blas, create_tlas, BlasBuild, BlasDescriptor,
+    BuildPreference, RayQueryCaps, TlasBuild, TlasDescriptor, TlasInstance, TriangleGeometry,
+    TriangleGeometrySize, UpdateMode,
+};
 use crate::device::{create_native_instance, request_native_device, select_native_adapter};
 use crate::{NativeCapabilities, NativeError, WGPU_VERSION};
 use serde::{Deserialize, Serialize};
@@ -127,10 +132,10 @@ pub async fn run_batch(batch: ReferenceBatch) -> Result<ReferenceResult, NativeE
         limits,
     )
     .await?;
+    let caps = RayQueryCaps::from_device(device.features(), &device.limits());
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut vertices = Vec::new();
     let mut blases = Vec::new();
-    let mut sizes = Vec::new();
     let mut identities = Vec::<[u32; 4]>::new();
     let mut offsets = Vec::new();
     for triangles in groups.values() {
@@ -146,46 +151,45 @@ pub async fn run_batch(batch: ReferenceBatch) -> Result<ReferenceResult, NativeE
             }
             identities.push([t[12], t[13], t[14], t[15]]);
         }
-        let buffer = device.create_buffer_init(&BufferInitDescriptor {
+        vertices.push(device.create_buffer_init(&BufferInitDescriptor {
             label: Some("ray-reference.vertices"),
             contents: bytemuck::cast_slice(&points),
             usage: wgpu::BufferUsages::BLAS_INPUT,
-        });
-        let size = wgpu::BlasTriangleGeometrySizeDescriptor {
-            vertex_format: wgpu::VertexFormat::Float32x3,
-            vertex_count: points.len() as u32,
-            index_format: None,
-            index_count: None,
-            flags: wgpu::AccelerationStructureGeometryFlags::OPAQUE,
-        };
-        let blas = device.create_blas(
-            &wgpu::CreateBlasDescriptor {
+        }));
+        blases.push(create_blas(
+            &device,
+            &caps,
+            &BlasDescriptor {
                 label: Some("ray-reference.blas"),
-                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
-                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+                geometries: vec![TriangleGeometrySize {
+                    vertex_count: points.len() as u32,
+                    index: None,
+                }],
+                preference: BuildPreference::FastTrace,
+                update_mode: UpdateMode::Rebuild,
             },
-            wgpu::BlasGeometrySizeDescriptors::Triangles {
-                descriptors: vec![size.clone()],
-            },
-        );
-        vertices.push(buffer);
-        sizes.push(size);
-        blases.push(blas);
+        )?);
     }
-    let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
-        label: Some("ray-reference.tlas"),
-        max_instances: groups.len().max(1) as u32,
-        flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
-        update_mode: wgpu::AccelerationStructureUpdateMode::Build,
-    });
-    for (i, group) in groups.values().enumerate() {
-        tlas[i] = Some(wgpu::TlasInstance::new(
-            &blases[i],
-            [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
-            offsets[i],
-            group[0][16] as u8,
-        ));
-    }
+    let mut tlas = create_tlas(
+        &device,
+        &caps,
+        &TlasDescriptor {
+            label: Some("ray-reference.tlas"),
+            max_instances: groups.len().max(1) as u32,
+            preference: BuildPreference::FastTrace,
+            update_mode: UpdateMode::Rebuild,
+        },
+    )?;
+    let instances = groups
+        .values()
+        .enumerate()
+        .map(|(i, group)| TlasInstance {
+            blas: &blases[i],
+            transform: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
+            custom_index: offsets[i],
+            mask: group[0][16] as u8,
+        })
+        .collect();
     if identities.is_empty() {
         identities.push([0; 4]);
     }
@@ -227,7 +231,7 @@ pub async fn run_batch(batch: ReferenceBatch) -> Result<ReferenceResult, NativeE
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::AccelerationStructure(&tlas),
+                resource: tlas.binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -243,25 +247,28 @@ pub async fn run_batch(batch: ReferenceBatch) -> Result<ReferenceResult, NativeE
             },
         ],
     });
-    let entries: Vec<_> = blases
+    let builds: Vec<_> = blases
         .iter()
-        .enumerate()
-        .map(|(i, blas)| wgpu::BlasBuildEntry {
+        .zip(&vertices)
+        .map(|(blas, vertex_buffer)| BlasBuild {
             blas,
-            geometry: wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
-                size: &sizes[i],
-                vertex_buffer: &vertices[i],
+            geometries: vec![TriangleGeometry {
+                vertex_buffer,
                 first_vertex: 0,
                 vertex_stride: 12,
-                index_buffer: None,
-                first_index: None,
-                transform_buffer: None,
-                transform_buffer_offset: None,
-            }]),
+                index: None,
+            }],
         })
         .collect();
     let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.build_acceleration_structures(entries.iter(), Some(&tlas));
+    build_acceleration_structures(
+        &mut encoder,
+        &builds,
+        &mut [TlasBuild {
+            tlas: &mut tlas,
+            instances,
+        }],
+    )?;
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("ray-reference"),

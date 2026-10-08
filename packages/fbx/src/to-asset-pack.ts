@@ -1,3 +1,5 @@
+import { packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import { cookMeshCollision } from '@forgeax/engine-import';
 // to-asset-pack.ts — aggregate parsed sub-assets into ImportedAsset[] (t31).
 //
 // GUID import-stable iron law: GUIDs come from `ctx.subAssets[]` (the external
@@ -69,6 +71,7 @@ export function buildMeshAsset(
     readonly materialSlotDefaultOverrides?: Readonly<Record<string, string | null>>;
     readonly meshSourceKey?: string;
     readonly lods?: readonly MeshLodLevel[];
+    readonly meshCollision?: unknown;
   } = {},
 ): ImportedAsset {
   const vc = pod.vertices.length / 3;
@@ -90,85 +93,24 @@ export function buildMeshAsset(
 
   const u = pod.attributes.TEXCOORD_0 as Float32Array | undefined;
 
-  // Skinned meshes use the 18-float interleaved stride (mirror of gltfImporter):
-  // 12 floats (position/normal/uv/tangent) + uint16x4 joints (2 float slots, via
-  // an aliased Uint16 view) + float32x4 weights = 18 floats / 72 bytes. The
-  // runtime deriveVertexBufferLayout expects skinIndex at byte 48, skinWeight at
-  // byte 56. Unskinned meshes keep the 12-float layout.
   const skinned = influences !== undefined && influences.length === vc && vc > 0;
-  // feat-20260629-multi-uv-set-support m1-w6: dynamic stride.
-  // Canonical interleaved order = position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
-  // Base stride: 12 (unskinned) / 18 (skinned). Extra UV sets add 2F each.
-  // UV1 offset: 12 (unskinned) / 18 (skinned) -- same as glTF bridge m1-w3.
-  const BASE_FLOATS = skinned ? 18 : 12;
-  const UV1_OFFSET = skinned ? 18 : 12;
-  const FLOATS_PER_VERT = BASE_FLOATS + (uvSetCount - 1) * 2;
-  const ib = new Float32Array(vc * FLOATS_PER_VERT);
-  const ibU16 = skinned ? new Uint16Array(ib.buffer) : undefined;
   const skinIndexAttr = skinned ? new Uint16Array(vc * 4) : undefined;
   const skinWeightAttr = skinned ? new Float32Array(vc * 4) : undefined;
-
-  for (let i = 0; i < vc; i++) {
-    const d = i * FLOATS_PER_VERT;
-    const p = i * 3;
-    const t = i * 2;
-    ib[d + 0] = pod.vertices[p + 0] ?? 0;
-    ib[d + 1] = pod.vertices[p + 1] ?? 0;
-    ib[d + 2] = pod.vertices[p + 2] ?? 0;
-    ib[d + 3] = n?.[p + 0] ?? 0;
-    ib[d + 4] = n?.[p + 1] ?? 0;
-    ib[d + 5] = n?.[p + 2] ?? 0;
-    ib[d + 6] = u?.[t + 0] ?? 0;
-    ib[d + 7] = u?.[t + 1] ?? 0;
-    ib[d + 8] = 1;
-    ib[d + 9] = 0;
-    ib[d + 10] = 0;
-    ib[d + 11] = 1;
-    if (skinned && ibU16 && skinIndexAttr && skinWeightAttr) {
-      const inf = influences[i];
-      const u16Base = (d + 12) * 2; // float slot 12 -> uint16 index (d+12)*2
-      const sd = i * 4;
-      for (let k = 0; k < 4; k++) {
-        const ji = inf?.jointIndices[k] ?? 0;
-        const jw = inf?.jointWeights[k] ?? 0;
-        ibU16[u16Base + k] = ji;
-        ib[d + 14 + k] = jw;
-        skinIndexAttr[sd + k] = ji;
-        skinWeightAttr[sd + k] = jw;
+  if (skinIndexAttr !== undefined && skinWeightAttr !== undefined) {
+    for (let i = 0; i < vc; i++) {
+      for (let lane = 0; lane < 4; lane++) {
+        skinIndexAttr[i * 4 + lane] = influences?.[i]?.jointIndices[lane] ?? 0;
+        skinWeightAttr[i * 4 + lane] = influences?.[i]?.jointWeights[lane] ?? 0;
       }
-    }
-    // feat-20260629-multi-uv-set-support m1-w6: write uv1..uvK after skin data.
-    // Canonical interleaved order matches glTF bridge m1-w3:
-    // position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
-    // UV1 starts at UV1_OFFSET (12 for unskinned, 18 for skinned) in float slots.
-    // Each additional UV set 2F. Missing texcoordK -> zero-fill (implicit).
-    for (let k = 1; k < uvSetCount; k++) {
-      const srcKey = `TEXCOORD_${k}`;
-      const srcArr = pod.attributes[srcKey] as Float32Array | undefined;
-      const interleavedOffset = UV1_OFFSET + (k - 1) * 2;
-      if (srcArr !== undefined) {
-        ib[d + interleavedOffset + 0] = srcArr[t + 0] ?? 0;
-        ib[d + interleavedOffset + 1] = srcArr[t + 1] ?? 0;
-      }
-      // else: zero-fill (implicit -- Float32Array defaults to 0)
     }
   }
 
-  // feat-20260629-multi-uv-set-support m1-w6: per-UV-set standalone typed arrays
-  // for MeshAsset.attributes (uv1..uvK). TEXCOORD_n -> attributes.uvN.
-  // Preserve sparse source-set semantics in the importer-facing mesh.
+  // Keep source UV presence sparse; only the portable vertex layout fills gaps.
   const extraUvAttrs: Record<string, Float32Array> = {};
   for (let k = 1; k < uvSetCount; k++) {
-    const srcKey = `TEXCOORD_${k}`;
-    const srcArr = pod.attributes[srcKey] as Float32Array | undefined;
-    if (srcArr !== undefined) {
-      const cat = new Float32Array(vc * 2);
-      for (let i = 0; i < vc; i++) {
-        const t2 = i * 2;
-        cat[t2 + 0] = srcArr[t2 + 0] ?? 0;
-        cat[t2 + 1] = srcArr[t2 + 1] ?? 0;
-      }
-      extraUvAttrs[`uv${k}`] = cat;
+    const source = pod.attributes[`TEXCOORD_${k}`] as Float32Array | undefined;
+    if (source !== undefined) {
+      extraUvAttrs[`uv${k}`] = Float32Array.from({ length: vc * 2 }, (_, i) => source[i] ?? 0);
     }
   }
 
@@ -181,6 +123,13 @@ export function buildMeshAsset(
     ...(skinWeightAttr ? { skinWeight: skinWeightAttr } : {}),
     ...extraUvAttrs,
   };
+
+  const wireAttributes = { ...attributes } as Record<string, Float32Array | Uint16Array>;
+  for (let k = 1; k < uvSetCount; k++) {
+    wireAttributes[`uv${k}`] ??= new Float32Array(vc * 2);
+  }
+  const packed = packInterleavedVertexAttributes(wireAttributes, vc);
+  if (!packed.ok) throw packed.error;
 
   const materialSlots: MeshMaterialSlot[] = [];
   const slotByMaterial = new Map<number | null, number>();
@@ -218,7 +167,7 @@ export function buildMeshAsset(
   };
   const currentMesh: MeshAsset = {
     kind: 'mesh',
-    vertices: ib,
+    vertices: packed.value.vertices,
     ...(pod.indices ? { indices: pod.indices } : {}),
     aabb: box3.fromPositions(box3.create(), pod.vertices),
     attributes,
@@ -270,7 +219,7 @@ export function buildMeshAsset(
       },
     });
   }
-  const mesh: MeshAsset = {
+  const sourceMesh: MeshAsset = {
     ...currentMesh,
     submeshes: currentMesh.submeshes.map((submesh) => ({
       ...submesh,
@@ -293,15 +242,8 @@ export function buildMeshAsset(
     }),
   };
 
-  // The wire projection is dense even when the source mesh intentionally
-  // preserves sparse UV-set presence. Missing intermediate slots are zeroed
-  // only for the canonical v4 payload.
-  const wireAttributes = { ...mesh.attributes } as Record<string, Float32Array | Uint16Array>;
-  for (let k = 1; k < uvSetCount; k++) {
-    if (wireAttributes[`uv${k}`] === undefined) {
-      wireAttributes[`uv${k}`] = new Float32Array(vc * 2);
-    }
-  }
+  const mesh = cookMeshCollision(sourceMesh, materialContext.meshCollision).unwrap();
+
   const wireMesh: MeshAsset = { ...mesh, attributes: wireAttributes };
 
   const refs: AssetRef[] = [];
@@ -547,6 +489,7 @@ function buildTextureNote(_pod: TexturePod, _guid: string): ImportedAsset {
 
 export function toAssetPack(params: {
   readonly meshes: readonly MeshPod[];
+  readonly meshCollision?: unknown;
   readonly scene: ScenePod;
   readonly materials: readonly MaterialPod[];
   readonly textures: readonly TexturePod[];
@@ -682,6 +625,7 @@ export function toAssetPack(params: {
     const meshLods = lodsByRootMesh.get(mesh.sourceIndex);
     assets.push(
       buildMeshAsset(mesh, guid, inf, {
+        meshCollision: params.meshCollision,
         guidByIndex: materialGuidByIndex,
         nameByIndex: materialNameByIndex,
         sourceKeyByIndex: materialSourceKeyByIndex,

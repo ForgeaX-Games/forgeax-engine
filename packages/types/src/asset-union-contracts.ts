@@ -7,8 +7,10 @@ import type { IesProfileAsset } from './lighting.js';
 import type { MaterialAsset } from './material/asset.js';
 import type { SkeletonAsset, SkinAsset, VideoAsset } from './media-contracts.js';
 import type { EquirectAsset, MeshAsset, SamplerAsset } from './mesh-contracts.js';
+import type { NavigationMeshAsset } from './navigation.js';
 import type { PluginAsset } from './plugin-asset.js';
 import type { SceneAsset } from './scene-contracts.js';
+import type { TerrainAsset } from './terrain.js';
 import type { TextureAsset } from './texture/asset.js';
 import type { ParticleEffectAsset } from './vfx.js';
 
@@ -59,6 +61,8 @@ export interface RenderPipelineAsset {
       readonly enabled: boolean;
       /** Screen-space AO estimator; defaults to hemisphere SSAO. */
       readonly algorithm?: 'ssao' | 'gtao' | undefined;
+      /** Fraction of screen-space AO applied to direct light, in [0, 1]; default 0. */
+      readonly directLightingStrength?: number | undefined;
       readonly radius?: number | undefined;
       readonly bias?: number | undefined;
       readonly intensity?: number | undefined;
@@ -163,7 +167,9 @@ export type Asset =
   // === 1 new variant (feat-20260623-world-space-video-asset M1) ===
   // runtime-only { url } descriptor; no width/height/duration in payload.
   | VideoAsset
-  | ParticleEffectAsset;
+  | ParticleEffectAsset
+  | TerrainAsset
+  | NavigationMeshAsset;
 
 // === Tileset asset POD shape (feat-20260608 M0 baseline rebuild) =================
 //

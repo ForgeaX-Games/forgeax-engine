@@ -32,6 +32,7 @@ describe('WebAudioEngine direct clip decode recovery', () => {
   it('reports a rejected clip decode and recovers on the same entity', async () => {
     const node = {
       buffer: null,
+      playbackRate: { value: 1, setValueAtTime: vi.fn() },
       loop: false,
       connect: vi.fn(),
       disconnect: vi.fn(),

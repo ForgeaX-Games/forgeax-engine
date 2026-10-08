@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
+import { decodeCatalogWire } from '@forgeax/engine-pack';
+import { runSmokeAppFrames, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { writeReferencePng } from '../../../shared/png-codec.mjs';
 
@@ -13,7 +13,7 @@ const height = 180;
 const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const errors = [];
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 const gpu = create([]);
@@ -58,7 +58,8 @@ const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const { createDevImportTransport } = await import('@forgeax/engine-runtime');
 const { buildEnvironmentWorld, stepEnvironmentRotation } = await import(resolve(appRoot, 'src', 'rotate-environment-map.ts'));
 const distDir = resolve(appRoot, 'dist');
-const packIndex = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), 'utf8'));
+const packIndexWire = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), 'utf8'));
+const packIndex = decodeCatalogWire(packIndexWire).unwrap();
 const hdrEntry = packIndex.find((entry) => entry.guid === hdrGuid);
 if (!hdrEntry) { console.error(`[smoke] missing HDR GUID ${hdrGuid}`); process.exit(1); }
 const hdrPackagePath = hdrEntry.packageUrl.replace(/^\//, '');
@@ -69,7 +70,7 @@ const hdrArtifactUrl = `${hdrEntry.packageUrl.slice(0, hdrEntry.packageUrl.lastI
 const hdrBytes = new Uint8Array(readFileSync(resolve(dirname(resolve(distDir, hdrPackagePath)), hdrArtifactPath)));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
-  if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+  if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndexWire), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   if (url === hdrEntry.packageUrl) return { ok: true, json: () => Promise.resolve(hdrPackage), arrayBuffer: () => Promise.resolve(hdrPackageBytes.buffer.slice(hdrPackageBytes.byteOffset, hdrPackageBytes.byteOffset + hdrPackageBytes.byteLength)) };
   if (url === hdrArtifactUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
   return originalFetch(url);
@@ -90,19 +91,14 @@ const scene = buildEnvironmentWorld(app.world, equirect, width / height);
 let latestAngle = 0;
 app.world.addSystem(Update, { name: 'smoke-rotate-environment', queries: [], fn: (world) => { latestAngle = stepEnvironmentRotation(world, scene, world.getResource(Time).elapsed); } });
 const frameStartTimestamp = performance.now();
-const started = app.start();
-if (!started.ok) { console.error(`[smoke] app.start failed: ${started.error.code}`); process.exit(1); }
-let frames = 0;
-for (let i = 0; i < targetFrames; i += 1) {
+let callbacks = 0;
+const frames = await runSmokeAppFrames(app, () => {
   const callback = rafQueue.shift();
-  if (!callback) break;
-  callback(frameStartTimestamp + i * 16.67); frames += 1;
-  if (i % 16 === 15) { await sharedDevice.queue.onSubmittedWorkDone(); await delay(1); }
-}
+  if (!callback) return false;
+  callback(frameStartTimestamp + callbacks++ * 16.67);
+  return true;
+}, targetFrames);
 await sharedDevice.queue.onSubmittedWorkDone();
-for (let i = 0; i < 16; i += 1) { const callback = rafQueue.shift(); if (!callback) break; callback(frameStartTimestamp + (targetFrames + i) * 16.67); frames += 1; }
-await sharedDevice.queue.onSubmittedWorkDone();
-app.stop();
 const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
 const readback = sharedDevice.createBuffer({ size: bytesPerRow * height, usage: 0x01 | 0x08 });
 const encoder = sharedDevice.createCommandEncoder();

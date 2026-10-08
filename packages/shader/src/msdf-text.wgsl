@@ -1,4 +1,5 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 
 #import forgeax_view::common::{View, Mesh, view, meshes, sampleMaterialTexture}
 #import forgeax_view::fog::{translucent_fog}

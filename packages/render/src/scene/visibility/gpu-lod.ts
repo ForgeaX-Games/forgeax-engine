@@ -1,7 +1,5 @@
-import { GPU_SCENE_LAYOUTS, GPU_SCENE_SCHEMAS } from '../../gpu-scene-schema';
+import { GPU_SCENE_LAYOUTS, gpuSceneFieldOffset } from '../../gpu-scene-schema';
 import { type LodSelection, selectLod } from './lod-selector';
-
-export const GPU_LOD_ROW_SCHEMA = GPU_SCENE_SCHEMAS.lod;
 export const GPU_LOD_ROW_LAYOUT = GPU_SCENE_LAYOUTS.lod;
 
 export interface LodDrawRange {
@@ -78,20 +76,32 @@ export function buildGpuLodRows(input: GpuLodRowsInput): readonly GpuLodRow[] {
   );
 }
 
+const LOD_FIELD = (name: string): number => gpuSceneFieldOffset(GPU_LOD_ROW_LAYOUT, name);
+const GENERATION = LOD_FIELD('generation');
+const LEVEL = LOD_FIELD('level');
+const FIRST_INDEX = LOD_FIELD('firstIndex');
+const INDEX_COUNT = LOD_FIELD('indexCount');
+const BASE_VERTEX = LOD_FIELD('baseVertex');
+const SCREEN_COVERAGE = LOD_FIELD('screenCoverage');
+const HYSTERESIS = LOD_FIELD('hysteresis');
+const READY = LOD_FIELD('ready');
+
+/** The one `GpuSceneLod` byte writer; GPU view topology and CPU evidence share it. */
+export function writeGpuLodRow(view: DataView, offset: number, row: GpuLodRow): void {
+  view.setUint32(offset + GENERATION, row.generation, true);
+  view.setUint32(offset + LEVEL, row.level, true);
+  view.setUint32(offset + FIRST_INDEX, row.firstIndex, true);
+  view.setUint32(offset + INDEX_COUNT, row.indexCount, true);
+  view.setInt32(offset + BASE_VERTEX, row.baseVertex, true);
+  view.setFloat32(offset + SCREEN_COVERAGE, row.screenCoverage, true);
+  view.setFloat32(offset + HYSTERESIS, row.hysteresis, true);
+  view.setUint32(offset + READY, row.ready ? 1 : 0, true);
+}
+
 export function encodeGpuLodRows(rows: readonly GpuLodRow[]): Uint8Array {
   const bytes = new Uint8Array(GPU_LOD_ROW_LAYOUT.stride * rows.length);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (const row of rows) {
-    const offset = row.level * GPU_LOD_ROW_LAYOUT.stride;
-    view.setUint32(offset, row.generation, true);
-    view.setUint32(offset + 4, row.level, true);
-    view.setUint32(offset + 8, row.firstIndex, true);
-    view.setUint32(offset + 12, row.indexCount, true);
-    view.setInt32(offset + 16, row.baseVertex, true);
-    view.setFloat32(offset + 20, row.screenCoverage, true);
-    view.setFloat32(offset + 24, row.hysteresis, true);
-    view.setUint32(offset + 28, row.ready ? 1 : 0, true);
-  }
+  for (const row of rows) writeGpuLodRow(view, row.level * GPU_LOD_ROW_LAYOUT.stride, row);
   return bytes;
 }
 

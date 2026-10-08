@@ -37,7 +37,7 @@ const manifestBody = readFileSync(resolve(distRoot, 'shaders', 'manifest.json'),
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   fail(`webgpu import failed: ${error instanceof Error ? error.message : String(error)}`);
 }
@@ -48,13 +48,20 @@ Object.defineProperty(globalThis.navigator, 'gpu', { value: gpu, configurable: t
 gpu.getPreferredCanvasFormat = () => 'rgba8unorm';
 
 let sharedDevice;
+// Diagnostic A/B: comma-separated device features to refuse, e.g. to run the
+// capability-less path (`indirect-first-instance`) on a capable adapter.
+const withheldFeatures = new Set((process.env.PERF_WITHHOLD_FEATURES ?? '').split(',').filter(Boolean));
 const originalRequestAdapter = gpu.requestAdapter.bind(gpu);
 gpu.requestAdapter = async (...args) => {
   const adapter = await originalRequestAdapter(...args);
   if (adapter === null) return adapter;
   const originalRequestDevice = adapter.requestDevice.bind(adapter);
-  adapter.requestDevice = async (...deviceArgs) => {
-    const device = await originalRequestDevice(...deviceArgs);
+  adapter.requestDevice = async (descriptor, ...rest) => {
+    const requiredFeatures = descriptor?.requiredFeatures?.filter((feature) => !withheldFeatures.has(feature));
+    const device = await originalRequestDevice(
+      descriptor === undefined ? descriptor : { ...descriptor, requiredFeatures },
+      ...rest,
+    );
     sharedDevice ??= device;
     return device;
   };
@@ -184,6 +191,7 @@ if (rhiCapturePath !== undefined) {
   if (captureFrame === undefined) fail('PERF_RHI_CAPTURE needs FORGEAX_ENGINE_RHI_DEBUG=1');
   let settled;
   const captureStartFrame = evidence.frameProgress;
+  const captureStarted = performance.now();
   void captureFrame().then(
     (value) => {
       settled = { value };
@@ -203,6 +211,7 @@ if (rhiCapturePath !== undefined) {
     frame.callback(rafNow);
     await sharedDevice?.queue.onSubmittedWorkDone();
   }
+  const captureMs = Math.round(performance.now() - captureStarted);
   if (settled === undefined) fail('RHI capture did not settle within 120s');
   if (settled.error !== undefined) fail(`RHI capture threw: ${String(settled.error)}`);
   if (!settled.value.ok) fail(`RHI capture ${settled.value.error.code}: ${settled.value.error.hint}`);
@@ -226,6 +235,8 @@ if (rhiCapturePath !== undefined) {
     kind: settled.value.value.kind,
     digest: settled.value.value.digest,
     byteLength: settled.value.value.bytes.byteLength,
+    // Wall time from captureFrame() to settled tape, including the captured frame.
+    captureMs,
     // Renderer inspection of the frames rendered while the capture was pending;
     // the captured frame is one of them.
     frames: [captureStartFrame, settledAtFrame],
@@ -373,6 +384,7 @@ const summary = {
   shadowRasterPassCount: distribution(samples.map((sample) => sample.passCount)),
   shadowRasterDrawCount: distribution(samples.map((sample) => sample.drawCount)),
   shadowTexelCulled: distribution(samples.map((sample) => sample.texelCulled)),
+  shadowCameraCulled: distribution(samples.map((sample) => sample.cameraCulled)),
   shadowStaticMissCount: distribution(samples.map((sample) => sample.staticMissCount)),
   shadowStaticPartialCount: distribution(samples.map((sample) => sample.staticPartialCount ?? 0)),
   shadowMissCount: distribution(samples.map((sample) => sample.misses.length)),
@@ -380,6 +392,11 @@ const summary = {
   capsuleShadow: evidence.capsuleShadow,
   gpuDriven,
   frameCacheHitRates,
+  gpuPassMicros: Object.fromEntries(
+    Object.entries(evidence.gpuPassNanos ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([pass, nanos]) => [pass, distribution(nanos.map((value) => value / 1000))]),
+  ),
 };
 const result = {
   backend: 'webgpu',
@@ -390,7 +407,8 @@ const result = {
   cpuPhasesMicros,
   readback: { width, height, ...stats },
   ...(rhiCapture === undefined ? {} : { rhiCapture }),
-  evidence: { ...evidence, profileCapture: undefined },
+  ...(withheldFeatures.size === 0 ? {} : { withheldFeatures: [...withheldFeatures] }),
+  evidence: { ...evidence, profileCapture: undefined, gpuPassNanos: undefined },
   assertions: {
     exactPostSpawn:
       evidence.postSpawn.staticCasterCount === evidence.options.staticCasterCount &&
@@ -407,11 +425,25 @@ const result = {
     ),
     texelCullingObserved:
       evidence.options.debrisCount === 0 || samples.some((sample) => sample.texelCulled > 0),
+    // Only a Deferred frame orders shadows after the camera pyramid; the
+    // low eye-height orbit hides casters whose receivers are all occluded.
+    cameraCullingObserved:
+      evidence.options.renderPath !== 'deferred' ||
+      evidence.options.camera !== 'low' ||
+      !evidence.options.gpuOcclusion ||
+      samples.some((sample) => sample.cameraCulled > 0),
+    forwardNeverCameraCulls:
+      evidence.options.renderPath === 'deferred' ||
+      samples.every((sample) => sample.cameraCulled === 0),
     passCountMatchesMisses: samples.every((sample) => sample.passCount === sample.misses.length),
     notClearOnly: stats.nonClearPixels > width * height * 0.2 && stats.lumaVariance > 0.00001,
     // A skinned draw bound to a stand-in palette collapses every character
-    // onto the origin, where the static casters hide it.
-    charactersVisible: evidence.options.characterCount === 0 || stats.characterPixels > 0,
+    // onto the origin, where the static casters hide it. The low eye-height
+    // view looks across the city, whose buildings hide the central characters.
+    charactersVisible:
+      evidence.options.characterCount === 0 ||
+      evidence.options.camera === 'low' ||
+      stats.characterPixels > 0,
     completeProfileNoDrops: profileComplete,
     noAppRendererErrors: evidence.appRendererErrors.length === 0,
     // A quiet scene changes no batch, so once every segment has been admitted

@@ -28,7 +28,7 @@ describe('Standard PBR UBO layout', () => {
       paramSnapshot: { clippingControl: [6, 1, 1, 0], clippingPlaneF: [0, 0, 1, -2] },
     } satisfies MaterialSnapshot;
     const bytes = buildPbrMaterialUboPayload(material);
-    expect(bytes.byteLength).toBe(1152);
+    expect(bytes.byteLength).toBe(1168);
     expect(Array.from(new Float32Array(bytes.buffer).slice(-4))).toEqual([0, 0, 1, -2]);
   });
 
@@ -39,7 +39,7 @@ describe('Standard PBR UBO layout', () => {
       derived.coordinateRecords.map((record) => [record.parameter, record.offset]),
     );
 
-    expect(derived.totalBytes).toBe(1040);
+    expect(derived.totalBytes).toBe(1056);
     expect(numeric.get('normalScale')).toBe(96);
     expect(numeric.get('transmission')).toBe(108);
     expect(numeric.get('ior')).toBe(112);
@@ -67,7 +67,7 @@ describe('Standard PBR UBO layout', () => {
     const payload = buildPbrMaterialUboPayload(material);
     const f32 = new Float32Array(payload.buffer);
 
-    expect(payload.byteLength).toBe(1040);
+    expect(payload.byteLength).toBe(1056);
     expect(f32.slice(120, 123)).toEqual(new Float32Array([0.8, 0.2, 0.75]));
   });
 

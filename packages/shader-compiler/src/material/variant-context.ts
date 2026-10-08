@@ -34,6 +34,7 @@ export interface MaterialVariantContextError {
 
 const RESERVED_AXES = new Set([
   'STORAGE_BUFFER_AVAILABLE',
+  'ATMOSPHERE_AVAILABLE',
   'WEBGL2_COMPAT',
   'CLUSTER_FORWARD_AVAILABLE',
   'PROBE_BLEND_AVAILABLE',
@@ -41,6 +42,7 @@ const RESERVED_AXES = new Set([
   'POINT_SHADOW_AVAILABLE',
   'PER_INSTANCE_REGION',
   'VISIBLE_SURFACE_AVAILABLE',
+  'TERRAIN_GEOMETRY_AVAILABLE',
 ]);
 
 function invalid(field: string, actual: unknown): Result<never, MaterialVariantContextError> {
@@ -90,14 +92,16 @@ export function lowerMaterialVariantContext(
   context: MaterialVariantContext,
 ): Readonly<Record<string, boolean>> {
   return Object.freeze({
-    STORAGE_BUFFER_AVAILABLE: context.capability === 'storage-buffer',
+    STORAGE_BUFFER_AVAILABLE: context.capability !== 'uniform-fallback',
     // Standard local-light transport follows the device storage capability
     // in both render paths. Cooked Surface programs must retain that shared
     // lighting branch before their WGSL becomes compiler-free runtime input.
-    CLUSTER_FORWARD_AVAILABLE: context.capability === 'storage-buffer',
-    PROBE_BLEND_AVAILABLE: context.capability === 'storage-buffer',
+    CLUSTER_FORWARD_AVAILABLE: context.capability !== 'uniform-fallback',
+    PROBE_BLEND_AVAILABLE: context.capability !== 'uniform-fallback',
+    ATMOSPHERE_AVAILABLE: context.capability === 'storage-buffer-atmosphere',
     WEBGL2_COMPAT: context.backend === 'webgl2',
     PER_INSTANCE_REGION: context.geometry === 'sprite-instances',
+    TERRAIN_GEOMETRY_AVAILABLE: context.geometry === 'terrain',
     SKINNING_DISABLED: context.geometry !== 'skinned',
     POINT_SHADOW_AVAILABLE: false,
     MATERIAL_VALIDATION_ENABLED: context.instrumentation === 'validation',

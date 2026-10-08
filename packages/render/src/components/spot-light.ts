@@ -36,6 +36,7 @@
 // pre-multiplication).
 
 import { defineComponent } from '@forgeax/engine-ecs';
+import { LIGHTING_CHANNELS_DEFAULT } from './lighting-channels';
 
 export interface SpotLightProjector {
   readonly guid: string;
@@ -115,6 +116,8 @@ export interface SpotLightAuthoring {
  *   // innerConeDeg=0, outerConeDeg=45 (KHR pi/4 equivalent).
  */
 export const SpotLight = defineComponent('SpotLight', {
+  // f64 preserves invalid author inputs until render validation (no u32 wrapping).
+  lightingChannels: { type: 'f64', default: LIGHTING_CHANNELS_DEFAULT },
   // direction has no default (D-5): omitting it lands the array layer-3
   // all-zero, which validate() rejects. color carries an explicit layer-2
   // default [1,1,1] (white); the array layer-3 fallback is all-zero.

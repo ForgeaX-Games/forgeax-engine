@@ -21,16 +21,16 @@ import { installPublicationPrograms } from '../../publication/programs';
 import { createRenderPublisher } from '../../publication/publisher';
 import { RenderPublicationReceiver } from '../../publication/receiver';
 import { buildRaySurfaceScene } from '../../raytracing/attributes';
-import { prepareRayMaterialTextures } from '../../raytracing/material-residency';
+import { prepareSurfaceMaterialTextures } from '../../raytracing/material-residency';
 import { createSubmittedRayPathTracer } from '../../raytracing/path-tracer';
 import { rayReferenceFailure } from '../../raytracing/scene';
-import type { RayPathFixture } from './path-tracer.commands';
+import type { RayPublicationFixture } from './path-tracer.commands';
 import { plane, readBuffer } from './path-tracer.fixture';
 
 /** Texture/sampler publication, Renderer residency and dynamic MASK meet in actual ray hits. */
-export async function verifySubmittedTextures(fixture: RayPathFixture) {
-  const material = fixture.materials.find((entry) => entry.name === 'cutout');
-  assert(material);
+export async function verifySubmittedTextures(fixture: RayPublicationFixture) {
+  const material = fixture.material;
+  assert(material.name === 'cutout');
   const assets = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const received = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const record = validateCookedMaterialRecord(
@@ -43,7 +43,7 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
       artifacts: Object.fromEntries(
         Object.entries(material.cookedPublication.artifacts).map(([path, bytes]) => [
           path,
-          { bytes: Uint8Array.from(bytes) },
+          { bytes: new TextEncoder().encode(bytes) },
         ]),
       ),
     }),
@@ -122,13 +122,16 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
       installPublicationPrograms(received, packet.programs);
       const accepted = receiver.accept(packet).unwrap();
       const snapshot = accepted.frame.renderables[0]?.material;
-      assert(snapshot?.materialRay);
-      expect(snapshot.materialRay.evaluateCoverage).toBe(cutoff > 0);
+      assert(snapshot?.materialSurfacePrograms?.['ray-hit']);
+      expect(snapshot.materialSurfacePrograms?.['ray-hit'].evaluateCoverage).toBe(cutoff > 0);
+      const schema = received.shaderRegistry
+        .findMaterialArtifact(snapshot.materialSurfacePrograms['ray-hit'].programKey)
+        .unwrap().paramSchema;
       const start = performance.now();
-      const prepared = prepareRayMaterialTextures(
+      const prepared = prepareSurfaceMaterialTextures(
         store,
         defaultSampler,
-        received.shaderRegistry,
+        schema,
         accepted.resources,
         snapshot,
       ).unwrap();
@@ -136,10 +139,10 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
       const binding = textures.get('baseColorTexture');
       assert(binding);
       expect(binding.sampler).not.toBe(defaultSampler);
-      const duplicate = prepareRayMaterialTextures(
+      const duplicate = prepareSurfaceMaterialTextures(
         store,
         defaultSampler,
-        received.shaderRegistry,
+        schema,
         accepted.resources,
         snapshot,
       ).unwrap();
@@ -149,10 +152,10 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
         { ...snapshot, textureHandles: new Map() },
         { ...snapshot, samplerHandles: new Map() },
       ]) {
-        const result = prepareRayMaterialTextures(
+        const result = prepareSurfaceMaterialTextures(
           store,
           defaultSampler,
-          received.shaderRegistry,
+          schema,
           accepted.resources,
           invalid,
         );
@@ -219,7 +222,7 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
                 kind: 'directional',
                 contactShadowLength: 0,
                 direction: vec3.create(0, 0, -1),
-                color: vec3.create(1, 1, 1),
+                color: vec3.create(Math.PI, Math.PI, Math.PI),
                 intensity: Math.PI,
               },
             ],
@@ -256,10 +259,9 @@ export async function verifySubmittedTextures(fixture: RayPathFixture) {
         const bytes = await readBuffer(device, tracer.buffers.accumulation, 160);
         outputs.push(bytes);
         const floats = new Float32Array(bytes.buffer);
-        // Standard's exponential Fresnel approximation retains a small normal-incidence
-        // GGX term even at F0=0. With unit cosines and light radiance PI it is F/(4*r^4).
-        // The multiple-scatter term here is below this unchanged 5-decimal tolerance.
-        const lit = 1 + 2 ** (-5.55473 - 6.98316) / (4 * 0.65 ** 4);
+        // F0=0 derives F90=0 (F90 = saturate(50 * F0)), so the Standard lobe
+        // carries no specular and unit cosines with light radiance PI give exactly 1.
+        const lit = 1;
         expect(floats[0]).toBeCloseTo(cutoff > 0 ? 0 : lit, 5);
         expect(floats[20]).toBeCloseTo(lit, 5);
         const words = new Uint32Array(bytes.buffer);

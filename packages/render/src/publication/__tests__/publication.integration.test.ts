@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   AssetRegistry,
   HANDLE_CUBE,
@@ -6,6 +7,13 @@ import {
   resolveAssetHandle,
 } from '@forgeax/engine-assets-runtime';
 import { Time, World } from '@forgeax/engine-ecs';
+import {
+  buildMeshCardLayout,
+  buildVisibilityDistanceField,
+  createBoxGeometry,
+  encodeMeshDistanceField,
+  MESH_VISIBILITY_DISTANCE_FIELD_CODEC,
+} from '@forgeax/engine-geometry';
 import { ChildOf, GlobalTransform, Transform } from '@forgeax/engine-scene';
 import { ShaderRegistry } from '@forgeax/engine-shader';
 import { Skin } from '@forgeax/engine-skinning';
@@ -14,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Camera,
   CameraView,
+  DirectionalLight,
   Instances,
   MeshFilter,
   MeshRenderer,
@@ -66,12 +75,65 @@ function fixture() {
     });
     publisher.recycle(packet.revision, returned).unwrap();
     // Preserve logical rows independently from the returned transport storage.
-    return { packet: saved, frame };
+    return { packet: saved, frame, resources: accepted.resources };
   };
   return { world, publisher, receiver, scene, first, second, spawn, publish };
 }
 
 describe('native render publication', () => {
+  it('retains distinct receiver channels, changes and high-bit light masks in transferred rows', () => {
+    const f = fixture();
+    f.world.set(f.first, MeshRenderer, { lightingChannels: 0x80000000 }).unwrap();
+    f.world.set(f.second, MeshRenderer, { lightingChannels: 1 }).unwrap();
+    const sun = f.world
+      .spawn({ component: DirectionalLight, data: { lightingChannels: 0x80000001 } })
+      .unwrap();
+    f.world.update(0).unwrap();
+    const initial = f.publish();
+    expect(initial.frame.renderables.map((row) => row.lightingChannels)).toEqual([0x80000000, 1]);
+    expect(initial.frame.lights.directional?.lightingChannels).toBe(0x80000001);
+    f.world.set(f.first, MeshRenderer, { lightingChannels: 0 }).unwrap();
+    f.world.set(sun, DirectionalLight, { lightingChannels: 0xffffffff }).unwrap();
+    f.world.update(0).unwrap();
+    const changed = f.publish();
+    expect(
+      changed.frame.renderables.find((row) => row.entityKey === f.first)?.lightingChannels,
+    ).toBe(0);
+    expect(
+      changed.frame.renderables.find((row) => row.entityKey === f.second)?.lightingChannels,
+    ).toBe(1);
+    expect(changed.frame.lights.directional?.lightingChannels).toBe(0xffffffff);
+    f.publisher.dispose();
+  });
+
+  it('rejects malformed light and receiver masks without consuming a baseline', () => {
+    const f = fixture();
+    const candidate = f.publisher.prepare(0).unwrap();
+    for (const value of [-1, 0.5, 0x100000000, null]) {
+      const receiverPacket = structuredClone(candidate.packet);
+      const template = receiverPacket.templates[0];
+      if (template === undefined) throw new Error('missing receiver template');
+      Reflect.set(template.snapshot, 'lightingChannels', value);
+      expect(f.receiver.accept(receiverPacket)).toMatchObject({
+        ok: false,
+        error: { detail: { reason: 'shape' } },
+      });
+      const lightPacket = structuredClone(candidate.packet);
+      Reflect.set(lightPacket.metadata.lights, 'point', [{ lightingChannels: value }]);
+      expect(f.receiver.accept(lightPacket)).toMatchObject({
+        ok: false,
+        error: { detail: { reason: 'shape' } },
+      });
+      expect(f.receiver.acceptedRevision).toBe(0);
+    }
+    const nullLight = structuredClone(candidate.packet);
+    Reflect.set(nullLight.metadata.lights, 'point', [null]);
+    expect(f.receiver.accept(nullLight).ok).toBe(false);
+    candidate.discard();
+    expect(f.publish().frame.renderables).toHaveLength(2);
+    f.publisher.dispose();
+  });
+
   it('queries detached bounds by publication identity and rejects another epoch', () => {
     const f = fixture();
     const identity = { source: 'publication-test', epoch: 1 };
@@ -225,26 +287,64 @@ it('publishes shared material changes and their removal, and retires detached de
   f.publisher.dispose();
 });
 
-it('publishes projected mesh buffers and restores their base payload after content removal', () => {
+it('publishes static mesh attachments across realms and restores them after vertex content removal', async () => {
   const f = fixture();
-  f.publish();
-  const original = resolveAssetHandle<MeshAsset>(f.world, HANDLE_CUBE).unwrap();
+  const geometry = createBoxGeometry(1, 1, 1).unwrap();
+  const positions = geometry.attributes.position;
+  if (!(positions instanceof Float32Array) || !geometry.indices)
+    throw new Error('expected indexed box');
+  const field = (
+    await buildVisibilityDistanceField(positions, geometry.indices, {
+      voxelSize: 0.5,
+      triangleSidedness: new Uint8Array(geometry.indices.length / 3),
+    })
+  ).unwrap();
+  const encoded = (await encodeMeshDistanceField(field)).unwrap();
+  const artifact = {
+    integrity: {
+      algorithm: 'sha256' as const,
+      digest: `sha256:${createHash('sha256').update(encoded).digest('hex')}`,
+    },
+    assetCodec: MESH_VISIBILITY_DISTANCE_FIELD_CODEC,
+  };
+  const original = {
+    ...geometry,
+    cardLayout: (
+      await buildMeshCardLayout(positions, geometry.indices, { resolution: 8 })
+    ).unwrap(),
+    distanceField: {
+      ...field,
+      sectionSidedness: geometry.submeshes.map(() => 0 as const),
+      artifact,
+    },
+  };
+  const handle = f.world.allocSharedRef('MeshAsset', original);
+  f.world.set(f.first, MeshFilter, { assetHandle: handle }).unwrap();
+  f.world.set(f.second, MeshFilter, { assetHandle: handle }).unwrap();
+  const initial = f.publish();
+  const copied = resolveAssetHandle<MeshAsset>(initial.resources, handle).unwrap();
+  expect(copied.distanceField).toEqual(original.distanceField);
+  expect(copied.distanceField?.values.buffer).not.toBe(original.distanceField.values.buffer);
+  expect(copied.distanceField?.bricks.buffer).not.toBe(original.distanceField.bricks.buffer);
+  expect(copied.cardLayout).toEqual(original.cardLayout);
+  expect(original.distanceField.values.byteLength).toBeGreaterThan(0);
   const vertices = new Float32Array(original.vertices);
   vertices[0] = Number(vertices[0]) + 0.25;
   const content = f.world
-    .spawn({ component: RuntimeMeshVertices, data: { asset: HANDLE_CUBE, vertices } })
+    .spawn({ component: RuntimeMeshVertices, data: { asset: handle, vertices } })
     .unwrap();
   const changed = f.publish();
-  expect(changed.packet.invalidatedAssets).toContain(HANDLE_CUBE);
-  expect(
-    (changed.packet.assets.find((row) => row.handle === HANDLE_CUBE)?.value as MeshAsset)
-      .vertices[0],
-  ).toBe(vertices[0]);
+  expect(changed.packet.invalidatedAssets).toContain(handle);
+  const projected = resolveAssetHandle<MeshAsset>(changed.resources, handle).unwrap();
+  expect(projected.vertices[0]).toBe(vertices[0]);
+  expect(projected).not.toHaveProperty('distanceField');
+  expect(projected).not.toHaveProperty('cardLayout');
   f.world.despawn(content).unwrap();
-  expect(
-    (f.publish().packet.assets.find((row) => row.handle === HANDLE_CUBE)?.value as MeshAsset)
-      .vertices[0],
-  ).toBe(original.vertices[0]);
+  const restored = resolveAssetHandle<MeshAsset>(f.publish().resources, handle).unwrap();
+  expect(restored.vertices[0]).toBe(original.vertices[0]);
+  expect(restored.distanceField).toEqual(original.distanceField);
+  expect(restored.cardLayout).toEqual(original.cardLayout);
+  expect(resolveAssetHandle<MeshAsset>(f.world, handle).unwrap()).toBe(original);
   f.publisher.dispose();
 });
 

@@ -14,4 +14,16 @@ describe('Standard WebGL2 inter-stage varying budget', () => {
     expect(source).toContain('in.positionOSAndViewZ.xyz');
     expect(source).toContain('in.positionOSAndViewZ.w');
   });
+
+  // WebGPU's default maxInterStageShaderVariables is 16 and the fragment
+  // front_facing input consumes one of them. The union over every define is
+  // the worst case: vertex color, object basis and scene-index address together.
+  it.each(shaderFiles)('%s keeps every VsOut variant within WebGPU inter-stage limits', (file) => {
+    const source = readFileSync(resolve(import.meta.dirname, '..', file), 'utf8');
+    const vsOut = /struct VsOut \{([\s\S]*?)\n\};/u.exec(source)?.[1] ?? '';
+    const locations = new Set([...vsOut.matchAll(/@location\((\d+)\)/gu)].map((match) => match[1]));
+
+    expect(locations.size).toBeGreaterThan(0);
+    expect(locations.size + 1).toBeLessThanOrEqual(16);
+  });
 });

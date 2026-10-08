@@ -140,9 +140,9 @@ import {
         expect(new Set(types).size).toBe(3);
       });
 
-      it('ColliderShape literal union has 3 discriminants', () => {
-        const shapes = ['cuboid', 'sphere', 'capsule'] as const;
-        expect(new Set(shapes).size).toBe(3);
+      it('ColliderShape reflected values have unique discriminants', () => {
+        const shapes = Object.values(ColliderShapeValue);
+        expect(new Set(shapes).size).toBe(shapes.length);
       });
 
       // solo round-24 (P7 residue): the enum fields project their label→value
@@ -159,7 +159,15 @@ import {
       it('Collider.shape reflects labels === ColliderShapeValue', () => {
         const reflection = Collider.fields.shape as { readonly labels?: Record<string, number> };
         expect(reflection.labels).toEqual({ ...ColliderShapeValue });
-        expect(reflection.labels).toEqual({ cuboid: 0, sphere: 1, capsule: 2 });
+        expect(reflection.labels).toEqual({
+          cuboid: 0,
+          sphere: 1,
+          capsule: 2,
+          cylinder: 3,
+          cone: 4,
+          convexHull: 5,
+          trimesh: 6,
+        });
       });
 
       it('a non-enum field (RigidBody.mass) reflects no labels (control)', () => {
@@ -215,7 +223,7 @@ import {
 
       it('out-of-range values fall back to cuboid', () => {
         expect(colliderShapeFromF32(-1)).toBe('cuboid');
-        expect(colliderShapeFromF32(3)).toBe('cuboid');
+        expect(colliderShapeFromF32(7)).toBe('cuboid');
         expect(colliderShapeFromF32(99)).toBe('cuboid');
       });
 

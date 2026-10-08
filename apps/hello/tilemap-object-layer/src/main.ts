@@ -18,7 +18,7 @@
 //       cellX=2..6 (hello-tilemap parity; AC-14 falsifier).
 //   (e) sprite x tilemap world-Y — cellY=28..31, one 3x4 large tree at
 //       cellX=15 + one standalone sprite entity at world (16, 28.5) that
-//       must Y-sort through the same TransparentEntry queue (AC-13 anchor).
+//       must Y-sort through the same transparent dispatch queue (AC-13 anchor).
 //
 // Atlas synthesis: charter P5 — no forgeax-engine-assets PNG dependency.
 // The two atlas identities registered here are unmanaged placeholders; the
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
 
   // Sub-scene (e) sprite entity for world-Y interleave with the cellY=28 big
   // tree. Needs a sprite material — register a lightweight placeholder so the
-  // entity rides the sprite-bucket TransparentEntry queue alongside tilemap-
+  // entity rides the transparent dispatch queue alongside tilemap-
   // spawned per-cell entities (AC-13 anchor; plan-decisions L-1).
   const spriteMaterialHandle = world.allocSharedRef<'MaterialAsset', MaterialAsset>(
     'MaterialAsset',

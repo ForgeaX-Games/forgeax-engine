@@ -11,7 +11,7 @@ import {
   toolJsonSchema,
 } from '@forgeax/engine-tool-runtime';
 import { executionWorkers, executionWorkersSchema } from '../execution-workers.js';
-import { RHI_INSPECT_INPUT_SCHEMA } from '../rhi-debug/operations.js';
+import { RHI_INSPECT_INPUT_SCHEMA, RHI_READ_INPUT_SCHEMA } from '../rhi-debug/operations.js';
 import { createWorkspaceLiveTools } from '../workspace-live-tools.js';
 import {
   assetInspectInputSchema,
@@ -148,6 +148,9 @@ const commandSchemas: Readonly<Record<string, ToolJsonSchema>> = {
   'debug rhi summary': schema({ ...root, artifact: string, digest: string, json: boolean }, [
     'artifact',
   ]),
+  'debug rhi timing': schema({ ...root, artifact: string, digest: string, json: boolean }, [
+    'artifact',
+  ]),
   'debug rhi inspect': schema(
     {
       ...root,
@@ -157,6 +160,16 @@ const commandSchemas: Readonly<Record<string, ToolJsonSchema>> = {
       json: boolean,
     },
     RHI_INSPECT_INPUT_SCHEMA.required,
+  ),
+  'debug rhi read': schema(
+    {
+      ...root,
+      ...RHI_READ_INPUT_SCHEMA.properties,
+      artifact: string,
+      digest: string,
+      json: boolean,
+    },
+    RHI_READ_INPUT_SCHEMA.required,
   ),
   'debug profile capture': schema({
     ...root,
@@ -602,7 +615,7 @@ export function createUnifiedCommandContributions(
     },
   );
   const rhi = (
-    operation: 'rhi.capture' | 'rhi.summary' | 'rhi.inspect',
+    operation: 'rhi.capture' | 'rhi.summary' | 'rhi.inspect' | 'rhi.read' | 'rhi.timing',
     leaf: string,
     summary: string,
   ) =>
@@ -697,6 +710,12 @@ export function createUnifiedCommandContributions(
       'Lists work indices, pipeline entry points, and missing initial contents.',
     ),
     rhi('rhi.inspect', 'inspect', 'Inspects one RHI work item on a fresh replay backend.'),
+    rhi(
+      'rhi.read',
+      'read',
+      'Batch-reads resources or bindings at work indices as records, image stats, atlas tiles and PNGs.',
+    ),
+    rhi('rhi.timing', 'timing', 'Reports replay GPU nanoseconds per render and compute pass.'),
     profile('capture', 'Captures one bounded CPU profile from a live App host.'),
     profile('summary', 'Projects a profile ArtifactRef into an offline summary.'),
     profile('frame', 'Selects one frame from a profile ArtifactRef.'),

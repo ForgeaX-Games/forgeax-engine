@@ -58,20 +58,23 @@ const RE_FROM_STRING_VIEW = /\bfrom\s*['"][^'"]*\/string-view['"]/m;
 const hits = [];
 
 function walk(dir, scanFixtures) {
+  if (!scanFixtures && `${dir}${sep}`.includes(FIXTURE_DIR_FRAGMENT)) return;
   let entries;
   try {
-    entries = readdirSync(dir);
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const name of entries) {
-    if (SKIP_DIRS.has(name)) continue;
-    const p = join(dir, name);
-    let st;
-    try {
-      st = statSync(p);
-    } catch {
-      continue;
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const p = join(dir, entry.name);
+    let st = entry;
+    if (entry.isSymbolicLink()) {
+      try {
+        st = statSync(p);
+      } catch {
+        continue;
+      }
     }
     if (st.isDirectory()) {
       walk(p, scanFixtures);
@@ -82,13 +85,15 @@ function walk(dir, scanFixtures) {
     const ext = p.slice(p.lastIndexOf('.'));
     if (!CODE_EXTS.has(ext)) continue;
     if (SELF_EXEMPT_FILES.has(p)) continue;
-    let text;
+    let bytes;
     try {
-      text = readFileSync(p, 'utf8');
+      bytes = readFileSync(p);
     } catch {
       continue;
     }
-    const lines = text.split(/\r?\n/);
+    // Both banned patterns require an ASCII token; decode only candidate files.
+    if (!bytes.includes('StringView') && !bytes.includes('string-view')) continue;
+    const lines = bytes.toString('utf8').split(/\r?\n/);
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (RE_IMPORT_NAMED.test(line) || RE_FROM_STRING_VIEW.test(line)) {

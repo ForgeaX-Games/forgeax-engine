@@ -11,8 +11,6 @@ import {
   publishImportPublication,
   type RunImportMeta,
   runImport,
-  type StagedImportPublication,
-  stageImportPublication,
 } from '@forgeax/engine-import';
 import {
   type CatalogBuildResult,
@@ -41,7 +39,7 @@ export interface MetaImportContext {
     | ((delta: import('@forgeax/engine-types').CatalogDelta) => void)
     | undefined;
   readonly cookedProjection: Record<string, unknown>;
-  readonly pendingImportPublications?: Map<string, StagedImportPublication>;
+  readonly pendingImportPublications?: Map<string, ImportPublicationInput>;
   /** Validated by the Pack inventory; absent only for on-demand route misses. */
   readonly declaration?: RunImportMeta;
   readonly signal?: AbortSignal;
@@ -78,7 +76,12 @@ export async function startMetaImport(
   }
   const cookers = new NativeCookerRegistry();
   for (const cooker of context.cookers ?? []) cookers.register(cooker);
-  const runResult = await runImport(meta, context.importerRegistry, context.fsForImport, cookers);
+  const runResult = await runImport(
+    { ...meta, buildPack: false },
+    context.importerRegistry,
+    context.fsForImport,
+    cookers,
+  );
   assertImportOpen(context, metaPath);
   if (!runResult.ok) throw runResult.error;
   if ('skipped' in runResult.value) return [];
@@ -271,31 +274,16 @@ export async function startMetaImport(
             }),
       },
     };
-    const staged =
-      context.pendingImportPublications === undefined
-        ? undefined
-        : await stageImportPublication(publicationInput);
+    // A generation queues validated outputs, not live DDC leases. A subsequent
+    // synchronous NativeCook can block heartbeat timers beyond the lease TTL.
+    // Acquire each lease only when the generation is ready to commit it.
     const publication =
-      staged === undefined
+      context.pendingImportPublications === undefined
         ? await publishImportPublication(publicationInput)
-        : staged.ok
-          ? {
-              ok: true as const,
-              key: staged.candidate.key,
-              head: staged.candidate.head,
-              catalog: staged.candidate.catalog,
-              revision: staged.candidate.revision,
-              transportPersisted: true,
-            }
-          : staged;
-    if (staged?.ok === true) {
-      context.pendingImportPublications?.set(
-        `${metaPath}\0${staged.candidate.key}`,
-        staged.candidate,
-      );
-    }
+        : undefined;
+    context.pendingImportPublications?.set(`${metaPath}\0${desiredKey}`, publicationInput);
     assertImportOpen(context, metaPath);
-    if (!publication.ok) {
+    if (publication !== undefined && !publication.ok) {
       context.setCatalogProjection({ ...context.getCatalogProjection(), entries: previousCatalog });
       context.importedGuids.clear();
       for (const guid of previousImportedGuids) context.importedGuids.add(guid);
@@ -320,7 +308,8 @@ export async function startMetaImport(
         mimeType: artifact.mediaType,
       });
     }
-    const delta = calculateCatalogDelta(previousCatalog, publication.catalog);
+    const publishedCatalog = publication?.catalog ?? catalog;
+    const delta = calculateCatalogDelta(previousCatalog, publishedCatalog);
     // A production generation publishes its accepted candidate through the
     // outer watcher after every owner commits. Direct route imports have no
     // candidate owner, so they remain responsible for publishing their delta.
@@ -329,10 +318,10 @@ export async function startMetaImport(
     }
     context.setCatalogProjection({
       ...context.getCatalogProjection(),
-      entries: [...publication.catalog],
+      entries: [...publishedCatalog],
     });
     const publishedRows = new Map(
-      publication.catalog.map((entry) => [entry.guid.toLowerCase(), entry]),
+      publishedCatalog.map((entry) => [entry.guid.toLowerCase(), entry]),
     );
     for (let index = 0; index < allEntries.length; index += 1) {
       const current = allEntries[index];
@@ -340,7 +329,7 @@ export async function startMetaImport(
         current === undefined ? undefined : publishedRows.get(current.guid.toLowerCase());
       if (projected !== undefined) allEntries[index] = projected;
     }
-    if (publication.transportPersisted !== false) {
+    if (publication?.transportPersisted !== false) {
       for (const entry of allEntries) context.importedGuids.add(entry.guid.toLowerCase());
     } else {
       console.warn('[forgeax-pack] persist DDC pack failed:', {

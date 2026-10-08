@@ -70,7 +70,10 @@ try {
               cooked: payload?.cooked !== undefined,
             },
             inherited,
-            readinessKeys: [...app.assets.materialReadiness.keys()],
+            expectedReadiness: expected.map(({ guid: expectedGuid }) => ({
+              guid: expectedGuid,
+              status: app.assets.getMaterialReadiness(expectedGuid)?.status ?? 'missing',
+            })),
           };
         }
         const forward = projection.passes.find((pass) => pass.name.toLowerCase() === 'forward');

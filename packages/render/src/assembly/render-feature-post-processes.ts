@@ -9,6 +9,7 @@ import {
   createBarrelDistortionRenderFeature,
 } from '../features/barrel-distortion';
 import { createLensEffectsRenderFeature } from '../features/lens-effects';
+import { createLensFlareRenderFeature } from '../features/lens-flare';
 import { createOutlineRenderFeature } from '../features/outline/shaders';
 import { createSmaaRenderFeature } from '../features/smaa/shaders';
 import type { RenderFeature } from '../features/types';
@@ -28,6 +29,7 @@ export function withBuiltinRenderFeatures(
   features.push(
     createOutlineRenderFeature(),
     createLensEffectsRenderFeature(),
+    createLensFlareRenderFeature(),
     createSmaaRenderFeature(),
   );
   return features;

@@ -32,6 +32,7 @@ import {
 import { createAssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { audioPlugin } from '@forgeax/engine-audio';
 import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import type { PluginPrograms } from '@forgeax/engine-plugin';
 import { buildProfileModel, createProfiler } from '@forgeax/engine-profiler';
 import { EngineEnvironmentError } from '@forgeax/engine-runtime';
@@ -174,8 +175,24 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
     previewRun.cleanup();
     throw new Error('preview: canvas App did not provide its AssetRegistry');
   }
+  // Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
+  // leak GPU contexts -> STATUS_ACCESS_VIOLATION.
+  let disposed = false;
+  const gracefulDispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    void app.dispose().finally(() => previewRun.cleanup());
+  };
+  window.addEventListener('message', (ev) => {
+    if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {
+      gracefulDispose();
+    }
+  });
+  window.addEventListener('pagehide', gracefulDispose);
+
   if (!app.pluginContext.runtimePacks) configureRuntimeAssetCatalog(assets, runtimeBinding);
   await assets.refreshCatalog();
+  if (disposed) return;
   previewRun.authoring.bind(createPreviewUiAssetGateway(assets, runtimeBinding, import.meta.hot));
   const previewInspection = createPreviewInspection(app, previewRun.registerCleanup);
 
@@ -202,11 +219,8 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
   try {
     await app.pluginContext.plugin(gameHostPlugin(gameHost));
     if (engine?.root) {
-      const started = await activateExecutionRoot(app.pluginContext, {
+      await activateExecutionRoot(app.pluginContext, {
         guid: engine.root,
-      });
-      previewRun.registerCleanup(() => {
-        void started.fiber.dispose();
       });
     }
     if (host?.root) {
@@ -239,20 +253,20 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
       });
       try {
         await provider.await();
-        const started = await activateExecutionRoot(scope, { guid: host.root });
-        previewRun.registerCleanup(() => {
-          void started.fiber.dispose().finally(() => provider.dispose());
-        });
+        await activateExecutionRoot(scope, { guid: host.root });
       } catch (cause) {
         await provider.dispose();
         throw cause;
       }
     }
   } catch (e: unknown) {
+    await app.dispose();
     previewRun.cleanup();
+    if (disposed) return;
     console.error('[preview] gameplay activation rejected:', e);
     throw e;
   }
+  if (disposed) return;
   if (!surfaceEvidenceMode) app.start();
 
   Object.assign(window, {
@@ -321,21 +335,8 @@ async function startPreview(app: App, previewRun: PreviewUiRun): Promise<void> {
     }
   }
 
-  // Graceful GPU shutdown: dispose before reload. Without this, rapid reloads
-  // leak GPU contexts -> STATUS_ACCESS_VIOLATION.
-  let disposed = false;
+  Object.assign(window, { __forgeaxPreviewInspection: previewInspection.inspection });
   const reportedAppErrorCodes = new Set<string>();
-  const gracefulDispose = (): void => {
-    if (disposed) return;
-    disposed = true;
-    void app.dispose().finally(() => previewRun.cleanup());
-  };
-  window.addEventListener('message', (ev) => {
-    if ((ev.data as { type?: string } | null)?.type === 'VAG_PREVIEW_DISPOSE') {
-      gracefulDispose();
-    }
-  });
-  window.addEventListener('pagehide', gracefulDispose);
   app.onError((err: { code?: string }) => {
     const code = err.code ?? 'unknown';
     if (!reportedAppErrorCodes.has(code)) {
@@ -569,12 +570,10 @@ function parseCatalogEntries(body: unknown): CatalogEntry[] {
   const entries =
     typeof body === 'object' &&
     body !== null &&
+    (body as { schemaVersion?: unknown }).schemaVersion === 'runtime-catalog-snapshot-v1' &&
     Array.isArray((body as { entries?: unknown }).entries)
       ? (body as { entries: unknown[] }).entries
-      : Array.isArray(body)
-        ? body
-        : undefined;
-  if (entries === undefined) throw new Error('catalog response has no entries array');
+      : decodeCatalogWire(body).unwrap();
   return entries.filter(isCatalogEntry);
 }
 

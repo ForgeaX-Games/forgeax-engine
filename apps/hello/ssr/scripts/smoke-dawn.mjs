@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnReflectionScene, resolveSsrFixture, SSR_FIXTURE_REVISION } from '../src/reflection-scene.mjs';
+import { spawnReflectionScene, resolveSsrFixture, SSR_FIXTURE_REVISION, SSR_ANTIALIAS_MODES } from '../src/reflection-scene.mjs';
 import { dirname, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -17,10 +17,16 @@ const PERFORMANCE = process.env.SMOKE_PERF_TIMING === '1';
 const WIDTH = Number.parseInt(process.env.SMOKE_WIDTH ?? '256', 10);
 const HEIGHT = Number.parseInt(process.env.SMOKE_HEIGHT ?? '256', 10);
 const ANTIALIAS = process.env.SSR_ANTIALIAS ?? 'none';
-if (ANTIALIAS !== 'none' && ANTIALIAS !== 'taa') throw new Error(`Unknown SSR antialias: ${ANTIALIAS}`);
+const ANIMATION_AMPLITUDE = Number(process.env.SMOKE_ANIMATION_AMPLITUDE ?? 0.4);
+const ANIMATION_SPEED = Number(process.env.SMOKE_ANIMATION_SPEED ?? 0.04);
+if (!Number.isFinite(ANIMATION_AMPLITUDE) || ANIMATION_AMPLITUDE < 0 || ANIMATION_AMPLITUDE > 3
+  || !Number.isFinite(ANIMATION_SPEED) || ANIMATION_SPEED <= 0 || ANIMATION_SPEED > 1) {
+  throw new Error('Receiver animation requires amplitude in [0, 3] and speed in (0, 1]');
+}
+if (!SSR_ANTIALIAS_MODES.includes(ANTIALIAS)) throw new Error(`Unknown SSR antialias: ${ANTIALIAS}`);
 const CAPTURE_FRAMES = Number(process.env.SMOKE_CAPTURE_FRAMES ?? 1);
 if (!Number.isInteger(CAPTURE_FRAMES) || CAPTURE_FRAMES < 1 || CAPTURE_FRAMES > 8) throw new Error('SMOKE_CAPTURE_FRAMES must be 1..8');
-if (CAPTURE_FRAMES > 1 && (ANTIALIAS !== 'taa' || process.env.SMOKE_CAPTURE_FILE === undefined)) throw new Error('A temporal cycle requires TAA and SMOKE_CAPTURE_FILE');
+if (CAPTURE_FRAMES > 1 && (ANTIALIAS === 'none' || process.env.SMOKE_CAPTURE_FILE === undefined)) throw new Error('A temporal cycle requires TAA and SMOKE_CAPTURE_FILE');
 const CAPTURE_OBJECT_MOTION = process.env.SMOKE_CAPTURE_OBJECT_MOTION === '1';
 if (CAPTURE_OBJECT_MOTION && (process.env.SSR_FIXTURE !== 'objects' || CAPTURE_FRAMES !== 8)) throw new Error('Object motion capture requires objects and eight TAA frames');
 const CAPTURE_RECOVERY = process.env.SMOKE_CAPTURE_RECOVERY === '1';
@@ -44,6 +50,10 @@ if (DISPLAY_OBJECT_MOTION && (process.env.SSR_FIXTURE !== 'objects'
   || process.env.SMOKE_DISPLAY_DIR === undefined || DISPLAY_CAMERA_STEP !== 0
   || CAMERA_OFFSET !== 0 || CAMERA_STEP !== 0 || OBJECT_OFFSET !== 0 || CAPTURE_OBJECT_MOTION)) {
   throw new Error('Display object motion requires the objects fixture and an isolated display journey');
+}
+const DISPLAY_TAPE_RECOVERY = process.env.SMOKE_DISPLAY_TAPE_RECOVERY === '1';
+if (DISPLAY_TAPE_RECOVERY && (!DISPLAY_OBJECT_MOTION || process.env.FORGEAX_ENGINE_RHI_DEBUG !== '1')) {
+  throw new Error('Recovery tape requires object motion display capture and RHI debug');
 }
 const DISPLAY_TAPE_FRAME = process.env.SMOKE_DISPLAY_TAPE_FRAME === undefined
   ? undefined : Number(process.env.SMOKE_DISPLAY_TAPE_FRAME);
@@ -162,7 +172,7 @@ const ssrIdentity = {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   console.error(`[smoke] FAIL - webgpu import failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -221,23 +231,25 @@ const readCanvasPixels = async () => {
   if (device === undefined || targetTexture === undefined) {
     throw new Error('canvas texture is unavailable for Dawn material readback');
   }
-  const bytesPerRow = Math.ceil((WIDTH * 4) / 256) * 256;
+  const readWidth = targetTexture.width;
+  const readHeight = targetTexture.height;
+  const bytesPerRow = Math.ceil((readWidth * 4) / 256) * 256;
   const buffer = device.createBuffer({
-    size: bytesPerRow * HEIGHT,
+    size: bytesPerRow * readHeight,
     usage: 0x0001 | 0x0008,
   });
   const encoder = device.createCommandEncoder();
   encoder.copyTextureToBuffer(
     { texture: targetTexture },
     { buffer, bytesPerRow },
-    { width: WIDTH, height: HEIGHT, depthOrArrayLayers: 1 },
+    { width: readWidth, height: readHeight, depthOrArrayLayers: 1 },
   );
   device.queue.submit([encoder.finish()]);
   await buffer.mapAsync(0x0001);
   const bytes = new Uint8Array(buffer.getMappedRange()).slice();
   buffer.unmap();
   buffer.destroy();
-  return { bytes, bytesPerRow };
+  return { bytes, bytesPerRow, width: readWidth, height: readHeight };
 };
 
 let targetTexture;
@@ -310,6 +322,8 @@ const cpuProfiler = CPU_PHASE_PROFILE
 const { HANDLE_CUBE, HANDLE_SPHERE } = await import('@forgeax/engine-assets-runtime');
 const { World } = await import('@forgeax/engine-ecs');
 const {
+  ANTIALIAS_NONE,
+  ANTIALIAS_TAA,
   Camera,
   CUBE_CAMERA_FACE_ORDER,
   CubeCamera,
@@ -413,6 +427,7 @@ const drawCpuByReceipt = new Map();
 const drawCpuFrameMs = [];
 const drawCpuAttemptMs = [];
 let latestDrawReceipt;
+let latestResourceSubmission;
 if (PERFORMANCE || SSR_EVIDENCE || CPU_PHASE_PROFILE || CAPTURE_RECOVERY || process.env.SMOKE_DISPLAY_DIR !== undefined) {
   const draw = renderer.draw.bind(renderer);
   renderer.draw = (...args) => {
@@ -422,6 +437,13 @@ if (PERFORMANCE || SSR_EVIDENCE || CPU_PHASE_PROFILE || CAPTURE_RECOVERY || proc
     drawCpuAttemptMs.push(drawDurationMs);
     if (result.ok && result.value !== undefined) {
       latestDrawReceipt = result.value;
+      if (process.env.SMOKE_RESOURCE_LIFECYCLE === '1') {
+        const inspection = renderer.inspect();
+        latestResourceSubmission = {
+          frame: inspection.frame, temporal: inspection.temporal, ssr: inspection.ssr,
+          boundary: 'draw-return-before-completion-wait',
+        };
+      }
       submittedDraws += 1;
       drawCpuByReceipt.set(result.value, drawDurationMs);
       drawCpuFrameMs.push(drawDurationMs);
@@ -700,6 +722,8 @@ if (!started.ok) {
 }
 let frames = 0;
 const cpuFrameMs = [];
+const completionWaitMs = [];
+const endToEndMs = [];
 const reflectionPassNames = new Set();
 let cpuProfileSession;
 let cpuProfileStarted = false;
@@ -724,7 +748,7 @@ const animatedReceiverOrigin = process.env.SMOKE_ANIMATE_RECEIVER === '1'
   ? Array.from(world.get(movingObjectEntity, Transform).unwrap().pos) : undefined;
 for (; frames < MIN_FRAMES; frames += 1) {
   if (animatedReceiverOrigin !== undefined) world.set(movingObjectEntity, Transform, {
-    pos: [animatedReceiverOrigin[0] + Math.sin(frames * 0.04) * 0.4, animatedReceiverOrigin[1], animatedReceiverOrigin[2]],
+    pos: [animatedReceiverOrigin[0] + Math.sin(frames * ANIMATION_SPEED) * ANIMATION_AMPLITUDE, animatedReceiverOrigin[1], animatedReceiverOrigin[2]],
   }).unwrap();
   const item = rafQueue.shift();
   if (item === undefined) break;
@@ -732,7 +756,8 @@ for (; frames < MIN_FRAMES; frames += 1) {
   now += 16.67;
   const cpuStart = hostNowMs();
   item.callback(now);
-  cpuFrameMs.push(hostNowMs() - cpuStart);
+  const submissionEnd = hostNowMs();
+  cpuFrameMs.push(submissionEnd - cpuStart);
   if (WAIT_DRAW_COMPLETION && latestDrawReceipt !== undefined) {
     const completed = await latestDrawReceipt.completed;
     if (!completed.ok) {
@@ -740,6 +765,8 @@ for (; frames < MIN_FRAMES; frames += 1) {
       process.exit(1);
     }
   }
+  completionWaitMs.push(WAIT_DRAW_COMPLETION ? hostNowMs() - submissionEnd : null);
+  endToEndMs.push(WAIT_DRAW_COMPLETION ? hostNowMs() - cpuStart : null);
   if (SSR_EVIDENCE) {
     for (const passName of renderer.inspect().perFramePassNames) reflectionPassNames.add(passName);
   }
@@ -757,6 +784,8 @@ const fallbackReadbackStability = {
   submittedFrames: submittedDraws,
   captureEnabled: SSR_REFLECTION_EVIDENCE,
   receiverMovedFrames: animatedReceiverOrigin === undefined ? 0 : frames,
+  receiverMotion: animatedReceiverOrigin === undefined ? undefined
+    : { amplitude: ANIMATION_AMPLITUDE, speedRadiansPerFrame: ANIMATION_SPEED },
 };
 if (animatedReceiverOrigin !== undefined) world.set(movingObjectEntity, Transform, { pos: animatedReceiverOrigin }).unwrap();
 if (cpuProfileSession !== undefined && cpuProfiler?.activeSession() !== undefined) {
@@ -770,7 +799,7 @@ const captureFile = process.env.SMOKE_CAPTURE_FILE;
 // It is not a replacement for a canonical RHI tape or per-work inspection.
 const displayDir = process.env.SMOKE_DISPLAY_DIR;
 if (displayDir !== undefined) {
-  if (ANTIALIAS !== 'taa' || captureFile !== undefined) throw new Error('Display cycle requires TAA and no simultaneous tape capture');
+  if (ANTIALIAS === 'none' || captureFile !== undefined) throw new Error('Display cycle requires TAA and no simultaneous tape capture');
   app.pause().unwrap();
   mkdirSync(displayDir, { recursive: true });
   // Host callback throughput varies with compilation and GPU scheduling.
@@ -791,7 +820,8 @@ if (displayDir !== undefined) {
     if (!before.historyValid || before.frameIndex < 128) throw new Error('Display cycle requires settled TAA');
     const executionBefore = app.execution.report().frame;
     let tape;
-    if (DISPLAY_TAPE_FRAME !== undefined && name === `frame-${DISPLAY_TAPE_FRAME}`) {
+    if ((DISPLAY_TAPE_FRAME !== undefined && name === `frame-${DISPLAY_TAPE_FRAME}`)
+      || (DISPLAY_TAPE_RECOVERY && name === 'recovery-8')) {
       if (app.rhiCapture === undefined) throw new Error('Display tape requires the RHI capture owner');
       const captured = (await app.rhiCapture.captureFrame()).unwrap();
       const path = resolve(displayDir, `${name}.rhitape`);
@@ -924,6 +954,90 @@ if (captureFile !== undefined) {
     console.log(`[smoke] recovery-frames=${recovery.length} first=${recovery[0].after.frameIndex} last=${recovery.at(-1).after.frameIndex}`);
   }
 }
+// Resource evidence follows the recorder's existing closure/lifecycle owner.
+// Keep these captures outside the measured CPU/GPU sampling windows.
+if (process.env.SMOKE_RESOURCE_LIFECYCLE === '1') {
+  if (captureFile === undefined || app.rhiCapture === undefined || !SSR_EVIDENCE || SSR_DISABLED) {
+    throw new Error('Resource lifecycle requires an enabled SSR capture and RHI Debug');
+  }
+  const { buildFrameModel, decodeTape, summarizeFrame } = await import('@forgeax/engine-rhi-debug');
+  const directory = resolve(dirname(captureFile), 'lifecycle');
+  mkdirSync(directory, { recursive: true });
+  const resourceFrames = [];
+  const captureResourceState = async (stage) => {
+    // The paused App capture owns Update and Render. A separate World update
+    // here would consume the transition before the recorder is armed.
+    const captured = (await app.rhiCapture.captureFrame({ signal: AbortSignal.timeout(120_000) })).unwrap();
+    const tape = decodeTape(captured.bytes).unwrap();
+    const model = buildFrameModel(tape);
+    writeFileSync(resolve(directory, `${stage}.rhitape`), captured.bytes);
+    const pixels = await readCanvasPixels();
+    const tightPixels = new Uint8Array(pixels.width * pixels.height * 4);
+    for (let y = 0; y < pixels.height; y++) tightPixels.set(
+      pixels.bytes.subarray(y * pixels.bytesPerRow, y * pixels.bytesPerRow + pixels.width * 4), y * pixels.width * 4);
+    writeFileSync(resolve(directory, `${stage}.png`), writeReferencePng(tightPixels, pixels.width, pixels.height));
+    const row = {
+      stage, extent: { width: pixels.width, height: pixels.height }, digest: captured.digest, byteLength: captured.bytes.byteLength,
+      inspection: { frame: renderer.inspect().frame, ssr: renderer.inspect().ssr, temporal: renderer.inspect().temporal,
+        dynamicResolution: renderer.inspect().dynamicResolution },
+      submissionInspection: latestResourceSubmission,
+      timings: GPU_PASS_TIMING_ENABLED
+        ? (await renderer.observe(latestDrawReceipt, { include: ['timings'] })).unwrap().timings
+        : { status: 'not-requested' },
+      lifecycle: model.resourceLifecycle,
+      resources: model.resources.filter((resource) => resource.kind === 'texture' || resource.kind === 'buffer'),
+      works: summarizeFrame(model).works,
+      unseededResources: model.unseededResources,
+    };
+    resourceFrames.push(row);
+    writeFileSync(resolve(directory, 'resources.json'), JSON.stringify({
+      resolution: { width: WIDTH, height: HEIGHT }, identity: ssrIdentity,
+      scope: 'captured-tape-resource-closure', driverAllocation: 'unavailable',
+      frames: resourceFrames,
+    }, null, 2));
+    console.log(`[smoke] resource-stage=${stage} live=${row.lifecycle.bytes.knownLive} peak=${row.lifecycle.bytes.knownPeak}`);
+  };
+  const ssrParameters = { ...world.get(cameraEntity, ScreenSpaceReflection).unwrap() };
+  await captureResourceState('stable-on');
+  const cameraVersion = world.get(cameraEntity, Camera).unwrap().historyVersion;
+  const priorResetCount = renderer.inspect().ssr.history.resetCount;
+  world.set(cameraEntity, Camera, { historyVersion: cameraVersion + 1 }).unwrap();
+  await captureResourceState('camera-cut');
+  if (renderer.inspect().ssr.history.resetCount <= priorResetCount) {
+    throw new Error('Explicit camera cut must reset the SSR-owned history');
+  }
+  world.set(cameraEntity, Camera, { historyVersion: cameraVersion }).unwrap();
+  await captureResourceState('camera-cut-restored');
+  world.removeComponent(cameraEntity, ScreenSpaceReflection).unwrap();
+  await captureResourceState('ssr-off');
+  world.addComponent(cameraEntity, { component: ScreenSpaceReflection, data: ssrParameters }).unwrap();
+  await captureResourceState('ssr-readmission');
+  if (ANTIALIAS === 'taa') {
+    world.set(cameraEntity, Camera, { antialias: ANTIALIAS_NONE }).unwrap();
+    await captureResourceState('taa-off');
+    world.set(cameraEntity, Camera, { antialias: ANTIALIAS_TAA }).unwrap();
+    await captureResourceState('taa-readmission');
+  }
+  // Use the existing canvas-owned surface route, so graph/history replacement
+  // and fence retirement are real Renderer work inside the captured frame.
+  const originalSurface = targetTexture;
+  const smallerWidth = Math.floor(WIDTH * 0.75);
+  const smallerHeight = Math.floor(HEIGHT * 0.75);
+  targetTexture = device.createTexture({
+    size: { width: smallerWidth, height: smallerHeight, depthOrArrayLayers: 1 },
+    format: originalSurface.format, usage: 0x10 | 0x01, viewFormats: ['rgba8unorm-srgb'],
+  });
+  canvas.width = smallerWidth;
+  canvas.height = smallerHeight;
+  await captureResourceState('resize-smaller');
+  const smallerSurface = targetTexture;
+  targetTexture = originalSurface;
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  await captureResourceState('resize-restored');
+  (await latestDrawReceipt.completed).unwrap();
+  smallerSurface.destroy();
+}
 const tickets = [];
 let drawn = timingReceipts.at(-1);
 let observed;
@@ -932,7 +1046,7 @@ if (!PERFORMANCE_ONLY) {
     // SSR owns its display output; only the cube fixture has a cube target writer.
     if (!SSR_EVIDENCE && face === CUBE_CAMERA_FACE_ORDER.length - 1) {
       for (const face of CUBE_CAMERA_FACE_ORDER.keys()) {
-        const ticketResult = renderer.requestTargetReadback(targetResult.value, { mipLevel: 0, face });
+        const ticketResult = renderer.requestTargetReadback(targetResult.value, { mipLevel: 0, layer: face });
         if (!ticketResult.ok) {
           console.error(`[smoke] FAIL - readback request failed: ${ticketResult.error.code}`);
           process.exit(1);
@@ -1246,6 +1360,12 @@ if (SSR_REFLECTION_EVIDENCE) {
     replacementReadback?.readbackStatus === 'complete' &&
     replacementReadback.deviceGeneration === replacementRow.deviceGeneration &&
     replacementReadback.frameId === replacementRow.frameId;
+  const replacementSsrReady =
+    afterRecovery.ssr.status === 'admitted' &&
+    afterRecovery.ssr.history.state === 'stable' &&
+    afterRecovery.ssr.history.bytes > 0 &&
+    afterRecovery.ssrDependencies.temporal.successfulSubmit === true &&
+    afterRecovery.ssrDependencies.temporal.generation === afterRecovery.frame.deviceGeneration;
   deviceRecovery = {
     triggered: true,
     lostState,
@@ -1256,8 +1376,12 @@ if (SSR_REFLECTION_EVIDENCE) {
     replacementRow,
     readback: replacementReadback,
     matchingReplacement,
+    beforeSsr: beforeLoss.ssr,
+    afterSsr: afterRecovery.ssr,
+    replacementTemporal: afterRecovery.ssrDependencies.temporal,
+    replacementSsrReady,
   };
-  if (!matchingReplacement || recoveryReceipt === undefined) {
+  if (!matchingReplacement || !replacementSsrReady || recoveryReceipt === undefined) {
     throw new Error(`device replacement receipt mismatch: ${JSON.stringify({ ...deviceRecovery, owner: replacementOwner })}`);
   }
 }
@@ -1443,6 +1567,14 @@ const performanceTiming = PERFORMANCE
       composeShaderSha256,
       shaderManifestSha256,
       cpu: {
+        semantics: 'host callback submission CPU; excludes receipt completion wait',
+        completionWaitSamples: [...completionWaitMs],
+        endToEndSamples: [...endToEndMs],
+        completionWaitP50Ms: percentile(completionWaitMs, 0.5),
+        completionWaitP95Ms: percentile(completionWaitMs, 0.95),
+        endToEndP50Ms: percentile(endToEndMs, 0.5),
+        endToEndP95Ms: percentile(endToEndMs, 0.95),
+        endToEndSemantics: 'callback start to receipt completion; excludes polling delay and timing readback',
         samples: [...cpuFrameMs],
         p50Ms: percentile(cpuFrameMs, 0.5),
         p95Ms: percentile(cpuFrameMs, 0.95),

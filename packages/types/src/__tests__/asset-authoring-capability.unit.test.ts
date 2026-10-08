@@ -95,13 +95,7 @@ describe('producer-owned asset authoring capability', () => {
       input: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
       navigation: { status: 'supported', operation: 'dom-native', contractVersion: '1' },
       font: { status: 'supported', operation: 'ui-artifact-companion', contractVersion: '1' },
-      localization: {
-        status: 'unavailable',
-        reason: {
-          code: 'missing-producer-capability',
-          hint: expect.stringContaining('localization'),
-        },
-      },
+      localization: { status: 'supported', operation: 'i18next', contractVersion: '1' },
     });
   });
 

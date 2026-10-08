@@ -1,33 +1,18 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
+import { brickDistanceFieldValues, distanceFieldTexel } from './distance-field-bricks';
 import { createTriangleQuery } from './triangle-query';
 
-export type FieldVec3 = readonly [number, number, number];
-export type FieldBounds = { readonly min: FieldVec3; readonly max: FieldVec3 };
-/** 32 MiB of CPU f32 samples fits the unchanged 16 MiB sampled-SNORM16 query pool. */
-export const MAX_DISTANCE_FIELD_SAMPLES = 8 * 1024 * 1024;
+export type {
+  DistanceFieldPolicy,
+  FieldBounds,
+  FieldVec3,
+  MeshDistanceField,
+} from '@forgeax/engine-types';
+
+import type { DistanceFieldPolicy, FieldVec3, MeshDistanceField } from '@forgeax/engine-types';
 export const MAX_VISIBILITY_DISTANCE_FIELD_AXIS = 514;
-export type DistanceFieldPolicy =
-  | { readonly kind: 'signed-solid' | 'two-sided'; readonly errorBound: number }
-  | {
-      readonly kind: 'sampled-visibility';
-      readonly sourceDigest: string;
-      readonly mostlyTwoSided: boolean;
-      readonly traceBounds: FieldBounds;
-      readonly distanceBand: number;
-    };
-export interface MeshDistanceField {
-  /** SHA-256 of canonical f32 positions/u32 topology, independent of materials and instances. */
-  readonly meshDigest: string;
-  /** Geometric distance bounds and sampled scene visibility have different hit semantics. */
-  readonly policy: DistanceFieldPolicy;
-  readonly dimensions: FieldVec3;
-  readonly origin: FieldVec3;
-  readonly spacing: number;
-  readonly values: Float32Array;
-  /** Actual geometry extent. Trace bounds and the stored gradient border are separate. */
-  readonly bounds: FieldBounds;
-  readonly quality: { readonly negativeSamples: number; readonly testedTriangles: number };
-}
+/** Advance when the builder policy changes, independently of artifact encoding. */
+export const MESH_DISTANCE_FIELD_GENERATION_VERSION = 5;
 export type GeometricDistanceField = MeshDistanceField & {
   readonly policy: Extract<DistanceFieldPolicy, { readonly errorBound: number }>;
 };
@@ -273,13 +258,16 @@ export async function buildMeshDistanceField(
   const errorBound = Math.fround(
     (Math.sqrt(3) * spacing) / 2 + rounding + surfaceEpsilon * 4 + spacing * 1e-5,
   );
+  const storage = brickDistanceFieldValues(dimensions, values);
+  if (!storage)
+    return distanceFieldFailure('distance-field storage exceeds 32 MiB', 'distance-field-limit');
   return ok({
     meshDigest: await distanceFieldMeshDigest(positions, indices),
     policy: { kind: twoSided ? 'two-sided' : 'signed-solid', errorBound },
     dimensions,
     origin,
     spacing,
-    values,
+    ...storage,
     bounds: { min, max },
     quality: { negativeSamples: interiorSamples, testedTriangles: triangles.length },
   });
@@ -300,12 +288,7 @@ export function sampleMeshDistanceField(field: MeshDistanceField, p: FieldVec3):
           (y ? item(q, 1) - item(cell, 1) : 1 - (item(q, 1) - item(cell, 1))) *
           (z ? item(q, 2) - item(cell, 2) : 1 - (item(q, 2) - item(cell, 2)));
         result +=
-          item(
-            field.values,
-            ((item(cell, 2) + z) * field.dimensions[1] + item(cell, 1) + y) * field.dimensions[0] +
-              item(cell, 0) +
-              x,
-          ) * w;
+          distanceFieldTexel(field, item(cell, 0) + x, item(cell, 1) + y, item(cell, 2) + z) * w;
       }
   return result;
 }

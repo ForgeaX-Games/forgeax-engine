@@ -24,8 +24,8 @@ const LF = 0x0a;
  * Steps per research F-6:
  * 1. Parse ASCII header: magic (#?RADIANCE), FORMAT=32-bit_rle_rgbe,
  *    resolution line (-Y height +X width).
- * 2. Decode per-scanline new-RLE pixel data: 4 independent channel runs.
- * 3. Convert RGBE to float: if E==0 -> 0; else f=2^(E-136), R=(Rm+0.5)*f.
+ * 2. Decode each scanline from its four independent channel runs.
+ * 3. Project that row directly to float: E==0 -> 0; otherwise (Rm+0.5)*2^(E-136).
  * 4. Output as interleaved RGBA Float32Array (alpha=1.0).
  *
  * Old-RLE scanlines (prefix not matching 0x02,0x02,hi,lo with correct width)
@@ -85,7 +85,7 @@ export function decodeHdr(bytes: Uint8Array): Result<HdrDecoded, ImageError> {
 
   // Step 2: decode per-scanline new-RLE pixel data
   const pixelCount = width * height;
-  const rgbe = new Uint8Array(pixelCount * 4);
+  const out = new Float32Array(pixelCount * 4);
   const scanlineBytes = width * 4;
 
   for (let y = 0; y < height; y++) {
@@ -108,13 +108,15 @@ export function decodeHdr(bytes: Uint8Array): Result<HdrDecoded, ImageError> {
       if (decoded === null) {
         return err(hdrDecodeError(`RLE decode failed at scanline ${y}`));
       }
-      // Copy into rgbe interleaved buffer
       const base = y * scanlineBytes;
-      const channels = [decoded[0], decoded[1], decoded[2], decoded[3]];
       for (let x = 0; x < width; x++) {
-        for (let ch = 0; ch < 4; ch++) {
-          // biome-ignore lint/style/noNonNullAssertion: checked at allocation
-          rgbe[base + x * 4 + ch] = channels[ch]![x]!;
+        const pixel = x * 4;
+        const exponent = decoded.data[pixel + 3] as number;
+        out[base + pixel + 3] = 1;
+        if (exponent === 0) continue;
+        const factor = 2 ** (exponent - 136);
+        for (let channel = 0; channel < 3; channel++) {
+          out[base + pixel + channel] = ((decoded.data[pixel + channel] as number) + 0.5) * factor;
         }
       }
       // Advance pos past the 4-byte prefix + the total RLE bytes consumed
@@ -129,50 +131,17 @@ export function decodeHdr(bytes: Uint8Array): Result<HdrDecoded, ImageError> {
     }
   }
 
-  // Step 3: RGBE to float
-  const out = new Float32Array(pixelCount * 4);
-  for (let i = 0; i < pixelCount; i++) {
-    const base = i * 4;
-    // biome-ignore lint/style/noNonNullAssertion: checked at allocation
-    const r = rgbe[base]!;
-    // biome-ignore lint/style/noNonNullAssertion: checked at allocation
-    const g = rgbe[base + 1]!;
-    // biome-ignore lint/style/noNonNullAssertion: checked at allocation
-    const b = rgbe[base + 2]!;
-    // biome-ignore lint/style/noNonNullAssertion: checked at allocation
-    const e = rgbe[base + 3]!;
-    out[base + 3] = 1.0;
-
-    if (e === 0) {
-      out[base] = 0;
-      out[base + 1] = 0;
-      out[base + 2] = 0;
-    } else {
-      // f = 2^(E - 136) = ldexp(1.0, E - 128 - 8)
-      // Equivalent: ldexp(1.0 / 256.0, E - 128)
-      // But simpler: const f = (1.0 / 256.0) * Math.pow(2, e - 128);
-      // Using ldexp: Math.pow(2, e - 136)
-      const f = 2 ** (e - 136);
-      out[base] = (r + 0.5) * f;
-      out[base + 1] = (g + 0.5) * f;
-      out[base + 2] = (b + 0.5) * f;
-    }
-  }
-
   return ok({ width, height, data: out });
 }
 
 interface DecodedScanline {
-  /** 4 channels, each width bytes */
-  readonly 0: Uint8Array;
-  readonly 1: Uint8Array;
-  readonly 2: Uint8Array;
-  readonly 3: Uint8Array;
+  /** One interleaved RGBE row; never a full-image intermediate. */
+  readonly data: Uint8Array;
   readonly totalBytes: number;
 }
 
 /**
- * Decode one scanline of new-RLE data into 4 channel arrays.
+ * Decode the four channel streams into one interleaved scanline.
  * Returns null on failure (data underrun).
  */
 function decodeNewRleScanline(
@@ -180,11 +149,10 @@ function decodeNewRleScanline(
   start: number,
   width: number,
 ): DecodedScanline | null {
-  const channels: Uint8Array[] = [];
+  const data = new Uint8Array(width * 4);
   let cursor = start;
 
   for (let ch = 0; ch < 4; ch++) {
-    const data = new Uint8Array(width);
     let x = 0;
     while (x < width) {
       if (cursor >= bytes.length) return null;
@@ -198,7 +166,7 @@ function decodeNewRleScanline(
         // biome-ignore lint/style/noNonNullAssertion: checked above
         const val = bytes[cursor]!;
         cursor++;
-        data.fill(val, x, x + count);
+        for (let k = 0; k < count; k++) data[(x + k) * 4 + ch] = val;
         x += count;
       } else {
         // Literal run: next `code` bytes copied verbatim
@@ -206,29 +174,15 @@ function decodeNewRleScanline(
         if (cursor + code > bytes.length || x + code > width) return null;
         for (let k = 0; k < code; k++) {
           // biome-ignore lint/style/noNonNullAssertion: checked above
-          data[x + k] = bytes[cursor + k]!;
+          data[(x + k) * 4 + ch] = bytes[cursor + k]!;
         }
         cursor += code;
         x += code;
       }
     }
-    channels.push(data);
   }
 
-  const ch0 = channels[0];
-  const ch1 = channels[1];
-  const ch2 = channels[2];
-  const ch3 = channels[3];
-  if (ch0 === undefined || ch1 === undefined || ch2 === undefined || ch3 === undefined) {
-    return null; // channels should always have 4 entries
-  }
-  return {
-    0: ch0,
-    1: ch1,
-    2: ch2,
-    3: ch3,
-    totalBytes: cursor - start,
-  };
+  return { data, totalBytes: cursor - start };
 }
 
 function findByte(bytes: Uint8Array, target: number, start: number): number {

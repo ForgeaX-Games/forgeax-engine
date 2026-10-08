@@ -32,7 +32,8 @@ const passes: [MaterialPass, ...MaterialPass[]] = [
   },
 ];
 
-describe('standard material cook integration', () => {
+// Cold publication validates both color ABIs, both addresses and each View ABI.
+describe('standard material cook integration', { timeout: 30_000 }, () => {
   it.each([true, false])('cooks a declared or omitted alphaHash parameter: %s', async (enabled) => {
     const names = new Set(
       STANDARD_MATERIAL_PARAM_SCHEMA.filter(
@@ -136,7 +137,9 @@ describe('standard material cook integration', () => {
     }
   });
 
-  it('cooks anisotropy with an identity direction fallback and an RG/B texture path', async () => {
+  it('cooks anisotropy with an identity direction fallback and an RG/B texture path', {
+    timeout: 30_000,
+  }, async () => {
     const baseParameters: readonly MaterialParameter[] = [
       { name: 'baseColor', type: 'color' },
       { name: 'metallic', type: 'f32' },

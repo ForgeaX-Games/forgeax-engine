@@ -7,7 +7,11 @@ import type {
   MaterialAsset,
   MaterialValue,
 } from '@forgeax/engine-types';
-import { ImportError, MATERIAL_TEXTURE_SLOTS } from '@forgeax/engine-types';
+import {
+  ImportError,
+  isMaterialTextureParameterType,
+  MATERIAL_TEXTURE_SLOTS,
+} from '@forgeax/engine-types';
 import type { RunImportMeta } from './import-runner.js';
 import { materialAssetOutputProducer } from './scriptable-pack-output-producers.js';
 
@@ -43,9 +47,7 @@ function materialSource(asset: ImportedAsset<unknown>): MaterialAsset {
   const textures = new Set(
     source.parameters === undefined
       ? MATERIAL_TEXTURE_SLOTS
-      : source.parameters
-          .filter((p) => p.type === 'texture' || p.type === 'texture_cube')
-          .map((p) => p.name),
+      : source.parameters.filter((p) => isMaterialTextureParameterType(p.type)).map((p) => p.name),
   );
   const value = (input: unknown, textureField: boolean): MaterialValue | null => {
     if (
@@ -86,10 +88,7 @@ function materialSource(asset: ImportedAsset<unknown>): MaterialAsset {
       ? {}
       : {
           parameters: source.parameters.map((parameter) => {
-            if (
-              parameter.default === undefined ||
-              (parameter.type !== 'texture' && parameter.type !== 'texture_cube')
-            )
+            if (parameter.default === undefined || !isMaterialTextureParameterType(parameter.type))
               return parameter;
             return { ...parameter, default: value(parameter.default, true) };
           }) as NonNullable<MaterialAsset['parameters']>,

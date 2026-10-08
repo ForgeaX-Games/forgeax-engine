@@ -1,23 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type AtmosphereParameters,
-  type EnvironmentCandidate,
-  type EnvironmentFrame,
-  type FogCandidate,
-  selectEnvironmentFrame,
-} from '../extract/environment';
+import { selectEnvironment } from '../environment/frame';
+import type { EnvironmentCandidate, EnvironmentFrame, FogCandidate } from '../extract/environment';
+import { earthAtmosphere } from './atmosphere-fixture';
 
-const atmosphereParameters: AtmosphereParameters = {
-  turbidity: 2,
-  rayleigh: 1,
-  mieCoefficient: 0.005,
-  mieDirectionalG: 0.8,
-  sunAngularRadius: 0.004675,
-  circumsolarStrength: 1,
-  circumsolarWidth: 1,
-};
+const atmosphereParameters = earthAtmosphere;
 
-function unwrapFrame(result: ReturnType<typeof selectEnvironmentFrame>): EnvironmentFrame {
+const sun = { entityKey: 99, direction: [0, -1, 0], color: [1, 1, 1], intensity: 1 } as const;
+
+function select(environments: readonly EnvironmentCandidate[], fogs: readonly FogCandidate[]) {
+  return selectEnvironment({ environments, fogs, suns: [sun], lane: 'direct' });
+}
+
+function unwrapFrame(result: ReturnType<typeof select>): EnvironmentFrame {
   if (!result.ok) throw result.error;
   return result.value;
 }
@@ -43,13 +37,13 @@ const fog = (entityKey: number): FogCandidate => ({
 
 describe('immutable frame plan contract', () => {
   it('selects none, one image, or one atmosphere deterministically', () => {
-    expect(unwrapFrame(selectEnvironmentFrame([], [])).source.kind).toBe('none');
-    expect(unwrapFrame(selectEnvironmentFrame([image(2, 'image-a')], [])).source).toEqual({
+    expect(unwrapFrame(select([], [])).source.kind).toBe('none');
+    expect(unwrapFrame(select([image(2, 'image-a')], [])).source).toEqual({
       kind: 'image',
       sourceKey: 'image-a',
       entityKey: 2,
     });
-    expect(unwrapFrame(selectEnvironmentFrame([atmosphere(7, 'sky-a')], [])).source).toEqual({
+    expect(unwrapFrame(select([atmosphere(7, 'sky-a')], [])).source).toEqual({
       kind: 'atmosphere',
       sourceKey: 'sky-a',
       entityKey: 7,
@@ -58,29 +52,29 @@ describe('immutable frame plan contract', () => {
   });
 
   it('rejects mixed source kinds and conflicting source keys', () => {
-    expect(selectEnvironmentFrame([image(1, 'a'), atmosphere(2, 'b')], [])).toMatchObject({
+    expect(select([image(1, 'a'), atmosphere(2, 'b')], [])).toMatchObject({
       ok: false,
       error: { code: 'environment-source-conflict' },
     });
-    expect(selectEnvironmentFrame([image(1, 'a'), image(2, 'b')], [])).toMatchObject({
+    expect(select([image(1, 'a'), image(2, 'b')], [])).toMatchObject({
       ok: false,
       error: { code: 'environment-source-conflict' },
     });
   });
 
   it('keeps Fog independent from environment source and bounds cardinality', () => {
-    const withoutFog = unwrapFrame(selectEnvironmentFrame([], []));
+    const withoutFog = unwrapFrame(select([], []));
     expect(withoutFog.fog).toBeUndefined();
-    const withFog = unwrapFrame(selectEnvironmentFrame([], [fog(4)]));
+    const withFog = unwrapFrame(select([], [fog(4)]));
     expect(withFog.fog?.entityKey).toBe(4);
-    expect(selectEnvironmentFrame([], [fog(4), fog(8)])).toMatchObject({
+    expect(select([], [fog(4), fog(8)])).toMatchObject({
       ok: false,
       error: { code: 'fog-cardinality' },
     });
   });
 
   it('returns detached facts without GPU handles and freezes nested values', () => {
-    const result = selectEnvironmentFrame([image(1, 'stable')], [fog(3)]);
+    const result = select([image(1, 'stable')], [fog(3)]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(Object.isFrozen(result.value)).toBe(true);

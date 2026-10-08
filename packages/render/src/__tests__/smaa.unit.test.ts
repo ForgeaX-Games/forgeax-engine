@@ -4,7 +4,6 @@ import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { parse, validate } from '../../../naga/src/index';
 import { ANTIALIAS_SMAA, antialiasFromF32, Camera } from '../components/camera';
-import { extractCameraSnapshots } from '../extract/camera';
 import { createRenderFeatureHost, runRenderFeatureFrame } from '../features/host';
 import { smaaLookupData } from '../features/smaa/lookup-data';
 import { createSmaaRenderFeature, SMAA_PROGRAMS } from '../features/smaa/shaders';
@@ -12,6 +11,7 @@ import {
   createStandardOutputPlan,
   validateStandardOutputPlan,
 } from '../pipeline/standard-output/graph';
+import { extractCameraSnapshots } from '../render-system-extract';
 
 describe('SMAA authoring and production programs', () => {
   it('projects the public Camera mode without temporal jitter or history', () => {

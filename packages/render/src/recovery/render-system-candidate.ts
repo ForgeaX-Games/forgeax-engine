@@ -28,7 +28,7 @@ import { motionBlurTemporalDemand } from '../features/motion-blur/motion-blur-pa
 import { createFeatureNoiseResolver } from '../features/noise-texture';
 import type { RenderFeatureGpuWorkOwner } from '../features/prepared-gpu-work';
 import { resolveStandardRenderFeatureTargets } from '../features/targets';
-import { renderFeatureCameraView } from '../features/view';
+import { renderFeatureCameraView, renderFeatureViewIdentity } from '../features/view';
 import {
   buildFullscreenPostProcessPass,
   entryHasDepthRead,
@@ -39,10 +39,10 @@ import { collectGpuDrivenMaterialArtifacts } from '../gpu-driven/material-artifa
 import { GpuDrivenProduction } from '../gpu-driven/production-raster';
 import { disposeInstanceBufferChunks, disposeInstanceBuffers } from '../instance-buffer-cache';
 import { inspectStandardLighting } from '../pipeline/standard-lighting/inspection';
-import { retireAutoExposureGpuResources } from '../pipeline/standard-output/auto-exposure/gpu';
 import {
   prepareStandardOutputResources,
   resetStandardOutputForDeviceLoss,
+  retirePendingStandardOutputGpu,
 } from '../pipeline/standard-output/resources';
 import type { PipelineBuilderShaderModuleFactory } from '../pipeline-builder';
 import { standardTopologyVariantSet } from '../pipeline-spec';
@@ -51,7 +51,11 @@ import type { PreparedGraphicsResolver } from '../prepare/prepared-graphics-reso
 import type { RenderResourceScope } from '../publication/resource-scope';
 import { gpuDrivenMeshesForFrame, validateRenderables } from '../record/frame';
 import { prepareFrameLighting } from '../record/frame-lighting';
-import type { RenderFrameState, ValidatedRenderable } from '../record/frame-snapshot';
+import {
+  emptyFrameRecordingOutputs,
+  type RenderFrameState,
+  type ValidatedRenderable,
+} from '../record/frame-snapshot';
 import { resolveGeometryInstanceBuffer } from '../record/main-pass-geometry';
 import { computeSplitLdrSprite } from '../record/main-pass-sprite-draws';
 import type { PreparedResolverCaches } from '../record/prepared-material-bindings';
@@ -69,6 +73,7 @@ import {
   retire as retireCompiledGraph,
   shareRenderGraphGenerationAllocationOwner,
 } from '../record/typed-frame-graph';
+import { emptyVolumetricFogParams } from '../record/volume-params';
 import { STANDARD_OUTPUT_TRANSFORM_FEATURE_ID } from '../render-contract';
 import type {
   ExtractedFrame,
@@ -240,37 +245,33 @@ export function createRenderSystemRecovery(
       ...baseFrameState,
       successfulTemporalFrameIndex: 0,
       temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
-      temporalFrameInput: undefined,
       ssrRequested: false,
       ssrSpatialAdmission: undefined,
       ssrHistoryOwner: undefined,
-      // The old GI owner captures the lost device and is retired at publication.
-      // Rebuild it from accepted scene content on the first replacement frame.
+      // These owners capture the lost device and retire at publication.
+      // Rebuild from accepted inputs on the first replacement frame.
       rayDiffuse: undefined,
-      ssrHistoryCandidate: undefined,
+      irradianceField: undefined,
+      screenProbe: undefined,
+      probePlacement: undefined,
+      probePlacementFrame: undefined,
       ssrTemporalParamsPayload: undefined,
       ssrLastCameraEntity: undefined,
       ssrLastHistoryVersion: undefined,
       graphTargetCapture: undefined,
-      perFrameGraph: null,
       directionalShadowCache: null,
       directionalShadowCacheRecorded: false,
       shadowRaster: new ShadowRasterLedger(),
       compiledFrameGraph: null,
       compiledFrameGraphCandidate: undefined,
-      compiledFrameGraphTopologyKey: null,
-      volumetricFogParamsBuffers: [null, null],
-      volumetricFogParamsPendingSlot: null,
-      volumetricFogParamsAcceptedSlot: null,
-      volumetricFogAcceptedParams: undefined,
-      volumetricFogPendingParams: undefined,
+      volumetricFogParams: emptyVolumetricFogParams(),
       volumetricFogAccepted: undefined,
       volumetricFogAcceptedContext: undefined,
       volumetricFogHistoryGraph: null,
       volumetricFogHistorySlot: null,
       volumetricFogHistorySignature: null,
       retiredCompiledFrameGraphs: new Set(),
-      currentFrameObservationSource: undefined,
+      frameOutputs: emptyFrameRecordingOutputs(),
       lastSuccessfulCameraAntialias: undefined,
       lastSuccessfulBarrelDistortion: undefined,
       temporalGpuState: undefined,
@@ -280,8 +281,6 @@ export function createRenderSystemRecovery(
       lastSuccessfulTemporalView: undefined,
       pendingTemporalCommit: { kind: 'none' },
       environmentGeneration: undefined,
-      currentDirectionalShadowView: null,
-      currentSpotShadowView: null,
       instanceBuffers: new Map(),
       instanceBufferChunks: new Map(),
       morphBuffers: new Map(),
@@ -290,8 +289,6 @@ export function createRenderSystemRecovery(
       hdrpLightIndexListScratch: null,
       hdrpClusterMembership: null,
       standardLightingGraphSignature: '',
-      standardLightingInspection: undefined,
-      pointShadowInspection: undefined,
       transientInstanceBuffers: [],
       pointShadowAtlas: null,
       pointShadowSnapshots: [],
@@ -325,11 +322,9 @@ export function createRenderSystemRecovery(
     // the first recovered frame recompiles the same topology against the
     // newly configured context instead of submitting a view from the lost
     // device generation.
-    const candidateDisplayGraph = candidate.frameState.compiledFrameGraph;
+    const candidateDisplayGraph = candidate.frameState.compiledFrameGraph?.graph;
     candidate.frameState.compiledFrameGraph = null;
     candidate.frameState.compiledFrameGraphCandidate = undefined;
-    candidate.frameState.compiledFrameGraphTopologyKey = null;
-    candidate.frameState.perFrameGraph = null;
     candidateDisplayGraph?.retire().catch(() => undefined);
     // The caller enters this method only after the active generation swap and
     // after resetForRecover() has shed every lost-device owner. Replace the
@@ -447,16 +442,13 @@ export function createRenderSystemRecovery(
     const releaseCandidate = (): void => {
       if (candidateReleased || candidatePublished) return;
       candidateReleased = true;
-      const pendingOutput = candidateFrameState.pendingAutoExposureGpuResources;
-      if (pendingOutput !== undefined) retireAutoExposureGpuResources(pendingOutput);
-      candidateFrameState.pendingAutoExposureGpuResources = undefined;
+      retirePendingStandardOutputGpu(candidateFrameState);
       for (const work of setupWorks) work.discard();
-      const graph = candidateFrameState.compiledFrameGraph;
+      const graph = candidateFrameState.compiledFrameGraph?.graph;
       candidateFrameState.compiledFrameGraph = null;
       candidateFrameState.compiledFrameGraphCandidate = undefined;
-      candidateFrameState.perFrameGraph = null;
       try {
-        if (graph !== null) retireCompiledGraph(candidateFrameState, graph);
+        if (graph !== undefined) retireCompiledGraph(candidateFrameState, graph);
       } catch {
         // Candidate cleanup continues through every independent owner.
       }
@@ -766,7 +758,7 @@ export function createRenderSystemRecovery(
             sceneResources: candidateSceneInputs,
           },
         ]);
-        const featureFrame = featureBatch.views.get(`camera:${camera.entityKey ?? 0}`);
+        const featureFrame = featureBatch.views.get(renderFeatureViewIdentity(camera));
         if (featureFrame === undefined) return failed('candidate render-feature view is missing');
         if (featureFrame.errors.length > 0) {
           return failed('candidate render-feature preparation failed', featureFrame.errors[0]);
@@ -1050,7 +1042,6 @@ export function createRenderSystemRecovery(
         undefined,
         false,
         undefined,
-        undefined,
         seed.frame.volumetricFog,
         seed.frame.volumetricFog?.status === 'available',
         lighting.value.standard,
@@ -1072,13 +1063,14 @@ export function createRenderSystemRecovery(
       // admitted to the candidate graph.  The point-shadow projection is
       // likewise detached from the candidate atlas and never waits for the
       // first post-recovery frame to rediscover the retained budget.
-      candidateFrameState.standardLightingInspection = inspectStandardLighting(
-        lighting.value.standard,
-      );
-      candidateFrameState.pointShadowInspection = inspectPointShadow(
-        seed.frame.lights.pointShadow,
-        SHADOW_ATLAS_DEFAULT_LAYERS,
-      );
+      // Capsule and transparency projections carry over from the frame state
+      // this candidate was cloned from; they are not re-derived here.
+      candidateFrameState.submittedInspection = {
+        standardLighting: inspectStandardLighting(lighting.value.standard),
+        pointShadow: inspectPointShadow(seed.frame.lights.pointShadow, SHADOW_ATLAS_DEFAULT_LAYERS),
+        capsuleShadow: candidateFrameState.submittedInspection?.capsuleShadow,
+        transparency: candidateFrameState.submittedInspection?.transparency,
+      };
       return {
         kind: 'ready',
         candidate: {

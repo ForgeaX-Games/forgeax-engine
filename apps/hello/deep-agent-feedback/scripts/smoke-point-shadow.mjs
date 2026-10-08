@@ -135,7 +135,7 @@ let attachment;
 let noShadowAttachment;
 
 try {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (!('navigator' in globalThis) || globalThis.navigator === undefined) {
     Object.defineProperty(globalThis, 'navigator', {

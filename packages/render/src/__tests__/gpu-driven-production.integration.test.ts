@@ -34,7 +34,6 @@ import { BatchTopology } from '../gpu-driven/batch-topology';
 import { standardPbrProgramKey } from '../gpu-driven/pbr-program';
 import { GpuDrivenProduction, resolveGpuDrivenMeshGroup } from '../gpu-driven/production-raster';
 import { MaterialAbiRasterAdapter } from '../gpu-driven/production-raster-material';
-import { adaptStandardPbrFrameResources } from '../gpu-driven/production-raster-scene';
 import {
   SHADOW_CASTER_PROMOTE_WINDOW,
   SHADOW_CASTER_SETTLE_FRAMES,
@@ -61,6 +60,7 @@ import {
   recordShadowCasterDraws,
   shadowShaderMap,
 } from '../record/shadow-pass';
+import { STANDARD_OPAQUE_FRAGMENT_ENTRY } from '../record/standard-opaque-entry';
 import type { RenderPipelineFrame } from '../render-pipeline';
 import type {
   DispatchEntry,
@@ -524,10 +524,10 @@ describe('GPU-driven production projection', () => {
     expect(restored?.topologySignature).toBe(prepared.topologySignature);
     expect(production.inspect()).toMatchObject({ batchCount: 1 });
     // Selector accounting precedes suppression; suppression precedes the
-    // compacted append in the early cull entry point.
+    // compacted append in the early admission shared by both cull entry points.
     const cullView = GPU_DRIVEN_VIEW_WGSL.slice(
+      GPU_DRIVEN_VIEW_WGSL.indexOf('fn admitEarly('),
       GPU_DRIVEN_VIEW_WGSL.indexOf('fn cullView('),
-      GPU_DRIVEN_VIEW_WGSL.indexOf('fn linearOcclusionDepth('),
     );
     expect(cullView.indexOf('atomicAdd(&counters[lodCounterIndex')).toBeGreaterThan(0);
     expect(cullView.indexOf('atomicAdd(&counters[lodCounterIndex')).toBeLessThan(
@@ -1463,43 +1463,6 @@ describe('GPU-driven production projection', () => {
     availability.scene.dispose();
   });
 
-  it('adapts the four existing Standard PBR groups from one receipt', () => {
-    const groups = {
-      view: { id: 'view' },
-      material: { id: 'material' },
-      mesh: { id: 'mesh' },
-      instances: { id: 'instances' },
-    } as unknown as {
-      readonly view: BindGroup;
-      readonly material: BindGroup;
-      readonly mesh: BindGroup;
-      readonly instances: BindGroup;
-    };
-    const result = adaptStandardPbrFrameResources({
-      artifact: {
-        material: 'forgeax::default-standard-pbr',
-        pass: 'forward',
-        program: createMaterialShaderProgram('standard-pbr'),
-        layoutIdentity: STANDARD_PBR_RECEIPT.reflection.layoutIdentity,
-        bindings: [],
-        deps: [],
-        vertexInputs: STANDARD_PBR_RECEIPT.vertexInputs.map((input) => ({ ...input })),
-        receipt: STANDARD_PBR_RECEIPT,
-      },
-      ...groups,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.entryPoint).toBe('vs_scene_index');
-    expect(result.value.bindGroups).toEqual([
-      groups.view,
-      groups.material,
-      groups.mesh,
-      groups.instances,
-    ]);
-    expect(result.value.resourceSlots).toEqual(STANDARD_PBR_RECEIPT.resourceSlots);
-  });
-
   it('projects aligned multi-batch compute work into one indirect raster pass', async () => {
     const adapter = (await rhi.requestAdapter()).unwrap();
     const device = (await adapter.requestDevice()).unwrap() as RhiNullDevice;
@@ -1621,7 +1584,7 @@ describe('GPU-driven production projection', () => {
       filteredPlanBuilds: 0,
       candidateUploadBytes: 0,
       batchUploadBytes: 0,
-      viewConstantsUploadBytes: 304,
+      viewConstantsUploadBytes: 528,
       viewBindGroupCreates: 0,
       batchBindGroupCreates: 0,
       indirectDrawCount: 2,
@@ -1668,6 +1631,9 @@ describe('GPU-driven production projection', () => {
         device.createBindGroup({ layout: materialBindGroup, entries: [] }).unwrap(),
       ],
     };
+    expect(gpu.hasWork()).toBe(true);
+    expect(gpu.hasWork('single-layer-medium')).toBe(false);
+    expect(gpu.hasWork('opaque', 'fs_temporal')).toBe(false);
     let activeFrameResources = frameResources;
     const color = graph
       .createTexture('gpu-driven-production-color', {
@@ -1687,8 +1653,17 @@ describe('GPU-driven production projection', () => {
             clearValue: { r: 0, g: 0, b: 0, a: 1 },
           },
         ],
+        // Main-pass forward encodes request the base-slot entry admitted with
+        // the batch; reusing it must not repeat the pipeline lookup.
         encode: ({ pass, resources }) =>
-          gpu.encode(viewBindGroup, pass, resources, activeFrameResources),
+          gpu.encode(
+            viewBindGroup,
+            pass,
+            resources,
+            activeFrameResources,
+            undefined,
+            STANDARD_OPAQUE_FRAGMENT_ENTRY,
+          ),
       })
       .unwrap();
     const compiled = graph.compile({ device, surfaceSize: { width: 1, height: 1 } }).unwrap();
@@ -2102,11 +2077,6 @@ describe('GPU-driven production projection', () => {
     // remains the CPU residual under common visibility projection, while the
     // clustered Standard graph and output transform stay active.
     expect(device.totalDrawCount).toBe(2);
-    expect(renderer.inspect().lodOcclusion).toMatchObject({
-      fallback: { active: false },
-      degradation: { active: false },
-      pagePressure: { used: 0, capacity: 3 * 4096 },
-    });
     expect(renderer.renderScene).toMatchObject({
       worldEntitiesScanned: 0,
       fullRebuilds: 1,
@@ -2225,12 +2195,10 @@ describe('GPU-driven production projection', () => {
         { component: PointLight, data: { intensity: 1, range: 10 } },
       )
       .unwrap();
-    const updateVisibility = vi.spyOn(PersistentRenderScene.prototype, 'updateVisibilityFacet');
     const projectVisibility = vi.spyOn(PersistentRenderScene.prototype, 'projectVisibility');
     try {
       world.update(1 / 60).unwrap();
       expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
-      const warmUpdateCalls = updateVisibility.mock.calls.length;
       const warmProjectCalls = projectVisibility.mock.calls.length;
       const before = renderer.inspect().renderScene;
 
@@ -2240,7 +2208,6 @@ describe('GPU-driven production projection', () => {
       world.update(1 / 60).unwrap();
       expect(renderer.draw([world], { cameraOwner: 0, resourceOwner: 0 }).ok).toBe(true);
 
-      expect(updateVisibility.mock.calls.length).toBeGreaterThan(warmUpdateCalls);
       expect(projectVisibility.mock.calls.length).toBeGreaterThan(warmProjectCalls);
       const after = renderer.inspect().renderScene;
       expect(after).toMatchObject({
@@ -2249,7 +2216,6 @@ describe('GPU-driven production projection', () => {
       });
       expect(after.topology.revision).toBe(before.topology.revision);
     } finally {
-      updateVisibility.mockRestore();
       projectVisibility.mockRestore();
       renderer.dispose();
     }
@@ -2484,7 +2450,7 @@ describe('GPU-driven production projection', () => {
     expect(rotated.submission.view.inspect()).toMatchObject({
       candidateUploadBytes: 0,
       batchUploadBytes: 0,
-      viewConstantsUploadBytes: 304,
+      viewConstantsUploadBytes: 528,
     });
     expect(rotated.frame.shadowDrawKeys).toEqual(input.shadowCasterDrawKeys);
     rotated.frame._commitResourceReplacement();

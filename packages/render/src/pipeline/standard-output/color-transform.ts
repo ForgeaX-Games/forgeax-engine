@@ -1,28 +1,24 @@
-import type { ColorValueDomain } from '@forgeax/engine-render-graph';
+import type {
+  ColorValueDomain,
+  GraphAccess,
+  GraphResourceResolver,
+  RenderGraphBuilder,
+  RenderGraphError,
+} from '@forgeax/engine-render-graph';
+import type {
+  BindGroup,
+  BindGroupLayout,
+  RenderPipeline,
+  RhiDevice,
+  Sampler,
+} from '@forgeax/engine-rhi';
+import { ok, type Result } from '@forgeax/engine-types';
+import type { RenderPipelineFrame, RenderPipelineTarget } from '../../render-pipeline';
 import { bradfordAdaptD65 } from './auto-exposure/oracle';
-import type { StandardOutputEncoding, StandardOutputLogicalStage } from './types';
-
-export interface StandardOutputDomainTransition {
-  readonly stage: StandardOutputLogicalStage;
-  readonly input: ColorValueDomain;
-  readonly output: ColorValueDomain;
-}
 
 export const LINEAR_HDR_DOMAIN: ColorValueDomain = 'linear-hdr';
 export const LINEAR_LDR_DOMAIN: ColorValueDomain = 'linear-ldr';
 export const DISPLAY_ENCODED_DOMAIN: ColorValueDomain = 'display-encoded';
-
-/** D65 product white point shared by the Camera output oracle. */
-export const D65_TEMPERATURE_KELVIN = 6504;
-export const CAMERA_COLOR_LUT_ZERO_COST_STRENGTH = 0;
-
-export function outputEncodingOwner(encoding: StandardOutputEncoding): string {
-  return encoding === 'explicit-oetf' ? 'output-encoding.wgsl' : 'srgb-attachment';
-}
-
-export function outputEncodingUsesOetf(encoding: StandardOutputEncoding): boolean {
-  return encoding === 'explicit-oetf';
-}
 
 export type StandardRgb = readonly [number, number, number];
 export type StandardRgba = readonly [number, number, number, number];
@@ -121,4 +117,120 @@ export function sampleStandardColorLut(
     rgb[2] + (sampled[2] - rgb[2]) * amount,
     alpha,
   ];
+}
+
+const COLOR_STAGE_PRELUDE_WGSL = /* wgsl */ `
+struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn color_stage_vs(@builtin(vertex_index) index: u32) -> VertexOutput {
+  var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(3.0, 1.0), vec2<f32>(-1.0, 1.0));
+  let p = positions[index];
+  return VertexOutput(vec4<f32>(p, 0.0, 1.0), vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
+}
+@group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+`;
+
+/** Stage-owned GPU inputs, bound at `@group(1)` beside the shared group-0 source. */
+export interface StandardColorStageResources {
+  readonly accesses: readonly GraphAccess[];
+  bind(
+    device: RhiDevice,
+    resources: GraphResourceResolver,
+  ): { readonly layout: BindGroupLayout; readonly bindGroup: BindGroup };
+}
+
+/**
+ * Record one fullscreen Standard color stage. `fragmentWgsl` follows the
+ * shared prelude (`source` / `sourceSampler` / `VertexOutput`) and defines
+ * `color_stage_fs`.
+ */
+export function addStandardColorStagePass(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  name: string,
+  input: RenderPipelineTarget,
+  output: RenderPipelineTarget,
+  fragmentWgsl: string,
+  stage?: StandardColorStageResources,
+): Result<void, RenderGraphError> {
+  let pipeline: RenderPipeline | undefined;
+  let layout: BindGroupLayout | undefined;
+  let sampler: Sampler | undefined;
+  const added = graph.addRasterPass(name, {
+    accesses: [
+      { resource: input.view, usage: 'sampled-read' },
+      ...(stage?.accesses ?? []),
+      { resource: output.view, usage: 'color-attachment' },
+    ],
+    colorAttachments: [
+      {
+        view: output.view,
+        loadOp: 'clear',
+        storeOp: 'store',
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      },
+    ],
+    encode: ({ pass, frame, resources }) => {
+      const device = frame.runtime.device;
+      const stageBinding = stage?.bind(device, resources);
+      if (layout === undefined) {
+        const created = device.createBindGroupLayout({
+          label: `${name}.bgl`,
+          entries: [
+            { binding: 0, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
+            { binding: 1, visibility: 2, sampler: { type: 'filtering' } },
+          ],
+        });
+        if (!created.ok) throw created.error;
+        layout = created.value;
+      }
+      if (sampler === undefined) {
+        const created = device.createSampler({ minFilter: 'linear', magFilter: 'linear' });
+        if (!created.ok) throw created.error;
+        sampler = created.value;
+      }
+      if (pipeline === undefined) {
+        const factory =
+          frame.runtime.immediateShaderModuleFactory ?? frame.runtime.shaderModuleFactory;
+        if (factory === undefined) throw new Error(`${name} shader factory unavailable`);
+        const source = factory.createShaderModule({
+          code: COLOR_STAGE_PRELUDE_WGSL + fragmentWgsl,
+          label: name,
+        });
+        if (!source.ok) throw source.error;
+        const pipelineLayout = device.createPipelineLayout({
+          label: `${name}.layout`,
+          bindGroupLayouts: stageBinding === undefined ? [layout] : [layout, stageBinding.layout],
+        });
+        if (!pipelineLayout.ok) throw pipelineLayout.error;
+        const created = device.createRenderPipeline({
+          label: name,
+          layout: pipelineLayout.value,
+          vertex: { module: source.value, entryPoint: 'color_stage_vs', buffers: [] },
+          fragment: {
+            module: source.value,
+            entryPoint: 'color_stage_fs',
+            targets: [{ format: output.format as GPUTextureFormat }],
+          },
+          primitive: { topology: 'triangle-list' },
+        });
+        if (!created.ok) throw created.error;
+        pipeline = created.value;
+      }
+      const inputView = resources.textureView(input.view);
+      if (!inputView.ok) throw inputView.error;
+      const bindings = device.createBindGroup({
+        layout,
+        entries: [
+          { binding: 0, resource: { kind: 'textureView', value: inputView.value } },
+          { binding: 1, resource: { kind: 'sampler', value: sampler } },
+        ],
+      });
+      if (!bindings.ok) throw bindings.error;
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindings.value);
+      if (stageBinding !== undefined) pass.setBindGroup(1, stageBinding.bindGroup);
+      pass.draw(3, 1, 0, 0);
+    },
+  });
+  return added.ok ? ok(undefined) : added;
 }

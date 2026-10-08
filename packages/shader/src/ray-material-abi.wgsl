@@ -10,6 +10,7 @@ struct RayMaterialInput {
   identity: vec4u,
 }
 // 96 bytes. status.x: 0 unset/miss, 1 admitted, 2 unsupported/nonfinite surface, 3 coverage rejected.
+// status.y: BSDF lobe, 0 standard, 1 (RAY_BSDF_LAMBERT) albedo-only Lambert.
 struct RayMaterialSurface {
   albedoOpacity: vec4f, normalRoughness: vec4f, emissionMetallic: vec4f,
   f0Occlusion: vec4f, status: vec4u,

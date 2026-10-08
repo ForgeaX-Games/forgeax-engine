@@ -30,6 +30,21 @@ async function listen(handler) {
 }
 
 describe('observeViteHttpReadiness', () => {
+  it('accepts the forced-color banner used by the real gizmo CI Host', async () => {
+    const origin = await listen((_request, response) => response.end('ready'));
+    const [prefix, port] = origin.split(/:(?=\d+$)/);
+    const process = new FakeViteProcess();
+    const readiness = observeViteHttpReadiness(process, {
+      timeoutEnvName: 'FORGEAX_TEST_GIZMO_VITE_TIMEOUT_MS',
+      defaultTimeoutMs: 1000,
+      pollIntervalMs: 5,
+    });
+    process.stdout.write(
+      `\u001b[32m➜\u001b[39m  \u001b[1mLocal\u001b[22m:   \u001b[36m${prefix}:\u001b[1m${port}\u001b[22m/\u001b[39m\n`,
+    );
+    assert.equal((await readiness.wait()).origin, origin);
+  });
+
   it('publishes a Local origin only after the complete ANSI CRLF line at every chunk boundary', async () => {
     let requests = 0;
     const listeningOrigin = await listen((_request, response) => {

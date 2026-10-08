@@ -3,25 +3,19 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import { compileShader } from '@forgeax/engine-shader-compiler';
-import type {
-  BindGroupLayoutDescriptor,
-  MaterialParticleInput,
-  ParticleEffectProgramV3,
-  Result,
-} from '@forgeax/engine-types';
+import type { MaterialParticleInput, ParticleEffectProgramV3, Result } from '@forgeax/engine-types';
 import { err, ok } from '@forgeax/engine-types';
 import type { ParticleEmitterSourceV3 } from '@forgeax/engine-vfx';
 import {
   PARTICLE_CODE_DEFAULT_MODULE_ID,
   type ParticleAttributeRef,
-  type ParticleChannelSource,
   type ParticleCodeSourceError,
-  type ParticleEventSource,
   type ParticleRendererSemantic,
-  type ParticleRendererSourceV3,
   parseParticleEffectSourceV3,
   VFX_PARTICLE_CORE_LAYOUT,
   type VfxDataInterfaceRequirement,
+  type VfxGpuEmitterProgramV3,
+  type VfxGpuProgramV3,
   type VfxGpuRendererReflectionV3,
 } from '@forgeax/engine-vfx';
 import {
@@ -1125,41 +1119,8 @@ export interface ParticleCodeModuleSet {
   readonly imports?: Readonly<Record<string, string>>;
 }
 
-export interface ParticleCodeProgramReflection {
-  readonly hooks: readonly ['vfx_spawn', 'vfx_update'];
-  readonly imports: readonly string[];
-  readonly resources: readonly string[];
-  readonly entryPoints: readonly string[];
-  readonly bindings: readonly BindGroupLayoutDescriptor[];
-  readonly layout: import('@forgeax/engine-vfx').VfxEffectReflection;
-  readonly dataInterfaces: readonly VfxDataInterfaceRequirement[];
-  readonly eventChannels: readonly ParticleChannelSource[];
-  readonly events: readonly ParticleEventSource[];
-  readonly eventEntryPoint: 'forgeax_vfx_event_main';
-  readonly stages: readonly import('@forgeax/engine-vfx').VfxGpuStageReflection[];
-  readonly renderers: readonly VfxGpuRendererReflectionV3[];
-}
-
-export interface CookedParticleCodeEmitter {
-  readonly id: string;
-  readonly module: string;
-  readonly capacity: number;
-  readonly backend: ParticleEmitterSourceV3['backend'];
-  readonly space: 'local' | 'world';
-  readonly schedule: ParticleEmitterSourceV3['schedule'];
-  readonly bounds: ParticleEmitterSourceV3['bounds'];
-  readonly renderers: readonly ParticleRendererSourceV3[];
-  readonly channels: readonly ParticleChannelSource[];
-  readonly events: readonly ParticleEventSource[];
-  readonly simulationWhenCulled: 'continue' | 'pause' | 'restart-on-visible';
-  readonly wgsl: string;
-  readonly reflection: ParticleCodeProgramReflection;
-}
-
-export interface ParticleCodeProgram {
-  readonly format: typeof PARTICLE_CODE_PROGRAM_FORMAT;
-  readonly emitters: readonly CookedParticleCodeEmitter[];
-}
+/** The runtime GPU program before its canonical bytes are fingerprinted. */
+export type ParticleCodeProgram = Omit<VfxGpuProgramV3, 'fingerprint'>;
 
 export interface ParticleCodeProgramArtifact {
   readonly artifactKey: typeof PARTICLE_CODE_PROGRAM_ARTIFACT_KEY;
@@ -1270,7 +1231,7 @@ async function compileEmitterV3(
   emitter: ParticleEmitterSourceV3,
   modules: Readonly<Record<string, ParticleCodeModuleSet>>,
   materials?: ParticleMaterialInputCatalog,
-): Promise<Result<CookedParticleCodeEmitter, ParticleCodeCookError>> {
+): Promise<Result<VfxGpuEmitterProgramV3, ParticleCodeCookError>> {
   const moduleId = emitter.program.module;
   const module =
     modules[moduleId] ??
@@ -1487,7 +1448,7 @@ export async function cookParticleCodeProgram(
 ): Promise<Result<ParticleCodeProgramArtifact, ParticleCodeCookError>> {
   const parsed = parseParticleEffectSourceV3(sourceValue);
   if (!parsed.ok) return parsed;
-  const emitters: CookedParticleCodeEmitter[] = [];
+  const emitters: VfxGpuEmitterProgramV3[] = [];
   for (const emitter of parsed.value.emitters) {
     const compiled = await compileEmitterV3(emitter, modules, materials);
     if (!compiled.ok) return compiled;

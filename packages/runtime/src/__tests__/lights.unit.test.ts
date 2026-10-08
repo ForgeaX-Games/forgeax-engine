@@ -349,12 +349,15 @@ function spawnValidatedLight(
         expect(defaults.normalBias).toBeCloseTo(0.05, 5);
         expect(defaults.shadowDistance).toBeCloseTo(200, 5);
         expect(defaults.shadowFilter).toBe(2);
+        expect(defaults.staggerCascades).toBe(false);
 
         // Merged component: 3 light (direction + color arrays + intensity) +
-        // 1 castShadow + 10 closed shadow-quality fields + contactShadowLength = 15 fields (feat-20260709 M2 collapsed
+        // 1 castShadow + 10 closed shadow-quality fields + staggerCascades + contactShadowLength + lightingChannels = 17 fields (feat-20260709 M2 collapsed
         // direction/color from 6 per-axis scalars to 2 array<f32,3> columns;
         // nearPlane removed — derived from camera near; farPlane -> shadowDistance)
-        expect(Object.keys(componentSchema(dl)).length).toBe(15);
+        expect(Object.keys(componentSchema(dl)).length).toBe(17);
+        expect('lightingChannels' in componentSchema(dl)).toBe(true);
+        expect(componentSchema(dl).staggerCascades).toBe('bool');
         expect('contactShadowLength' in componentSchema(dl)).toBe(true);
         expect('direction' in componentSchema(dl)).toBe(true);
         expect('color' in componentSchema(dl)).toBe(true);
@@ -1245,7 +1248,7 @@ function spawnValidatedLight(
     const EPSILON = 1e-6;
 
     describe('unified Point direct-light layout', () => {
-      it('emits 8 floats / 32 bytes byte-for-byte (position + invRangeSquared + color + shadowAtlasLayer)', () => {
+      it('emits six rows with unchanged position, color and shadow metadata', () => {
         const snap: PointLightSnapshot = {
           kind: 'point',
           position: vec3.create(1.5, -2.25, 0.125),
@@ -1256,8 +1259,8 @@ function spawnValidatedLight(
         };
         const out = packDirectLightSlot(snap);
         expect(out).toBeInstanceOf(Float32Array);
-        expect(out.length).toBe(20);
-        expect(out.byteLength).toBe(80);
+        expect(out.length).toBe(24);
+        expect(out.byteLength).toBe(96);
         // Slot 0..2: position vec3.
         expect(out[0]).toBeCloseTo(1.5, 6);
         expect(out[1]).toBeCloseTo(-2.25, 6);
@@ -1342,8 +1345,8 @@ function spawnValidatedLight(
           shadowAtlasLayer: 2,
         };
         const out = packDirectLightSlot(snap);
-        // Byte length is 80; the metadata row starts at byte offset 64.
-        expect(out.byteLength).toBe(80);
+        // Byte length is 96; the metadata row starts at byte offset 64.
+        expect(out.byteLength).toBe(96);
         // i32 view at byte offset 68 (= metadata shadow word).
         const i32 = new Int32Array(out.buffer, 68, 1);
         expect(i32[0]).toBe(2);
@@ -1389,11 +1392,11 @@ function spawnValidatedLight(
         };
       }
 
-      it('emits 20 floats / 80 bytes; slots 0..11 unchanged from the 48B layout', () => {
+      it('emits 24 floats / 96 bytes; slots 0..11 unchanged from the 48B layout', () => {
         const out = packDirectLightSlot(makeSnap(0));
         expect(out).toBeInstanceOf(Float32Array);
-        expect(out.length).toBe(20);
-        expect(out.byteLength).toBe(80);
+        expect(out.length).toBe(24);
+        expect(out.byteLength).toBe(96);
         // Slot 0..2: position vec3.
         expect(out[0]).toBeCloseTo(3.0, 6);
         expect(out[1]).toBeCloseTo(4.0, 6);
@@ -1537,24 +1540,24 @@ function spawnValidatedLight(
     // ── test: unified direct-light slot byte-size lock ─────
 
     describe('BYTES_PER_DIRECT_LIGHT_SLOT', () => {
-      it('is exactly 80 (unified ABI lock)', () => {
-        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(80);
+      it('is exactly 96 (unified ABI lock)', () => {
+        expect(BYTES_PER_DIRECT_LIGHT_SLOT).toBe(96);
       });
     });
 
     // ── test: DirectLightSlot layout byte-size lock ───────────────────────────────
 
     describe('DIRECT_LIGHT_SLOT_LAYOUT byte-size', () => {
-      it('declares byteSize === 80', () => {
-        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(80);
+      it('declares byteSize === 96', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(96);
       });
 
-      it('declares floatCount === 20 (80 bytes / 4 bytes per f32)', () => {
-        expect(DIRECT_LIGHT_SLOT_LAYOUT.floatCount).toBe(20);
+      it('declares floatCount === 24 (96 bytes / 4 bytes per f32)', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.floatCount).toBe(24);
       });
 
-      it('declares vec4Count === 5 (80 bytes / 16 bytes per vec4)', () => {
-        expect(DIRECT_LIGHT_SLOT_LAYOUT.vec4Count).toBe(5);
+      it('declares vec4Count === 6 (96 bytes / 16 bytes per vec4)', () => {
+        expect(DIRECT_LIGHT_SLOT_LAYOUT.vec4Count).toBe(6);
       });
     });
 
@@ -1586,7 +1589,7 @@ function spawnValidatedLight(
         expect(DIRECT_LIGHT_SLOT_LAYOUT.metadataByteOffset).toBe(64);
       });
       it('metadata starts at byte 64 after four payload rows', () => {
-        const buf = new Float32Array(20);
+        const buf = new Float32Array(24);
         const i32 = new Int32Array(buf.buffer);
         i32[16] = DirectLightSlotKind.SPOT;
         i32[17] = 3;
@@ -1595,12 +1598,12 @@ function spawnValidatedLight(
       });
     });
 
-    // ── test: Float32Array(20).byteLength === 80 (one DirectLightSlot) ───────────
+    // ── test: Float32Array(24).byteLength === 96 (one DirectLightSlot) ───────────
 
     describe('Float32Array representation of one DirectLightSlot', () => {
-      it('Float32Array(20).byteLength === 80', () => {
-        const buf = new Float32Array(20);
-        expect(buf.byteLength).toBe(80);
+      it('Float32Array(24).byteLength === 96', () => {
+        const buf = new Float32Array(24);
+        expect(buf.byteLength).toBe(96);
       });
     });
 
@@ -1922,10 +1925,13 @@ function spawnValidatedLight(
         expect(view.shadowFilter).toBe(5);
       });
 
-      it('schema has 15 fields (3 light + 1 castShadow + 10 shadow-quality + contactShadowLength)', () => {
-        expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(15);
+      it('schema includes lightingChannels alongside the existing light and shadow fields', () => {
+        expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(17);
+        expect(componentSchema(DirectionalLight).staggerCascades).toBe('bool');
+        expect(componentDefinition(DirectionalLight).defaults?.staggerCascades).toBe(false);
         expect('direction' in componentSchema(DirectionalLight)).toBe(true);
         expect('color' in componentSchema(DirectionalLight)).toBe(true);
+        expect('lightingChannels' in componentSchema(DirectionalLight)).toBe(true);
         expect('castShadow' in componentSchema(DirectionalLight)).toBe(true);
         expect('cascadeCount' in componentSchema(DirectionalLight)).toBe(true);
         expect('splitLambda' in componentSchema(DirectionalLight)).toBe(true);

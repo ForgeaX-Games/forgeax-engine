@@ -32,18 +32,9 @@
 //       renamed to `_internal_getRawDevice`; the bare identifier must not
 //       reappear. Whitelist exists for legacy compatibility but is currently
 //       empty (rename moved every call site to the prefixed form).
-//   (h) `_internal_getRawDevice(` call sites limited to:
-//          - packages/rhi-webgpu/src/device.ts (function definition)
-//          - packages/rhi-webgpu/src/index.ts (in-package use inside the
-//            async createShaderModule entry)
-//          - packages/render/src/assembly/webgpu-renderer.ts (Renderer's
-//            uncaptured-error bridge)
-//          - packages/rhi-webgpu/src/__tests__/dawn-real-gpu.dawn.test.ts
-//            (feat-20260508-rhi-surface-completion w17 / candidate
-//            proposition 6 truth check: dawn pushErrorScope/popErrorScope
-//            probing for queue-submit-failed async validation; test-only
-//            allowance, not a runtime escape hatch).
-//       Every other call site is a violation (D-S1 single-point exemption).
+//   (h) `_internal_getRawDevice(` call sites are limited to the exact
+//       ALLOWED_CALL_SITES paths below, with each owner or test boundary
+//       explained there. Every other call site violates D-S1.
 //   (i) packages/runtime/src/internal/webgpu-backend.ts must not contain raw
 //       WebGPU device-recording entry-point calls. Banned tokens (bare
 //       identifiers, only counted on non-comment lines):
@@ -534,9 +525,17 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // still in flight. This is a test-only D-S1 boundary, not a runtime
     // recording path.
     'packages/render/src/__tests__/gpu-driven-view-gpu-evidence.ts',
+    // Texture/sampler residency fixtures observe native validation and destroy
+    // test-owned devices. Upload, Graph work, readback and replay stay on RHI.
+    'packages/render/src/__tests__/graph-texture-residency.gpu-fixture.ts',
+    'packages/render/src/__tests__/sampler-residency.gpu-fixture.ts',
     // Cached-depth Browser/Dawn verification observes native validation errors
     // and disposes its fresh test device. All capture and replay work uses RHI.
     'packages/rhi-debug/src/__tests__/cached-depth.fixture.ts',
+    // Seven-target skin replay observes native validation; the offline curved
+    // receiver probe disposes fresh test devices. Recording and readback use RHI.
+    'packages/runtime/src/__tests__/standard-deferred-parity.dawn.test.ts',
+    'apps/hello/terrain/scripts/curved-shadow-replay.mjs',
     // Independent Standard map probes observe native validation and destroy
     // test devices; all draw, capture, replay and readback work stays on RHI.
     'packages/render/src/__tests__/standard-independent-maps.dawn.test.ts',
@@ -546,6 +545,27 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // and explicitly destroys those test-owned devices during final cleanup.
     // Capture, replay, and readback themselves remain on the RHI-debug surface.
     'packages/runtime/src/__tests__/standard-gbuffer-replay.fixture.ts',
+    // Generated LOD evidence scopes native validation and destroys its fresh
+    // replay devices; capture, work inspection and pixel readback use RHI Debug.
+    'packages/runtime/src/__tests__/generated-lod.fixture.ts',
+    // Ordinary Renderer Global-probe replay observes validation and destroys
+    // its fresh replay device. Replay and post-work inspection remain on RHI Debug.
+    'packages/runtime/src/__tests__/renderer-probe-global.dawn.test.ts',
+    // Irradiance-field, screen-probe and Lite-reflection Renderer tests observe
+    // native validation and destroy their test-owned devices; GI work, capture
+    // and readback stay on the Renderer/RHI surface.
+    'packages/runtime/src/__tests__/renderer-irradiance-field.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-irradiance-field-edit.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-irradiance-field-clipmap.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-screen-probe.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-baked-field.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-radiance-cache.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-reflection-denoise.dawn.test.ts',
+    'packages/runtime/src/__tests__/renderer-reflections.fixture.ts',
+    // The GI coverage diagnostic dispatches its kernel and reads the retained
+    // field's Global SDF and Card atlas on the Renderer's native device; the
+    // Renderer journey, capture and tape inspection stay on RHI.
+    'packages/runtime/src/__tests__/renderer-gi-coverage.dawn.test.ts',
     // Visible-surface diagnostics observe native attachments and pause a real
     // mapAsync completion to inject loss. Fresh replay devices are test-owned;
     // production observation, capture and replay continue through RHI.
@@ -562,16 +582,29 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // Adaptive DRS replay uses the same cleanup-only boundary for its fresh
     // test-owned device; capture, replay and pixel inspection remain on RHI.
     'packages/runtime/src/__tests__/adaptive-drs.fixture.ts',
+    // TAA maturity capture/displacement evidence destroys only its test-owned
+    // fresh replay devices. Capture, per-work readback and replay remain on RHI Debug.
+    'packages/runtime/src/__tests__/taa-maturity-rhi.dawn.test.ts',
+    'packages/runtime/src/__tests__/displacement-temporal.dawn.test.ts',
     // SMAA replay uses this boundary only to destroy its fresh test-owned
     // device; all capture, replay and stage readback remain on RHI Debug.
     'packages/runtime/src/__tests__/smaa.fixture.ts',
+    // Offline evidence verifier: native validation observation and device disposal only.
+    // All replay, resource inspection and HDR/pixel readbacks use RHI Debug.
+    'apps/hello/ssr/scripts/replay-atmosphere-evidence.mjs',
     'packages/runtime/src/__tests__/material-mrt.fixture.ts',
     // Clipping Browser/Dawn evidence uses native error scopes and disposes
     // fresh test-owned devices; all GPU work and readback remain on RHI Debug.
     'packages/runtime/src/__tests__/clipping-planes.fixture.ts',
+    // Current-pose picking observes native validation and destroys fresh test
+    // devices; capture, replay, palette/VBO and pixel inspection use RHI Debug.
+    'packages/picking/src/__tests__/skinned-triangle-gpu.fixture.ts',
     // Planar reflection Dawn evidence listens for validation errors and
     // destroys its fresh replay device; capture and readback stay on RHI.
     'packages/runtime/src/__tests__/planar-reflection.dawn.test.ts',
+    // Native test canvas, validation observation and cleanup only; capture,
+    // resource recovery and target content remain on Renderer/RHI Debug.
+    'packages/runtime/src/__tests__/scene-material-capture-recovery.dawn.test.ts',
     // Canvas Browser evidence observes native validation and destroys fresh
     // test-owned devices; upload, capture, replay and readback stay on RHI.
     'packages/runtime/src/__tests__/canvas-texture.browser.test.ts',
@@ -582,6 +615,8 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     'packages/render/src/__tests__/raytracing/path-tracer.fixture.ts',
     'packages/render/src/__tests__/raytracing/path-buffer.fixture.ts',
     'packages/render/src/__tests__/raytracing/raster-source.fixture.ts',
+    'packages/render/src/__tests__/raytracing/probe-placement.fixture.ts',
+    'packages/render/src/__tests__/raytracing/probe-card-support.fixture.ts',
     // Retained-scene query fixture observes native validation; all work uses RHI.
     'packages/render/src/__tests__/raytracing/scene-projection.gpu-fixture.ts',
     'packages/render/src/__tests__/raytracing/material-publication.gpu-fixture.ts',
@@ -597,7 +632,19 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     'packages/render/src/__tests__/raytracing/sdf-two-sided.fixture.ts',
     'packages/render/src/__tests__/raytracing/multi-material-cards.fixture.ts',
     'packages/render/src/__tests__/raytracing/global-sdf.fixture.ts',
+    // Native world support observes validation and destroys its owned test device;
+    // budgeted builds, Graph coverage copies, traversal and readback stay on RHI.
+    'packages/render/src/__tests__/raytracing/world-acceleration-support.dawn.test.ts',
+    // Live-field visibility records adapter identity and observes native validation;
+    // composition, projection, paired sampling and readback all execute through RHI.
+    'packages/render/src/__tests__/raytracing/irradiance-field-visibility.dawn.test.ts',
     'packages/render/src/__tests__/raytracing/global-sdf-query.fixture.ts',
+    // GPU-origin fixture observes validation and destroys its source device before fresh replay.
+    'packages/render/src/__tests__/raytracing/global-sdf-gpu-rays.fixture.ts',
+    // Borrowed recorders observe native validation and destroy only test-owned devices.
+    'packages/render/src/__tests__/raytracing/global-sdf-compose.fixture.ts',
+    'packages/render/src/__tests__/raytracing/probe-rays.fixture.ts',
+    'packages/render/src/__tests__/raytracing/software-sdf-query.fixture.ts',
     'packages/render/src/__tests__/raytracing/global-card-lookup.fixture.ts',
     'packages/render/src/__tests__/raytracing/global-sdf-step.fixture.ts',
     'packages/render/src/__tests__/raytracing/sdf-visibility.fixture.ts',
@@ -613,12 +660,28 @@ const G_GET_RAW_DEVICE_WHITELIST = new Set([
     // Ordinary Renderer GI destroys only its fresh test-owned replay device;
     // draw, transport, capture, replay, and readback remain on RHI.
     'packages/runtime/src/__tests__/renderer-diffuse.fixture.ts',
+    // These fixtures release only their caller-owned replay devices after
+    // the live Renderer ends; capture, replay and readback remain on RHI.
+    'packages/runtime/src/__tests__/continuous-lines.fixture.ts',
+    'packages/runtime/src/__tests__/display-p3.fixture.ts',
     // Diffuse reconstruction observes validation and disposes fresh test devices.
     // All production filtering and replay use the RHI surface.
     'packages/render/src/__tests__/raytracing/diffuse-reconstruction.fixture.ts',
     // Rect source-texture Dawn evidence scopes validation on and destroys its
     // fresh replay devices; capture, replay and readback stay on RHI Debug.
     'packages/runtime/src/__tests__/rect-light-source-texture.dawn.test.ts',
+    // External-texture evidence counts raw importExternalTexture /
+    // copyExternalImageToTexture calls to prove the zero-copy path, observes
+    // validation and destroys fresh replay devices; rendering stays on RHI.
+    'packages/runtime/src/__tests__/external-texture.browser.test.ts',
+    'packages/runtime/src/__tests__/external-texture-perf.browser.test.ts',
+    // Channel replay/capture evidence observes native validation and releases
+    // fresh test-owned devices; rendering and readback stay on RHI Debug.
+    'packages/runtime/src/__tests__/lighting-channels-replay.fixture.ts',
+    'packages/runtime/src/__tests__/lighting-channels-views.fixture.ts',
+    // Independent native outer timing brackets the original Renderer command
+    // buffers in one submit. Only this opt-in test installs the native markers.
+    'packages/runtime/src/__tests__/lighting-channels-performance.dawn.test.ts',
   ]);
   // feat-20260510-rhi-resource-creation M4 (w28 / w29): the previous
   // `apps/hello/triangle/src/main.ts` allow-list entry was removed - the

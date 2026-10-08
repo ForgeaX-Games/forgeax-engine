@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // game-default production UI proof: Pack v2 -> GUID -> UiAsset -> ShadowRoot.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -71,12 +72,7 @@ function pageQuery(page, expression, args) {
 async function loadPack(origin) {
   const response = await fetch(`${origin}/pack-index.json`);
   if (!response.ok) throw new Error(`pack-index status=${response.status}`);
-  const index = await response.json();
-  const entries = Array.isArray(index)
-    ? index
-    : Array.isArray(index.entries)
-      ? index.entries
-      : Object.values(index.entries ?? index);
+  const entries = decodeCatalogWire(await response.json()).unwrap();
   const rows = {};
   for (const [key, expected] of Object.entries(REAL_UI_ASSETS)) {
     const row = entries.find((entry) => entry.guid === expected.guid && entry.kind === 'ui');

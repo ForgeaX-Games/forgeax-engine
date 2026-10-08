@@ -4,13 +4,15 @@ import type {
   RenderGraphBuilder,
   RenderGraphError,
 } from '@forgeax/engine-render-graph';
-import type { Texture, TextureView } from '@forgeax/engine-rhi';
-import { ok, type Result } from '@forgeax/engine-types';
+import { err, ok, type Result } from '@forgeax/engine-types';
+import { addAtmosphereBackground } from '../environment/background';
+import { analyticFogSampleCountError } from '../pipeline/analytic-fog-pass';
 import type { RenderPipelineFrame } from '../render-pipeline';
-import type { RenderTarget } from '../targets/contracts';
+import { type RenderTarget, renderTargetLayerCount } from '../targets/contracts';
 import { resolveRenderTargetMaterialSource } from '../targets/material-source';
 import type { RenderTargetPhysical } from '../targets/physical';
 import { isCanvasTextureSource } from '../textures/canvas-texture';
+import { isExternalTextureSource } from '../textures/external-texture';
 import type { TypedShadowTargets } from '../typed-shadow-passes';
 import { buildPerFrameBindGroups } from './frame-lighting';
 import { encodeMainPass } from './main-pass';
@@ -19,14 +21,17 @@ import type { ReflectionProbeGraphState } from './typed-frame-graph';
 
 export interface CubeCaptureGraphWork {
   readonly sceneInput?: true;
+  readonly candidateGeneration?: number;
   readonly target: RenderTarget;
-  readonly faceIndex: number;
+  /** Cube face, array layer, or 3D depth slice written by this work item. */
+  readonly layer: number;
   readonly physical: RenderTargetPhysical;
   readonly faceCamera: import('../render-contract').CameraSnapshot;
 }
 
 export interface CubeCaptureGraphState {
   work: readonly CubeCaptureGraphWork[];
+  atmosphere?: boolean;
   reflectionProbes?: ReflectionProbeGraphState;
   planar?: import('../capture/planar-state').PlanarCaptureState;
 }
@@ -43,6 +48,11 @@ export function addTargetCaptureGraphPasses(
   state: CubeCaptureGraphState,
   lighting?: { readonly shadows: TypedShadowTargets; readonly accesses: readonly GraphAccess[] },
 ): Result<GraphTextureView | undefined, RenderGraphError> {
+  if (
+    state.atmosphere === true &&
+    state.work.some((work) => work.physical.descriptor.sampleCount !== 1)
+  )
+    return err(analyticFogSampleCountError());
   let planarView: GraphTextureView | undefined;
   for (let index = 0; index < state.work.length; index += 1) {
     const slot = index;
@@ -54,41 +64,40 @@ export function addTargetCaptureGraphPasses(
         ? 'cube-capture'
         : 'planar-reflection';
     const current = (): CubeCaptureGraphWork => state.work[slot] ?? initial;
+    const descriptor = initial.physical.descriptor;
+    const volume = descriptor.shape === '3d';
+    const msaa = descriptor.sampleCount === 4;
+    const layers = renderTargetLayerCount(descriptor);
     const texture = builder.importTexture(
       `${label}.${slot}.texture`,
       {
-        format: initial.physical.descriptor.format,
+        format: descriptor.format,
         size: {
-          width: initial.physical.descriptor.width,
-          height: initial.physical.descriptor.height,
-          depthOrArrayLayers:
-            initial.physical.descriptor.sampleCount === 4 ||
-            initial.physical.descriptor.shape === '2d'
-              ? 1
-              : 6,
+          width: descriptor.width,
+          height: descriptor.height,
+          depthOrArrayLayers: msaa ? 1 : layers,
         },
-        mipLevelCount:
-          initial.physical.descriptor.sampleCount === 4 ? 1 : renderTargetMipCount(initial),
-        sampleCount: initial.physical.descriptor.sampleCount,
-        dimension: '2d',
+        mipLevelCount: msaa ? 1 : renderTargetMipCount(initial),
+        sampleCount: descriptor.sampleCount,
+        dimension: volume ? '3d' : '2d',
         usage: 0x10 | 0x04 | 0x01,
       },
-      () => current().physical.colorTextures[current().faceIndex] ?? initial.physical.texture,
+      () => current().physical.colorTextures[current().layer] ?? initial.physical.texture,
     );
     if (!texture.ok) return texture;
     const color = builder.importView(
       texture.value,
       {
         label: `${label}.${slot}.color`,
-        dimension: '2d',
+        dimension: volume ? '3d' : '2d',
         baseMipLevel: 0,
         mipLevelCount: 1,
-        baseArrayLayer: initial.physical.descriptor.sampleCount === 4 ? 0 : initial.faceIndex,
+        baseArrayLayer: msaa || volume ? 0 : initial.layer,
         arrayLayerCount: 1,
       },
       () =>
-        current().physical.faceViews[current().faceIndex] ??
-        initial.physical.faceViews[initial.faceIndex] ??
+        current().physical.layerViews[current().layer] ??
+        initial.physical.layerViews[initial.layer] ??
         initial.physical.view,
     );
     if (!color.ok) return color;
@@ -96,21 +105,13 @@ export function addTargetCaptureGraphPasses(
       `${label}.${slot}.depth-texture`,
       {
         format: 'depth32float-stencil8',
-        size: {
-          width: initial.physical.descriptor.width,
-          height: initial.physical.descriptor.height,
-          depthOrArrayLayers:
-            initial.physical.descriptor.sampleCount === 4 ||
-            initial.physical.descriptor.shape === '2d'
-              ? 1
-              : 6,
-        },
+        size: { width: descriptor.width, height: descriptor.height, depthOrArrayLayers: 1 },
         mipLevelCount: 1,
-        sampleCount: initial.physical.descriptor.sampleCount,
+        sampleCount: descriptor.sampleCount,
         dimension: '2d',
         usage: 0x10 | (initial.physical.sampledDepth ? 0x04 : 0),
       },
-      () => current().physical.depthTextures[current().faceIndex] as Texture,
+      () => current().physical.depthTexture,
     );
     if (!depthTexture.ok) return depthTexture;
     const depth = builder.importView(
@@ -118,34 +119,33 @@ export function addTargetCaptureGraphPasses(
       {
         label: `${label}.${slot}.depth`,
         dimension: '2d',
-        baseArrayLayer: initial.physical.descriptor.sampleCount === 4 ? 0 : initial.faceIndex,
+        baseArrayLayer: 0,
         arrayLayerCount: 1,
       },
-      () => current().physical.depthViews[current().faceIndex] as TextureView,
+      () => current().physical.depthView,
     );
     if (!depth.ok) return depth;
-    const resolveTexture =
-      initial.physical.descriptor.sampleCount === 4
-        ? builder.importTexture(
-            `${label}.${slot}.resolve-texture`,
-            {
-              format: initial.physical.descriptor.format,
-              size: {
-                width: initial.physical.descriptor.width,
-                height: initial.physical.descriptor.height,
-                depthOrArrayLayers: initial.physical.descriptor.shape === 'cube' ? 6 : 1,
-              },
-              mipLevelCount: renderTargetMipCount(initial),
-              sampleCount: 1,
-              dimension: '2d',
-              usage: 0x10 | 0x04 | 0x01,
+    const resolveTexture = msaa
+      ? builder.importTexture(
+          `${label}.${slot}.resolve-texture`,
+          {
+            format: descriptor.format,
+            size: {
+              width: descriptor.width,
+              height: descriptor.height,
+              depthOrArrayLayers: layers,
             },
-            () =>
-              current().physical.resolveTexture ??
-              initial.physical.resolveTexture ??
-              initial.physical.texture,
-          )
-        : undefined;
+            mipLevelCount: renderTargetMipCount(initial),
+            sampleCount: 1,
+            dimension: '2d',
+            usage: 0x10 | 0x04 | 0x01,
+          },
+          () =>
+            current().physical.resolveTexture ??
+            initial.physical.resolveTexture ??
+            initial.physical.texture,
+        )
+      : undefined;
     if (resolveTexture !== undefined && !resolveTexture.ok) return resolveTexture;
     const resolve =
       resolveTexture === undefined
@@ -157,20 +157,50 @@ export function addTargetCaptureGraphPasses(
               dimension: '2d',
               baseMipLevel: 0,
               mipLevelCount: 1,
-              baseArrayLayer: initial.faceIndex,
+              baseArrayLayer: initial.layer,
               arrayLayerCount: 1,
             },
             () =>
-              current().physical.resolveFaceViews[current().faceIndex] ??
-              initial.physical.resolveFaceViews[initial.faceIndex] ??
+              current().physical.resolveLayerViews[current().layer] ??
+              initial.physical.resolveLayerViews[initial.layer] ??
               initial.physical.resolveView,
           );
     if (resolve !== undefined && !resolve.ok) return resolve;
     if (initial.faceCamera.planarReflection !== undefined)
       planarView = resolve?.value ?? color.value;
+    const environment =
+      state.atmosphere === true && initial.sceneInput !== true
+        ? addAtmosphereBackground(
+            builder,
+            {
+              texture: texture.value,
+              view: color.value,
+              format: initial.physical.descriptor.format,
+              sampleCount: initial.physical.descriptor.sampleCount,
+            },
+            { directional: lighting?.shadows.directional?.view },
+          )
+        : undefined;
+    if (environment !== undefined && !environment.ok) return environment;
+    const atmosphere = environment?.value.atmosphere;
     const added = builder.addRasterPass(`${label}-face.${slot}`, {
       accesses: [
         ...(lighting?.accesses ?? []),
+        ...(atmosphere === undefined
+          ? []
+          : [
+              atmosphere.transmittance,
+              atmosphere.multipleScattering,
+              atmosphere.aerialPerspective,
+              atmosphere.aerialTransmittance,
+              atmosphere.distantSkyLight,
+            ].map((resource) => ({ resource, usage: 'sampled-read' as const }))),
+        ...(environment === undefined
+          ? []
+          : [environment.value.irradiance, environment.value.prefilter].map((resource) => ({
+              resource,
+              usage: 'sampled-read' as const,
+            }))),
         ...(lighting === undefined
           ? []
           : [
@@ -194,13 +224,14 @@ export function addTargetCaptureGraphPasses(
         {
           view: color.value,
           ...(resolve === undefined ? {} : { resolveTarget: resolve.value }),
-          loadOp: 'clear',
+          ...(volume ? { depthSlice: initial.layer } : {}),
+          loadOp: environment === undefined ? 'clear' : 'load',
           storeOp: 'store',
           clearValue: () => {
             const clear =
-              current().physical.descriptor.shape === '2d'
-                ? current().faceCamera.clearColor
-                : [0, 0, 0, 1];
+              current().physical.descriptor.shape === 'cube'
+                ? [0, 0, 0, 1]
+                : current().faceCamera.clearColor;
             return { r: clear[0] ?? 0, g: clear[1] ?? 0, b: clear[2] ?? 0, a: clear[3] ?? 1 };
           },
         },
@@ -231,6 +262,7 @@ export function addTargetCaptureGraphPasses(
               ![...(material.textureSources?.values() ?? [])].some(
                 (source) =>
                   !isCanvasTextureSource(source) &&
+                  !isExternalTextureSource(source) &&
                   resolveRenderTargetMaterialSource(source)?.target === current().target,
               )
             )
@@ -261,6 +293,25 @@ export function addTargetCaptureGraphPasses(
                 internal.validated.length > 0,
                 internal.bindGroupCounts,
                 {
+                  ...(atmosphere === undefined
+                    ? {}
+                    : {
+                        atmosphere: {
+                          transmittance: resources.textureView(atmosphere.transmittance).unwrap(),
+                          multipleScattering: resources
+                            .textureView(atmosphere.multipleScattering)
+                            .unwrap(),
+                          aerialPerspective: resources
+                            .textureView(atmosphere.aerialPerspective)
+                            .unwrap(),
+                          aerialTransmittance: resources
+                            .textureView(atmosphere.aerialTransmittance)
+                            .unwrap(),
+                          distantSkyLight: resources
+                            .textureView(atmosphere.distantSkyLight)
+                            .unwrap(),
+                        },
+                      }),
                   directionalShadow: resolveShadow(lighting.shadows.directional),
                   spotShadow: resolveShadow(lighting.shadows.spot),
                 },
@@ -270,6 +321,14 @@ export function addTargetCaptureGraphPasses(
         const captureContext = {
           ...internal,
           ...(groups === undefined ? {} : groups),
+          ...(environment === undefined
+            ? {}
+            : {
+                environmentIbl: {
+                  irradiance: resources.textureView(environment.value.irradiance).unwrap(),
+                  prefilter: resources.textureView(environment.value.prefilter).unwrap(),
+                },
+              }),
           camera: current().faceCamera,
           targetW: current().physical.descriptor.width,
           targetH: current().physical.descriptor.height,
@@ -305,9 +364,9 @@ export function addTargetCaptureGraphPasses(
             passKind: 'forward',
             recordMode: 'opaque',
             clearColor:
-              current().physical.descriptor.shape === '2d'
-                ? current().faceCamera.clearColor
-                : [0, 0, 0, 1],
+              current().physical.descriptor.shape === 'cube'
+                ? [0, 0, 0, 1]
+                : current().faceCamera.clearColor,
           },
         );
       },

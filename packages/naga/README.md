@@ -6,7 +6,7 @@
 
 - **关注点单一** —— 只做 raw wasm-bindgen 出口的 TS 包装（snake_case naga upstream 原生命名延续）；reflection 字段派生 / 三件套 emit 都在上游 `@forgeax/engine-shader-compiler`。
 - **TS-only 薄壳** —— 本包无 Rust crate / `Cargo.toml` / `build.sh` / `pkg/` 资产；物理 wasm 段统一由 `@forgeax/engine-wgpu-wasm` 出包，本包 deps `'@forgeax/engine-wgpu-wasm': 'workspace:*'`。
-- **ShaderError 不重定义** —— `ShaderErrorCode` closed union 4 成员从 `@forgeax/engine-types` 复用（+0 破坏点，AC-09）；本包仅做 `try { ... } catch (e) { return err(wrapShaderError(...)) }` 包装层。
+- **ShaderError 不重定义** —— `ShaderError` 类与 `manifestMalformed` / `shaderNotFound` 工厂唯一 owner 为 `@forgeax/engine-shader`（本包 re-export，build 与 runtime 路径共用同一个 `instanceof` 身份）；`ShaderErrorCode` / `ShaderErrorDetail` closed union 来自 `@forgeax/engine-types`；本包仅做 `try { ... } catch (e) { return err(wrapShaderError(...)) }` 包装层。
 - **物理隔离** —— `@forgeax/engine-shader` runtime 包**禁止**直接或间接依赖本包（AC-06 三重闸门 grep 守护）。
 
 ## API 索引
@@ -16,6 +16,13 @@
 | `parse(source)` | `(string) => Promise<Result<ParsedModule, ShaderError>>` | naga `parse_str` 透传；syntax error → `Result.err(ShaderError code='shader-compile-failed')`（含 lineNum / linePos） |
 | `validate(parsed)` | `(ParsedModule) => Promise<Result<ValidatedModule, ShaderError>>` | naga `Validator::validate` 透传；ownership 转移（消费 parsed handle） |
 | `emit_reflection(validated, optionsJson)` | `(ValidatedModule, string) => Promise<Result<string, ShaderError>>` | reflection JSON 字符串 emit；ModuleInfo 已嵌入 ValidatedModule 句柄；上层 `@forgeax/engine-shader-compiler.parseReflectionJson` 派生 `BindGroupLayoutDescriptor[]` |
+
+Opaque module handles expose `free()` for deterministic native IR release.
+`validate` consumes its parsed handle even on failure; do not free that handle
+again. A successful syntax probe that stops before validation frees its parsed
+handle. Reflection and selected-entry validation borrow the validated handle;
+its caller frees it after the last operation, normally in `finally`. Garbage
+collection is not an execution budget for native IR during long source builds.
 
 签名映射 `@forgeax/engine-wgpu-wasm/pkg/wgpu_wasm.d.ts`（wasm-pack auto-emit）；本包仅做 try/catch + ensureReady 适配层。
 

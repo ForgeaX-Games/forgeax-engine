@@ -145,7 +145,7 @@ const imageMeta = JSON.parse(readFileSync(imageMetaPath, 'utf8'));
 const stableGuid = imageMeta.subAssets[0]?.guid;
 if (typeof stableGuid !== 'string') fail('image sidecar has no stable texture GUID');
 const decoded = { bytes: new Uint8Array([137, 80, 78, 71]), width: 1, height: 1, mime: 'image/png', colorSpace: 'srgb', mipmap: true };
-const reused = reimportReuseMeta(decoded, imageMeta);
+const reused = reimportReuseMeta(imageMeta);
 if (reused[0]?.guid !== stableGuid) fail(`reimport changed GUID: ${reused[0]?.guid}`);
 const parsedGuid = AssetGuid.parse(stableGuid);
 if (!parsedGuid.ok) fail(`stable GUID is malformed: ${parsedGuid.error.code}`);

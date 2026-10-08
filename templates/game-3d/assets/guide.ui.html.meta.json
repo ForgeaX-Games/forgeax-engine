@@ -3,7 +3,9 @@
   "kind": "external-asset-package",
   "importer": "ui",
   "source": "guide.ui.html",
-  "importSettings": {},
+  "importSettings": {
+    "localization": "guide.ui.i18n.json"
+  },
   "subAssets": [
     {
       "guid": "019fb7ce-3600-7000-8000-000000000001",

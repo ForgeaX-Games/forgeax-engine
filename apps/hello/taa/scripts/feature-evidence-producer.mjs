@@ -285,7 +285,7 @@ function collectErrors(input, workload, { requirePhysicalBrowser = true, executi
     if (DOMAINS.some((domain) => !domains.includes(domain)) || new Set(domains).size !== DOMAINS.length) {
       errors.push(error('domain-set-invalid', 'stages.*.domain', 'the exact linear-HDR, linear-LDR, and final-sRGB domain set is required'));
     }
-    const expectedIds = ['linear-hdr', 'linear-ldr', 'final-srgb'];
+    const expectedIds = ['linear-hdr', 'linear-ldr', 'final-display'];
     for (const [index, stage] of stages.entries()) {
       if (stage?.id !== expectedIds[index] || stage?.domain !== DOMAINS[index]) {
         errors.push(error('domain-pairing-invalid', `stages[${index}]`, 'stage id and domain must be the canonical one-to-one pair'));

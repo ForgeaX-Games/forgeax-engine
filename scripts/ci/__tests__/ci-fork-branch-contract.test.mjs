@@ -184,8 +184,11 @@ test('shared RHI-debug capture forwards the configured Chrome channel', () => {
   );
   assert.doesNotMatch(rhiDebugVerify, /channel: 'chrome'/);
   assert.match(rhiDebugVerify, /buildFrameModel, decodeTape, replayDeviceRequest/);
-  assert.match(rhiDebugVerify, /bootstrapDawn\(label, tape\)/);
-  assert.match(rhiDebugVerify, /export async function bootstrapDawn\(label, tape\)/);
+  assert.match(rhiDebugVerify, /bootstrapDawn\(\s*label,\s*tape,\s*dawnSelection,?\s*\)/);
+  assert.match(
+    rhiDebugVerify,
+    /export async function bootstrapDawn\(label, tape, options = \{\}\)/,
+  );
   assert.match(rhiDebugVerify, /replayDeviceRequest\(tape, adapter\.features, adapter\.limits\)/);
   assert.match(rhiDebugVerify, /requestReplayDeviceForTape\(adapterRes\.value, tape\)/);
   assert.doesNotMatch(
@@ -210,7 +213,7 @@ test('shared RHI-debug capture forwards the configured Chrome channel', () => {
   for (const flag of [
     '--use-vulkan=swiftshader',
     '--disable-gpu-driver-bug-workarounds',
-    '--disable-dawn-features=disallow_unsafe_apis',
+    '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
   ]) {
     assert.match(rhiDebugVerify, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -247,8 +250,8 @@ test('resource-intensive WebGPU/browser gates use the heavy capacity pool', () =
     if (name === 'vitest-browser') {
       assert.match(
         jobSection('vitest-browser-shard'),
-        /matrix:\n(?:\s*#.*\n)*\s+shard: \[0, 1, 2, 3\]/,
-        'vitest-browser must retain four productive heavy matrix legs',
+        /matrix:\n(?:\s*#.*\n)*\s+shard: \[0, 1, 2, 3, 4, 5\]/,
+        'vitest-browser must retain six productive heavy matrix legs',
       );
     }
   }

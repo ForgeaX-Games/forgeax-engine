@@ -21,7 +21,7 @@ interface Segment {
   bundle: RenderBundle | undefined;
 }
 
-/** Consecutive frames without any reusable segment before probing backs off. */
+/** Consecutive churned frames (any drawing segment re-recorded) before probing backs off. */
 const IDLE_FRAMES_BEFORE_BACKOFF = 4;
 const MAX_BYPASS_FRAMES = 64;
 
@@ -54,9 +54,14 @@ function replay(commands: readonly Command[], target: RhiRenderCommands, from = 
  *
  * A segment is admitted after two matching frames and invalidated on its own
  * mismatch, so one changed batch re-records only that batch. Consecutive
- * bundles share one `executeBundles`. A pass whose segments never repeat
- * backs off to the direct path for a bounded, growing number of frames
- * instead of paying the proxy cost on every frame.
+ * bundles share one `executeBundles`. A pass that re-records any drawing
+ * segment on several consecutive frames backs off to the direct path for a
+ * bounded, growing number of frames. Partial reuse of a churning pass does
+ * not pay: every executed bundle restarts from WebGPU's reset pass state and
+ * replays its prelude, so a pass split into many small bundles costs more
+ * queue time than direct encoding, on top of the proxy's per-command
+ * compare. A pass that settles (a frame without a re-recorded segment)
+ * resets the backoff.
  */
 export class RenderBundleCache {
   private device: RhiDevice | undefined;
@@ -87,6 +92,7 @@ export class RenderBundleCache {
     const pending: RenderBundle[] = [];
     let reusedSegments = 0;
     let drawSegments = 0;
+    let missedSegments = 0;
 
     // Tracked pass state, used as each segment's inherited prelude.
     let pipeline: Command | undefined;
@@ -179,6 +185,7 @@ export class RenderBundleCache {
         pending.push(segment.bundle);
         return;
       }
+      missedSegments += 1;
       if (counters !== undefined) counters.misses += 1;
       emitDirect(segment.commands, preludeLength);
     };
@@ -307,7 +314,7 @@ export class RenderBundleCache {
       throw error;
     }
     this.segments = nextSegments;
-    if (drawSegments > 0 && reusedSegments === 0) {
+    if (drawSegments > 0 && missedSegments > 0) {
       this.idleFrames += 1;
       if (this.idleFrames >= IDLE_FRAMES_BEFORE_BACKOFF) {
         this.bypassFrames = Math.min(MAX_BYPASS_FRAMES, IDLE_FRAMES_BEFORE_BACKOFF << this.backoff);

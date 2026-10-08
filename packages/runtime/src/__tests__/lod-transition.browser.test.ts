@@ -14,7 +14,10 @@ it.each([
   document.body.append(canvas);
   const host = value(await constructRuntimeRendererHost(canvas));
   try {
-    await verifyLodTransition(host, options);
+    await verifyLodTransition(host, {
+      ...options,
+      heldFrames: import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 8 : 52,
+    });
   } finally {
     host.renderer.dispose();
     canvas.remove();

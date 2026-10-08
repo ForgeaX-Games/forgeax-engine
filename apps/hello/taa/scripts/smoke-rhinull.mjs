@@ -162,7 +162,7 @@ console.log(JSON.stringify({
     frames: STRUCTURAL_FRAME_COUNT,
     resolution: { width: 1, height: 1 },
     stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: '0'.repeat(64), frame: STRUCTURAL_FRAME_COUNT - 1 },
     })),

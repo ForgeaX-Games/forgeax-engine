@@ -110,6 +110,8 @@ if (clipResult.ok) {
   });
   content.ready = true;
   content.revision = 1;
+  if (clipResult.value.stream)
+    throw new Error('[m8-capstone] loaded-byte fixture requires a buffered short SFX');
   content.bytes = clipResult.value.bytes.length;
 } else {
   throw new Error(`m8-capstone content load failed: ${clipResult.error.code}`);

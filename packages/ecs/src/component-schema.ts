@@ -1,14 +1,7 @@
-import type { Component, FieldReflection, SchemaFieldType } from './component';
+import type { Component, FieldReflection } from './component';
 
 /** The complete storage placement vocabulary owned by ECS schema. */
 export type ComponentStorageKind = 'table' | 'sparse';
-
-/** The stable public facts needed to describe a component schema offline. */
-export interface ComponentSchemaDefinition {
-  readonly name: string;
-  readonly fields: Readonly<Record<string, SchemaFieldType>>;
-  readonly storage: ComponentStorageKind;
-}
 
 /**
  * Serialization facts owned beside schema registration, not carried by the

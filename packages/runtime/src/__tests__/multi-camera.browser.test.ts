@@ -58,6 +58,7 @@ it.each([
         rejectSubmit = true;
       },
       mode === 'publication' ? { assets: host.assets, identity } : undefined,
+      import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 16 : 60,
     );
   } finally {
     renderValue(await host.renderer.dispose());
@@ -81,6 +82,7 @@ it.each([
       canvas,
       shaderManifestUrl: '/shaders/manifest.json',
       publication,
+      warmupFrames: import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 12 : 60,
       cook: commands.cookVfxMeshLighting,
       save: async (name, bytes) => {
         let binary = '';

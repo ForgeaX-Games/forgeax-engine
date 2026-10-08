@@ -81,7 +81,7 @@ export default defineFeature({
           };
           own.update(1 / 60);
           renderer.draw(input);
-          renderer.requestObservation?.(['final-srgb']);
+          renderer.requestObservation?.(['final-display']);
           own.update(1 / 60);
           const drawn = renderer.draw(input);
           checks.ok('draw ok', drawn.ok, drawn.ok ? undefined : drawn.error.code);
@@ -100,7 +100,7 @@ export default defineFeature({
                 !passes.some((name) => name.includes('bloom')),
                 passes.join(','),
               );
-            const observed = await renderer.observe(drawn.value, { include: ['final-srgb'] });
+            const observed = await renderer.observe(drawn.value, { include: ['final-display'] });
             const final = observed.ok ? observed.value.observations?.[0] : undefined;
             checks.ok(
               'final image observed',

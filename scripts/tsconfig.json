@@ -5,6 +5,7 @@
     "noEmit": true,
     "emitDeclarationOnly": false,
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "types": ["node"]
   },
   "include": [

@@ -2,7 +2,12 @@ import { err, ok, type Result } from '@forgeax/engine-types';
 import { REPLICATION_PROTOCOL_PREFIX, REPLICATION_PROTOCOL_VERSION } from './constants';
 import { NetError } from './errors';
 import type { ReplicationLimits } from './profile';
-import type { ReplicationDataPacket, ReplicationEntityRecord, ReplicationPacket } from './protocol';
+import type {
+  ReplicationDataPacket,
+  ReplicationEntityRecord,
+  ReplicationPacket,
+  ReplicationPacketKind,
+} from './protocol';
 
 export type { ReplicationComponentRecord, ReplicationEntityRecord } from './protocol';
 
@@ -21,22 +26,22 @@ const TYPED_ARRAYS = {
 type TypedArrayName = keyof typeof TYPED_ARRAYS;
 type PortableTypedArray = (typeof TYPED_ARRAYS)[TypedArrayName]['prototype'];
 
-const PACKET_KINDS = [
-  'session-open',
-  'session-resume',
-  'baseline',
-  'delta',
-  'ack',
-  'rejection',
-] as const satisfies readonly ReplicationPacket['kind'][];
+const PACKET_KINDS = {
+  'session-open': true,
+  'session-resume': true,
+  baseline: true,
+  delta: true,
+  ack: true,
+  rejection: true,
+} as const satisfies Record<ReplicationPacketKind, true>;
 
 const REPLICATION_ENTITY_KINDS = [
   'upsert',
   'despawn',
 ] as const satisfies readonly ReplicationEntityRecord['kind'][];
 
-function isPacketKind(value: unknown): value is ReplicationPacket['kind'] {
-  return PACKET_KINDS.some((kind) => kind === value);
+function isPacketKind(value: unknown): value is ReplicationPacketKind {
+  return typeof value === 'string' && Object.hasOwn(PACKET_KINDS, value);
 }
 
 function isReplicationEntityKind(value: unknown): value is ReplicationEntityRecord['kind'] {
@@ -52,6 +57,7 @@ function isSessionId(value: unknown): boolean {
 }
 
 function typedArrayName(value: unknown): TypedArrayName | undefined {
+  if (!ArrayBuffer.isView(value)) return undefined;
   for (const [name, typedArrayConstructor] of Object.entries(TYPED_ARRAYS) as [
     TypedArrayName,
     (typeof TYPED_ARRAYS)[TypedArrayName],
@@ -173,26 +179,39 @@ function validatePacket(packet: ReplicationPacket): string | undefined {
   if (!isPacketKind(packet.kind)) return 'packet kind is unsupported';
   if (!isSessionId(packet.sessionId)) return 'sessionId must be a positive safe integer';
   if (!isSafeNonNegativeInteger(packet.epoch)) return 'epoch must be a non-negative safe integer';
-  if (packet.kind === 'session-open' || packet.kind === 'session-resume')
-    return packet.sequence === 0 ? undefined : 'session control sequence must be zero';
-  if (packet.kind === 'ack')
-    return isSafeNonNegativeInteger(packet.acknowledgedSequence)
-      ? undefined
-      : 'acknowledgedSequence must be a non-negative safe integer';
-  if (!isSafeNonNegativeInteger(packet.sequence) || packet.sequence === 0)
-    return 'sequence must be a positive safe integer';
-  if (packet.kind === 'baseline' && packet.sequence !== 1) return 'baseline sequence must be one';
-  if (packet.kind === 'rejection') {
-    if (!isPacketKind(packet.rejectedKind) || typeof packet.reason !== 'string')
-      return 'rejection details are invalid';
-    return undefined;
+  switch (packet.kind) {
+    case 'session-open':
+    case 'session-resume':
+      return packet.sequence === 0 ? undefined : 'session control sequence must be zero';
+    case 'ack':
+      return isSafeNonNegativeInteger(packet.acknowledgedSequence)
+        ? undefined
+        : 'acknowledgedSequence must be a non-negative safe integer';
+    case 'rejection':
+      return (
+        validateSequence(packet.sequence) ??
+        (isPacketKind(packet.rejectedKind) && typeof packet.reason === 'string'
+          ? undefined
+          : 'rejection details are invalid')
+      );
+    case 'baseline':
+    case 'delta': {
+      const sequence = validateSequence(packet.sequence);
+      if (sequence !== undefined) return sequence;
+      if (packet.kind === 'baseline' && packet.sequence !== 1)
+        return 'baseline sequence must be one';
+      if (typeof packet.tick !== 'number' || !Number.isSafeInteger(packet.tick))
+        return 'tick must be a safe integer';
+      if (typeof packet.fingerprint !== 'string') return 'fingerprint must be a string';
+      return validateEntities(packet.entities);
+    }
   }
-  if (packet.kind !== 'baseline' && packet.kind !== 'delta')
-    return 'packet kind does not carry a data payload';
-  if (typeof packet.tick !== 'number' || !Number.isSafeInteger(packet.tick))
-    return 'tick must be a safe integer';
-  if (typeof packet.fingerprint !== 'string') return 'fingerprint must be a string';
-  return validateEntities(packet.entities);
+}
+
+function validateSequence(sequence: unknown): string | undefined {
+  return isSafeNonNegativeInteger(sequence) && sequence !== 0
+    ? undefined
+    : 'sequence must be a positive safe integer';
 }
 
 function validateLimits(
@@ -287,8 +306,20 @@ function parse(
   }
 }
 
-function isDataPacket(packet: ReplicationPacket): packet is ReplicationDataPacket {
-  return packet.kind === 'baseline' || packet.kind === 'delta';
+/** @internal Single data-kind classification of the closed packet union. */
+export function isReplicationDataPacket(
+  packet: ReplicationPacket,
+): packet is ReplicationDataPacket {
+  switch (packet.kind) {
+    case 'baseline':
+    case 'delta':
+      return true;
+    case 'session-open':
+    case 'session-resume':
+    case 'ack':
+    case 'rejection':
+      return false;
+  }
 }
 
 export function encodeReplicationPacket(
@@ -299,7 +330,7 @@ export function encodeReplicationPacket(
   if (reason !== undefined) return err(invalid(reason));
   const body = JSON.stringify(canonicalize(packet));
   const bytes = new TextEncoder().encode(`${REPLICATION_PROTOCOL_PREFIX}\n${body}`);
-  const failure = isDataPacket(packet) ? validateLimits(packet, bytes, limits) : null;
+  const failure = isReplicationDataPacket(packet) ? validateLimits(packet, bytes, limits) : null;
   return failure ? err(failure) : ok(bytes);
 }
 
@@ -311,6 +342,8 @@ export function decodeReplicationPacket(
     return err(limitError('maxMessageBytes', bytes.byteLength, limits.maxMessageBytes));
   const parsed = parse(bytes);
   if ('error' in parsed) return err(parsed.error);
-  const failure = isDataPacket(parsed.packet) ? validateLimits(parsed.packet, bytes, limits) : null;
+  const failure = isReplicationDataPacket(parsed.packet)
+    ? validateLimits(parsed.packet, bytes, limits)
+    : null;
   return failure ? err(failure) : ok(parsed.packet);
 }

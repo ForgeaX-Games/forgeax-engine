@@ -1,6 +1,11 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
-import { IntelligenceError } from './errors';
-import { type IntelligenceRuntime, resolveIntelligenceLimits } from './runtime';
+import { IntelligenceError, intelligenceFailure } from './errors';
+import {
+  type IntelligenceRuntime,
+  nextIntelligenceIdentity,
+  resolveIntelligenceLimits,
+  validateActivityRequest,
+} from './runtime';
 import {
   type ActivityEvent,
   type ActivityId,
@@ -61,7 +66,7 @@ export function bindIntelligencePort(
     if (message.kind === 'intelligence-submit') {
       const accepted = runtime.accept(message.submission);
       if (!accepted.ok) {
-        const failure = importFailure(accepted.error);
+        const failure = intelligenceFailure(accepted.error);
         port.postMessage({
           kind: 'intelligence-rejected',
           activityId: message.submission.id,
@@ -108,38 +113,6 @@ export function bindIntelligencePort(
   return { close };
 }
 
-function importFailure(error: import('./errors').IntelligenceError) {
-  if (error.code === 'intelligence-provider-failed') {
-    return {
-      code: error.code,
-      expected: error.expected,
-      hint: error.hint,
-      detail: {
-        providerId: error.detail.providerId,
-        cause:
-          error.detail.cause instanceof Error
-            ? error.detail.cause.message
-            : String(error.detail.cause),
-      },
-    } as const;
-  }
-  return {
-    code: error.code,
-    expected: error.expected,
-    hint: error.hint,
-    detail: error.detail,
-  } as import('./errors').IntelligenceFailure;
-}
-
-let portIdentity = 0;
-
-function nextPortIdentity(prefix: string): string {
-  const uuid = globalThis.crypto?.randomUUID?.();
-  if (uuid !== undefined) return `${prefix}-${uuid}`;
-  portIdentity += 1;
-  return `${prefix}-${portIdentity}`;
-}
-
 /** Worker/main-realm client. Polling is request/response and never awaits a Host provider. */
 export class IntelligencePortClient implements IntelligenceService {
   readonly limits: IntelligenceLimits;
@@ -167,8 +140,8 @@ export class IntelligencePortClient implements IntelligenceService {
   ) {
     this.limits = resolveIntelligenceLimits(options.limits);
     this.createActivityId =
-      options.createActivityId ?? (() => activityId(nextPortIdentity('activity')));
-    this.createSessionId = options.createSessionId ?? (() => nextPortIdentity('session'));
+      options.createActivityId ?? (() => activityId(nextIntelligenceIdentity('activity')));
+    this.createSessionId = options.createSessionId ?? (() => nextIntelligenceIdentity('session'));
     this.listener = (event) => {
       const message = event.data;
       if (this.closed && message.kind !== 'intelligence-closed') return;
@@ -209,32 +182,13 @@ export class IntelligencePortClient implements IntelligenceService {
   }
 
   submit(request: ActivityRequest): Result<ActivityRef, IntelligenceError> {
-    if (this.closed) return err(new IntelligenceError({ code: 'intelligence-closed', detail: {} }));
-    if (request.input.length === 0 || request.input.length > this.limits.maxInputChars) {
-      return err(
-        new IntelligenceError({
-          code: 'intelligence-invalid-request',
-          detail: {
-            field: 'input',
-            reason:
-              request.input.length === 0
-                ? 'input is empty'
-                : `input exceeds ${this.limits.maxInputChars} characters`,
-          },
-        }),
-      );
-    }
-    if (request.session !== undefined && request.session.providerId !== this.providerId) {
-      return err(
-        new IntelligenceError({
-          code: 'intelligence-session-provider-mismatch',
-          detail: {
-            expectedProviderId: this.providerId,
-            receivedProviderId: request.session.providerId,
-          },
-        }),
-      );
-    }
+    const validated = validateActivityRequest(
+      request,
+      this.providerId,
+      this.limits.maxInputChars,
+      this.closed,
+    );
+    if (!validated.ok) return validated;
     if (this.active.size >= this.limits.maxConcurrentActivities) {
       return err(
         new IntelligenceError({

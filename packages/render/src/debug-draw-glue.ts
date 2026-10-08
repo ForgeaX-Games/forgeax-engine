@@ -7,6 +7,7 @@
 import { mat4 } from '@forgeax/engine-math';
 import type { RenderGraphBuilder, RenderGraphError } from '@forgeax/engine-render-graph';
 import type { Result } from '@forgeax/engine-types';
+import { cameraLensProjection } from './camera-projection';
 import type { RenderPipelineFrame, RenderPipelineTarget } from './render-pipeline';
 
 export function addTypedDebugOverlayPass(
@@ -21,26 +22,7 @@ export function addTypedDebugOverlayPass(
       return overlay !== undefined && (overlay.hasWork?.() ?? true);
     },
     encode: ({ pass, frame }) => {
-      const projection = mat4.create();
-      if (frame.camera.projection === 'orthographic') {
-        mat4.orthographicReverseZ(
-          projection,
-          frame.camera.orthoLeft,
-          frame.camera.orthoRight,
-          frame.camera.orthoTop,
-          frame.camera.orthoBottom,
-          frame.camera.near,
-          frame.camera.far,
-        );
-      } else {
-        mat4.perspectiveReverseZ(
-          projection,
-          frame.camera.fov,
-          frame.camera.aspect,
-          frame.camera.near,
-          frame.camera.far,
-        );
-      }
+      const projection = cameraLensProjection(frame.camera);
       const view = mat4.invert(mat4.create(), frame.camera.world);
       const result = frame.runtime.debugOverlay?.encode(
         pass,

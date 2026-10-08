@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { fetchWithRetry, streamFile } from './sdk-lib.mjs';
+import { fetchWithRetry, streamFile, verifySdkViewRuntime } from './sdk-lib.mjs';
+import { sdkStage } from './sdk-stage.mjs';
 
 /*
  * Cheap release preflight: install the freshly-built user-facing Engine
@@ -17,7 +18,9 @@ import { fetchWithRetry, streamFile } from './sdk-lib.mjs';
  * before browser verification or npm publish spends the long release budget.
  */
 
-const execFileAsync = promisify(execFile);
+const execute = promisify(execFile);
+const execFileAsync = (file, args, options) =>
+  sdkStage([file, ...args].join(' ').slice(0, 240), () => execute(file, args, options));
 const args = process.argv.slice(2);
 const value = (name) => {
   const index = args.indexOf(name);
@@ -54,6 +57,7 @@ const all = [...packageArchives, carrier];
 const names = new Set(packageArchives.map(({ manifest }) => manifest.name));
 const umbrella = packageArchives.find(({ manifest }) => manifest.name === '@forgeax/engine');
 if (umbrella === undefined) throw new Error('npm-umbrella-package-missing');
+if (!names.has('@forgeax/view')) throw new Error('npm-view-tool-package-missing');
 if (carrier.manifest.name !== '@forgeax/engine-sdk') throw new Error('npm-sdk-carrier-name');
 
 for (const item of all) {
@@ -72,7 +76,9 @@ for (const item of all) {
         throw new Error(`npm-workspace-specifier: ${item.manifest.name} -> ${name}@${range}`);
       }
       if (
-        (name === '@forgeax/engine' || name.startsWith('@forgeax/engine-')) &&
+        (name === '@forgeax/engine' ||
+          name.startsWith('@forgeax/engine-') ||
+          name === '@forgeax/view') &&
         range !== version
       ) {
         throw new Error(
@@ -84,7 +90,7 @@ for (const item of all) {
 }
 const umbrellaDependencies = new Set(Object.keys(umbrella.manifest.dependencies ?? {}));
 for (const name of names) {
-  if (name !== '@forgeax/engine' && !umbrellaDependencies.has(name)) {
+  if (name !== '@forgeax/engine' && name !== '@forgeax/view' && !umbrellaDependencies.has(name)) {
     throw new Error(`npm-umbrella-dependency-missing: ${name}`);
   }
 }
@@ -125,19 +131,24 @@ function recordRegistryRequest(request, status, source) {
 const registry = createServer(async (request, response) => {
   try {
     const url = request.url ?? '/';
-    if (url.startsWith('/tarballs/')) {
+    if (url.startsWith('/tarballs/') || url.includes('/-/')) {
       const item = [...archives.values()].find(
-        (candidate) => basename(candidate.path) === basename(url),
+        (candidate) =>
+          basename(candidate.path) === basename(url) ||
+          url ===
+            `/${candidate.manifest.name}/-/${candidate.manifest.name.split('/').at(-1)}-${candidate.manifest.version}.tgz`,
       );
-      if (item === undefined) {
+      if (item === undefined && url.startsWith('/tarballs/')) {
         recordRegistryRequest(request, 404, 'local-tarball');
         response.writeHead(404).end();
         return;
       }
-      recordRegistryRequest(request, 200, 'local-tarball');
-      response.writeHead(200, { 'content-type': 'application/octet-stream' });
-      streamFile(item.path, response);
-      return;
+      if (item !== undefined) {
+        recordRegistryRequest(request, 200, 'local-tarball');
+        response.writeHead(200, { 'content-type': 'application/octet-stream' });
+        streamFile(item.path, response);
+        return;
+      }
     }
     const name = decodeURIComponent(url.slice(1).split('?', 1)[0]);
     const item = archives.get(name);
@@ -184,6 +195,7 @@ const consumerEnv = {
   ...process.env,
   npm_config_registry: registryUrl,
   NPM_CONFIG_REGISTRY: registryUrl,
+  pnpm_config_registry: registryUrl,
   npm_config_cache: npmCache,
   NPM_CONFIG_CACHE: npmCache,
   npm_config_userconfig: npmUserConfig,
@@ -291,10 +303,49 @@ try {
     throw new Error('npm-installed-sdk-version-mismatch');
   }
   await readFile(resolve(installedSdk, 'bin', 'forgeax.mjs'), 'utf8');
+  await execFileAsync(
+    process.execPath,
+    [resolve(installedSdk, 'bin/forgeax.mjs'), 'help', '--json'],
+    {
+      cwd: installedSdk,
+      env: consumerEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
+  await execFileAsync(
+    process.execPath,
+    [resolve(root, 'tools/view-plugins/integration/verify-diagnostic-pages.mjs')],
+    {
+      cwd: installedSdk,
+      env: {
+        ...consumerEnv,
+        FORGEAX_VIEW_TOOL_PACKAGE: resolve(
+          installedSdk,
+          '.forgeax/cli-runtime/node_modules/@forgeax/view',
+        ),
+        FORGEAX_VIEW_ENGINE_PACKAGE: resolve(
+          installedSdk,
+          '.forgeax/cli-runtime/node_modules/@forgeax/engine',
+        ),
+        FORGEAX_VIEW_TEMPLATE_ROOT: resolve(installedSdk, 'templates/game-3d'),
+        FORGEAX_VIEW_EVIDENCE_ROOT: resolve(output, 'view-registry'),
+      },
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
+  await verifySdkViewRuntime({
+    sdkRoot: installedSdk,
+    evidenceRoot: resolve(output, 'view-registry'),
+    env: consumerEnv,
+  });
   process.stdout.write(
     `${JSON.stringify({
       ok: true,
       version,
+      group: 'npm',
+      sha256: JSON.parse(await readFile(resolve(output, 'sdk-build-result.json'), 'utf8')).sha256,
+      engineCommit: installedSdkManifest.engineCommit,
+      viewCommit: installedSdkManifest.viewCommit,
       packageCount: packageArchives.length,
       carrier: carrier.manifest.name,
       sdkInstall: { version: installedSdkManifest.sdkVersion, source: carrier.manifest.name },

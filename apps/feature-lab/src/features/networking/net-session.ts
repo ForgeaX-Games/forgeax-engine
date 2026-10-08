@@ -83,12 +83,9 @@ export default defineFeature({
     );
     checks.equal('replica applies the baseline without errors', replica.receiveEvents().length, 0);
     checks.equal('replica becomes active', replica.getRecoverySnapshot().state.kind, 'active');
-    const netId = authorityCoordinator.idFor(hero);
-    checks.equal(
-      'replica World holds the replicated hp',
-      replicaCoordinator.readComponent(netId, NetHealth)?.hp,
-      100,
-    );
+    const replicatedHealth = () =>
+      replicaCoordinator.readComponent(authorityCoordinator.idFor(hero, sessionId), NetHealth)?.hp;
+    checks.equal('replica World holds the replicated hp', replicatedHealth(), 100);
     authority.receiveEvents();
     checks.equal(
       'replica auto-ACK drains the authority ledger',
@@ -110,11 +107,7 @@ export default defineFeature({
       [['delta', 2]],
     );
     replica.receiveEvents();
-    checks.equal(
-      'delta updates replica hp',
-      replicaCoordinator.readComponent(netId, NetHealth)?.hp,
-      42,
-    );
+    checks.equal('delta updates replica hp', replicatedHealth(), 42);
 
     hub.dropPeer(2);
     replica.receiveEvents();
@@ -159,11 +152,7 @@ export default defineFeature({
       replica.getRecoverySnapshot().state.kind,
       'active',
     );
-    checks.equal(
-      'replica state converges after resync',
-      replicaCoordinator.readComponent(netId, NetHealth)?.hp,
-      42,
-    );
+    checks.equal('replica state converges after resync', replicatedHealth(), 42);
 
     replica.dispose();
     authority.dispose();

@@ -50,7 +50,7 @@ import type {
   TextureMipPolicy,
 } from '@forgeax/engine-types';
 import { IMPORT_ERROR_HINTS, ImportError } from '@forgeax/engine-types';
-import type { CompressionMode, EncodedTexture, EncodeSourceInfo } from './ktx2-encode.js';
+import type { CompressionMode, EncodedTexture } from './ktx2-encode.js';
 import { encodeTextureToKtx2, resolveEncodeMode } from './ktx2-encode.js';
 import { importCubeSource } from './lut/cube-producer.js';
 import { parseImage } from './parse-image.js';
@@ -541,52 +541,54 @@ function compressionModeToken(token: unknown): CompressionMode {
   return 'none';
 }
 
-/**
- * Basis encode arm (D-5 / M3 w18; HDR arm feat-20260707): when the sidecar
- * requests a compressed delivery (mode resolves to non-'none'), encode the
- * decoded pixels into a Basis KTX2 and return it with its level count; the catalog
- * `compression` discriminant is set by the vite-plugin-pack wiring (w20).
- * Returns `null` for the 'none' path so the caller keeps the uncompressed
- * `.bin` bytes unchanged (rgba8 for LDR, rgba16float for HDR).
- *
- * `pixels` is tight-packed RGBA: 8-bit RGBA for LDR (`source.isHdr: false`),
- * rgba16float bytes for HDR (`isHdr: true`). The `isHdr` signal drives both the
- * 'auto' derivation (-> 'uastc-hdr') and the encoder's HDR source path.
- */
-async function maybeEncodeTextureBytes(
-  ctx: ImportContext,
-  pixels: Uint8Array,
-  width: number,
-  height: number,
-  compressionMode: CompressionMode,
-  source: EncodeSourceInfo,
-): Promise<
-  | { readonly ok: true; readonly value: EncodedTexture | null }
-  | { readonly ok: false; readonly error: ImportError }
-> {
-  if (resolveEncodeMode(compressionMode, source) === 'none') {
-    return { ok: true, value: null };
+/** Decode, resize and cook an LDR image once for source and embedded imports. */
+async function cookLdrImage(
+  bytes: Uint8Array,
+  mimeType: Parameters<ImportContext['decodeImage']>[1],
+  settings: Readonly<Record<string, unknown>>,
+  mipmap: boolean,
+) {
+  const colorSpace: ImageColorSpace = settings.colorSpace === 'srgb' ? 'srgb' : 'linear';
+  const downscaleMaxDimension =
+    typeof settings.downscaleMaxDimension === 'number' &&
+    Number.isInteger(settings.downscaleMaxDimension) &&
+    settings.downscaleMaxDimension > 0
+      ? settings.downscaleMaxDimension
+      : undefined;
+  const decoded = parseImage(bytes, mimeType, {
+    colorSpace,
+    mipmap,
+    ...(downscaleMaxDimension === undefined ? {} : { downscaleMaxDimension }),
+  });
+  if (!decoded.ok) return decoded;
+  const image = decoded.value;
+  const compressionMode = compressionModeToken(settings.compressionMode);
+  let encoded: EncodedTexture | null = null;
+  if (resolveEncodeMode(compressionMode, { colorSpace, isHdr: false }) !== 'none') {
+    const result = await encodeTextureToKtx2(
+      image.bytes,
+      image.width,
+      image.height,
+      compressionMode,
+      { colorSpace, isHdr: false, mipmap },
+    );
+    if (!result.ok) return result;
+    encoded = result.value;
   }
-  const result = await encodeTextureToKtx2(pixels, width, height, compressionMode, source);
-  if (!result.ok) {
-    return {
-      ok: false,
-      error: imageConversionFailure(
-        ctx,
-        'encode',
-        result.error.code === 'ktx2-encode-source-too-large'
-          ? 'ktx2-source-too-large'
-          : 'ktx2-encode-refused',
-        `${ctx.source}#compressionMode`,
-        'the requested compression mode to accept the decoded image',
-        `codec:${result.error.code},mode:${result.error.mode}`,
-        result.error.code === 'ktx2-encode-source-too-large'
-          ? 'reduce source dimensions or set compressionMode to none'
-          : 'repair the source image or compression settings and retry the import',
-      ),
-    };
-  }
-  return { ok: true, value: result.value };
+  return {
+    ok: true as const,
+    value: {
+      texture: {
+        kind: 'texture',
+        shape: { viewDimension: '2d', extent: { width: image.width, height: image.height } },
+        format: colorSpaceToFormat(colorSpace),
+        data: encoded?.ktx2 ?? image.bytes,
+        colorSpace,
+        mips: cookedMipPolicy(encoded, mipmap),
+      } satisfies TextureAsset,
+      encoded,
+    },
+  };
 }
 
 /**
@@ -710,79 +712,62 @@ async function importImage(ctx: ImportContext): Promise<ImportResult> {
     );
   }
 
-  const colorSpace: ImageColorSpace = ctx.importSettings.colorSpace === 'srgb' ? 'srgb' : 'linear';
-  const mipmap = mipmapTokenToBoolean(ctx.importSettings.mipmap);
-  const compressionMode = compressionModeToken(ctx.importSettings.compressionMode);
-  const downscaleMaxDimension =
-    typeof ctx.importSettings.downscaleMaxDimension === 'number' &&
-    Number.isInteger(ctx.importSettings.downscaleMaxDimension) &&
-    ctx.importSettings.downscaleMaxDimension > 0
-      ? ctx.importSettings.downscaleMaxDimension
-      : undefined;
-
-  const decoded = parseImage(read.value, mime, {
-    colorSpace,
-    mipmap,
-    ...(downscaleMaxDimension !== undefined ? { downscaleMaxDimension } : {}),
-  });
-  if (!decoded.ok) {
+  const cooked = await cookLdrImage(
+    read.value,
+    mime,
+    ctx.importSettings,
+    mipmapTokenToBoolean(ctx.importSettings.mipmap),
+  );
+  if (!cooked.ok) {
+    const error = cooked.error;
+    const encodeFailed = 'mode' in error;
     return {
       ok: false,
       error: imageConversionFailure(
         ctx,
-        'decode',
-        'ldr',
-        ctx.source,
-        'valid PNG or JPEG bytes to decode into RGBA pixels',
-        `image:${decoded.error.code}`,
-        'repair the source image bytes and retry the import',
+        encodeFailed ? 'encode' : 'decode',
+        encodeFailed
+          ? error.code === 'ktx2-encode-source-too-large'
+            ? 'ktx2-source-too-large'
+            : 'ktx2-encode-refused'
+          : 'ldr',
+        encodeFailed ? `${ctx.source}#compressionMode` : ctx.source,
+        encodeFailed
+          ? 'the requested compression mode to accept the decoded image'
+          : 'valid PNG or JPEG bytes to decode into RGBA pixels',
+        encodeFailed ? `codec:${error.code},mode:${error.mode}` : `image:${error.code}`,
+        encodeFailed
+          ? error.code === 'ktx2-encode-source-too-large'
+            ? 'reduce source dimensions or set compressionMode to none'
+            : 'repair the source image or compression settings and retry the import'
+          : 'repair the source image bytes and retry the import',
       ),
     };
   }
-  const dec = decoded.value;
-
-  // Basis encode arm (M3 w18): null keeps the uncompressed rgba8 `.bin` path.
-  const encoded = await maybeEncodeTextureBytes(
-    ctx,
-    dec.bytes,
-    dec.width,
-    dec.height,
-    compressionMode,
-    { colorSpace, isHdr: false, mipmap },
-  );
-  if (!encoded.ok) return encoded;
-  const encodedBytes = encoded.value?.ktx2 ?? null;
+  const { texture, encoded } = cooked.value;
 
   const out: ImportedAsset[] = [];
   for (const sub of ctx.subAssets) {
     // Only flat 2D image sub-assets are folded here; cube-texture sub-assets
     // ride the runtime IBL multi-face cook and are intentionally not produced.
     if (sub.kind !== 'texture') continue;
-    const payload: TextureAsset = {
-      kind: 'texture',
-      shape: { viewDimension: '2d', extent: { width: dec.width, height: dec.height } },
-      format: colorSpaceToFormat(colorSpace),
-      data: encodedBytes ?? dec.bytes,
-      colorSpace,
-      mips: cookedMipPolicy(encoded.value, mipmap),
-    };
     out.push({
       guid: sub.guid,
       kind: 'texture',
-      payload,
+      payload: texture,
       refs: [],
       artifacts: {
         body: {
-          mediaType: encodedBytes === null ? 'application/x-forgeax-rgba8' : 'image/ktx2',
+          mediaType: encoded === null ? 'application/x-forgeax-rgba8' : 'image/ktx2',
           assetCodec:
-            encodedBytes === null
+            encoded === null
               ? { name: 'rgba8', version: '1' }
               : {
                   name: 'basis',
                   container: 'ktx2',
-                  profile: resolveEncodeMode(compressionMode, { colorSpace, isHdr: false }),
+                  profile: encoded.mode,
                 },
-          bytes: encodedBytes ?? dec.bytes,
+          bytes: texture.data,
         },
       },
     });
@@ -796,74 +781,31 @@ export const decodeImageForImport: ImportContext['decodeImage'] = async (
   mimeType,
   importSettings,
 ) => {
-  const colorSpace =
-    importSettings.colorSpace === 'srgb' || importSettings.colorSpace === 'linear'
-      ? importSettings.colorSpace
-      : 'linear';
-  const mipmap = importSettings.mipmap === true;
-  const downscaleMaxDimension =
-    typeof importSettings.downscaleMaxDimension === 'number' &&
-    Number.isInteger(importSettings.downscaleMaxDimension) &&
-    importSettings.downscaleMaxDimension > 0
-      ? importSettings.downscaleMaxDimension
-      : undefined;
-  const decoded = parseImage(bytes, mimeType, {
-    colorSpace,
-    mipmap,
-    ...(downscaleMaxDimension === undefined ? {} : { downscaleMaxDimension }),
-  });
-  if (!decoded.ok) return decoded;
-  const tex = decoded.value;
-  const requestedCompression =
-    importSettings.compressionMode === 'auto' ||
-    importSettings.compressionMode === 'etc1s' ||
-    importSettings.compressionMode === 'uastc' ||
-    importSettings.compressionMode === 'none'
-      ? importSettings.compressionMode
-      : 'none';
-  const resolvedCompression = resolveEncodeMode(requestedCompression, {
-    colorSpace,
-    isHdr: false,
-  });
-  let cookedBytes = tex.bytes;
-  let cookedKtx2: EncodedTexture | null = null;
-  let mediaType: string = mimeType;
-  let assetCodec: { name: string; profile?: string; version?: string } = {
-    name: 'rgba8',
-    version: '1',
-  };
-  if (resolvedCompression !== 'none') {
-    const encoded = await encodeTextureToKtx2(
-      tex.bytes,
-      tex.width,
-      tex.height,
-      requestedCompression,
-      { colorSpace, isHdr: false, mipmap },
-    );
-    if (!encoded.ok) {
+  const cooked = await cookLdrImage(
+    bytes,
+    mimeType,
+    importSettings,
+    importSettings.mipmap === true,
+  );
+  if (!cooked.ok) {
+    if ('mode' in cooked.error) {
       throw new Error(
-        `embedded texture compression failed (${encoded.error.code} / ${encoded.error.mode}): ${encoded.error.reason}`,
+        `embedded texture compression failed (${cooked.error.code} / ${cooked.error.mode}): ${cooked.error.reason}`,
       );
     }
-    cookedBytes = encoded.value.ktx2;
-    cookedKtx2 = encoded.value;
-    mediaType = 'image/ktx2';
-    assetCodec = { name: 'basis', profile: encoded.value.mode };
+    return { ok: false as const, error: cooked.error };
   }
+  const { texture, encoded } = cooked.value;
   return {
     ok: true as const,
     value: {
-      texture: {
-        kind: 'texture' as const,
-        data: cookedBytes,
-        shape: { viewDimension: '2d', extent: { width: tex.width, height: tex.height } },
-        format: colorSpaceToFormat(colorSpace),
-        colorSpace,
-        mips: cookedMipPolicy(cookedKtx2, mipmap),
-      },
-      bytes: cookedBytes,
-      mediaType,
-      assetCodec,
+      texture,
+      bytes: texture.data,
+      mediaType: encoded === null ? mimeType : 'image/ktx2',
+      assetCodec:
+        encoded === null
+          ? { name: 'rgba8', version: '1' }
+          : { name: 'basis', profile: encoded.mode },
     },
   };
 };

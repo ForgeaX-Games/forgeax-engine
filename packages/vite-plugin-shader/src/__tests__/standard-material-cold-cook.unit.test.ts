@@ -5,6 +5,9 @@ import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { describe, expect, it } from 'vitest';
 
 describe('Standard material cold cook', () => {
+  // Cold filesystem discovery and all Standard variants share the
+  // explicit compiler-fixture budget used by covered Pack/Surface cooks.
+  // Keep every artifact and ABI assertion inside this bounded operation.
   it.each([
     'forgeax_material::standard',
     'forgeax_material::pbr-skin',
@@ -31,25 +34,70 @@ describe('Standard material cold cook', () => {
       },
     });
     // Standard roots publish ordinary/visible direct and scene-index artifacts;
-    // the rigid Standard root also publishes ray-hit; particles retain their authored artifact.
+    // for each atmosphere capability and color ABI; rigid Standard also publishes ray-hit and Card artifacts.
     expect(Object.keys(draft.artifacts)).toHaveLength(
-      module === 'forgeax_material::standard' ? 5 : module === 'forgeax_material::pbr-skin' ? 4 : 1,
+      module === 'forgeax_material::standard'
+        ? 20
+        : module === 'forgeax_material::pbr-skin'
+          ? 18
+          : 2,
     );
     const cooked = validateCookedMaterialRecord(
       (draft.payload as Record<string, unknown>).cooked,
     ).unwrap();
     const selections = cooked.programs.flatMap((program) => program.selections);
+    // Both Surface derivatives select from the same authored forward pass.
+    // Skinned and particle roots retain their existing raster-only admission.
+    expect(
+      selections
+        .filter((selection) => selection.context.pipeline === 'ray')
+        .map((selection) => ({
+          pass: selection.pass,
+          context: selection.context.pass,
+          entry: selection.entry,
+        }))
+        .sort((left, right) => left.context.localeCompare(right.context)),
+    ).toEqual(
+      module === 'forgeax_material::standard'
+        ? [
+            { pass: 'forward', context: 'card-capture', entry: 'vs_card' },
+            { pass: 'forward', context: 'ray-hit', entry: 'cs_surface' },
+          ]
+        : [],
+    );
     if (!module.startsWith('forgeax::vfx-render')) {
-      for (const visibleSurface of [false, true]) {
-        expect(
-          selections
-            .filter(
-              (selection) =>
-                selection.context.pipeline !== 'ray' &&
-                (selection.context.visibleSurface === true) === visibleSurface,
-            )
-            .map((selection) => selection.address),
-        ).toEqual(['direct', 'scene-index']);
+      for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+        for (const visibleSurface of [false, true]) {
+          for (const vertexColor of [false, true]) {
+            expect(
+              selections
+                .filter(
+                  (selection) =>
+                    selection.context.pipeline !== 'ray' &&
+                    selection.context.capability === capability &&
+                    (selection.context.visibleSurface === true) === visibleSurface &&
+                    selection.abi?.vertexInputs.some((input) => input.semantic === 'color') ===
+                      vertexColor,
+                )
+                .map((selection) => selection.address),
+            ).toEqual(['direct', 'scene-index']);
+          }
+        }
+      }
+      for (const backend of ['webgpu', 'webgl2']) {
+        for (const vertexColor of [false, true]) {
+          expect(
+            selections
+              .filter(
+                (selection) =>
+                  selection.context.backend === backend &&
+                  selection.context.capability === 'uniform-fallback' &&
+                  selection.abi?.vertexInputs.some((input) => input.semantic === 'color') ===
+                    vertexColor,
+              )
+              .map((selection) => selection.address),
+          ).toEqual(['direct']);
+        }
       }
     } else {
       expect(
@@ -59,5 +107,5 @@ describe('Standard material cold cook', () => {
         ),
       ).toBe(true);
     }
-  });
+  }, 15_000);
 });

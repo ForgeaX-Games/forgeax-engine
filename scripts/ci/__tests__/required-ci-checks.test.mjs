@@ -18,7 +18,7 @@ test('lists the exact direct CI contexts selected for fallback evidence', () => 
   assert.equal(new Set(manifest).size, manifest.length);
 });
 
-test('keeps the authoritative required roster at the exact 23 logical contexts', () => {
+test('keeps the authoritative required roster at the exact 24 logical contexts', () => {
   assert.deepEqual(REQUIRED_CHECK_NAMES, [
     'build-artifacts',
     'primary-pnpm',
@@ -43,8 +43,9 @@ test('keeps the authoritative required roster at the exact 23 logical contexts',
     'metrics-validate',
     'collectathon-boot-e2e',
     'gpu-pass-timing-contract',
+    'view-integration',
   ]);
-  assert.equal(REQUIRED_CHECK_NAMES.length, 23);
+  assert.equal(REQUIRED_CHECK_NAMES.length, 24);
 });
 
 function runFixture(values = {}) {
@@ -305,7 +306,7 @@ test('emits a deterministic simultaneous coverage and browser failure packet', (
       )
       .reverse(),
   });
-  assert.equal(REQUIRED_CHECK_NAMES.length, 23);
+  assert.equal(REQUIRED_CHECK_NAMES.length, 24);
   assert.equal(result.status, 'genuine-failure');
   assert.equal(result.actionable, true);
   assert.equal(result.complete, false);
@@ -364,7 +365,7 @@ test('t7: REQUIRED_CHECK_NAMES includes build-artifacts as required context', ()
 test('t7: REQUIRED_CHECK_NAMES includes every direct CI gate', () => {
   assert.strictEqual(
     REQUIRED_CHECK_NAMES.length,
-    23,
+    24,
     'REQUIRED_CHECK_NAMES must include the legacy smoke aggregates and matrix gates',
   );
 });

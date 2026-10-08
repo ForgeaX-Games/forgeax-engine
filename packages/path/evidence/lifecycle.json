@@ -1,0 +1,4273 @@
+{
+  "node": "v26.4.0",
+  "baseline": {
+    "heapUsed": 11307976,
+    "arrayBuffers": 253867
+  },
+  "final": {
+    "heapUsed": 11722152,
+    "arrayBuffers": 145367
+  },
+  "retainedArrayBuffersDelta": -108500,
+  "contract": {
+    "rounds": 4,
+    "replacementsPerRound": 64,
+    "followersPerRound": 1000,
+    "maxRetainedArrayBufferDelta": 1048576
+  },
+  "rounds": [
+    {
+      "count": 1000,
+      "replacements": 64,
+      "snapshots": [
+        {
+          "replacement": 16,
+          "heapUsed": 11741760,
+          "arrayBuffers": 662039
+        },
+        {
+          "replacement": 32,
+          "heapUsed": 11667520,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 48,
+          "heapUsed": 11740720,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 64,
+          "heapUsed": 11741616,
+          "arrayBuffers": 465375
+        }
+      ],
+      "allocation": {
+        "method": "V8 statistical HeapProfiler; 512-byte sampling, collected allocations included; instrumentation run separate from timings",
+        "frames": 120,
+        "estimatedBytes": 61885336,
+        "rows": [
+          {
+            "bytes": 544,
+            "function": "fn",
+            "url": "node:internal/util"
+          },
+          {
+            "bytes": 672,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 608,
+            "function": "delete",
+            "url": ""
+          },
+          {
+            "bytes": 17280,
+            "function": "worldUpdate",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2608,
+            "function": "min",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 45616,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 21496,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 10176,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 12160,
+            "function": "slice",
+            "url": ""
+          },
+          {
+            "bytes": 16520,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 58960,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29032,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 6400,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 131232,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 91184,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 44944,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 52224,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 427136,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 37960,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 15680,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29280,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 63336,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7488,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 10640,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 85928,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 74088,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 4848,
+            "function": "detectMobilityStaticMoved",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 16912,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 57400,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25832,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10808,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 101624,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14360,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 6960,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 28584,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8064,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2688,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 38768,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12936,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5904,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9184,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29400,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 17736,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9184,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 53224,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5840,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4848,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 11872,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6960,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 86216,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 22048,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9120,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 3808,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 18224,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 28672,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 43896,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 12968,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4848,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10248,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 61864,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 5904,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 19104,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 7440,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 9184,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 56088,
+            "function": "validateScheduleReferences",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3720,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 123464,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 62720,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 10928,
+            "function": "runFixed",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25440,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 20240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 30944,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14136,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 86544,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 44024,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 35784,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 432368,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 35536,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 10808,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 26400,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 58936,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8064,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 9600,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 87920,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 74376,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 39984,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8096,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5904,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8624,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 30440,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11832,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 41264,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 9176,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5376,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 38104,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 520,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 10192,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 89576,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 23680,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10176,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14616,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10248,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 19152,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 54560,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 45240,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 47232,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 18792,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2680,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 11856,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 15576,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 1040,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 31952,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 44888,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3720,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 3744,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 9184,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 48248,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 520,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1568,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14664,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 59248,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 4272,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 17512,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5840,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 6920,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 4312,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 23909216,
+            "function": "fn",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 1008,
+            "function": "isFinite",
+            "url": ""
+          },
+          {
+            "bytes": 1064,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 18192,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2688,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 1040,
+            "function": "get delta",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25144,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2120,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 24856,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 19240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 175904,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 130104,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 117432,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 528,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 216008,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9040,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 141960,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 158488,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 93552,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25328,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11808,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 19992,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10120,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 10176,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 3256,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1064,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2184,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 37648,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 11840,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6960,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 23616,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11336,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1168,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1040,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 21719328,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 80936,
+            "function": "get",
+            "url": ""
+          },
+          {
+            "bytes": 7633696,
+            "function": "sample",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 1890352,
+            "function": "hypot",
+            "url": ""
+          },
+          {
+            "bytes": 3584,
+            "function": "invert",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/math/dist/index.mjs"
+          },
+          {
+            "bytes": 813872,
+            "function": "advancePathDistance",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 20256,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15544,
+            "function": "get",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5432,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 15960,
+            "function": "readRow",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15440,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 8784,
+            "function": "keys",
+            "url": ""
+          },
+          {
+            "bytes": 37336,
+            "function": "Float32Array",
+            "url": ""
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 1040,
+            "function": "getFixedAccumulator",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          }
+        ]
+      },
+      "afterDetach": {
+        "heapUsed": 11660928,
+        "arrayBuffers": 145367
+      }
+    },
+    {
+      "count": 1000,
+      "replacements": 64,
+      "snapshots": [
+        {
+          "replacement": 16,
+          "heapUsed": 11790032,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 32,
+          "heapUsed": 11867696,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 48,
+          "heapUsed": 11868360,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 64,
+          "heapUsed": 11800224,
+          "arrayBuffers": 465375
+        }
+      ],
+      "allocation": {
+        "method": "V8 statistical HeapProfiler; 512-byte sampling, collected allocations included; instrumentation run separate from timings",
+        "frames": 120,
+        "estimatedBytes": 54608792,
+        "rows": [
+          {
+            "bytes": 560,
+            "function": "fn",
+            "url": "node:internal/util"
+          },
+          {
+            "bytes": 672,
+            "function": "Promise",
+            "url": ""
+          },
+          {
+            "bytes": 1120,
+            "function": "post",
+            "url": "node:inspector"
+          },
+          {
+            "bytes": 1136,
+            "function": "#onMessage",
+            "url": "node:inspector"
+          },
+          {
+            "bytes": 608,
+            "function": "delete",
+            "url": ""
+          },
+          {
+            "bytes": 18368,
+            "function": "worldUpdate",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14784,
+            "function": "slice",
+            "url": ""
+          },
+          {
+            "bytes": 2080,
+            "function": "min",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 58032,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 10176,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 22712,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 15440,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 38736,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 54192,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 8000,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 42560,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 147880,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 52408,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 78272,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 431920,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 36384,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 12992,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 27600,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 65416,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 80616,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 8520,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 83936,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "detectMobilityStaticMoved",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 16368,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4272,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 47696,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 26920,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12432,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 98896,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14920,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 11280,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 22112,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11280,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9608,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 49640,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11872,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4272,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 22696,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15080,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 46112,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3720,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 13464,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6408,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 79792,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29144,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12336,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15680,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8624,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 15408,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 32384,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8624,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9744,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 46712,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6920,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 11840,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 53592,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 16512,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 7488,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4848,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 59160,
+            "function": "validateScheduleReferences",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 125464,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 70160,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 13520,
+            "function": "runFixed",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 23224,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 12760,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2680,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 20960,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 19456,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 80432,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 35800,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 45616,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 438496,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 32136,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 9744,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 31560,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 62704,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 70440,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 9040,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 94224,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 46528,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16704,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6960,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25432,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10776,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5432,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 48368,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2688,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 13464,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 39216,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1568,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13624,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 97032,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 26952,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9648,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10808,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3808,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 18752,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 44368,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 33904,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 4800,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 47920,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 21960,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13624,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 2120,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 20672,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2080,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 24936,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 42768,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 11312,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4272,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 45048,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1568,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10192,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 43968,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 19704,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 8592,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4272,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 10808,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 20873736,
+            "function": "fn",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 2688,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 2120,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 65040,
+            "function": "isFinite",
+            "url": ""
+          },
+          {
+            "bytes": 8296,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 1056,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 2608,
+            "function": "get delta",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6984,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3432,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 4576,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 160384,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 122200,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 11160,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 134216,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2608,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 228712,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 160680,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 161296,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 83800,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 18296,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13392,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25928,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11720,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 10176,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 560,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 39080,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 17744,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6960,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 19944,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11856,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1096,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3808,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1040,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 17664768,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1152,
+            "function": "get",
+            "url": ""
+          },
+          {
+            "bytes": 7751392,
+            "function": "sample",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 1919472,
+            "function": "hypot",
+            "url": ""
+          },
+          {
+            "bytes": 4088,
+            "function": "fromRotationMatrix",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/math/dist/index.mjs"
+          },
+          {
+            "bytes": 538240,
+            "function": "advancePathDistance",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 20256,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11800,
+            "function": "get",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 12224,
+            "function": "readRow",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7704,
+            "function": "keys",
+            "url": ""
+          },
+          {
+            "bytes": 18080,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 6960,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 34528,
+            "function": "Float32Array",
+            "url": ""
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 1040,
+            "function": "getFixedAccumulator",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          }
+        ]
+      },
+      "afterDetach": {
+        "heapUsed": 11695472,
+        "arrayBuffers": 145367
+      }
+    },
+    {
+      "count": 1000,
+      "replacements": 64,
+      "snapshots": [
+        {
+          "replacement": 16,
+          "heapUsed": 11881456,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 32,
+          "heapUsed": 11964728,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 48,
+          "heapUsed": 11965368,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 64,
+          "heapUsed": 11894808,
+          "arrayBuffers": 465375
+        }
+      ],
+      "allocation": {
+        "method": "V8 statistical HeapProfiler; 512-byte sampling, collected allocations included; instrumentation run separate from timings",
+        "frames": 120,
+        "estimatedBytes": 55037208,
+        "rows": [
+          {
+            "bytes": 544,
+            "function": "round",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/bench/lifecycle.mjs"
+          },
+          {
+            "bytes": 672,
+            "function": "Promise",
+            "url": ""
+          },
+          {
+            "bytes": 608,
+            "function": "delete",
+            "url": ""
+          },
+          {
+            "bytes": 17280,
+            "function": "worldUpdate",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6920,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 1568,
+            "function": "min",
+            "url": ""
+          },
+          {
+            "bytes": 52080,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 14496,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 19128,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 12160,
+            "function": "slice",
+            "url": ""
+          },
+          {
+            "bytes": 14920,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 6400,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 32832,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11160,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 31312,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 136032,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 45936,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 54000,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 83936,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 454016,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 32904,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 16744,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 33840,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 74024,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5840,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 73720,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 80768,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 4848,
+            "function": "detectMobilityStaticMoved",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 2680,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 14088,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 6960,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 50352,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 27456,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16240,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 103000,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14360,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 15024,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 25336,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16608,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8008,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 51832,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10784,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7488,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7000,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 24448,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11312,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 45456,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2120,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 8064,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 14000,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8024,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 94688,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 576,
+            "function": "_QueryRowFacade",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 24272,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13392,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11872,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 18752,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 28552,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 52144,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5840,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 14592,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6944,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4312,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 55968,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 19104,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 3200,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 8064,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 58776,
+            "function": "validateScheduleReferences",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 112472,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 74472,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 10928,
+            "function": "runFixed",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 22112,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 15960,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 6400,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 25856,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 22496,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 85752,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 34184,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 57216,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 420704,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 32200,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 15120,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 36240,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 68136,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 66360,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 86192,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 11280,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 49976,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14528,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 24464,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15584,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 47232,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4800,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 8592,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 14000,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 46016,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1568,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15288,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 91440,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 28016,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11808,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14056,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8624,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 17520,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 51856,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6400,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 45984,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 37856,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 26248,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7440,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 21624,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 9568,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1040,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 26168,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4312,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 40696,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3200,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 13472,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 40136,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1568,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14144,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 7560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 57608,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 19192,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 4272,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 4848,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 20391768,
+            "function": "fn",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 3200,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 2688,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 14888,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 1568,
+            "function": "get delta",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6448,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3328,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 7384,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 172728,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 122296,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 124488,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 2608,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 231872,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6400,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 170992,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 161200,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 82728,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25832,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6432,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 20552,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6920,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 12336,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 520,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 48536,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 7488,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 9176,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3216,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 19408,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12480,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1704,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 528,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 18535680,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 53864,
+            "function": "get",
+            "url": ""
+          },
+          {
+            "bytes": 1905952,
+            "function": "sample",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 64536,
+            "function": "fromRotationMatrix",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/math/dist/index.mjs"
+          },
+          {
+            "bytes": 5650768,
+            "function": "tangent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 1922080,
+            "function": "hypot",
+            "url": ""
+          },
+          {
+            "bytes": 614176,
+            "function": "advancePathDistance",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 26400,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8048,
+            "function": "get",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 12728,
+            "function": "readRow",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6552,
+            "function": "keys",
+            "url": ""
+          },
+          {
+            "bytes": 16520,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 33904,
+            "function": "Float32Array",
+            "url": ""
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 1568,
+            "function": "getFixedAccumulator",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8624,
+            "function": "create",
+            "url": ""
+          }
+        ]
+      },
+      "afterDetach": {
+        "heapUsed": 11747776,
+        "arrayBuffers": 145367
+      }
+    },
+    {
+      "count": 1000,
+      "replacements": 64,
+      "snapshots": [
+        {
+          "replacement": 16,
+          "heapUsed": 11934952,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 32,
+          "heapUsed": 12016584,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 48,
+          "heapUsed": 12018208,
+          "arrayBuffers": 465375
+        },
+        {
+          "replacement": 64,
+          "heapUsed": 11947648,
+          "arrayBuffers": 465375
+        }
+      ],
+      "allocation": {
+        "method": "V8 statistical HeapProfiler; 512-byte sampling, collected allocations included; instrumentation run separate from timings",
+        "frames": 120,
+        "estimatedBytes": 54418312,
+        "rows": [
+          {
+            "bytes": 672,
+            "function": "post",
+            "url": "node:inspector"
+          },
+          {
+            "bytes": 16240,
+            "function": "worldUpdate",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16384,
+            "function": "slice",
+            "url": ""
+          },
+          {
+            "bytes": 44536,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 9648,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 3120,
+            "function": "min",
+            "url": ""
+          },
+          {
+            "bytes": 2680,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 20792,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 10120,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 2680,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 45184,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 53472,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 135744,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 48664,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 5840,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 93648,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 34960,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 468936,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 34648,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 15680,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29880,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 66488,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 67896,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 9600,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 94096,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 8592,
+            "function": "detectMobilityStaticMoved",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 17680,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 51504,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 20448,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 98392,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14360,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 7488,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 23168,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10704,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11752,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5376,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 48768,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16680,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5904,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29832,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12968,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 39912,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 13992,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8064,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4264,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 79448,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 560,
+            "function": "_QueryRowFacade",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 25328,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 15552,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14616,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10248,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 20336,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 31744,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 44008,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 7488,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 14024,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3744,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4304,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 52488,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 19080,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 3744,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 4800,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 4312,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 63480,
+            "function": "validateScheduleReferences",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 107600,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 65344,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 3720,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 8320,
+            "function": "runFixed",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 19512,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 12240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5320,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 26952,
+            "function": "runScheduleBody",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 75568,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 40064,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 3200,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 41808,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 20064,
+            "function": "push",
+            "url": ""
+          },
+          {
+            "bytes": 449264,
+            "function": "createCommandBuffer",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 29440,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 13496,
+            "function": "flushCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 31560,
+            "function": "commit",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 64872,
+            "function": "preflightCommands",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 74056,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 11720,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 83752,
+            "function": "Map",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "propagateTransforms",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 46544,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14032,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3216,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6496,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 21608,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13464,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8120,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 50888,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7440,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 9120,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 11272,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2688,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 43480,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3120,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14144,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 90728,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 27488,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 18768,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 9184,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10248,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 6496,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 18096,
+            "function": "propagateFlat",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 31528,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 520,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 39000,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 16848,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 11856,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 2080,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 23816,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4872,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 48328,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 4240,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 14488,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 8064,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 34288,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2608,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 13000,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 9184,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 48176,
+            "function": "read",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/projection/index.mjs"
+          },
+          {
+            "bytes": 15768,
+            "function": "Set",
+            "url": ""
+          },
+          {
+            "bytes": 5904,
+            "function": "filter",
+            "url": ""
+          },
+          {
+            "bytes": 6400,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 8064,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 5840,
+            "function": "propagateHierarchy",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/scene/dist/index.mjs"
+          },
+          {
+            "bytes": 7560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 20955296,
+            "function": "fn",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 648,
+            "function": "isFinite",
+            "url": ""
+          },
+          {
+            "bytes": 8464,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 528,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 2120,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 2184,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 2608,
+            "function": "get delta",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5352,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6176,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 520,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 1664,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 98232,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5096,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 520,
+            "function": "entries",
+            "url": ""
+          },
+          {
+            "bytes": 118248,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 2080,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 126688,
+            "function": "buildColumnShape",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 3328,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 153296,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 90832,
+            "function": "ExecutableQuery",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 30672,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10704,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 16240,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 14360,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 10176,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 520,
+            "function": "spans",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 560,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 49552,
+            "function": "ok",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 6400,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 3216,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 10280,
+            "function": "hasUnchangedInput",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 2688,
+            "function": "refreshMatches",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 22608,
+            "function": "next",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 12480,
+            "function": "subarray",
+            "url": ""
+          },
+          {
+            "bytes": 1128,
+            "function": "",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5936,
+            "function": "spanUnavailableReason",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1040,
+            "function": "internalnextMutationEpoch",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 17921952,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 1906992,
+            "function": "sample",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 20936,
+            "function": "fromRotationMatrix",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/math/dist/index.mjs"
+          },
+          {
+            "bytes": 5731904,
+            "function": "tangent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 2026360,
+            "function": "hypot",
+            "url": ""
+          },
+          {
+            "bytes": 603104,
+            "function": "advancePathDistance",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/path/dist/index.mjs"
+          },
+          {
+            "bytes": 21888,
+            "function": "hasComponent",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 10744,
+            "function": "get",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 7000,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 12200,
+            "function": "readRow",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 22360,
+            "function": "next",
+            "url": ""
+          },
+          {
+            "bytes": 5376,
+            "function": "values",
+            "url": ""
+          },
+          {
+            "bytes": 8784,
+            "function": "keys",
+            "url": ""
+          },
+          {
+            "bytes": 35672,
+            "function": "Float32Array",
+            "url": ""
+          },
+          {
+            "bytes": 5936,
+            "function": "create",
+            "url": ""
+          },
+          {
+            "bytes": 1568,
+            "function": "getFixedAccumulator",
+            "url": "file:///Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-16-path-follow/packages/ecs/dist/index.mjs"
+          },
+          {
+            "bytes": 5432,
+            "function": "create",
+            "url": ""
+          }
+        ]
+      },
+      "afterDetach": {
+        "heapUsed": 11836056,
+        "arrayBuffers": 145367
+      }
+    }
+  ]
+}

@@ -52,7 +52,7 @@ const manifestBody = readFileSync(resolve(distRoot, 'shaders', 'manifest.json'),
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   fail(`webgpu import failed: ${error instanceof Error ? error.message : String(error)}`);
 }

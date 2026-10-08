@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { type CubeCaptureRequest, createCubeCaptureScheduler } from '../capture/scheduler';
+import { createCubeCaptureScheduler } from '../capture/scheduler';
+import type { CubeCameraSnapshot } from '../render-contract';
 import type { RenderTarget } from '../targets/contracts';
 
-function request(target: RenderTarget, requestVersion = 1): CubeCaptureRequest {
+function request(target: RenderTarget, requestVersion = 1): CubeCameraSnapshot {
   return {
     target,
     position: [0, 0, 0],

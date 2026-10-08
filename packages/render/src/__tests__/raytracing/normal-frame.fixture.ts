@@ -41,7 +41,11 @@ export async function verifyNormalFrame(path: RayPathFixture, fixture: SdfCardsF
     tangents,
     transform: [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
   };
-  const field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
+  const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  };
   const source = {
     instance,
     layout: fixture.layout,

@@ -7,7 +7,7 @@
 #   `pkg/wgpu_wasm.js` default `init(input?)` export. The TS shim layer
 #   (src/index.ts ensureReady singleton wrapper, w3) consumes this via Vite ?url.
 # - --release is the wasm-pack default; the [profile.release] in Cargo.toml
-#   (opt-level=z + lto=fat + codegen-units=1 + strip=debuginfo + wasm-opt -Oz
+#   (opt-level=3 + lto=fat + codegen-units=1 + strip=debuginfo + wasm-opt -Oz
 #   override) is the size-budget knob honoured here.
 # - pkg/ output is NOT committed to git (ufbx-style release; see .gitignore).
 #   wasm-bindgen emits pkg/ as an inseparable .wasm + .js glue + .d.ts set, so

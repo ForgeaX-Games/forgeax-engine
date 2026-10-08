@@ -141,7 +141,7 @@ function writeReport(payload) {
 
 async function loadDawn() {
   try {
-    const mod = await import('webgpu');
+    const mod = await import('@forgeax/engine-dawn-node');
     return mod;
   } catch (err) {
     return {

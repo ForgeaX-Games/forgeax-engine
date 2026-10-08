@@ -13,7 +13,7 @@ import {
 import { runSsrReprojectionProbe } from './ssr-reprojection-probe';
 
 describe('SSR GPU dispatch Dawn probe', () => {
-  it('executes the admitted Hi-Z and trace shaders and reads a finite result', async () => {
+  it('executes the admitted depth-pyramid and trace shaders and reads a finite result', async () => {
     expect(admittedSsrSpatial().status).toBe('admitted');
     // CI hydrates the shared-app projection; local builds publish the same
     // shader producer under shared-build-inputs. Never depend on a demo dist.
@@ -62,11 +62,12 @@ describe('SSR GPU dispatch Dawn probe', () => {
     // independent reflection confidence in the same four-byte texel.
     const surfaceNormals = new Set(
       Array.from({ length: hit.surfacePixels.length / 4 }, (_, p) =>
-        hit.surfacePixels.slice(p * 4, p * 4 + 3).join(','),
+        hit.surfacePixels.slice(p * 4 + 1, p * 4 + 3).join(','),
       ),
     );
-    // Oct12 quantization places zero Z just below the UNORM8 midpoint.
-    expect(surfaceNormals).toEqual(new Set(['218,128,218', '0,128,127']));
+    // G retains seven oct-normal bits and a zero source flag in this static
+    // scene; B retains eight normal bits. R is the presentation response.
+    expect(surfaceNormals).toEqual(new Set(['190,128', '0,128']));
     expect(hit.surfacePixels.filter((_, i) => i % 4 === 3).some((value) => value > 0)).toBe(true);
     const pyramid = hit.pyramidPixels[0] ?? [];
     // Independently derive the view distance at the leftmost pixel of the

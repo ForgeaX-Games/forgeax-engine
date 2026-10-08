@@ -1,9 +1,14 @@
 import type { BuildProductionSink, ImporterRegistry, ImportRunnerFs } from '@forgeax/engine-import';
 import { buildCatalogResult, produceBuildAssets } from '@forgeax/engine-import';
+import { encodeCatalogWire } from '@forgeax/engine-pack';
 import {
   type CatalogProducerVisibility,
   STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
 } from '@forgeax/engine-pack/build';
+import {
+  createScriptablePackSourceSnapshot,
+  type ScriptablePackSourceSnapshot,
+} from '@forgeax/engine-pack/source-node';
 import { type PackIndexEntry, validateCatalogDelta } from '@forgeax/engine-types';
 import { assertBuildRoots, projectPackIndexUrl, resolvePackBuildInputs } from '../build-inputs.js';
 import { structuredPluginError } from '../structured-plugin-error.js';
@@ -30,6 +35,7 @@ export interface PluginBuildContext {
 async function scanBuildInventory(
   roots: readonly string[],
   context: PluginBuildContext,
+  sourceSnapshot: ScriptablePackSourceSnapshot = createScriptablePackSourceSnapshot(),
 ): Promise<Awaited<ReturnType<typeof buildCatalogResult>>> {
   const scanOptions = {
     // Build inventory needs source metadata only; the build producer acquires
@@ -37,6 +43,7 @@ async function scanBuildInventory(
     scriptablePack: {
       ...STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
       metadataOnly: true,
+      sourceSnapshot,
     },
     ...(context.opts.ignorePath === undefined ? {} : { ignorePath: context.opts.ignorePath }),
   };
@@ -55,7 +62,8 @@ async function buildProduction(
   roots: readonly string[],
   context: PluginBuildContext,
 ): Promise<void> {
-  const inventory = await scanBuildInventory(roots, context);
+  const sourceSnapshot = createScriptablePackSourceSnapshot();
+  const inventory = await scanBuildInventory(roots, context, sourceSnapshot);
   if (inventory.authority !== 'authoritative') {
     throw structuredPluginError({
       code: 'catalog-degraded',
@@ -70,6 +78,7 @@ async function buildProduction(
   });
   const productionCatalog: PackIndexEntry[] = await produceBuildAssets({
     inventory,
+    sourceSnapshot,
     cwd: process.cwd(),
     basePrefix,
     generation: 1,
@@ -104,7 +113,7 @@ async function buildProduction(
   plugin.emitFile({
     type: 'asset',
     fileName: 'pack-index.json',
-    source: JSON.stringify(productionCatalog),
+    source: JSON.stringify(encodeCatalogWire(productionCatalog)),
   });
 }
 

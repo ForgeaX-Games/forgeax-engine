@@ -129,6 +129,9 @@
       "path": "./packages/rhi-debug"
     },
     {
+      "path": "./packages/rhi-wgpu-native"
+    },
+    {
       "path": "./packages/vite-plugin-rhi-debug"
     },
     {
@@ -163,6 +166,21 @@
     },
     {
       "path": "./packages/dsh"
+    },
+    {
+      "path": "./packages/interaction"
+    },
+    {
+      "path": "./packages/mesh-io"
+    },
+    {
+      "path": "./packages/terrain"
+    },
+    {
+      "path": "./packages/navigation"
+    },
+    {
+      "path": "./packages/path"
     }
   ]
 }

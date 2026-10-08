@@ -25,6 +25,7 @@ import { featureScopeKey, resolveFeatureWorkResources } from './frame-plan';
 import {
   cloneRenderFeaturePlanSignatureSnapshot,
   freezeRenderFeaturePlan,
+  isRenderFeatureSceneResource,
   type RenderFeatureLogicalTarget,
   type RenderFeatureMaterialShaderBindingContract,
   type RenderFeaturePassDeclaration,
@@ -32,6 +33,7 @@ import {
   type RenderFeaturePlanSignatureMetrics,
   type RenderFeaturePlanSignatureSnapshot,
   type RenderFeatureResourceDeclaration,
+  type RenderFeatureSceneResource,
   type RenderFeatureWorkPlan,
   rememberRenderFeaturePlanSignature,
   renderFeaturePlanSignature,
@@ -142,9 +144,12 @@ export interface RenderFeatureFrameInput {
   readonly sceneData?: SceneDataCatalog;
   readonly generation?: number;
   readonly caps: Readonly<RhiCaps>;
+  readonly limits?: Readonly<{ maxSampledTexturesPerShaderStage?: number }>;
   /** Normal frame-owner facts shared with producer extraction. */
   readonly frame?: import('./types').RenderFeatureFrameContext;
   /** Renderer-owned material binding contract projection for producer plans. */
+  /** Read a build-time cooked utility selected for the receiving device. */
+  readonly getFeatureShaderSource?: ((identifier: string) => string | undefined) | undefined;
   readonly materialShaderBindingContract?: (
     materialShaderId: string,
   ) => RenderFeatureMaterialShaderBindingContract;
@@ -152,7 +157,7 @@ export interface RenderFeatureFrameInput {
     | {
         prepare(
           identity: string,
-          resource: import('../assembly/feature-scene-inputs').RenderFeatureSceneResource,
+          resource: RenderFeatureSceneResource,
         ): { readonly view: TextureView; readonly target?: RenderFeatureTargetHandle };
         abortFeature(identity: string): void;
       }
@@ -597,15 +602,12 @@ function preparePlanResources(
 
   if (
     gpu === undefined &&
-    plan.resources.some((resource) =>
-      [
-        'compute-program',
-        'buffer',
-        'prepared-gpu-resource',
-        'compute-bindings',
-        'scene-depth',
-        'scene-noise',
-      ].includes(resource.kind),
+    plan.resources.some(
+      (resource) =>
+        isRenderFeatureSceneResource(resource) ||
+        ['compute-program', 'buffer', 'prepared-gpu-resource', 'compute-bindings'].includes(
+          resource.kind,
+        ),
     )
   ) {
     return err(planFailure(slot));
@@ -673,7 +675,7 @@ function preparePlanResources(
     preparedGpuResources.set(resource.name, { kind: 'sampler', reference: prepared.value });
   }
   for (const resource of plan.resources) {
-    if (resource.kind !== 'scene-depth' && resource.kind !== 'scene-noise') continue;
+    if (!isRenderFeatureSceneResource(resource)) continue;
     if (gpu === undefined || sceneResources === undefined) return err(planFailure(slot));
     const scene = sceneResources.prepare(slot.feature.identity, resource);
     const prepared = gpu.prepareTextureView(resource.name, scene.view, scene.target);
@@ -1594,8 +1596,9 @@ export function runRenderFeatureFrame(
       'plan',
       () =>
         feature.plan(extracted.value, {
+          getFeatureShaderSource: input.getFeatureShaderSource,
           caps: input.caps,
-          ...renderMaterialContext(input.caps),
+          ...renderMaterialContext(input.caps, input.limits),
           frame: { frameNumber: input.frameNumber },
           generation: transaction.generation,
           views,
@@ -1645,12 +1648,7 @@ export function runRenderFeatureFrame(
       const targetInputs = new Map<string, readonly RenderFeatureTargetHandle[]>();
       for (const row of workResources) {
         const workScope = row.work.scope;
-        if (
-          workScope !== 'frame' &&
-          row.work.resources.some(
-            (resource) => resource.kind === 'scene-depth' || resource.kind === 'scene-noise',
-          )
-        )
+        if (workScope !== 'frame' && row.work.resources.some(isRenderFeatureSceneResource))
           throw new Error('Scene inputs belong to frame-scoped work');
         const view =
           workScope === 'frame'

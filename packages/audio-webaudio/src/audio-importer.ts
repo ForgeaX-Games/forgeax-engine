@@ -1,28 +1,5 @@
-// audio-importer.ts - the build-time audioImporter (feat-20260603-asset-import-loader-injection M3 / w25).
-//
-// The `{ key: 'audio', import }` Importer the @forgeax/engine-import runner
-// dispatches a `*.meta.json` with `importer: 'audio'` to.
-//
-// SEMANTIC HETEROGENEITY (plan-strategy D-3 / requirements AC-18 callout):
-// audio is NOT like image / gltf. There is no JS decoder to strip out of the
-// runtime bundle -- the runtime decodes audio with the native Web Audio
-// `AudioContext.decodeAudioData` (clip-loader.ts), and the browser owns codec
-// selection (wav / mp3 / ogg / flac). So this importer is NOT a bundle
-// optimization: AC-16's bundle-delta evidence is image-only and does NOT
-// apply to audio. The audioImporter's value is the UNIFIED IMPORT ENTRY -- it
-// lets an audio source flow through the same declare -> import -> load
-// pipeline (meta.importer='audio') as every other asset family, so an AI user
-// reads one consistent import surface instead of an audio special case.
-//
-// The importer body MUST NOT call `AudioContext` / `decodeAudioData`: decode is
-// the runtime loader's job (clip-loader.ts, which fetches the source URL and
-// decodes in the browser). A decoded `AudioClipAsset` carries an `AudioBuffer`,
-// a runtime-only Web Audio object that cannot be produced at build time. The
-// importer therefore emits a thin pass-through descriptor (`kind: 'audio'` +
-// the source path) under the meta-declared GUID; the runtime resolves it to a
-// decoded clip at load time.
-//
-// GUID import-stable iron law: every produced GUID comes from `ctx.subAssets[]`.
+// Build-time audio import preserves encoded bytes; the Host owns native decode.
+// The validated topology names exactly one output under its author-owned GUID.
 
 import {
   IMPORT_ERROR_HINTS,
@@ -78,6 +55,8 @@ function validateAudioOutputTopology(ctx: ImportContext): ImportError | undefine
   });
 }
 
+import { indexPcmWave } from './pcm-wave';
+
 async function importAudio(ctx: ImportContext): Promise<ImportResult> {
   const topologyError = validateAudioOutputTopology(ctx);
   if (topologyError !== undefined) return { ok: false, error: topologyError };
@@ -101,34 +80,72 @@ async function importAudio(ctx: ImportContext): Promise<ImportResult> {
     };
   }
 
-  const out: ImportedAsset[] = [];
-  for (const sub of ctx.subAssets) {
-    if (sub.kind !== 'audio') continue;
-    // Thin pass-through descriptor: the runtime audio loader fetches the source
-    // URL and decodes via the browser, so the build-time payload carries only
-    // the source reference (no AudioBuffer; cast through the Asset slot like the
-    // other importers' build-time POD-vs-runtime-handle bridges).
-    const payload = {
-      kind: 'audio',
-      mediaType: audioMediaType(ctx.source),
-      source: ctx.source,
-      bytes: read.value,
-    } as unknown as ImportedAsset['payload'];
-    out.push({
-      guid: sub.guid,
-      kind: 'audio',
-      payload,
-      refs: [],
-      artifacts: {
-        source: {
-          mediaType: audioMediaType(ctx.source),
-          assetCodec: { name: 'browser-audio' },
-          bytes: read.value,
-        },
-      },
-    });
+  const sub = ctx.subAssets[0] as ImportContext['subAssets'][number];
+  const streaming = ctx.importSettings.playback === 'stream';
+  const mediaType = streaming ? 'audio/wav' : audioMediaType(ctx.source);
+  let stream: Awaited<ReturnType<typeof indexPcmWave>> | undefined;
+  if (
+    ctx.importSettings.playback !== undefined &&
+    ctx.importSettings.playback !== 'stream' &&
+    ctx.importSettings.playback !== 'buffer'
+  )
+    return {
+      ok: false,
+      error: new ImportError({
+        code: 'source-validation-failed',
+        expected: "playback 'buffer' or 'stream'",
+        hint: 'correct the audio Meta importSettings.playback',
+        detail: { diagnostics: [] },
+      }),
+    };
+  if (streaming) {
+    try {
+      stream = await indexPcmWave(read.value);
+    } catch (cause) {
+      return {
+        ok: false,
+        error: new ImportError({
+          code: 'source-validation-failed',
+          expected: 'PCM16 WAV with 1/2 channels at 8..96 kHz and a bounded stream index',
+          hint: 'encode the long BGM/dialogue as PCM16 WAV or select buffered playback',
+          detail: {
+            diagnostics: [
+              {
+                code: 'audio-stream-format',
+                severity: 'error',
+                sourcePath: ctx.source,
+                sourceRange: { start: 0, end: 0, line: 1, column: 1 },
+                rule: 'pcm16-stream',
+                expected: 'RIFF PCM16 WAV',
+                actual: String(cause),
+                hint: 'recook a supported source',
+              },
+            ],
+          },
+        }),
+      };
+    }
   }
-  return { ok: true, value: { assets: out, sourceDependencies: [ctx.source] } };
+  const asset: ImportedAsset = {
+    guid: sub.guid,
+    kind: 'audio',
+    payload: {
+      kind: 'audio',
+      mediaType,
+      source: ctx.source,
+      ...(stream ? { stream } : {}),
+    } as unknown as ImportedAsset['payload'],
+    refs: [],
+    artifacts: {
+      source: {
+        mediaType,
+        ...(stream ? { delivery: 'stream' as const } : {}),
+        assetCodec: { name: stream ? 'forgeax-pcm16-stream' : 'browser-audio', version: '1' },
+        bytes: read.value,
+      },
+    },
+  };
+  return { ok: true, value: { assets: [asset], sourceDependencies: [ctx.source] } };
 }
 
 /**

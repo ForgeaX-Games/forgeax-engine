@@ -50,5 +50,4 @@ expectTypeOf<ToolRuntimeError['code']>().toEqualTypeOf<
   | 'tool-bootstrap-not-clone-safe'
   | 'tool-migration-live-state'
   | 'tool-artifact-manifest-invalid'
-  | 'tool-timing-invalid'
 >();

@@ -80,6 +80,7 @@ try {
   await capture('direct');
   console.log('Prepare ordinary Renderer GI');
   const settings = {
+    gather: 'exact',
     maxBounces: 1,
     maxDistance: 100,
     seed: 47,

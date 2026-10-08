@@ -18,10 +18,9 @@ import type { Handle, MeshAsset, VertexAttributeMap } from '@forgeax/engine-type
 
 /** Public Atmosphere values; the DirectionalLight is the sun authority. */
 export const WAVE1_ATMOSPHERE_PRESET = Object.freeze({
-  turbidity: 2,
-  rayleigh: 1,
-  mieCoefficient: 0.005,
-  mieDirectionalG: 0.8,
+  rayleighScattering: [5.802e-6, 13.558e-6, 33.1e-6] as const,
+  mieScattering: 3.996e-6,
+  mieAnisotropy: 0.8,
   sunAngularRadius: 0.004675,
 });
 

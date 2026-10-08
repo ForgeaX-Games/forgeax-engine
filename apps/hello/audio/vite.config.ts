@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { vitePluginRhiDebug } from '@forgeax/engine-vite-plugin-rhi-debug';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
@@ -32,6 +33,7 @@ const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-audio');
 export default defineConfig({
   plugins: [
     forgeaxShader() as never,
+    ...(process.env.FORGEAX_ENGINE_RHI_DEBUG === '1' ? [vitePluginRhiDebug()] : []),
     ...optionalAssetPack(assetRoots, () =>
       pluginPack({
         roots: assetRoots,

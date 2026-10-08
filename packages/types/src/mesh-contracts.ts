@@ -1,7 +1,17 @@
 // Mesh, texture, and material asset primitives.
 /// <reference types="@webgpu/types" />
+import type { AssetCodec, Integrity } from './asset.js';
 import type { AssetGuid } from './image-pack-contracts.js';
 import type { VertexAttributeMap } from './media-contracts.js';
+import type { MeshDistanceField } from './mesh-distance-field.js';
+
+export type {
+  DistanceFieldPolicy,
+  FieldBounds,
+  FieldVec3,
+  MeshDistanceField,
+} from './mesh-distance-field.js';
+
 import type { MeshLodLevel } from './mesh.js';
 import type { PrimitiveTopology } from './primitive-topology.js';
 
@@ -41,8 +51,16 @@ export type { TextureAsset } from './texture/asset.js';
  * Designed for M3 GLTF loader single-layer mapping
  * (`POSITION -> position` / `TEXCOORD_0 -> uv` etc.) without runtime rename.
  */
+/** Static, welded collision geometry produced from the mesh's triangle sections. */
+export interface MeshCollision {
+  readonly positions: Float32Array;
+  readonly indices: Uint32Array;
+}
+
 export interface MeshAsset {
   readonly kind: 'mesh';
+  /** Opt-in build-time collision product; source mesh GUID and lifecycle remain authoritative. */
+  readonly collision?: MeshCollision;
   readonly vertices: Float32Array;
   /**
    * Index buffer. Optional: vertex-only meshes (point-list / line-list with no
@@ -90,6 +108,12 @@ export interface MeshAsset {
   readonly submeshes: readonly Submesh[];
   /** Offline local-space representation of the entire static mesh. */
   readonly cardLayout?: MeshCardLayout;
+  /** Optional validated offline visibility data, loaded with this mesh publication. */
+  readonly distanceField?: MeshDistanceField & {
+    readonly sectionSidedness: readonly (0 | 1)[];
+    /** Verified publication facts; absent on a generated field before artifact admission. */
+    readonly artifact?: { readonly integrity: Integrity; readonly assetCodec: AssetCodec };
+  };
   /** Stable, mesh-owned material entry points shared by every instance. */
   readonly materialSlots: readonly MeshMaterialSlot[];
   /** Ordered lower-detail MeshAsset references; the root remains LOD0. */

@@ -22,6 +22,11 @@ import {
 import { createCookieProjectionMatrixData } from '../prepare/extended-lighting/spot-modifiers';
 import { runShimSyncStep } from './renderer-helpers';
 
+type FallbackDevice = Pick<
+  RhiDevice,
+  'createBuffer' | 'createTexture' | 'createTextureView' | 'queue'
+>;
+
 export interface ExtendedLightingFallbackResources {
   readonly iesProfileTexture: Texture;
   readonly cookieTexture: Texture;
@@ -39,7 +44,7 @@ function requireResult<T>(fn: () => Result<T, RhiError>, expected: string, hint:
 }
 
 function createModifierTexture(
-  device: RhiDevice,
+  device: FallbackDevice,
   label: string,
   width: number,
   height: number,
@@ -65,7 +70,7 @@ function createModifierTexture(
 }
 
 function writeModifierTexture(
-  device: RhiDevice,
+  device: FallbackDevice,
   texture: Texture,
   data: Uint8Array,
   width: number,
@@ -87,7 +92,7 @@ function writeModifierTexture(
   );
 }
 
-function createLtcView(device: RhiDevice, label: string, table: Uint16Array): TextureView {
+function createLtcView(device: FallbackDevice, label: string, table: Uint16Array): TextureView {
   const texture = requireResult(
     () =>
       device.createTexture({
@@ -124,7 +129,7 @@ function createLtcView(device: RhiDevice, label: string, table: Uint16Array): Te
 
 /** Allocate the always-valid fallback resources for the extended-lighting BGL. */
 export function createExtendedLightingFallbackResources(
-  device: RhiDevice,
+  device: FallbackDevice,
   enabled: boolean,
 ): ExtendedLightingFallbackResources | undefined {
   if (!enabled) return undefined;

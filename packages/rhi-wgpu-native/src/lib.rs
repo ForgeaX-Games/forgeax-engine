@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "reference"))]
+mod acceleration;
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod conformance_registry;
@@ -6,6 +8,8 @@ mod ray_query;
 #[cfg(feature = "reference")]
 pub mod reference;
 mod surface;
+#[cfg(test)]
+mod world_traversal_parity;
 
 use serde::Serialize;
 use std::path::Path;

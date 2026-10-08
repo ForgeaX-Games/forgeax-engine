@@ -50,16 +50,24 @@ export interface DepthPyramid {
   readonly pyramid: GraphTextureView;
 }
 
-export interface DepthPyramidGraphInputs {
+interface DepthPyramidGraphInputBase {
   /** Full-resolution scene depth of the view. */
   readonly depth: GraphTextureView;
   /** Shared View UBO; its projection range linearizes depth. */
   readonly view?: GraphBuffer;
   readonly width: number;
   readonly height: number;
-  /** Defaults to `closest`. */
-  readonly reduction?: DepthPyramidReduction;
 }
+
+/**
+ * Only the furthest reduction seeds from multisampled depth: occlusion needs
+ * every sample, while screen-space tracers read the resolved depth.
+ */
+export type DepthPyramidGraphInputs = DepthPyramidGraphInputBase &
+  (
+    | { readonly reduction?: 'closest' }
+    | { readonly reduction: 'furthest'; readonly multisampled?: boolean }
+  );
 
 export interface DepthPyramidProjection {
   readonly pyramid: DepthPyramid;
@@ -78,6 +86,19 @@ const SEED_ENTRIES = [
     storageTexture: { access: 'write-only', format: DEPTH_PYRAMID_FORMAT, viewDimension: '2d' },
   },
   { binding: 2, visibility: GPU_SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+] as const;
+
+// Its own binding keeps each module binding single-typed for reflection.
+const SEED_MULTISAMPLED_BINDING = 3;
+
+const SEED_MULTISAMPLED_ENTRIES = [
+  {
+    binding: SEED_MULTISAMPLED_BINDING,
+    visibility: GPU_SHADER_STAGE_COMPUTE,
+    texture: { sampleType: 'depth', viewDimension: '2d', multisampled: true },
+  },
+  SEED_ENTRIES[1],
+  SEED_ENTRIES[2],
 ] as const;
 
 const REDUCE_ENTRIES = [
@@ -169,6 +190,7 @@ export function addDepthPyramidPasses<FrameCtx extends RenderGraphFrame>(
 ): Result<DepthPyramidProjection, RenderGraphError> {
   const reduction = input.reduction ?? 'closest';
   const names = REDUCTION_NAMES[reduction];
+  const multisampled = input.reduction === 'furthest' && input.multisampled === true;
   const seedPass = `${names.graph}-seed`;
   const reducePass = `${names.graph}-reduce-chain`;
   const created = createDepthPyramid(
@@ -201,15 +223,15 @@ export function addDepthPyramidPasses<FrameCtx extends RenderGraphFrame>(
         frame,
         source,
         'depth_pyramid_seed',
-        SEED_ENTRIES,
-        `depth_pyramid_seed${names.entry}`,
+        multisampled ? SEED_MULTISAMPLED_ENTRIES : SEED_ENTRIES,
+        `depth_pyramid_seed${names.entry}${multisampled ? '_multisampled' : ''}`,
       );
       pass.setPipeline(seedState.pipeline);
       pass.setBindGroup(
         0,
         computeBindGroup(frame, seedState, [
           {
-            binding: 0,
+            binding: multisampled ? SEED_MULTISAMPLED_BINDING : 0,
             resource: { kind: 'textureView', value: resolvedGraphView(resources, depth) },
           },
           {

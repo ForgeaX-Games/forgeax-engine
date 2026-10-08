@@ -3,6 +3,7 @@ import {
   buildVisibilityDistanceField,
   type DistanceFieldPolicy,
   encodeMeshDistanceField,
+  MESH_DISTANCE_FIELD_GENERATION_VERSION,
 } from '@forgeax/engine-geometry';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 
@@ -58,7 +59,7 @@ export function createMeshDistanceFieldCooker(): NativeCooker<
         artifacts: {
           'distance-field.bin': { mediaType: 'application/octet-stream', bytes: encoded.value },
         },
-        inputFingerprint: `mesh-distance-field:4:${built.value.meshDigest}:${built.value.spacing}:${JSON.stringify(built.value.policy)}`,
+        inputFingerprint: `mesh-distance-field:${MESH_DISTANCE_FIELD_GENERATION_VERSION}:${built.value.meshDigest}:${built.value.spacing}:${JSON.stringify(built.value.policy)}`,
       };
     },
   };

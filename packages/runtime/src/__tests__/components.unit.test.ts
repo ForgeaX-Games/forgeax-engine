@@ -176,16 +176,18 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(componentSchema(MeshFilter).assetHandle).toBe('shared<MeshAsset>');
     });
 
-    it('MeshRenderer has 1 field (materials; feat-20260608 M2 / w7 multi-material array)', () => {
+    it('MeshRenderer has materials and lossless lightingChannels fields', () => {
       expect(MeshRenderer.name).toBe('MeshRenderer');
-      expect(Object.keys(componentSchema(MeshRenderer)).length).toBe(1);
+      expect(Object.keys(componentSchema(MeshRenderer)).length).toBe(2);
       const schemaRecord = componentSchema(MeshRenderer) as Record<string, string>;
       expect(schemaRecord.materials).toBe('array<shared<MaterialAsset>>');
+      expect(schemaRecord.lightingChannels).toBe('f64');
     });
 
-    it('Camera has 31 fields including target, exposure, and color grading columns', () => {
+    it('Camera has 32 fields including target, targetLayer, exposure, and color grading columns', () => {
       expect(Camera.name).toBe('Camera');
-      expect(Object.keys(componentSchema(Camera)).length).toBe(31);
+      expect(Object.keys(componentSchema(Camera)).length).toBe(32);
+      expect(componentSchema(Camera).targetLayer).toBe('u32');
       expect(componentSchema(Camera).fov).toBe('f32');
       expect(componentSchema(Camera).aspect).toBe('f32');
       expect(componentSchema(Camera).near).toBe('f32');
@@ -227,19 +229,22 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(componentSchema(Camera).colorLutStrength).toBe('f32');
     });
 
-    it('DirectionalLight has 15 fields: 3 light + castShadow bool + closed shadow quality fields + contactShadowLength', () => {
+    it('DirectionalLight includes lightingChannels alongside light and shadow fields', () => {
       // feat-20260621: DirectionalLightShadow merged into DirectionalLight via castShadow toggle.
       // shadowDistance replaced the nearPlane/farPlane pair (near derives from camera).
       // feat-20260709 M2: direction/color collapsed from 6 per-axis scalars to
       // two array<f32,3> columns (3 light fields: direction + color + intensity).
       expect(DirectionalLight.name).toBe('DirectionalLight');
-      expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(15);
+      expect(Object.keys(componentSchema(DirectionalLight)).length).toBe(17);
+      expect(componentSchema(DirectionalLight).lightingChannels).toBe('f64');
+      expect(componentSchema(DirectionalLight).staggerCascades).toBe('bool');
+      expect(componentDefinition(DirectionalLight).defaults?.staggerCascades).toBe(false);
       expect(componentSchema(DirectionalLight).contactShadowLength).toBe('f32');
       // 3 light fields
       expect(componentSchema(DirectionalLight).direction).toBe('array<f32, 3>');
       expect(componentSchema(DirectionalLight).color).toBe('array<f32, 3>');
       expect(componentSchema(DirectionalLight).intensity).toBe('f32');
-      // shadow gate + 8 merged shadow fields
+      // shadow gate + merged shadow quality and cadence fields
       expect(componentSchema(DirectionalLight).castShadow).toBe('bool');
       expect(componentSchema(DirectionalLight).mapSize).toBe('f32');
       expect(componentSchema(DirectionalLight).cascadeCount).toBe('f32');
@@ -1035,9 +1040,8 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   //   - Layer { value: 100 } + SortKey { value: -2.0 } co-exist on one entity
   //     (multi-component spawn targets a single archetype).
   //
-  // The downstream "SortKey overrides TransparentSortConfig mode formula"
-  // behaviour is verified by w16 inside `transparent-sort.test.ts` — this
-  // task only validates that SortKey is a registerable scalar f32 component
+  // Transparent ordering is owned by `TransparentSortCache`
+  // (render/src/systems/transparent-dispatch.ts) — this task only validates that SortKey is a registerable scalar f32 component
   // with the expected read-back path. charter mapping: F1 + P3 + P4 (Layer +
   // SortKey are generic ECS renderer components, not 2D-only specials).
   //
@@ -1084,48 +1088,23 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
 }
 
 {
-  // --- from animation-player.test.ts ---
-  // feat-20260615-animation-player-crossfade-simple-transition M1 / w1 —
-  // AnimationPlayer SoA schema lock test.
-  //
-  // Old 5-field schema { clip, time, speed, paused, looping } replaced
-  // by 6-field SoA variable arrays (feat-20260713 M1 / w4 dropped the fixed
-  // 4-slot cap; the columns are now variable `array<T>`), then extended to
-  // 10 fields by feat-20260713 M3 / w24 (plan D-3: a single component surface
-  // hosts both direct-write and graph-driven playback — no second peer
-  // component):
-  //   clips:   'array<shared<AnimationClip>>'   (default empty — no slot active)
-  //   times:   'array<f32>'                      (default empty Float32Array)
-  //   weights: 'array<f32>'                      (default empty Float32Array)
-  //   speeds:  'array<f32>'                      (default empty — consumers write
-  //                                               all four columns length-synced)
-  //   graph:       'shared<AnimationGraph>'      (default 0 — no graph attached)
-  //   nodeWeights: 'array<f32>'                  (default empty — per-node runtime knob)
-  //   nodeTimes:   'array<f32>'                  (default empty — per-node seek time)
-  //   nodeSpeeds:  'array<f32>'                  (default empty — per-node speed)
-  //   paused:  'bool'                                (default false)
-  //   looping: 'bool'                                (default true)
-  //
-  // Anchors: requirements AC-01 (variable N-slot direct-write field set) + AC-02
-  // (type-level error on old shape) + IS-1 (SoA arrays); feat-20260713 M1
-  // plan D-1/D-6 (variable columns, speeds default []); M3 plan D-3 (graph
-  // handle + per-node runtime knobs extend the same component);
-  // plan-tasks.json w3/w4/w24.
-
-  describe('AnimationPlayer — SoA 10-field schema lock (M1 / w3 + M3 / w24)', () => {
-    it('AnimationPlayer is a registered component with name "AnimationPlayer" and 10 SoA schema fields', () => {
+  // Direct and graph playback share one schema; masks are World-local bindings.
+  describe('AnimationPlayer schema', () => {
+    it('registers the twelve playback and graph fields', () => {
       expect(AnimationPlayer.name).toBe('AnimationPlayer');
       const schema = componentSchema(AnimationPlayer) as Record<string, unknown>;
-      expect(Object.keys(schema).length).toBe(10);
+      expect(Object.keys(schema).length).toBe(12);
       expect(schema).toEqual({
         clips: 'array<shared<AnimationClip>>',
-        times: 'array<f32>',
+        times: 'array<f64>',
         weights: 'array<f32>',
         speeds: 'array<f32>',
+        masks: 'array<shared<AnimationMask>>',
         graph: 'shared<AnimationGraph>',
         nodeWeights: 'array<f32>',
-        nodeTimes: 'array<f32>',
+        nodeTimes: 'array<f64>',
         nodeSpeeds: 'array<f32>',
+        nodeMasks: 'array<shared<AnimationMask>>',
         paused: 'bool',
         looping: 'bool',
       });
@@ -1137,9 +1116,9 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       );
     });
 
-    it('componentSchema(AnimationPlayer).times is variable array<f32>', () => {
+    it('componentSchema(AnimationPlayer).times is variable array<f64>', () => {
       expect((componentSchema(AnimationPlayer) as Record<string, unknown>).times).toBe(
-        'array<f32>',
+        'array<f64>',
       );
     });
 
@@ -1175,9 +1154,9 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       );
     });
 
-    it('componentSchema(AnimationPlayer).nodeTimes is variable array<f32> (M3 / w24 per-node seek time)', () => {
+    it('componentSchema(AnimationPlayer).nodeTimes is variable array<f64> (M3 / w24 per-node seek time)', () => {
       expect((componentSchema(AnimationPlayer) as Record<string, unknown>).nodeTimes).toBe(
-        'array<f32>',
+        'array<f64>',
       );
     });
 
@@ -1209,7 +1188,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         .unwrap();
       const ap = world.get(e, AnimationPlayer).unwrap() as unknown as {
         clips: Uint32Array;
-        times: Float32Array;
+        times: Float64Array;
         weights: Float32Array;
         speeds: Float32Array;
         paused: boolean;
@@ -1219,7 +1198,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       // four columns length-synced when spawning an active player (M1 / w7).
       expect(ap.clips).toBeInstanceOf(Uint32Array);
       expect(ap.clips.length).toBe(0);
-      expect(ap.times).toBeInstanceOf(Float32Array);
+      expect(ap.times).toBeInstanceOf(Float64Array);
       expect(ap.times.length).toBe(0);
       expect(ap.weights).toBeInstanceOf(Float32Array);
       expect(ap.weights.length).toBe(0);
@@ -1244,7 +1223,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 1.5, 0, 0]),
+            times: new Float64Array([0, 1.5, 0, 0]),
             weights: new Float32Array([0.7, 0.3, 0, 0]),
             speeds: new Float32Array([1, 0.5, 0, 0]),
             paused: true,
@@ -1254,7 +1233,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         .unwrap();
       const ap = world.get(e, AnimationPlayer).unwrap() as unknown as {
         clips: Uint32Array;
-        times: Float32Array;
+        times: Float64Array;
         weights: Float32Array;
         speeds: Float32Array;
         paused: boolean;
@@ -1282,8 +1261,8 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
           data: {},
         })
         .unwrap();
-      world.set(e, AnimationPlayer, { times: new Float32Array([2.0, 0, 0, 0]) });
-      const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float32Array };
+      world.set(e, AnimationPlayer, { times: new Float64Array([2.0, 0, 0, 0]) });
+      const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float64Array };
       expect(ap.times[0]).toBeCloseTo(2.0, 5);
     });
   });
@@ -1313,7 +1292,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   //        refactoring — every field value must stay byte-identical)
   // ────────────────────────────────────────────────────────────────────────────
 
-  describe('camera factory 31-field schema snapshot (w14 AC-07 invariant)', () => {
+  describe('camera factory 32-field schema snapshot (w14 AC-07 invariant)', () => {
     it('perspective({ fov: Math.PI/3, aspect: 16/9 }) — all 20 fields match reference', () => {
       const pod = perspective({ fov: Math.PI / 3, aspect: 16 / 9 });
       // Perspective quartet — caller-supplied
@@ -1416,16 +1395,16 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(pod.tonemap).toBe(TONEMAP_NONE);
     });
 
-    it('perspective + orthographic 30-field payload counts (30 factory Camera values)', () => {
+    it('perspective + orthographic 31-field payload counts (31 factory Camera values)', () => {
       const p = perspective({ fov: 60, aspect: 4 / 3 });
       const o = orthographic({ left: -1, right: 1, bottom: -1, top: 1 });
-      // Both return exactly 30 values: Camera.fields also includes the optional
-      // target reference, which factories intentionally leave unset.
+      // Both return exactly 31 values (including targetLayer 0): Camera.fields also
+      // includes the optional target reference, which factories intentionally leave unset.
       // The returned values include exposure and color grading columns +
       // autoAspect bool column; feat-20260709 M3 collapsed the 4-scalar
       // clear-color quartet into one inline array<f32,4>).
-      expect(Object.keys(p).length).toBe(30);
-      expect(Object.keys(o).length).toBe(30);
+      expect(Object.keys(p).length).toBe(31);
+      expect(Object.keys(o).length).toBe(31);
     });
   });
 
@@ -1434,7 +1413,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   // ────────────────────────────────────────────────────────────────────────────
 
   describe('Camera.fields reflection (w14 AC-07 SSOT)', () => {
-    it('Camera.fields has exactly 31 keys matching the Camera column set', () => {
+    it('Camera.fields has exactly 32 keys matching the Camera column set', () => {
       const keys = Object.keys(Camera.fields).sort();
       expect(keys).toEqual([
         'antialias',
@@ -1462,6 +1441,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         'rates',
         'right',
         'target',
+        'targetLayer',
         'temperature',
         'tint',
         'tonemap',
@@ -1482,7 +1462,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
                 ? 'array<f32, 2>'
                 : key === 'colorLut'
                   ? 'shared<TextureAsset>'
-                  : key === 'historyVersion'
+                  : key === 'historyVersion' || key === 'targetLayer'
                     ? 'u32'
                     : key === 'target'
                       ? 'shared<RenderTarget>'
@@ -1511,6 +1491,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(d.whitePoint.default).toBeCloseTo(4.0, 6);
       expect(d.antialias.default).toBe(0);
       expect(d.historyVersion.default).toBe(0);
+      expect(d.targetLayer.default).toBe(0);
       expect(d.bloom.default).toBe(0);
       expect(d.bloomThreshold.default).toBeCloseTo(1.0, 6);
       expect(d.bloomIntensity.default).toBeCloseTo(1.0, 6);
@@ -1552,6 +1533,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         whitePoint: 4.0,
         antialias: 0,
         historyVersion: 0,
+        targetLayer: 0,
         bloom: 0,
         bloomThreshold: 1.0,
         bloomIntensity: 1.0,
@@ -1776,7 +1758,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
       expect(pod.exposure).toBeCloseTo(1.0, 6);
     });
 
-    it('perspective return value has all 30 factory Camera fields', () => {
+    it('perspective return value has all 31 factory Camera fields', () => {
       const pod = perspective({ fov: 60, aspect: 4 / 3 });
       const keys = Object.keys(pod).sort();
       expect(keys).toEqual([
@@ -1804,6 +1786,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
         'rangeEv',
         'rates',
         'right',
+        'targetLayer',
         'temperature',
         'tint',
         'tonemap',
@@ -1911,7 +1894,7 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   // array added.
   //
   //   (a) `componentDefinition(MeshRenderer).defaults` is a frozen map asserting
-  //       `{ materials: [] }` (empty array routes to D-Q7 case B default
+  //       `{ materials: [], lightingChannels: 0xffffffff }` (empty array routes to D-Q7 case B default
   //       material path).
   //
   //   (b) `world.spawn({ component: MeshRenderer, data: {} })` produces a row
@@ -1924,8 +1907,11 @@ import { extractFrame } from '../../../render/src/render-system-extract-tail';
   //       compile-time error (verified via test-d.ts).
 
   describe('componentDefinition(MeshRenderer).defaults — frozen map assertion (w8)', () => {
-    it('componentDefinition(MeshRenderer).defaults equals { materials: [] }', () => {
-      expect(componentDefinition(MeshRenderer).defaults).toEqual({ materials: [] });
+    it('componentDefinition(MeshRenderer).defaults retains empty materials and all light channels', () => {
+      expect(componentDefinition(MeshRenderer).defaults).toEqual({
+        materials: [],
+        lightingChannels: 0xffffffff,
+      });
     });
 
     it('componentDefinition(MeshRenderer).defaults is deep-frozen (Object.isFrozen returns true)', () => {

@@ -1,6 +1,7 @@
 import type { World } from '@forgeax/engine-ecs';
 
 export type AnimationDiagnosticCode =
+  | 'animation-property-invalid'
   | 'animation-target-missing'
   | 'animation-target-transform-missing'
   | 'animation-target-id-duplicate'
@@ -15,6 +16,7 @@ export interface AnimationDiagnosticDetail {
   readonly channel: number;
   readonly targetId: string;
   readonly reason:
+    | 'property-invalid'
     | 'target-missing'
     | 'transform-missing'
     | 'target-id-duplicate'
@@ -23,7 +25,9 @@ export interface AnimationDiagnosticDetail {
     | 'morph-weights-missing'
     | 'morph-weight-count-mismatch';
   readonly target?: number;
-  readonly property?: 'translation' | 'rotation' | 'scale' | 'weights';
+  readonly property?: 'translation' | 'rotation' | 'scale' | 'weights' | 'property';
+  readonly binding?: string;
+  readonly cause?: string;
   readonly expectedWeightCount?: number;
   readonly actualWeightCount?: number;
 }

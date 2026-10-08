@@ -36,7 +36,7 @@
 | `'invalid-variant'` | `setNextState()` called with a variant string not in the token's variants tuple | `Result.err` |
 | `'state-default-required'` | `defineState()` called with empty or duplicate variants array | throw (programmer error) |
 
-All errors carry the standard 4-field surface: `.code` / `.expected` / `.hint` / `.detail`. The `detail` field is narrowed per `.code` via the `StateErrorDetail` discriminated union. SSOT at `packages/state/src/errors.ts`.
+All errors carry the standard 4-field surface: `.code` / `.expected` / `.hint` / `.detail`. The `detail` field is narrowed per `.code` via the `StateError` discriminated union. The code lives on the error; detail contains only its payload. SSOT at `packages/state/src/errors.ts`.
 
 ## Transition pipeline
 
@@ -90,6 +90,16 @@ The state package has zero custom ECS primitives. It consumes only:
 - `world.despawn` -- for scoped entity teardown
 
 ## Runtime disposal and callback identity
+
+Activation acquires each token's component lease before publishing its resources.
+If a later component registration or transition-system installation fails, the
+adapter removes the resources and releases the leases it already acquired.
+Foreign component registrations remain owned by their original contributor;
+after resolving that conflict, the same World can retry activation. If live
+scoped entities prevent rollback, the original `component-in-use` error names
+the remaining contribution. Remove those entities and retry
+`registerStatesPlugin(world)`; it completes the retained rollback before
+acquiring new leases.
 
 The disposer stops transitions and removes its resources, then releases its
 component leases. A live scoped entity causes the original structured

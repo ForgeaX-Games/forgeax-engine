@@ -1,14 +1,50 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
-import { digestBytes, encodeTape } from '../protocol/codec';
+import { concatParts, digestParts, encodeTapeParts, sliceParts } from '../protocol/codec';
+import { EVENT_SEMANTICS, resourceKindForEvent } from '../protocol/event-semantics';
 import type { BootstrapResource, Tape as V7Tape } from '../protocol/types';
 import type { DebugRhiInstance } from '../recorder';
 import type { HandleId, Tape as LegacyTape, RhiCallEvent } from '../types';
 
-export interface EncodedTape {
-  readonly bytes: Uint8Array;
+/**
+ * A streamable `.rhitape` container. Buffers are borrowed, never copied:
+ * `chunks()` yields bounded windows; `bytes` and `digest` are computed on
+ * first access and cached.
+ */
+export interface TapeArtifact {
+  readonly byteLength: number;
+  /** SHA-256 of the whole container (`sha256:<hex>`), the artifact identity. */
   readonly digest: string;
+  /** Contiguous container. Materializing costs one container-sized copy. */
+  readonly bytes: Uint8Array;
+  /** Ordered container windows of at most `chunkBytes`; views where possible. */
+  chunks(chunkBytes: number): Iterable<{ readonly offset: number; readonly bytes: Uint8Array }>;
+}
+
+/** One captured container together with its decoded tape. */
+export interface EncodedTape extends TapeArtifact {
   readonly tape: V7Tape;
+}
+
+/** Wrap container parts (or one contiguous container) without copying them. */
+export function tapeArtifact(
+  parts: readonly Uint8Array[],
+  byteLength = parts.reduce((sum, part) => sum + part.byteLength, 0),
+): TapeArtifact {
+  let digest: string | undefined;
+  let bytes: Uint8Array | undefined = parts.length === 1 ? parts[0] : undefined;
+  return {
+    byteLength,
+    get digest() {
+      digest ??= digestParts(parts);
+      return digest;
+    },
+    get bytes() {
+      bytes ??= concatParts(parts, byteLength);
+      return bytes;
+    },
+    chunks: (chunkBytes) => sliceParts(parts, chunkBytes),
+  };
 }
 
 export function assembleTape(recorder: DebugRhiInstance): Result<EncodedTape, RhiDebugError> {
@@ -24,17 +60,62 @@ export function assembleTape(recorder: DebugRhiInstance): Result<EncodedTape, Rh
   if ('code' in legacy) {
     return err(legacy);
   }
-  const tape = toV7Tape(legacy, new Set(recorder.bootstrapEvents()));
-  const encoded = encodeTape(tape);
+  const tape = toV7Tape(
+    legacy,
+    hoistableCreates(legacy.events, recorder.bootstrapEvents()),
+    recorder.omittedSeeds(),
+  );
+  const encoded = encodeTapeParts(tape, { contentHashes: true });
   if (!encoded.ok) return err(encoded.error);
+  const artifact = tapeArtifact(encoded.value.parts, encoded.value.byteLength);
   return ok({
-    bytes: encoded.value,
-    digest: digestBytes(encoded.value),
     tape,
+    byteLength: artifact.byteLength,
+    get digest() {
+      return artifact.digest;
+    },
+    get bytes() {
+      return artifact.bytes;
+    },
+    chunks: (chunkBytes) => artifact.chunks(chunkBytes),
   });
 }
 
-function toV7Tape(legacy: LegacyTape, bootstrapEvents: ReadonlySet<RhiCallEvent>): V7Tape {
+/**
+ * Bootstrap resources are created before any frame command replays, so a bind
+ * group that binds a TLAS after an in-frame build stays in the frame stream:
+ * hoisted, it would bind the acceleration structure before that build.
+ */
+function hoistableCreates(
+  events: readonly RhiCallEvent[],
+  bootstrapEvents: readonly RhiCallEvent[],
+): Set<RhiCallEvent> {
+  // Only prefix creations can move into bootstrap. Later-frame resources
+  // must keep their create event at its original position in the stream.
+  const prefix = new Set<RhiCallEvent>();
+  for (const event of events) {
+    if (event.kind === 'frameMark') break;
+    prefix.add(event);
+  }
+  const hoistable = new Set(bootstrapEvents.filter((event) => prefix.has(event)));
+  let built = false;
+  for (const event of events) {
+    if (event.kind === 'buildAccelerationStructures') built = true;
+    if (
+      built &&
+      event.kind === 'createBindGroup' &&
+      event.entries.some((entry) => entry.resourceKind === 'accelerationStructure')
+    )
+      hoistable.delete(event);
+  }
+  return hoistable;
+}
+
+function toV7Tape(
+  legacy: LegacyTape,
+  bootstrapEvents: ReadonlySet<RhiCallEvent>,
+  omittedSeeds: ReadonlySet<HandleId>,
+): V7Tape {
   const firstFrame = legacy.events.findIndex((event) => event.kind === 'frameMark');
   const boundary = firstFrame < 0 ? legacy.events.length : firstFrame;
   const bootstrap: BootstrapResource[] = [];
@@ -48,8 +129,8 @@ function toV7Tape(legacy: LegacyTape, bootstrapEvents: ReadonlySet<RhiCallEvent>
       continue;
     }
     if (!bootstrapEvents.has(event)) continue;
-    const handleId = createdHandleId(event);
-    const kind = resourceKind(event);
+    const kind = resourceKindForEvent(event.kind);
+    const [handleId] = EVENT_SEMANTICS[event.kind].created(event);
     if (handleId === undefined || kind === undefined || bootstrapIds.has(handleId)) continue;
     bootstrapIds.add(handleId);
     bootstrap.push({
@@ -74,7 +155,9 @@ function toV7Tape(legacy: LegacyTape, bootstrapEvents: ReadonlySet<RhiCallEvent>
         const blob = legacy.blobPool.get(hash);
         return blob === undefined ? [] : [{ hash, byteOffset: 0, byteLength: blob.byteLength }];
       });
-      return { ...resource, initialData: slices };
+      return omittedSeeds.has(resource.handleId)
+        ? { ...resource, initialData: slices, seed: 'omitted' as const }
+        : { ...resource, initialData: slices };
     });
   const events = legacy.events
     .filter((event) => event.kind !== 'initialData' && !bootstrapEvents.has(event))
@@ -151,47 +234,4 @@ function toJsonSafe(event: RhiCallEvent): RhiCallEvent {
 
 function toJsonRecord(event: RhiCallEvent): Record<string, unknown> {
   return JSON.parse(JSON.stringify(event));
-}
-
-function createdHandleId(event: RhiCallEvent): HandleId | undefined {
-  if (event.kind === 'createTextureView') return event.resultHandleId;
-  if (event.kind === 'createCommandEncoder') return event.cmdHandleId;
-  if (event.kind === 'beginRenderPass' || event.kind === 'beginComputePass') {
-    return event.passHandleId;
-  }
-  if (
-    (event.kind.startsWith('create') || event.kind === 'getBindGroupLayout') &&
-    'handleId' in event
-  )
-    return event.handleId;
-  return undefined;
-}
-
-function resourceKind(event: RhiCallEvent): BootstrapResource['kind'] | undefined {
-  switch (event.kind) {
-    case 'createBuffer':
-      return 'buffer';
-    case 'createTexture':
-      return 'texture';
-    case 'createQuerySet':
-      return 'query-set';
-    case 'createTextureView':
-      return 'texture-view';
-    case 'createSampler':
-      return 'sampler';
-    case 'createShaderModule':
-      return 'shader-module';
-    case 'createRenderPipeline':
-    case 'createComputePipeline':
-      return 'pipeline';
-    case 'createBindGroup':
-    case 'createBindGroupLayout':
-    case 'getBindGroupLayout':
-    case 'createPipelineLayout':
-      return 'binding';
-    case 'createCommandEncoder':
-      return 'encoder';
-    default:
-      return undefined;
-  }
 }

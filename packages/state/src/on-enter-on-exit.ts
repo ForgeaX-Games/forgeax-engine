@@ -38,11 +38,9 @@ export type StateCallback = (world: World) => void;
 export type UnsubscribeHandle = () => void;
 
 /**
- * Internal callback entry: pairs a function with its identity for removal.
- * The `id` is a unique symbol used as the remove key.
+ * Each registration object supplies identity independently of its callback.
  */
 interface CallbackEntry {
-  id: symbol;
   fn: StateCallback;
 }
 
@@ -125,13 +123,13 @@ function _add(label: string, fn: StateCallback): UnsubscribeHandle {
     _registry.set(label, entries);
   }
 
-  const id = Symbol();
-  entries.push({ id, fn });
+  const entry = { fn };
+  entries.push(entry);
 
   return () => {
     const list = _registry.get(label);
     if (!list) return;
-    const idx = list.findIndex((e) => e.id === id);
+    const idx = list.indexOf(entry);
     if (idx !== -1) {
       list.splice(idx, 1);
       if (list.length === 0) _registry.delete(label);

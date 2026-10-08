@@ -70,31 +70,18 @@ let importer: TranscoderImporter = defaultImporter;
  */
 let _initPromise: Promise<BasisTranscoderModule> | null = null;
 
-/** Count of importer invocations; observed in tests to prove single-init. @internal */
-let initCount = 0;
-
 /**
  * Lazy-init the Basis transcoder WASM module (D-10 main-thread singleton).
  * First call dynamic-imports + initializes; subsequent calls return the cache.
  */
 export function initBasisTranscoder(): Promise<BasisTranscoderModule> {
   if (_initPromise !== null) return _initPromise;
-  initCount++;
   traceBasisPhase('basis.init.start');
   _initPromise = importer().catch((cause: unknown) => {
     _initPromise = null;
     throw new Error('codec-init-failed', { cause });
   });
   return _initPromise;
-}
-
-/**
- * Test-only: number of times the transcoder importer has been invoked. Proves
- * the lazy singleton loads the module at most once (D-10).
- * @internal
- */
-export function _basisTranscoderInitCount(): number {
-  return initCount;
 }
 
 /**
@@ -105,7 +92,6 @@ export function _basisTranscoderInitCount(): number {
 export function _setBasisTranscoderImporter(next?: TranscoderImporter): void {
   importer = next ?? defaultImporter;
   _initPromise = null;
-  initCount = 0;
 }
 
 /** One transcoded mip level (mip-major output). */

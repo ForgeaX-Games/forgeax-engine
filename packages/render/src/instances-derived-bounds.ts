@@ -325,6 +325,28 @@ const HIERARCHY_FANOUT = 16;
 const MAX_ROW_CHANGE_RANGES = 32;
 
 const composedScratch = new Float32Array(16);
+/** Row/node box scratch: hierarchy writes copy out of it instead of allocating subarray views per row. */
+const boxScratch = new Float32Array(6);
+
+/** `includeBox` over 6 floats of `source` at `offset`, without a subarray view. */
+function includeBoxAt(
+  out: Float32Array,
+  source: Float32Array,
+  offset: number,
+  initialized: boolean,
+): boolean {
+  if (!initialized) {
+    for (let i = 0; i < 6; i += 1) out[i] = source[offset + i] as number;
+    return true;
+  }
+  for (let i = 0; i < 3; i += 1) {
+    const lo = source[offset + i] as number;
+    const hi = source[offset + 3 + i] as number;
+    if (lo < (out[i] as number)) out[i] = lo;
+    if (hi > (out[i + 3] as number)) out[i + 3] = hi;
+  }
+  return true;
+}
 
 /**
  * World-space AABBs of changed instance rows for one revision step: pairs of
@@ -370,11 +392,11 @@ class InstanceRowBoundsHierarchy {
     transforms: ArrayLike<number>,
   ): void {
     const offset = row * 16;
-    const box = this.rowBoxes.subarray(row * 6, row * 6 + 6);
     let valid = finiteMatrixAt(transforms, offset);
     if (valid) {
       multiplyMat4(composedScratch, entityWorld, transforms, offset);
-      valid = finiteMatrix(composedScratch) && transformAabb(box, meshAabb, composedScratch);
+      valid = finiteMatrix(composedScratch) && transformAabb(boxScratch, meshAabb, composedScratch);
+      if (valid) this.rowBoxes.set(boxScratch, row * 6);
     }
     const was = this.rowValid[row] === 1;
     if (was !== valid) this.invalidRows += valid ? -1 : 1;
@@ -394,14 +416,14 @@ class InstanceRowBoundsHierarchy {
     const childFilled =
       level === 0 ? this.rowValid : (this.levels[level - 1]?.filled as Uint8Array);
     const childCount = childFilled.length;
-    const out = target.boxes.subarray(node * 6, node * 6 + 6);
     const first = node * HIERARCHY_FANOUT;
     const last = Math.min(first + HIERARCHY_FANOUT, childCount);
     let initialized = false;
     for (let child = first; child < last; child += 1) {
       if (childFilled[child] !== 1) continue;
-      initialized = includeBox(out, childBoxes.subarray(child * 6, child * 6 + 6), initialized);
+      initialized = includeBoxAt(boxScratch, childBoxes, child * 6, initialized);
     }
+    if (initialized) target.boxes.set(boxScratch, node * 6);
     target.filled[node] = initialized ? 1 : 0;
     return last - first;
   }
@@ -565,7 +587,14 @@ export class InstanceBoundsCache {
       if (transforms !== undefined) this.nodeVisits += Math.floor(transforms.length / 16);
       return { ...base, bounds };
     }
-    const hierarchy = new InstanceRowBoundsHierarchy(transforms.length / 16);
+    // A full re-derive of a same-size collection (a moving collection without
+    // dirty-row proof) rewrites the previous hierarchy in place: every row and
+    // node is recomputed below, and the replaced entry is dropped from the map.
+    const reusable = this.entries.get(this.key(input))?.hierarchy;
+    const hierarchy =
+      reusable !== undefined && reusable.rows === transforms.length / 16
+        ? reusable
+        : new InstanceRowBoundsHierarchy(transforms.length / 16);
     hierarchy.markAllRowsUnset();
     for (let row = 0; row < hierarchy.rows; row += 1) {
       hierarchy.writeRow(row, meshAabb, entityWorld, transforms);

@@ -65,6 +65,27 @@ encoder-position marker use an empty timestamp-enabled compute pass on the same
 encoder. A marker failure is a structured `webgpu-runtime-error`; the shim
 never treats it as a no-op or synthesizes timestamp ticks. Capability-disabled
 devices retain the existing refusal path.
+`caps.timestampPeriodNanoseconds` is 1 for W3C devices, which resolve nanoseconds. A raw
+device that exposes a positive `timestampPeriod` resolves raw ticks, and its period is
+published instead. That is the native wgpu `GPU` of
+[`@forgeax/engine-rhi-wgpu-native`](../rhi-wgpu-native/README.md#node-binding-napi-rs).
+
+## Ray Query extension
+
+Browser WebGPU and Dawn expose no acceleration structures, so `caps.rayQuery` is
+`backend-has-no-ray-query`. When the raw device carries wgpu's extension shape, the shim
+lowers the RHI BLAS/TLAS surface onto it ([`ray-query.ts`](./src/ray-query.ts)). The
+native wgpu `GPU` is one such device. The extension shape is:
+
+- device `createBlas` / `createTlas`;
+- encoder `buildAccelerationStructures`;
+- the `wgpu-ray-query` feature, plus the four Ray Query limits.
+
+The RHI rules decide what happens next:
+
+- `deriveRayQueryCaps` derives the caps. A device without the feature or limits reports
+  `adapter-lacks-feature`.
+- Structural validation in `@forgeax/engine-rhi` runs before any raw call.
 
 ## Query forwarding contract
 

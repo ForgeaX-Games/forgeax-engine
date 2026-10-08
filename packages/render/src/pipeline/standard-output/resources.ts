@@ -1,4 +1,4 @@
-import { err, ok, type Result, RhiError } from '@forgeax/engine-rhi';
+import { err, ok, type Result, RhiError, type RhiQueue } from '@forgeax/engine-rhi';
 import { toShared } from '@forgeax/engine-types';
 import type { RenderResourceScope } from '../../publication/resource-scope';
 import type { RenderFrameState } from '../../record/frame-snapshot';
@@ -7,10 +7,27 @@ import type { CameraSnapshot } from '../../render-contract';
 import {
   createAutoExposureGpuResources,
   retireAutoExposureGpuResources,
+  writeAutoExposureParameters,
 } from './auto-exposure/gpu';
-import { resetAutoExposureState } from './auto-exposure/state';
-import { prepareStandardLutGpu } from './lut-gpu';
-import { recordStandardLutFailure, resetStandardLutState } from './lut-state';
+import {
+  commitAutoExposureSubmission,
+  createAutoExposureState,
+  resetAutoExposureState,
+} from './auto-exposure/state';
+import { prepareStandardLutGpu, retireStandardLutGpuResources } from './lut-gpu';
+import {
+  commitStandardLutCandidate,
+  prepareStandardLutCandidate,
+  recordStandardLutFailure,
+  resetStandardLutState,
+} from './lut-state';
+
+/*
+ * The Standard output transaction: auto-exposure and LUT candidates (GPU
+ * resources and CPU inspection state) are staged here, promoted by
+ * `commitStandardOutputSubmission` after an accepted submit, and discarded by
+ * the failure paths below. No other module writes the pending fields.
+ */
 
 /** Ordinary frames and detached recovery graphs prepare the same output resources. */
 export function prepareStandardOutputResources(
@@ -112,10 +129,198 @@ export function resetStandardOutputForDeviceLoss(
     targetGeneration: state.standardLutState.targetGeneration + 1,
     deviceEpoch,
   });
-  state.pendingAutoExposureState = undefined;
-  state.pendingStandardLutState = undefined;
+  discardStandardOutputStates(state);
   state.pendingAutoExposureGpuResources = undefined;
   state.autoExposureGpuResources = undefined;
   state.pendingStandardLutGpuResources = undefined;
+  state.standardLutGpuResources = undefined;
+}
+
+/**
+ * Stage the detached auto/LUT facts beside the GPU candidates already owned
+ * by RenderFrameState. `commitStandardOutputSubmission` promotes both records
+ * only after the single finish/submit transaction succeeds; no side registry or
+ * compile callback can publish a value early.
+ */
+export function stageStandardOutputStates(
+  frameState: RenderFrameState,
+  internals: RenderSystemInternals,
+  camera: CameraSnapshot | undefined,
+  deltaTime: number,
+): void {
+  discardStandardOutputStates(frameState);
+  const output = camera?.output;
+  if (output === undefined) return;
+
+  const publicFrameId =
+    (internals as RenderSystemInternals & { readonly observationFrameId?: number })
+      .observationFrameId ?? frameState.frameNumber;
+  const targetGeneration = Math.max(1, camera?.historyVersion ?? 0);
+  const deviceEpoch = internals.deviceScope.generation;
+
+  if (
+    output.exposure.kind === 'auto' &&
+    (frameState.pendingAutoExposureGpuResources !== undefined ||
+      frameState.autoExposureGpuResources !== undefined)
+  ) {
+    let state = frameState.autoExposureState;
+    if (state === undefined || state.fallback !== output.exposure.fallback) {
+      const created = createAutoExposureState({
+        fallback: output.exposure.fallback,
+        targetGeneration,
+        deviceEpoch,
+        frameId: publicFrameId,
+      });
+      if (!created.ok) {
+        internals.errorRegistry.fire(created.error);
+        return;
+      }
+      state = created.value;
+    } else if (state.targetGeneration !== targetGeneration || state.deviceEpoch !== deviceEpoch) {
+      state = resetAutoExposureState(state, 'camera-change', {
+        targetGeneration,
+        deviceEpoch,
+      });
+    }
+    const resources =
+      frameState.pendingAutoExposureGpuResources ?? frameState.autoExposureGpuResources;
+    if (resources !== undefined) {
+      const parameterWrite = writeAutoExposureParameters(resources, {
+        compensationEv: output.exposure.compensationEv,
+        rangeMinEv: output.exposure.rangeEv[0],
+        rangeMaxEv: output.exposure.rangeEv[1],
+        upRate: output.exposure.rates[0],
+        downRate: output.exposure.rates[1],
+        deltaTime,
+        fallback: output.exposure.fallback,
+        generation: state.targetGeneration,
+      });
+      if (!parameterWrite.ok) {
+        internals.errorRegistry.fire(parameterWrite.error as RhiError);
+        return;
+      }
+    }
+    // The GPU adapt pass owns the numeric candidate. CPU staging carries
+    // only the generation/transaction facts needed for submit publication.
+    frameState.pendingAutoExposureState = Object.freeze({
+      state,
+      generation: state.targetGeneration,
+      deviceEpoch: state.deviceEpoch,
+      frameId: publicFrameId,
+    });
+  }
+
+  let lutState = frameState.standardLutState;
+  if (lutState.targetGeneration !== targetGeneration || lutState.deviceEpoch !== deviceEpoch) {
+    lutState = resetStandardLutState(lutState, 'device-recovered', {
+      targetGeneration,
+      deviceEpoch,
+    });
+    frameState.standardLutState = lutState;
+  }
+  const wantsLut = output.colorLutStrength > 0 && output.colorLut > 0;
+  const lutResources =
+    frameState.pendingStandardLutGpuResources ?? frameState.standardLutGpuResources;
+  if (wantsLut && lutResources !== undefined) {
+    const prepared = prepareStandardLutCandidate(lutState, {
+      // sourceKey is the Catalog-owned identity returned by the same
+      // preparation that built the live LUT bind group; numeric handles do
+      // not cross the inspection boundary.
+      resident: lutResources.sourceKey,
+      sourceKey: lutResources.sourceKey,
+      generation: lutState.targetGeneration,
+      deviceEpoch: lutState.deviceEpoch,
+      frameId: publicFrameId,
+    });
+    if (prepared.ok) {
+      frameState.pendingStandardLutState = Object.freeze({
+        state: lutState,
+        candidate: prepared.value,
+        remove: false,
+        targetGeneration,
+        deviceEpoch,
+      });
+    }
+  } else if (!wantsLut && lutState.resident !== null) {
+    frameState.pendingStandardLutState = Object.freeze({
+      state: lutState,
+      remove: true,
+      targetGeneration,
+      deviceEpoch,
+    });
+  }
+}
+
+/** Promote every staged candidate after the frame's queue submit is accepted. */
+export function commitStandardOutputSubmission(state: RenderFrameState, queue: RhiQueue): void {
+  const pendingAuto = state.pendingAutoExposureGpuResources;
+  if (pendingAuto !== undefined) {
+    const previousAuto = state.autoExposureGpuResources;
+    state.autoExposureGpuResources = pendingAuto;
+    state.pendingAutoExposureGpuResources = undefined;
+    if (previousAuto !== undefined && previousAuto !== pendingAuto) {
+      queue
+        .onSubmittedWorkDone()
+        .then(() => retireAutoExposureGpuResources(previousAuto))
+        .catch(() => undefined);
+    }
+  }
+  const pendingAutoState = state.pendingAutoExposureState;
+  if (pendingAutoState !== undefined) {
+    state.autoExposureState = commitAutoExposureSubmission(
+      pendingAutoState.state,
+      pendingAutoState,
+    );
+    state.pendingAutoExposureState = undefined;
+  }
+  const pendingLut = state.pendingStandardLutGpuResources;
+  if (pendingLut !== undefined) {
+    const previousLut = state.standardLutGpuResources;
+    state.standardLutGpuResources = pendingLut;
+    state.pendingStandardLutGpuResources = undefined;
+    if (previousLut !== undefined && previousLut !== pendingLut) {
+      retireStandardLutGpuResources(previousLut);
+    }
+  }
+  const pendingLutState = state.pendingStandardLutState;
+  if (pendingLutState !== undefined) {
+    state.standardLutState =
+      pendingLutState.remove || pendingLutState.candidate === undefined
+        ? resetStandardLutState(pendingLutState.state, 'resource-removed', {
+            targetGeneration: pendingLutState.targetGeneration,
+            deviceEpoch: pendingLutState.deviceEpoch,
+          })
+        : commitStandardLutCandidate(pendingLutState.state, pendingLutState.candidate);
+    state.pendingStandardLutState = undefined;
+  }
+}
+
+/** Drop the staged CPU inspection candidates; accepted state is untouched. */
+export function discardStandardOutputStates(state: RenderFrameState): void {
+  state.pendingAutoExposureState = undefined;
+  state.pendingStandardLutState = undefined;
+}
+
+/** Retire staged GPU candidates that never reached an accepted submit. */
+export function retirePendingStandardOutputGpu(state: RenderFrameState): void {
+  if (state.pendingAutoExposureGpuResources !== undefined) {
+    retireAutoExposureGpuResources(state.pendingAutoExposureGpuResources);
+    state.pendingAutoExposureGpuResources = undefined;
+  }
+  if (state.pendingStandardLutGpuResources !== undefined) {
+    retireStandardLutGpuResources(state.pendingStandardLutGpuResources);
+    state.pendingStandardLutGpuResources = undefined;
+  }
+}
+
+/** Renderer disposal: retire staged and accepted resources and drop auto-exposure state. */
+export function disposeStandardOutput(state: RenderFrameState): void {
+  retirePendingStandardOutputGpu(state);
+  if (state.autoExposureGpuResources !== undefined) {
+    retireAutoExposureGpuResources(state.autoExposureGpuResources);
+    state.autoExposureGpuResources = undefined;
+  }
+  state.autoExposureState = undefined;
+  discardStandardOutputStates(state);
   state.standardLutGpuResources = undefined;
 }

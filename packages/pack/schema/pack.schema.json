@@ -350,6 +350,9 @@
         },
         "integrity": {
           "$ref": "#/$defs/integrity"
+        },
+        "delivery": {
+          "const": "stream"
         }
       }
     },

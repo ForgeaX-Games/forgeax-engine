@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { volumetricFogTopology } from '../volume/passes';
 import { deriveVolumetricFogResolvedExtent } from '../volume/resources';
 
 const pipelineSource = readFileSync(
@@ -55,25 +54,6 @@ describe('volumetric fog RenderGraph topology', () => {
     );
   });
 
-  it('keeps the authored path to four ordered passes and two history slots', () => {
-    const topology = volumetricFogTopology(true);
-    expect(topology.passes).toEqual([
-      'volume-inject',
-      'volume-integrate',
-      'volume-temporal',
-      'volume-composite',
-    ]);
-    expect(topology.resources).toEqual([
-      'volume-froxel',
-      'volume-resolved-current',
-      'volume-history',
-      'volume-temporal',
-    ]);
-    expect(topology.colorInput).toBe('linear-hdr');
-    expect(topology.depthInput).toBe('scene-depth');
-    expect(topology.passes).not.toContain('apply_fog');
-  });
-
   it('packs four logical visibility slices per rgba8 array texel', () => {
     const resources = readFileSync(
       fileURLToPath(new URL('../volume/resources.ts', import.meta.url)),
@@ -104,24 +84,30 @@ describe('volumetric fog RenderGraph topology', () => {
     expect(viewUbo).toContain("camera.projection === 'orthographic' ? 1 : 0");
   });
 
-  it('does not allocate or schedule volume work when fog is off', () => {
-    expect(volumetricFogTopology(false)).toEqual({
-      passes: [],
-      resources: [],
-      colorInput: 'linear-hdr',
-      depthInput: 'scene-depth',
-    });
-  });
-
-  it('composites the integrated volume onto the opaque scene before translucency', () => {
-    expect(opaqueFogSource).toContain('addAuthoredVolumetricFogPasses');
-    expect(opaqueFogSource.indexOf('addAuthoredVolumetricFogPasses(')).toBeLessThan(
-      opaqueFogSource.indexOf('addAnalyticFogPass(graph, {'),
+  it('composites analytic fog before translucency and the integrated volume after it', () => {
+    // The resolved volume is one camera-to-opaque-depth integral per pixel, so
+    // composited before translucency every blended surface behind the medium
+    // would replace the medium's in-scatter and cut its silhouette out of it.
+    const opaque = opaqueFogSource.slice(
+      opaqueFogSource.indexOf('export function addOpaqueFogPasses('),
+      opaqueFogSource.indexOf('export function addTranslucencyVolumetricFogPasses('),
     );
+    expect(opaque).toContain('addAnalyticFogPass(');
+    expect(opaque).not.toContain('addAuthoredVolumetricFogPasses(');
+    expect(
+      opaqueFogSource.slice(
+        opaqueFogSource.indexOf('export function addTranslucencyVolumetricFogPasses('),
+      ),
+    ).toContain('addAuthoredVolumetricFogPasses(');
     for (const source of [pipelineSource, forwardPipelineSource]) {
       const fog = source.indexOf('addOpaqueFogPasses(graph');
+      const volume = source.indexOf('addTranslucencyVolumetricFogPasses(graph');
+      const lastTransparent = source.lastIndexOf('addStandardTransparentPasses(graph');
       expect(fog).toBeGreaterThan(0);
       expect(fog).toBeLessThan(source.indexOf('addStandardTransparentPasses(graph'));
+      expect(volume).toBeGreaterThan(lastTransparent);
+      expect(volume).toBeLessThan(source.indexOf('contributeStandardSceneFeatures('));
+      expect(source).not.toContain('addAuthoredVolumetricFogPasses(');
     }
     expect(pipelineSource.indexOf('addOpaqueFogPasses(graph')).toBeLessThan(
       pipelineSource.indexOf('addTransmissionBackdropPasses({'),
@@ -131,7 +117,7 @@ describe('volumetric fog RenderGraph topology', () => {
   it('keeps mesh CSM visibility on the shared volume owner in both Standard lanes', () => {
     expect(opaqueFogSource).toContain('input.directionalShadow');
     for (const source of [pipelineSource, forwardPipelineSource]) {
-      expect(source).toContain('addOpaqueFogPasses');
+      expect(source).toContain('addTranslucencyVolumetricFogPasses');
       expect(source).toContain('shadows.value.directional?.view');
     }
     expect(shaderSource('volume-inject.wgsl')).toContain('fn volume_cascade');
@@ -224,12 +210,11 @@ describe('volumetric fog RenderGraph topology', () => {
       'utf8',
     );
     expect(recordSource).toContain('temporalFrameTransaction.stage');
-    expect(recordSource).toContain('volumetricFogParamsPendingSlot');
-    expect(recordSource).toContain('volumetricFogParamsAcceptedSlot');
+    expect(recordSource).toContain('promoteVolumetricFogParams(frameState.volumetricFogParams)');
     expect(recordSource).toContain('hasVolumetricFogCapability');
     expect(submitSource).toContain('yield* recordFrameTransaction(steps,');
     expect(submitSource).not.toContain('queue.submit(');
-    expect(submitSource).toContain('commitTemporalGpuSubmit(stagedGpuState)');
+    expect(submitSource).toContain('commitStagedTemporalGpuState(frameState');
   });
 
   it('requires the manifest-owned shader bundle in addition to compute/storage caps', async () => {
@@ -257,11 +242,7 @@ describe('volumetric fog RenderGraph topology', () => {
     );
     expect(recoverEnd).toBeGreaterThan(recoverStart);
     const recoverSource = renderSystemSource.slice(recoverStart, recoverEnd);
-    expect(recoverSource).toContain('frameState.volumetricFogParamsBuffers = [null, null]');
-    expect(recoverSource).toContain('frameState.volumetricFogParamsPendingSlot = null');
-    expect(recoverSource).toContain('frameState.volumetricFogParamsAcceptedSlot = null');
-    expect(recoverSource).toContain('frameState.volumetricFogAcceptedParams = undefined');
-    expect(recoverSource).toContain('frameState.volumetricFogPendingParams = undefined');
+    expect(recoverSource).toContain('frameState.volumetricFogParams = emptyVolumetricFogParams()');
     expect(recoverSource).not.toContain('destroyBuffer(buffer)');
   });
 });

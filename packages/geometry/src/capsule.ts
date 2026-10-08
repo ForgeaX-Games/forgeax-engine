@@ -23,6 +23,7 @@
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
 import { err, type Result } from '@forgeax/engine-types';
 import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
+import { poleGridIndices } from './pole-grid-indices';
 
 /**
  * Build a procedural capsule geometry aligned with Bevy `Capsule3d` /
@@ -56,10 +57,8 @@ export function createCapsuleGeometry(
   // becomes the cylinder wall.
   const latRows = 2 * (cs + 1);
   const vertexCount = latRows * (rs + 1);
-  const indexCount = (latRows - 1) * rs * 6;
 
   const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
-  const indices = new Uint32Array(indexCount);
 
   let vIdx = 0;
   // Emit rows top -> bottom. `row` in [0, latRows-1]. The first cs+1 rows are
@@ -114,32 +113,5 @@ export function createCapsuleGeometry(
     }
   }
 
-  let iIdx = 0;
-  const stride = rs + 1;
-  for (let row = 0; row < latRows - 1; row++) {
-    for (let ix = 0; ix < rs; ix++) {
-      const a = row * stride + ix + 1;
-      const b = row * stride + ix;
-      const c = (row + 1) * stride + ix;
-      const d = (row + 1) * stride + ix + 1;
-      // Skip the collapsed triangles at the two poles (row 0 north, last row
-      // south) exactly as sphere.ts does — a degenerate ring has zero-area
-      // triangles on one side of each quad.
-      const northPoleRow = row === 0;
-      const southPoleRow = row === latRows - 2;
-      if (!northPoleRow) {
-        indices[iIdx++] = a;
-        indices[iIdx++] = b;
-        indices[iIdx++] = d;
-      }
-      if (!southPoleRow) {
-        indices[iIdx++] = b;
-        indices[iIdx++] = c;
-        indices[iIdx++] = d;
-      }
-    }
-  }
-
-  const trimmed = indices.slice(0, iIdx);
-  return meshFromInterleaved(vertices, trimmed);
+  return meshFromInterleaved(vertices, poleGridIndices(rs, latRows));
 }

@@ -587,6 +587,36 @@ describe('unified CLI', () => {
     }
   });
 
+  it('admits default providers for every tool realm', async () => {
+    const root = await fixtureRoot();
+    const realms = ['build', 'host', 'engine', 'frontend'] as const;
+    const client = await createToolClient({
+      projectRoot: root,
+      projectDiscovery: async () => [],
+      baseContributions: realms.map(
+        (realm) =>
+          command(
+            `fixture.${realm}`,
+            ['fixture', realm],
+            realm,
+            'Realm provider fixture.',
+            async () => ({ ok: true, value: { realm } }),
+            realm,
+          ) as ToolContribution,
+      ),
+    });
+    try {
+      for (const realm of realms) {
+        await expect(client.runPath(['fixture', realm], {})).resolves.toMatchObject({
+          outcome: 'succeeded',
+          result: { realm },
+        });
+      }
+    } finally {
+      await client.dispose?.();
+    }
+  });
+
   it('accepts equals syntax for schema-typed values and root', async () => {
     const root = await fixtureRoot();
     expect(

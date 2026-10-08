@@ -1,7 +1,7 @@
 import { FixedUpdate, Update, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { GlobalTransform, Transform } from '../index';
-import { registerPropagateTransforms } from '../systems';
+import { registerPropagateTransforms } from '../systems/propagate-transforms';
 
 describe('TransformPropagation schedule contract', () => {
   it('exposes one ordering token in both Update and FixedUpdate', () => {

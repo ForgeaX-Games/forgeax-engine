@@ -15,8 +15,14 @@ export const AudioSource = defineComponent('AudioSource', {
   clip: { type: 'shared<AudioClipAsset>' },
   playing: { type: 'bool', default: false },
   loop: { type: 'bool', default: false },
+  paused: { type: 'bool', default: false },
+  playbackRate: { type: 'f32', default: 1 },
+  fromPosition: { type: 'f32', default: 0 },
   volume: { type: 'f32', default: 1.0 },
   spatialBlend: { type: 'f32', default: 0 },
+  coneInnerAngle: { type: 'f32', default: 360 },
+  coneOuterAngle: { type: 'f32', default: 360 },
+  coneOuterGain: { type: 'f32', default: 0 },
   bus: { type: 'string', default: 'sfx' },
 });
 

@@ -1,7 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, Transform } from '../index';
-import { projectHierarchy, type SceneHierarchyDiagnostic } from '../systems';
+import { projectHierarchy, type SceneHierarchyDiagnostic } from '../systems/hierarchy-projection';
 import { setMalformedParentEdge } from './fixtures/malformed-hierarchy-edge';
 
 describe('scene hierarchy projection contract', () => {

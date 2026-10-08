@@ -64,8 +64,16 @@ export function createRayDiffuseComposite(
   if (!pipeline.ok) return pipeline;
   return ok({
     record(pass: RhiRenderPassEncoder, input: RayDiffuseCompositeInputs, pixelCount: number) {
-      if (!Number.isInteger(pixelCount) || pixelCount < 1 || pixelCount > 262144)
-        return rayReferenceFailure('expected 1..262144 diffuse receiver texels', true);
+      const stride = signal === 'raw' ? RAY_ACCUMULATION_STRIDE : 16;
+      if (
+        !Number.isInteger(pixelCount) ||
+        pixelCount < 1 ||
+        !(pixelCount * stride <= device.limits.maxStorageBufferBindingSize)
+      )
+        return rayReferenceFailure(
+          'expected a positive diffuse receiver count within the storage binding limit',
+          true,
+        );
       const bindings = device.createBindGroup({
         layout: layout.value,
         entries: [
@@ -75,7 +83,7 @@ export function createRayDiffuseComposite(
               kind: 'buffer',
               value: {
                 buffer: input.irradiance,
-                size: pixelCount * (signal === 'raw' ? RAY_ACCUMULATION_STRIDE : 16),
+                size: pixelCount * stride,
               },
             },
           },

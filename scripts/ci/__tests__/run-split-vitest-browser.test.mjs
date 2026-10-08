@@ -4,8 +4,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { runGroups } from '../../lib/run-bounded-groups.mjs';
+import hostFiles from '../browser-host-files.json' with { type: 'json' };
 import {
   assignBrowserGroupsToShards,
+  browserGroupIsHostOnly,
+  browserGroupRequiresExclusiveRunner,
   browserGroupRunOrder,
   browserGroupWeight,
   browserProducerReadiness,
@@ -13,6 +18,289 @@ import {
   ciBrowserShardTailSeconds,
   parseArgs,
 } from '../run-split-vitest-browser.mjs';
+
+test('browser host contracts never share a GPU owner group', () => {
+  assert.equal(hostFiles.length, 21);
+  assert.equal(browserGroupIsHostOnly([]), false);
+  assert.equal(browserGroupIsHostOnly(['new-owner.browser.test.ts']), false);
+  assert.equal(browserGroupIsHostOnly([...hostFiles, 'new-owner.browser.test.ts']), false);
+  assert.ok(hostFiles.every((file) => browserTestFiles().includes(file)));
+  for (const size of [1, 8, 24]) {
+    const groups = dryRunGroups(size);
+    for (const file of hostFiles) {
+      const owners = groups.filter((group) => group.includes(file));
+      assert.equal(owners.length, 1);
+      assert.ok(
+        owners[0].every((owner) => hostFiles.includes(owner)),
+        owners[0].join(','),
+      );
+    }
+  }
+});
+
+test('host groups keep their deadline and start without Python or a GPU lease', () => {
+  const temporary = mkdtempSync(join(tmpdir(), 'forgeax-browser-host-'));
+  const fixture = join(temporary, 'vitest.mjs');
+  writeFileSync(fixture, 'console.log(JSON.stringify(process.argv.slice(2)));');
+  const module = new URL('../run-split-vitest-browser.mjs', import.meta.url).href;
+  const program = `import { runGroup } from ${JSON.stringify(module)};
+    await runGroup({cliPath:process.argv[1],group:JSON.parse(process.argv[2]),groupIndex:1,groupCount:1,maxWorkers:1});`;
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', program, fixture, JSON.stringify(hostFiles.slice(0, 1))],
+      {
+        encoding: 'utf8',
+        timeout: 5000,
+        env: { ...process.env, PATH: temporary, FORGEAX_LOCAL_GPU_LEASE: '1' },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /config\/vitest.browser-host.config.ts/);
+    assert.doesNotMatch(result.stderr, /\[local-gpu\]/);
+    const prefix = '[browser-gate] process-start ';
+    const line = result.stderr.split('\n').find((value) => value.startsWith(prefix));
+    assert.equal(JSON.parse(line.slice(prefix.length)).timeoutMs, 300_000);
+    const native = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        program,
+        fixture,
+        JSON.stringify(['packages/runtime/src/__tests__/decals.browser.test.ts']),
+      ],
+      {
+        encoding: 'utf8',
+        timeout: 5000,
+        env: { ...process.env, PATH: temporary, FORGEAX_LOCAL_GPU_LEASE: '1' },
+      },
+    );
+    assert.equal(native.status, 1);
+    assert.match(native.stderr, /ENOENT|POSIX/);
+    assert.doesNotMatch(native.stdout, /config\/vitest.browser.config.ts/);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('host guard rejects graphics before native acquisition and preserves 2D canvas', () => {
+  let acquisitions = 0;
+  class Canvas {
+    getContext(kind) {
+      acquisitions++;
+      return kind;
+    }
+  }
+  class Offscreen {
+    getContext(kind) {
+      acquisitions++;
+      return kind;
+    }
+  }
+  const navigator = {
+    gpu: {
+      requestAdapter() {
+        acquisitions++;
+      },
+    },
+  };
+  runInNewContext(readFileSync('config/browser-host-guard.mjs', 'utf8'), {
+    navigator,
+    HTMLCanvasElement: Canvas,
+    OffscreenCanvas: Offscreen,
+  });
+  assert.throws(() => navigator.gpu.requestAdapter(), /host contract requested graphics/);
+  for (const canvas of [new Canvas(), new Offscreen()]) {
+    for (const kind of ['webgpu', 'webgl', 'webgl2', 'experimental-webgl']) {
+      for (const argument of [kind, Object(kind), { [Symbol.toPrimitive]: () => kind }])
+        assert.throws(() => canvas.getContext(argument), /host contract requested graphics/);
+    }
+  }
+  assert.equal(acquisitions, 0);
+  assert.equal(new Canvas().getContext('2d'), '2d');
+  assert.equal(acquisitions, 1);
+  let conversions = 0;
+  assert.equal(
+    new Offscreen().getContext({
+      [Symbol.toPrimitive](hint) {
+        assert.equal(hint, 'string');
+        conversions++;
+        return '2d';
+      },
+    }),
+    '2d',
+  );
+  assert.equal(conversions, 1);
+  assert.equal(acquisitions, 2);
+  assert.throws(() => new Canvas().getContext(Symbol('webgl')), /Cannot convert a Symbol/);
+  assert.equal(acquisitions, 2);
+});
+
+test('Preview child execution receives its documented preparation deadline', () => {
+  const temporary = mkdtempSync(join(tmpdir(), 'forgeax-browser-deadline-'));
+  const fixture = join(temporary, 'vitest.mjs');
+  writeFileSync(fixture, "process.stdout.write('coordinator child completed\\n');");
+  const module = new URL('../run-split-vitest-browser.mjs', import.meta.url).href;
+  const program = `import { runGroup } from ${JSON.stringify(module)};
+    await runGroup({cliPath:process.argv[1],group:JSON.parse(process.argv[2]),groupIndex:1,groupCount:1,maxWorkers:1});`;
+  try {
+    for (const [file, expected] of [
+      ['apps/preview/__tests__/preview.browser.test.ts', 420_000],
+      ['packages/runtime/src/__tests__/decals.browser.test.ts', 300_000],
+    ]) {
+      const result = spawnSync(
+        process.execPath,
+        ['--input-type=module', '-e', program, fixture, JSON.stringify([file])],
+        { encoding: 'utf8' },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const prefix = '[browser-gate] process-start ';
+      const line = result.stderr.split('\n').find((value) => value.startsWith(prefix));
+      assert.ok(line, 'the real coordinator must start its bounded child');
+      assert.equal(JSON.parse(line.slice(prefix.length)).timeoutMs, expected);
+    }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('lighting-channel sources and writers conserve both paths in bounded singletons', () => {
+  const groups = dryRunGroups();
+  const files = groups.flat();
+  for (const mode of ['world', 'publication'])
+    for (const receiver of ['rigid', 'skin'])
+      for (const renderPath of ['forward', 'deferred']) {
+        const file = `packages/runtime/src/__tests__/lighting-channels-${mode}-${receiver}-${renderPath}.browser.test.ts`;
+        assert.equal(files.filter((candidate) => candidate === file).length, 1);
+        assert.deepEqual(
+          groups.filter((group) => group.includes(file)),
+          [[file]],
+        );
+        assert.ok(browserGroupWeight([file]) > 190);
+      }
+  for (const mode of ['world', 'publication'])
+    for (const receiver of ['sections', 'instances', 'transparent', 'physical']) {
+      const file = `packages/runtime/src/__tests__/lighting-channels-${mode}-${receiver}.browser.test.ts`;
+      assert.equal(files.filter((candidate) => candidate === file).length, 1);
+      assert.deepEqual(
+        groups.filter((group) => group.includes(file)),
+        [[file]],
+      );
+      assert.match(readFileSync(file, 'utf8'), /timeout: 300_000/);
+      assert.ok(
+        readFileSync(file, 'utf8').includes(
+          `runChannelBrowserCase('${mode}', '${receiver}', 'both')`,
+        ),
+      );
+    }
+  assert.equal(
+    files.includes('packages/runtime/src/__tests__/lighting-channels.browser.test.ts'),
+    false,
+  );
+  const character = 'packages/runtime/src/__tests__/lighting-channels-character.browser.test.ts';
+  assert.equal(files.filter((candidate) => candidate === character).length, 1);
+  assert.deepEqual(
+    groups.filter((group) => group.includes(character)),
+    [[character]],
+  );
+  assert.match(
+    readFileSync('scripts/ci/run-split-vitest-browser.mjs', 'utf8'),
+    /const browserGroupTimeoutMs = 300_000;/,
+  );
+});
+
+test('short renderer deadlines own an exclusive runner without serializing ordinary groups', () => {
+  for (const file of [
+    'packages/runtime/src/__tests__/barrel-distortion-zero-size.browser.test.ts',
+    'packages/runtime/src/__tests__/clamp-to-last.e2e.browser.test.ts',
+    'packages/runtime/src/__tests__/composite-skybox-cross-world.browser.test.ts',
+  ]) {
+    assert.equal(browserGroupRequiresExclusiveRunner([file]), true);
+    assert.deepEqual(
+      dryRunGroups().filter((group) => group.includes(file)),
+      [[file]],
+    );
+  }
+  assert.equal(
+    browserGroupRequiresExclusiveRunner([
+      'packages/runtime/src/__tests__/capsule-shadow.browser.test.ts',
+      'packages/runtime/src/__tests__/contact-shadow.browser.test.ts',
+    ]),
+    false,
+  );
+});
+
+test('the measured video benchmark keeps neighboring render groups outside its memory window', () => {
+  assert.equal(
+    browserGroupRequiresExclusiveRunner([
+      'packages/runtime/src/__tests__/external-texture-perf.browser.test.ts',
+    ]),
+    true,
+  );
+  assert.equal(
+    browserGroupRequiresExclusiveRunner([
+      'packages/runtime/src/__tests__/wave1-rendering-p0.browser.test.ts',
+      'packages/runtime/src/__tests__/wave1-shadow-diagnostic.browser.test.ts',
+      'packages/runtime/src/__tests__/weapon-spirit-material.browser.test.ts',
+      'packages/ui/src/preview/__tests__/capture-determinism.browser.test.ts',
+    ]),
+    false,
+    'ordinary render groups retain concurrency outside the benchmark',
+  );
+});
+
+test('the measured color-lighting visual group gets an exclusive runner slot', () => {
+  const target =
+    'apps/parity/color-lighting/src/visual/__tests__/vertex-color-visual.browser.test.ts';
+  const groups = dryRunGroups();
+  const ownerGroups = groups.filter((group) => group.includes(target));
+
+  assert.equal(ownerGroups.length, 1, 'the visual owner stays in exactly one group');
+  assert.equal(ownerGroups[0].length, 8, 'the measured owner keeps its full existing group');
+  assert.equal(browserGroupRequiresExclusiveRunner(ownerGroups[0]), true);
+});
+
+test('large render-worker owners retain singleton groups with exclusive runner admission', () => {
+  const groups = dryRunGroups();
+  for (const file of [
+    'packages/app/__tests__/render-worker-environment.browser.test.ts',
+    'packages/app/__tests__/render-worker-tiles.browser.test.ts',
+    'packages/app/__tests__/render-worker-deformation.browser.test.ts',
+    'packages/app/__tests__/render-worker-multi-camera.browser.test.ts',
+  ]) {
+    const owners = groups.filter((group) => group.includes(file));
+    assert.deepEqual(owners, [[file]], 'retain the complete existing owner exactly once');
+    assert.equal(browserGroupRequiresExclusiveRunner(owners[0]), true, file);
+  }
+});
+
+test('the complete environment presentation owner keeps its original deadline in a fresh process', () => {
+  const target = 'packages/runtime/src/__tests__/image-environment-presentation.browser.test.ts';
+  const expected = [
+    ...browserTestFiles(),
+    'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts',
+  ].sort();
+  for (const groupSize of [4, 8, 16]) {
+    const groups = dryRunGroups(groupSize);
+    assert.deepEqual(groups.flat().sort(), expected, 'all browser owners remain scheduled once');
+    assert.deepEqual(
+      groups.filter((group) => group.includes(target)),
+      [[target]],
+    );
+    for (const neighbor of ['framebuffer-snapshot', 'light-casters-9-light', 'material-mrt']) {
+      assert.equal(
+        groups.flat().filter((file) => file.endsWith(`/${neighbor}.browser.test.ts`)).length,
+        1,
+      );
+    }
+  }
+  assert.equal(
+    browserGroupRequiresExclusiveRunner([target]),
+    true,
+    'the complete measured environment owner drains neighboring groups',
+  );
+});
 
 test('floating harness experiments stay outside the Engine browser roster', () => {
   const root = mkdtempSync(join(tmpdir(), 'browser-roster-'));
@@ -65,6 +353,24 @@ test('browser discovery excludes floating harness experiments while retaining En
   }
 });
 
+test('browser discovery skips owned native build outputs without hiding a source directory named target', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-browser-generated-'));
+  const owners = ['packages/render/target/owner.browser.test.ts'];
+  const generated = [
+    'packages/wgpu-wasm/target/generated.browser.test.ts',
+    'packages/dawn-node/.native-build/generated.browser.test.ts',
+  ];
+  try {
+    for (const file of [...owners, ...generated]) {
+      mkdirSync(join(root, file, '..'), { recursive: true });
+      writeFileSync(join(root, file), '');
+    }
+    assert.deepEqual(browserTestFiles(root), owners);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('SSAO onerror gate keeps a bounded lavapipe cold-start budget', () => {
   const source = readFileSync(
     'apps/learn-render/5.advanced-lighting/9.ssao/src/__tests__/onerror-gate.browser.test.ts',
@@ -112,8 +418,9 @@ test('preview browser owners are isolated from ordinary bounded groups', () => {
   assert.equal(new Set(files).size, files.length, 'a browser test may belong to only one group');
 });
 
-test('solar atmosphere calibration keeps the full roster and a balanced singleton owner', () => {
+test('solar atmosphere calibration keeps its complete singleton and exclusive runner admission', () => {
   const target = 'packages/runtime/src/__tests__/solar-atmosphere-calibration.browser.test.ts';
+  const replay = 'packages/runtime/src/__tests__/volumetric-fog-world-time.browser.test.ts';
   const r32float =
     'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts';
   const groups = dryRunGroups();
@@ -127,6 +434,13 @@ test('solar atmosphere calibration keeps the full roster and a balanced singleto
     [[target]],
     'the measured long-lived solar owner must have a fresh process',
   );
+  assert.deepEqual(
+    groups.filter((group) => group.includes(replay)),
+    [[replay]],
+    'the complete equal-time replay must own a fresh process under its original deadlines',
+  );
+
+  assert.equal(browserGroupRequiresExclusiveRunner([target]), true);
 
   const assignment = assignBrowserGroupsToShards(groups, 4, 'balanced');
   const totals = [0, 0, 0, 0];
@@ -141,6 +455,9 @@ test('solar atmosphere calibration keeps the full roster and a balanced singleto
 });
 
 for (const target of [
+  'packages/runtime/src/__tests__/adaptive-drs.browser.test.ts',
+  'packages/runtime/src/__tests__/advanced-modeling.browser.test.ts',
+  'packages/runtime/src/__tests__/alpha-hash.browser.test.ts',
   'packages/runtime/src/__tests__/material-publication.browser.test.ts',
   'packages/runtime/src/__tests__/render-publication.browser.test.ts',
   'packages/runtime/src/__tests__/standard-gbuffer-replay.browser.test.ts',
@@ -150,8 +467,13 @@ for (const target of [
   'packages/runtime/src/__tests__/lod-transition.browser.test.ts',
   'packages/runtime/src/__tests__/normal-bump.browser.test.ts',
   'packages/runtime/src/__tests__/barrel-distortion-output.browser.test.ts',
+  'packages/runtime/src/__tests__/barrel-distortion-zero-size.browser.test.ts',
+  'packages/runtime/src/__tests__/clamp-to-last.e2e.browser.test.ts',
+  'packages/runtime/src/__tests__/composite-skybox-cross-world.browser.test.ts',
+  'packages/runtime/src/__tests__/external-texture-perf.browser.test.ts',
   'packages/runtime/src/__tests__/multi-camera.browser.test.ts',
   'packages/render/src/__tests__/ssr-gpu-dispatch.browser.test.ts',
+  'packages/render/src/__tests__/raytracing/path-tracer.browser.test.ts',
 ]) {
   test(`${target} keeps its complete journey in a bounded singleton`, () => {
     const expectedFiles = [
@@ -182,7 +504,7 @@ test('real multi-camera Worker capture and replacement owns a bounded browser pr
   assert.equal(groups.flat().filter((file) => file === target).length, 1);
 });
 
-test('runtime rendering groups retain their roster within four-file process budgets', () => {
+test('runtime and ray rendering groups retain their roster within four-file process budgets', () => {
   const expected = [
     ...browserTestFiles(),
     'packages/rhi-webgpu/src/__tests__/r32float-capability-generation.integration.test.ts',
@@ -191,7 +513,13 @@ test('runtime rendering groups retain their roster within four-file process budg
     const groups = dryRunGroups(groupSize);
     assert.deepEqual(groups.flat().sort(), expected);
     for (const group of groups) {
-      if (group.some((file) => file.startsWith('packages/runtime/src/__tests__/'))) {
+      if (
+        group.some(
+          (file) =>
+            file.startsWith('packages/runtime/src/__tests__/') ||
+            file.startsWith('packages/render/src/__tests__/raytracing/'),
+        )
+      ) {
         assert.ok(group.length <= 4, `runtime group exceeds its process budget: ${group}`);
       }
     }
@@ -322,6 +650,18 @@ test('direct-light browser producer owns an isolated long-lived group', () => {
   assert.match(browserRunner, /group\.includes\(directLightBrowserFile\)/);
 });
 
+test('generated LOD capture and replay retain one complete browser owner', () => {
+  const file = 'packages/runtime/src/__tests__/generated-lod.browser.test.ts';
+  assert.deepEqual(
+    dryRunGroups().filter((group) => group.includes(file)),
+    [[file]],
+  );
+  const runner = readFileSync('scripts/ci/run-split-vitest-browser.mjs', 'utf8');
+  assert.match(runner, /generatedLodBrowserGroupTimeoutMs = 630_000/);
+  assert.match(runner, /group\.includes\(generatedLodBrowserFile\)/);
+  assert.match(runner, /browserGroupTimeoutMs = 300_000/);
+});
+
 test('color-lighting capture cases stay within the regular browser budget', () => {
   const groups = dryRunGroups(16);
   const colorLightingGroups = groups.filter((group) =>
@@ -370,6 +710,35 @@ test('ordinary groups cook on demand while Preview requires its catalog', () => 
   );
 });
 
+test('Render Worker groups own the runner after repeated cgroup OOM beside a neighbor', () => {
+  for (const file of [
+    'packages/app/__tests__/render-worker.browser.test.ts',
+    'packages/app/__tests__/render-worker-contract.browser.test.ts',
+    'packages/app/__tests__/render-worker-deformation.browser.test.ts',
+  ]) {
+    assert.equal(browserGroupRequiresExclusiveRunner([file]), true, file);
+  }
+});
+
+test('before-consume catalog producers own the runner and are charged every lane', () => {
+  const surface = ['packages/runtime/src/__tests__/surface-standard-pipeline.browser.test.ts'];
+  const preview = ['apps/preview/__tests__/preview.browser.test.ts'];
+  const ordinary = ['packages/runtime/src/__tests__/lens-effects.browser.test.ts'];
+  for (const group of [surface, preview]) {
+    assert.equal(browserProducerReadiness(group, 'on-demand'), 'before-consume');
+    assert.equal(browserGroupRequiresExclusiveRunner(group), true);
+  }
+  assert.equal(browserGroupRequiresExclusiveRunner(ordinary), false);
+  // One exclusive group on a two-lane runner displaces as much as two equal
+  // shared groups, so LPT balances it against them.
+  const shared = [ordinary, ordinary];
+  const assignment = assignBrowserGroupsToShards([surface, ...shared], 2, 'balanced', {
+    concurrency: 2,
+  });
+  assert.notEqual(assignment[0], assignment[1]);
+  assert.equal(assignment[1], assignment[2]);
+});
+
 test('Surface provenance owns a singleton with its complete before-consume catalog', () => {
   const target = 'packages/runtime/src/__tests__/surface-standard-pipeline.browser.test.ts';
   const groups = dryRunGroups();
@@ -388,11 +757,13 @@ test('Surface provenance owns a singleton with its complete before-consume catal
 });
 
 test('lens captures and fresh-device replays own one complete process', () => {
-  const target = 'packages/runtime/src/__tests__/lens-effects.browser.test.ts';
-  assert.deepEqual(
-    dryRunGroups().filter((group) => group.includes(target)),
-    [[target]],
-  );
+  for (const name of ['lens-effects', 'lens-flare']) {
+    const target = `packages/runtime/src/__tests__/${name}.browser.test.ts`;
+    assert.deepEqual(
+      dryRunGroups().filter((group) => group.includes(target)),
+      [[target]],
+    );
+  }
 });
 
 test('all fifteen shadow contact cases retain three independent five-filter processes', () => {
@@ -424,12 +795,15 @@ test('Render Worker content owners retain every case in separate complete proces
   }
 });
 
-test('VFX mesh lighting and consumer recovery keep one complete process', () => {
-  const target = 'packages/runtime/src/__tests__/vfx-mesh-lighting.browser.test.ts';
-  assert.deepEqual(
-    dryRunGroups().filter((group) => group.includes(target)),
-    [[target]],
-  );
+test('VFX mesh local lighting and native publication retain independent complete processes', () => {
+  const groups = dryRunGroups();
+  for (const name of ['vfx-mesh-lighting', 'vfx-mesh-lighting-publication']) {
+    const target = `packages/runtime/src/__tests__/${name}.browser.test.ts`;
+    assert.deepEqual(
+      groups.filter((group) => group.includes(target)),
+      [[target]],
+    );
+  }
 });
 
 test('two host-loss recovery cycles own a fresh complete process', () => {
@@ -490,16 +864,18 @@ test('CI browser shards use deterministic cost balancing without dropping groups
 });
 
 test('serial CI tails are reserved as concurrency-scaled group seconds', () => {
-  const concurrency = 3;
+  const concurrency = 2;
   for (const groupSize of [8, 16]) {
     const groups = dryRunGroups(groupSize);
     const assignment = assignBrowserGroupsToShards(groups, 4, 'balanced', {
       tailSeconds: ciBrowserShardTailSeconds,
       concurrency,
     });
+    const laneSeconds = (group) =>
+      browserGroupWeight(group) * (browserGroupRequiresExclusiveRunner(group) ? concurrency : 1);
     const groupSeconds = [0, 0, 0, 0];
     for (const [index, group] of groups.entries())
-      groupSeconds[assignment[index]] += browserGroupWeight(group);
+      groupSeconds[assignment[index]] += laneSeconds(group);
     assert.ok(
       groupSeconds.every((seconds) => seconds > 0),
       `idle Vitest lane: ${groupSeconds}`,
@@ -507,12 +883,12 @@ test('serial CI tails are reserved as concurrency-scaled group seconds', () => {
     const withTails = groupSeconds.map(
       (seconds, shard) => seconds + (ciBrowserShardTailSeconds[shard] ?? 0) * concurrency,
     );
-    const largest = Math.max(...groups.map(browserGroupWeight));
+    const largest = Math.max(...groups.map(laneSeconds));
     assert.ok(
       Math.max(...withTails) - Math.min(...withTails) <= largest,
       `tail-aware lanes are imbalanced: ${withTails}`,
     );
-    assert.ok(groupSeconds[0] < groupSeconds[2] && groupSeconds[1] < groupSeconds[3]);
+    assert.ok(groupSeconds[2] < groupSeconds[3]);
   }
 });
 
@@ -521,12 +897,50 @@ test('CI tail reservations match the shards that run the serial tails', () => {
   const job = ci.slice(ci.indexOf('name: vitest-browser-shard-'), ci.indexOf('name: vitest-dawn-'));
   assert.match(job, /FORGEAX_BROWSER_FIXED_SMOKE: '1'/);
   assert.match(job, /--group-concurrency=2\n/);
+  assert.match(
+    job,
+    /node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0\s+node scripts\/ci\/run-split-vitest-browser\.mjs/,
+  );
+  assert.match(job, /--shard-count=4\n/);
   assert.match(job, /- name: Verify actual browser test discovery\n\s+if: matrix\.shard == 0\n/);
   assert.match(
     job,
-    /- name: Runtime Pack Worker dev\/build JS\/TS browser gate\n\s+if: matrix\.shard == 1\n/,
+    /- name: Runtime Pack Worker dev\/build JS\/TS browser gate\n\s+if: matrix\.shard == 3\n/,
   );
-  assert.equal(ciBrowserShardTailSeconds.length, 2);
+  assert.match(
+    job,
+    /- name: Mesh interchange Catalog and RHI replay browser gate\n\s+if: matrix\.shard == 2\n/,
+  );
+  assert.match(
+    job,
+    /node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+xvfb-run -a pnpm --filter @forgeax\/engine-devkit test:runtime-browser/,
+  );
+  assert.match(
+    job,
+    /node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+xvfb-run -a pnpm --filter @forgeax\/mesh-io-parity verify/,
+  );
+  assert.deepEqual(ciBrowserShardTailSeconds, [300, 0, 400, 350]);
+  assert.match(
+    job,
+    /- name: Preserve Runtime Pack Worker evidence\n\s+if: always\(\) && matrix\.shard == 3\n/,
+  );
+});
+
+test('measured file seconds cover the current browser roster and drive group weights', () => {
+  const table = JSON.parse(readFileSync('scripts/ci/browser-file-seconds.json', 'utf8'));
+  assert.ok(table.sourceRuns.length > 0, 'measured seconds name their source runs');
+  const roster = new Set(dryRunGroups().flat());
+  const measured = Object.keys(table.files);
+  assert.deepEqual(
+    measured.filter((file) => !roster.has(file)),
+    [],
+    'a removed or renamed browser file must leave the measured table',
+  );
+  assert.ok(measured.length >= roster.size * 0.85, 'most of the roster is measured');
+  for (const [file, seconds] of Object.entries(table.files)) {
+    assert.ok(Number.isInteger(seconds) && seconds > 0, `${file}: ${seconds}`);
+    assert.ok(browserGroupWeight([file]) > seconds, `${file} keeps startup overhead`);
+  }
 });
 
 test('fixed-smoke shard remains a real Vitest lane', () => {
@@ -568,4 +982,116 @@ test('concurrent browser lanes launch the heaviest selected owners first', () =>
   const selected = [0, 1, 3];
   assert.equal(browserGroupRunOrder(groups, selected, 1), undefined);
   assert.deepEqual(browserGroupRunOrder(groups, selected, 2), [1, 2, 0]);
+});
+
+test('exclusive browser owners do not fragment otherwise concurrent batches', async () => {
+  const groups = [
+    Array.from({ length: 8 }, (_, index) => `apps/ordinary-${index}.browser.test.ts`),
+    ['packages/runtime/src/__tests__/barrel-distortion-zero-size.browser.test.ts'],
+    ['apps/game-capability-lab/__tests__/hud-ui.browser.test.ts'],
+  ];
+  assert.ok(browserGroupWeight(groups[0]) > browserGroupWeight(groups[1]));
+  assert.ok(browserGroupWeight(groups[1]) >= browserGroupWeight(groups[2]));
+  const selected = [0, 1, 2];
+  let ordinaryActive = 0;
+  let ordinaryPeak = 0;
+  const visited = [];
+  await runGroups({
+    groups: selected,
+    concurrency: 2,
+    order: browserGroupRunOrder(groups, selected, 2),
+    isExclusive: (index) => browserGroupRequiresExclusiveRunner(groups[index]),
+    runGroupImpl: async (index) => {
+      const exclusive = browserGroupRequiresExclusiveRunner(groups[index]);
+      if (exclusive) assert.equal(ordinaryActive, 0);
+      else ordinaryPeak = Math.max(ordinaryPeak, ++ordinaryActive);
+      visited.push(index);
+      await Promise.resolve();
+      if (!exclusive) ordinaryActive -= 1;
+    },
+  });
+  assert.equal(ordinaryPeak, 2);
+  assert.deepEqual(visited.toSorted(), selected);
+});
+
+test('Browser refuses a fifth shard before starting work', () => {
+  assert.throws(() => parseArgs(['--shard-count=5']), /--shard-count/);
+  assert.throws(() => parseArgs(['--shard-index=4']), /--shard-index/);
+  assert.equal(parseArgs(['--shard-count=4', '--shard-index=3']).shardCount, 4);
+});
+
+test('exclusive GPU work consumes both runner slots when balancing two-group shards', () => {
+  const exclusive = ['packages/runtime/src/__tests__/external-texture-perf.browser.test.ts'];
+  const shared = ['packages/runtime/src/__tests__/capsule-shadow.browser.test.ts'];
+  const exclusiveSeconds = browserGroupWeight(exclusive);
+  const sharedSeconds = browserGroupWeight(shared);
+  assert.ok(exclusiveSeconds > sharedSeconds);
+  // Enough shared work to exceed one exclusive slot, but not both slots.
+  const count = Math.floor(exclusiveSeconds / sharedSeconds) + 2;
+  const groups = [exclusive, ...Array.from({ length: count }, () => shared)];
+  assert.deepEqual(assignBrowserGroupsToShards(groups, 2, 'balanced', { concurrency: 2 }), [
+    0,
+    ...Array(count).fill(1),
+  ]);
+});
+
+test('the complete framebuffer/environment/light/MRT owners do not share a native browser lifetime', () => {
+  const groups = dryRunGroups();
+  for (const file of [
+    'packages/runtime/src/__tests__/framebuffer-snapshot.browser.test.ts',
+    'packages/runtime/src/__tests__/image-environment-presentation.browser.test.ts',
+    'packages/runtime/src/__tests__/light-casters-9-light.browser.test.ts',
+    'packages/runtime/src/__tests__/material-mrt.browser.test.ts',
+  ]) {
+    assert.deepEqual(
+      groups.filter((group) => group.includes(file)),
+      [[file]],
+    );
+  }
+});
+
+test('the native PCM loop owner retains a fresh complete browser process', () => {
+  const file = 'packages/audio-webaudio/src/__tests__/pcm-stream.browser.test.ts';
+  assert.deepEqual(
+    dryRunGroups().filter((group) => group.includes(file)),
+    [[file]],
+  );
+});
+
+// Run37361872160: both overlapping pairs exceeded their original bounds;
+// the environment/calibration neighbors passed their unchanged solo retries.
+test('full environment and fog owners drain neighboring browser groups', async () => {
+  const files = [
+    'packages/runtime/src/__tests__/vfx-mesh-lighting.browser.test.ts',
+    'packages/runtime/src/__tests__/image-environment-presentation.browser.test.ts',
+    'packages/runtime/src/__tests__/solar-atmosphere-calibration.browser.test.ts',
+    'packages/runtime/src/__tests__/volumetric-fog-world-time.browser.test.ts',
+  ];
+  for (const file of files) {
+    assert.equal(browserGroupRequiresExclusiveRunner([file]), true, file);
+    assert.deepEqual(
+      dryRunGroups().filter((group) => group.includes(file)),
+      [[file]],
+    );
+  }
+  const groups = [['ordinary-a'], ...files.map((file) => [file]), ['ordinary-b']];
+  let active = 0;
+  const visited = [];
+  await runGroups({
+    groups: groups.map((_group, index) => index),
+    concurrency: 2,
+    isExclusive: (index) => browserGroupRequiresExclusiveRunner(groups[index]),
+    runGroupImpl: async (index) => {
+      if (browserGroupRequiresExclusiveRunner(groups[index])) assert.equal(active, 0);
+      active += 1;
+      if (browserGroupRequiresExclusiveRunner(groups[index])) assert.equal(active, 1);
+      visited.push(index);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+    },
+  });
+  assert.deepEqual(
+    visited.toSorted((a, b) => a - b),
+    groups.map((_group, index) => index),
+  );
 });

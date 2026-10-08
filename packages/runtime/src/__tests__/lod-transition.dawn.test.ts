@@ -19,7 +19,7 @@ const manifestUrl = shaderManifestUrl(await buildEngineShaderManifest());
 it.each([
   false,
   true,
-])('proves LOD color, shadow and fresh-device RHI replay at 60 frames (TAA=%s)', {
+])('proves LOD color, shadow and fresh-device RHI replay across the held-frame window (TAA=%s)', {
   timeout: 180_000,
 }, async (taa) => {
   let target: GPUTexture | undefined;
@@ -52,6 +52,7 @@ it.each([
   mkdirSync(directory, { recursive: true });
   try {
     await verifyLodTransition(host, {
+      heldFrames: process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 8 : 52,
       recorder,
       taa,
       masked: taa,
@@ -62,7 +63,9 @@ it.each([
         const color = model.works.filter(
           (work) =>
             work.vertexBuffers.length > 0 &&
-            work.pipeline.shaders.some((shader) => shader.entryPoint === 'fs_main'),
+            work.pipeline.shaders.some(
+              (shader) => shader.entryPoint === 'fs_main' || shader.entryPoint === 'fs_opaque',
+            ),
         );
         const shadows = model.works.filter((work) =>
           work.pipeline.shaders.some((shader) => shader.entryPoint === 'fs_shadow'),

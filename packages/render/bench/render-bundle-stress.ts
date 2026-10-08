@@ -7,7 +7,7 @@ import { cpus, loadavg } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Result, RhiRenderPassEncoder } from '@forgeax/engine-rhi';
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 import { makeRhiDevice } from '../../rhi-webgpu/src/device';
 import { createShaderModule } from '../../rhi-webgpu/src/index';
 import { RenderBundleCache } from '../src/record/render-bundle-cache';

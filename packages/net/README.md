@@ -46,10 +46,23 @@ change when a socket is replaced. Never use a reopened socket or a new
 | `failed` | Terminal protocol, apply, or recovery failure is observable. | `retired` |
 | `retired` | The session owns no further work. | `retired` |
 
-`isLegalNetSessionTransition` checks a transition without changing state.
+`isLegalNetSessionTransition` checks a transition without changing state;
+`isTerminalNetSessionState` names the `failed`/`retired` states whose only exit is retirement.
 `transitionNetSessionState` returns a `Result`, rejects a different
 `SessionId`, and reports `session-illegal-transition` instead of silently
 accepting an invalid replacement.
+
+## Replication coordinator boundary
+
+`AuthorityCoordinator` adopts one entity-to-identity/component-signature map per `SessionId` only
+when packet encoding succeeds. A failed publication consumes neither an identity
+nor a tick, epoch, sequence, or component baseline. Every candidate identity is
+established before any entity reference is projected.
+
+`createReplicaCoordinator(world, profile)` consumes validated data packets and
+owns the replica projection. Endpoint attachment, disconnect, retry and resource
+accounting belong to `NetSession`. Unresolved cross-packet references are rejected
+before World mutation; a later baseline cannot revive a deferred write.
 
 ## Finite recovery policy
 
@@ -109,6 +122,84 @@ const decoded = decodeReplicationPacket(encoded.value, profile.limits);
 strings, buffers, and arrays. Typed arrays are represented by an allowlisted
 canonical tag and revived only after validation. There is no compatibility
 decoder or second batch envelope.
+
+## Receiver visibility
+
+Attach one synchronous receiver policy to the authority session:
+
+```ts
+import { AuthorityCoordinator, NetSession, type ReplicationVisibility } from '@forgeax/engine/net';
+
+const visibility: ReplicationVisibility = (entity, sessionId) =>
+  admittedPlayers.get(sessionId)?.visibleEntities.has(entity) ?? false;
+const session = new NetSession({ endpoint, maxRawMessages: 32 });
+session.attachAuthority(new AuthorityCoordinator(world, profile), visibility);
+```
+
+The policy is pure game code and runs once per Profile candidate per receiver per
+publication. It only narrows the Profile query. Read current ownership, team,
+distance, or explicit visibility facts there; no renderer or camera state is
+required. Omitting the policy selects all Profile entities for every receiver.
+
+| Change | Packet and replica result |
+|:--|:--|
+| Initial connection | Replica announces its logical identity automatically; every authority waits for that announcement before evaluating or sending data. Each receiver starts with its own sequence-one baseline, including an empty baseline. |
+| Becomes visible | Complete component upsert with a fresh receiver-local network identity. |
+| Remains visible | Changed-component delta; component removal retains the ordinary removal operation. |
+| Becomes hidden | Despawn in that receiver's delta; other receivers keep their own state. |
+| Hidden reference | With a visibility policy, scalar references outside the visible Profile become `null`, and those array entries are removed; revealing a target restores references in the same packet. Without a policy, the existing unresolved-reference rejection remains. |
+| Late join or explicit resync | Full current baseline for that receiver; established peers retain their epochs and deltas. |
+| Authority or policy reattachment | Every connected receiver receives a newly evaluated baseline at a newer epoch, so an already accepted stream cannot retain revoked entities. |
+| Transport replacement | Disconnect drops that receiver's signatures and ACK ledger. Replica clearing resets ordering; the replacement announces the same `SessionId` and receives a newly evaluated baseline at the resume epoch. |
+
+> [!IMPORTANT]
+> Logical identity announcement is routing, not authentication. The game's
+> admission policy owns trusted player identities. Two live announced peers
+> cannot attach the same `SessionId`; the rejected announcement leaves the
+> current attachment intact.
+
+`AuthorityCoordinator.publish(sessionId, visibility)` and
+`publishFull(sessionId, visibility)` expose the same projection for direct
+consumers. `idFor(entity, sessionId)` reads its receiver-local network identity;
+`forgetSession(sessionId)` releases direct-consumer state. `resumeSession(sessionId, epoch)` starts a fresh projection at a monotonic
+recovery epoch. Session integration
+owns that release automatically on disconnect, replacement, failure and disposal.
+A full resync bumps only that receiver's epoch. Encoding failure adopts no
+candidate identity, sequence, tick or component signature.
+
+ACKs must match the sending transport peer, logical session, current epoch and
+published sequence. A stale or foreign ACK cannot drain another peer's ledger.
+`maxPendingPackets` bounds each receiver independently; a stalled receiver
+returns ordinary backpressure while healthy peers still publish. A transport
+write failure schedules a new baseline before that receiver's next delta.
+
+`getReplicationSnapshot()` is the authority's per-peer diagnostic roster
+(`peerId`, `sessionId`, `epoch`, `sequence`, `acknowledgedSequence`,
+`pendingPackets`). Its rows are independent sequence spaces.
+`getRecoverySnapshot()` retains single-session recovery evidence; for an authority,
+`pendingPackets` is the largest peer backlog, `acknowledgedSequence` is the smallest
+peer watermark, and `ownedResources.ledgers` counts nonempty peer ledgers. Its
+`epoch`/`sequence` describe the last sent publication; use the roster to diagnose
+individual receivers.
+
+Run the receiver regression and real-socket checks, then the optional performance
+consumer after building the package closure:
+
+```bash
+pnpm --filter @forgeax/engine-net exec vitest run --config vitest.config.ts
+pnpm --filter @forgeax/engine-net-websocket exec vitest run --config vitest.config.ts
+node packages/net/__tests__/fixtures/peer-visibility-performance.mjs artifacts/g25 <baseline-sha>
+```
+
+The diagnostic compares the exact baseline coordinator/codec source with the
+current built barrel: 128/512 entities, 1/8/32 receivers, 100%/25%/10% visibility,
+40 warmup and 100 measured alternating AB/BA samples. It records CPU and wall
+p50/p95, exact outgoing bytes and raw samples. Each entity's `x` changes every publication;
+World writes are outside the timed interval, encoding is inside, sockets and
+replica application are outside. This measures publication, not whole-game FPS
+or network round-trip latency. All-visible publication performs independent
+receiver projection and encoding; bandwidth savings require a smaller visible
+set. Hardware timings are diagnostic evidence, not a portable CI threshold.
 
 ## Structured failure and recovery guidance
 
@@ -185,6 +276,7 @@ terminal failure, connector cancellation, and plugin teardown.
 | `NetError`, `EndpointError` | Closed structured expected failures |
 | `NetEndpoint`, `PeerId` | Transport-only bytes and peer lifecycle |
 | `NetSession`, `netPlugin` | World-facing session integration |
+| `ReplicationVisibility`, `ReplicationPeerSnapshot` | Receiver policy and per-peer publication evidence |
 | `defineReplication`, `ReplicationProfile` | Portable ECS replication contract |
 | `AuthorityCoordinator`, `ReplicaCoordinator` | Authority publication and atomic replica apply |
 

@@ -34,7 +34,6 @@ export type {
   VfxStagePlanObservation,
   VfxStageReadiness,
   VfxStageRecovery,
-  VfxValidatedStage,
   VfxValidatedStagePlan,
 } from './feature/stage-plan.js';
 export {

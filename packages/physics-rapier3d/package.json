@@ -5,7 +5,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "sideEffects": false,
-  "description": "Rapier 3D WASM backend for forgeax-engine — compat WASM loader, three-phase tick pipeline (syncBackend / stepSimulation / writeback), transform sync, collision event translation, raycast, teleport, despawn cleanup.",
+  "description": "Rapier 3D WASM backend for forgeax-engine \u2014 compat WASM loader, three-phase tick pipeline (syncBackend / stepSimulation / writeback), transform sync, collision event translation, raycast, teleport, despawn cleanup.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -31,9 +31,14 @@
     "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-physics": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
-    "@forgeax/engine-scene": "workspace:*"
+    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-assets-runtime": "workspace:*"
   },
   "devDependencies": {
+    "@forgeax/engine-terrain": "workspace:*",
+    "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-shader": "workspace:*",
     "@dimforge/rapier3d": "0.20.0",
     "@forgeax/engine-runtime": "workspace:*"
   },
@@ -41,7 +46,7 @@
     "metrics": {
       "bundle-size": {
         "enabled": false,
-        "reason": "WASM binary loaded via dynamic import() — not counted in first-frame bundle; bundle-size reflects thin TS shell only"
+        "reason": "WASM binary loaded via dynamic import() \u2014 not counted in first-frame bundle; bundle-size reflects thin TS shell only"
       },
       "fps": {
         "enabled": false,
@@ -49,7 +54,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "no microbenchmark suite yet — Rapier WASM step time is dominated by WASM call overhead and entity count; baseline-tracking deferred to a future feat once a representative scene benchmark exists"
+        "reason": "Manual native collision measurements are available; no stable CI regression baseline or thresholds are declared."
       },
       "gate": {
         "enabled": false,

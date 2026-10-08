@@ -1,13 +1,19 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from './errors';
 import type { ReplayReadbackResult, ReplaySession } from './replay/session';
+import { halfToFloat } from './texel-decode';
+
+/** `f16` reads IEEE half floats (packed `vec2<f16>` / `pack2x16float` payloads). */
+export type BufferFieldType = 'f32' | 'u32' | 'i32' | 'f16';
+
+const FIELD_BYTES: Readonly<Record<BufferFieldType, 2 | 4>> = { f32: 4, u32: 4, i32: 4, f16: 2 };
 
 export interface BufferRecordLayout {
   readonly stride: number;
   readonly fields: readonly {
     readonly name: string;
     readonly offset: number;
-    readonly type: 'f32' | 'u32' | 'i32';
+    readonly type: BufferFieldType;
     readonly components: 1 | 2 | 3 | 4;
   }[];
 }
@@ -64,13 +70,8 @@ export function decodeBufferRecords(
         layout.fields.map((field) => [
           field.name,
           Array.from({ length: field.components }, (_, component): BufferScalar => {
-            const offset = i * layout.stride + field.offset + component * 4;
-            const value =
-              field.type === 'f32'
-                ? view.getFloat32(offset, true)
-                : field.type === 'u32'
-                  ? view.getUint32(offset, true)
-                  : view.getInt32(offset, true);
+            const offset = i * layout.stride + field.offset + component * FIELD_BYTES[field.type];
+            const value = readScalar(view, offset, field.type);
             return Number.isNaN(value)
               ? 'NaN'
               : value === Infinity
@@ -114,14 +115,27 @@ function validateLayout(
       !field.name ||
       !Number.isInteger(field.offset) ||
       field.offset < 0 ||
-      field.offset % 4 !== 0 ||
-      !['f32', 'u32', 'i32'].includes(field.type) ||
+      !Object.hasOwn(FIELD_BYTES, field.type) ||
+      field.offset % FIELD_BYTES[field.type] !== 0 ||
       ![1, 2, 3, 4].includes(field.components) ||
-      field.offset + field.components * 4 > layout.stride
+      field.offset + field.components * FIELD_BYTES[field.type] > layout.stride
     )
       return failure(`field ${field.name} exceeds or disagrees with its record layout`);
   }
   return undefined;
+}
+
+function readScalar(view: DataView, offset: number, type: BufferFieldType): number {
+  switch (type) {
+    case 'f32':
+      return view.getFloat32(offset, true);
+    case 'u32':
+      return view.getUint32(offset, true);
+    case 'i32':
+      return view.getInt32(offset, true);
+    case 'f16':
+      return halfToFloat(view.getUint16(offset, true));
+  }
 }
 
 function failure(cause: string): Result<never, RhiDebugError> {

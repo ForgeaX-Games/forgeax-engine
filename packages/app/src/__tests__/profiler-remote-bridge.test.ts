@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { err } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { serializeBridgeResult } from '../internal/browser-remote-bridge';
 
@@ -28,6 +29,18 @@ describe('browser remote profiler bridge', () => {
     expect(bridge).toContain("code: typeof e.code === 'string' ? e.code : 'script-runtime-error'");
     expect(bridge).toContain('detail');
     expect(bridge).toContain('script-result-unserializable');
+  });
+
+  it('identifies rejected Result prototypes without accepting them as plain JSON', () => {
+    const failure = { code: 'capture-unavailable', detail: { cause: 'worker terminated' } };
+    expect(serializeBridgeResult({ ok: true, value: err(failure) })).toMatchObject({
+      ok: false,
+      error: { code: 'script-result-unserializable', detail: { cause: 'custom object prototype' } },
+    });
+    expect(serializeBridgeResult({ ok: true, value: { ok: false, error: failure } })).toEqual({
+      ok: true,
+      value: { ok: false, error: failure },
+    });
   });
 
   it('reports an unserializable result as an eval failure', () => {

@@ -256,7 +256,7 @@ async function recordDemo(demo) {
   // 1. dawn-node GPU setup
   let create, globals;
   try {
-    ({ create, globals } = await import('webgpu'));
+    ({ create, globals } = await import('@forgeax/engine-dawn-node'));
   } catch (err) {
     console.error(`  SKIP - dawn.node import failed: ${err.message}`);
     return null;

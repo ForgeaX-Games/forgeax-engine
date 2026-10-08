@@ -245,7 +245,9 @@ export function executionWorkerEntries(
     },
     async config(config, environment) {
       building = environment.command === 'build';
-      if (building) return;
+      // The shared graph also runs in Workers. Vite's dynamic-import preload
+      // helper accesses document, so emitted Worker imports must stay native.
+      if (building) return { build: { modulePreload: false } };
       const root = config.root ?? process.cwd();
       const exclude = ['@forgeax/engine'];
       let manifest: string;

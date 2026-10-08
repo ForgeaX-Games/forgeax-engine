@@ -8,19 +8,20 @@ import type {
   PeerId,
 } from '../endpoint/endpoint';
 import { type EndpointError, isEndpointError } from '../endpoint/errors';
-import type { AuthorityCoordinator, PublishedPacket } from '../replication/authority';
+import type { AuthorityCoordinator, ReplicationVisibility } from '../replication/authority';
 import { decodeReplicationPacket, encodeReplicationPacket } from '../replication/codec';
-import { NetError, type NetError as NetErrorType } from '../replication/errors';
+import { NetError } from '../replication/errors';
 import { DEFAULT_REPLICATION_LIMITS, type ReplicationLimits } from '../replication/profile';
 import type {
   ReplicationAckPacket,
   ReplicationDataPacket,
   ReplicationSessionPacket,
 } from '../replication/protocol';
-import { decodeAndApplyReplicationPacket, type ReplicaCoordinator } from '../replication/replica';
+import { applyReplicationPacket, type ReplicaCoordinator } from '../replication/replica';
 import {
   createSessionId,
   DEFAULT_NET_RECOVERY_POLICY,
+  isTerminalNetSessionState,
   type NetRecoveryOutcome,
   type NetRecoveryPolicy,
   type NetRecoverySnapshot,
@@ -46,12 +47,7 @@ export interface NetSessionClock {
   readonly schedule: (delayMs: number, callback: () => void) => { cancel(): void };
 }
 
-export interface NetSessionResourceCounts {
-  readonly pendingConnects: number;
-  readonly timers: number;
-  readonly ledgers: number;
-  readonly callbacks: number;
-}
+export type NetSessionResourceCounts = NetRecoverySnapshot['ownedResources'];
 
 export interface NetSessionConfig {
   readonly endpoint?: NetEndpoint;
@@ -60,6 +56,23 @@ export interface NetSessionConfig {
   readonly recovery?: Partial<NetRecoveryPolicy>;
   readonly clock?: NetSessionClock;
   readonly maxRawMessages: number;
+}
+
+export interface ReplicationPeerSnapshot {
+  readonly peerId: PeerId;
+  readonly sessionId: SessionId;
+  readonly epoch: number;
+  readonly sequence: number;
+  readonly acknowledgedSequence: number;
+  readonly pendingPackets: number;
+}
+
+interface PeerPublication {
+  readonly sessionId: SessionId;
+  epoch: number;
+  sequence: number;
+  acknowledgedSequence: number;
+  readonly ledger: Map<number, Uint8Array>;
 }
 
 export interface RawMessage {
@@ -76,7 +89,7 @@ const defaultClock: NetSessionClock = {
   },
 };
 
-function recoveryFailure(reason: string): NetErrorType {
+function recoveryFailure(reason: string): NetError {
   return new NetError({
     code: 'recovery-rejected',
     expected: 'a recoverable NetSession lifecycle operation',
@@ -116,7 +129,8 @@ export class NetSession {
   #reconnectAttempts = 0;
   #pendingConnect: { readonly abort: () => void } | undefined;
   #retryTimer: { cancel(): void } | undefined;
-  readonly #ledger = new Map<number, Uint8Array>();
+  readonly #publications = new Map<PeerId, PeerPublication>();
+  #visibility: ReplicationVisibility | undefined;
   #deferredEvents: EndpointEvent[] = [];
   #deferReplicaMessages = false;
   #disposed = false;
@@ -135,7 +149,7 @@ export class NetSession {
     else if (!policy.ok) this.#setFailure(policy.error);
   }
 
-  #resolveSessionId(value: SessionId | number | undefined): Result<SessionId, NetErrorType> {
+  #resolveSessionId(value: SessionId | number | undefined): Result<SessionId, NetError> {
     return createSessionId(value ?? 1);
   }
 
@@ -150,8 +164,9 @@ export class NetSession {
 
   #setFailure(failure: NetSessionFailure): void {
     this.#lastError = failure;
-    if (this.#state.kind !== 'failed' && this.#state.kind !== 'retired')
+    if (!isTerminalNetSessionState(this.#state))
       this.#setState({ kind: 'failed', sessionId: this.#sessionId, error: failure });
+    this.#clearPublications();
     this.#authority = undefined;
     this.#peerIds.clear();
     this.#sessionPeers.clear();
@@ -170,7 +185,7 @@ export class NetSession {
     this.#retryTimer = undefined;
     this.#pendingConnect?.abort();
     this.#pendingConnect = undefined;
-    this.#ledger.clear();
+    this.#clearPublications();
   }
 
   #beginRecovery(): void {
@@ -188,13 +203,12 @@ export class NetSession {
         epoch: this.#epoch,
         attempt: 0,
       });
-    this.#ledger.clear();
+    this.#clearPublications();
     this.#sequence = 0;
     this.#acknowledgedSequence = 0;
     this.#peerIds.clear();
     this.#sessionPeers.clear();
     this.#announcedPeers.clear();
-    this.#sessionAnnounced = false;
     this.#pendingFullPeers.clear();
     this.#rawMessages = [];
     this.#deferredEvents = [];
@@ -252,7 +266,7 @@ export class NetSession {
     this.#epoch += 1;
     this.#sequence = 0;
     this.#acknowledgedSequence = 0;
-    this.#ledger.clear();
+    this.#clearPublications();
     // Keep the replacement endpoint's first message behind one receive tick.
     // A connector may deliver peer-connected and the fresh baseline in the
     // same poll; exposing resyncing for one frame makes the lifecycle state
@@ -267,7 +281,7 @@ export class NetSession {
     if (this.#disposed || this.#state.kind !== 'recovering') return;
     const failure: NetSessionFailure =
       cause instanceof NetError
-        ? (cause as unknown as NetErrorType)
+        ? (cause as unknown as NetError)
         : isEndpointError(cause)
           ? cause
           : recoveryFailure('connector attempt failed');
@@ -289,32 +303,23 @@ export class NetSession {
     this.advanceRecovery();
   }
 
-  #handleAck(packet: ReplicationAckPacket): Result<void, NetError> {
-    if (packet.sessionId !== this.#sessionId && !this.#sessionPeers.has(packet.sessionId))
-      return err(
-        new NetError({
-          code: 'recovery-rejected',
-          expected: 'an ACK for the current SessionId',
-          hint: 'discard ACKs from another logical session',
-          detail: { reason: 'ACK SessionId does not match the current session' },
-        }),
-      );
-    if (packet.epoch !== this.#epoch || packet.acknowledgedSequence > this.#sequence)
-      return ok(undefined);
-    if (packet.acknowledgedSequence <= this.#acknowledgedSequence) return ok(undefined);
-    this.#acknowledgedSequence = packet.acknowledgedSequence;
-    for (const sequence of this.#ledger.keys())
-      if (sequence <= packet.acknowledgedSequence) this.#ledger.delete(sequence);
-    return ok(undefined);
+  #handleAck(peerId: PeerId, packet: ReplicationAckPacket): void {
+    const publication = this.#publications.get(peerId);
+    if (publication === undefined) return;
+    if (packet.sessionId !== publication.sessionId) return;
+    if (packet.epoch !== publication.epoch || packet.acknowledgedSequence > publication.sequence)
+      return;
+    publication.acknowledgedSequence = Math.max(
+      publication.acknowledgedSequence,
+      packet.acknowledgedSequence,
+    );
+    for (const sequence of publication.ledger.keys())
+      if (sequence <= publication.acknowledgedSequence) publication.ledger.delete(sequence);
+    return;
   }
 
   #receiveMessage(peerId: PeerId, data: Uint8Array, errors: NetError[]): void {
-    if (
-      this.#state.kind === 'recovering' ||
-      this.#state.kind === 'failed' ||
-      this.#state.kind === 'retired'
-    )
-      return;
+    if (this.#state.kind === 'recovering' || isTerminalNetSessionState(this.#state)) return;
     const limits = this.#replica?.limits ?? DEFAULT_REPLICATION_LIMITS;
     const decoded = decodeReplicationPacket(data, limits);
     if (!decoded.ok) {
@@ -323,40 +328,53 @@ export class NetSession {
         return;
       }
       errors.push(decoded.error);
-      this.#setFailure(decoded.error as NetErrorType);
+      this.#setFailure(decoded.error);
       return;
     }
-    if (decoded.value.kind === 'session-open' || decoded.value.kind === 'session-resume') {
-      this.#bindSession(decoded.value.sessionId, peerId);
-      return;
-    }
-    if (decoded.value.kind === 'ack') {
-      const handled = this.#handleAck(decoded.value);
-      if (!handled.ok) {
-        errors.push(handled.error);
-        this.#setFailure(handled.error);
+    const packet = decoded.value;
+    switch (packet.kind) {
+      case 'session-open':
+      case 'session-resume': {
+        const attached = this.#sessionPeers.get(packet.sessionId);
+        if (attached !== undefined && attached !== peerId && this.#announcedPeers.has(attached)) {
+          errors.push(recoveryFailure('SessionId is already attached to another live peer'));
+          return;
+        }
+        this.#bindSession(packet.sessionId, peerId);
+        if (packet.kind === 'session-resume' && !this.#announcedPeers.has(peerId)) {
+          this.#authority?.resumeSession(packet.sessionId, packet.epoch);
+          this.#pendingFullPeers.add(peerId);
+        }
+        this.#announcedPeers.add(peerId);
+        return;
       }
-      return;
-    }
-    if (decoded.value.kind !== 'baseline' && decoded.value.kind !== 'delta') {
-      if (decoded.value.kind === 'rejection') {
-        const failure = recoveryFailure(
-          `peer rejected ${decoded.value.rejectedKind}: ${decoded.value.reason}`,
-        );
+      case 'ack':
+        this.#handleAck(peerId, packet);
+        return;
+      case 'rejection': {
+        const failure = recoveryFailure(`peer rejected ${packet.rejectedKind}: ${packet.reason}`);
         errors.push(failure);
         this.#setFailure(failure);
+        return;
       }
-      return;
+      case 'baseline':
+      case 'delta':
+        this.#receiveDataPacket(peerId, data, packet, errors);
+        return;
     }
+  }
+
+  #receiveDataPacket(
+    peerId: PeerId,
+    data: Uint8Array,
+    packet: ReplicationDataPacket,
+    errors: NetError[],
+  ): void {
     if (this.#replica === undefined) {
       this.#queueRawMessage(peerId, data);
       return;
     }
-    const applied = decodeAndApplyReplicationPacket(
-      this.#replica.coordinator,
-      data,
-      this.#replica.limits,
-    );
+    const applied = applyReplicationPacket(this.#replica.coordinator, packet);
     if (!applied.ok) {
       errors.push(applied.error);
       this.#setFailure(applied.error);
@@ -364,9 +382,9 @@ export class NetSession {
     }
     const packetOutcome = this.#replica.coordinator.lastPacketOutcome;
     if (packetOutcome === 'accepted') {
-      this.#epoch = decoded.value.epoch;
-      this.#sequence = decoded.value.sequence;
-      this.#acknowledgedSequence = decoded.value.sequence;
+      this.#epoch = packet.epoch;
+      this.#sequence = packet.sequence;
+      this.#acknowledgedSequence = packet.sequence;
       this.#setState({
         kind: 'active',
         sessionId: this.#sessionId,
@@ -375,13 +393,12 @@ export class NetSession {
       });
     }
     if (packetOutcome === 'accepted' || packetOutcome === 'duplicate')
-      this.#sendReplicationAck(peerId, decoded.value);
+      this.#sendReplicationAck(peerId, packet);
   }
 
   receiveEvents(): readonly NetError[] {
     const errors: NetError[] = [];
-    if (this.#disposed || this.#state.kind === 'failed' || this.#state.kind === 'retired')
-      return errors;
+    if (this.#disposed || isTerminalNetSessionState(this.#state)) return errors;
     const events = [...this.#deferredEvents, ...(this.#endpoint?.poll() ?? [])];
     this.#deferredEvents = [];
     const deferMessages = this.#deferReplicaMessages;
@@ -389,8 +406,12 @@ export class NetSession {
     for (const event of events) {
       if (event.kind === 'peer-connected') {
         this.#peerIds.add(event.peerId);
-        if (this.#replica !== undefined) this.#bindSession(this.#sessionId, event.peerId);
-        else this.#bindSession(this.#sessionForPeer(event.peerId), event.peerId);
+        if (this.#replica !== undefined) {
+          this.#bindSession(this.#sessionId, event.peerId);
+          const announced = this.#announceSession(event.peerId);
+          if (!announced.ok) this.#lastError = announced.error;
+        } else if (this.#visibility === undefined)
+          this.#bindSession(this.#sessionForPeer(event.peerId), event.peerId);
         this.#pendingFullPeers.add(event.peerId);
       } else if (event.kind === 'peer-disconnected') {
         this.#forgetPeer(event.peerId);
@@ -420,14 +441,33 @@ export class NetSession {
     return { sessionIds, connected: sessionIds.length > 0 };
   }
 
+  getReplicationSnapshot(): readonly ReplicationPeerSnapshot[] {
+    return [...this.#publications]
+      .map(([peerId, publication]) => ({
+        peerId,
+        sessionId: publication.sessionId,
+        epoch: publication.epoch,
+        sequence: publication.sequence,
+        acknowledgedSequence: publication.acknowledgedSequence,
+        pendingPackets: publication.ledger.size,
+      }))
+      .sort((left, right) => left.peerId - right.peerId);
+  }
+
   /** Return lifecycle, epoch, sequence, ledger, and owned-resource evidence. */
   getRecoverySnapshot(): NetRecoverySnapshot {
     return {
       sessionId: this.#sessionId,
       state: this.#state,
-      pendingPackets: this.#ledger.size,
+      pendingPackets: Math.max(
+        0,
+        ...[...this.#publications.values()].map((peer) => peer.ledger.size),
+      ),
       maxPendingPackets: this.#policy.maxPendingPackets,
-      acknowledgedSequence: this.#acknowledgedSequence,
+      acknowledgedSequence:
+        this.#publications.size === 0
+          ? this.#acknowledgedSequence
+          : Math.min(...[...this.#publications.values()].map((peer) => peer.acknowledgedSequence)),
       reconnectAttempts: this.#reconnectAttempts,
       epoch: this.#epoch,
       sequence: this.#sequence,
@@ -435,7 +475,7 @@ export class NetSession {
       ownedResources: {
         pendingConnects: this.#pendingConnect === undefined ? 0 : 1,
         timers: this.#retryTimer === undefined ? 0 : 1,
-        ledgers: this.#ledger.size === 0 ? 0 : 1,
+        ledgers: [...this.#publications.values()].filter((peer) => peer.ledger.size > 0).length,
         callbacks: 0,
       },
     };
@@ -446,7 +486,7 @@ export class NetSession {
   }
 
   recover(): NetRecoveryOutcome {
-    if (this.#state.kind === 'retired' || this.#state.kind === 'failed')
+    if (isTerminalNetSessionState(this.#state))
       return { kind: 'retired', sessionId: this.#sessionId };
     if (this.#state.kind === 'recovering')
       return { kind: 'already-recovering', sessionId: this.#sessionId };
@@ -479,11 +519,7 @@ export class NetSession {
   sendToAuthority(sessionId: SessionId, data: Uint8Array): Result<void, EndpointError | NetError> {
     if (sessionId !== this.#sessionId)
       return err(recoveryFailure('session id does not belong to this NetSession'));
-    if (
-      this.#state.kind === 'recovering' ||
-      this.#state.kind === 'failed' ||
-      this.#state.kind === 'retired'
-    )
+    if (this.#state.kind === 'recovering' || isTerminalNetSessionState(this.#state))
       return err(recoveryFailure('session is not connected to the authority'));
     const peerId = this.#peerForSession(sessionId);
     if (peerId === undefined) return err(recoveryFailure('authority peer is not connected'));
@@ -496,15 +532,22 @@ export class NetSession {
 
   /** Send one application message to an authority-owned logical session. */
   sendToSession(sessionId: SessionId, data: Uint8Array): Result<void, EndpointError | NetError> {
-    if (this.#state.kind === 'failed' || this.#state.kind === 'retired')
+    if (isTerminalNetSessionState(this.#state))
       return err(recoveryFailure('session is not connected to the authority'));
     const peerId = this.#peerForSession(sessionId);
     if (peerId === undefined) return err(recoveryFailure('logical session is not connected'));
     return this.#sendToPeer(peerId, data);
   }
 
-  attachAuthority(authority: AuthorityCoordinator): void {
+  attachAuthority(authority: AuthorityCoordinator, visibility?: ReplicationVisibility): void {
+    if (this.#authority !== authority)
+      for (const publication of this.#publications.values()) {
+        this.#authority?.forgetSession(publication.sessionId);
+        authority.resumeSession(publication.sessionId, publication.epoch + 1);
+      }
     this.#authority = authority;
+    this.#visibility = visibility;
+    for (const peerId of this.#peerIds) this.#pendingFullPeers.add(peerId);
   }
 
   requestFullBaseline(peerId: PeerId): void {
@@ -518,6 +561,11 @@ export class NetSession {
 
   attachReplica(coordinator: ReplicaCoordinator, limits: ReplicationLimits): void {
     this.#replica = { coordinator, limits };
+    for (const peerId of this.#peerIds) {
+      this.#bindSession(this.#sessionId, peerId);
+      const announced = this.#announceSession(peerId);
+      if (!announced.ok) this.#lastError = announced.error;
+    }
   }
 
   #ledgerBoundError(): NetError {
@@ -529,80 +577,72 @@ export class NetSession {
     });
   }
 
-  #ensurePublicationCapacity(expectedEpoch: number): Result<void, NetError> {
-    if (expectedEpoch === this.#epoch && this.#ledger.size >= this.#policy.maxPendingPackets)
-      return err(this.#ledgerBoundError());
-    return ok(undefined);
-  }
-
-  #reservePublished(packet: PublishedPacket): Result<void, NetError> {
-    if (packet.epoch !== this.#epoch) {
-      this.#ledger.clear();
-      this.#acknowledgedSequence = 0;
-      this.#epoch = packet.epoch;
-    }
-    if (this.#ledger.size >= this.#policy.maxPendingPackets && !this.#ledger.has(packet.sequence))
-      return err(this.#ledgerBoundError());
-    this.#sequence = packet.sequence;
-    this.#ledger.set(packet.sequence, packet.bytes);
-    return ok(undefined);
-  }
-
-  #sendPublished(
-    packet: PublishedPacket,
-    peerIds: readonly PeerId[],
-  ): Result<void, EndpointError | NetError> {
-    const reserved = this.#reservePublished(packet);
-    if (!reserved.ok) return reserved;
-    if (this.#endpoint === undefined) return err(recoveryFailure('session has no endpoint'));
-    let delivered = false;
-    for (const peerId of peerIds) {
-      const sent = this.#endpoint.send(peerId, packet.bytes);
-      if (!sent.ok) {
-        if (sent.error.code === 'connection-closed') {
-          // A socket can close before its endpoint emits the corresponding
-          // disconnect event. Treat that transport race as the lifecycle
-          // event it represents so one stale peer cannot poison the World or
-          // prevent the same publication reaching live peers.
-          this.#forgetPeer(peerId);
-          continue;
-        }
-        this.#ledger.delete(packet.sequence);
-        return err(sent.error);
-      }
-      delivered = true;
-    }
-    if (!delivered) this.#ledger.delete(packet.sequence);
-    return ok(undefined);
+  #clearPublications(): void {
+    for (const publication of this.#publications.values())
+      this.#authority?.forgetSession(publication.sessionId);
+    this.#publications.clear();
   }
 
   publish(): Result<void, NetError | EndpointError> {
-    // Do not advance the authority ledger before a peer exists. A host can
-    // start its fixed loop before the first socket handshake; reserving that
-    // empty publication would make the first connected peer wait behind an
-    // ACK for bytes it could never receive.
-    if (this.#authority === undefined || this.#endpoint === undefined || this.#peerIds.size === 0)
+    if (
+      this.#authority === undefined ||
+      this.#endpoint === undefined ||
+      isTerminalNetSessionState(this.#state)
+    )
       return ok(undefined);
-    if (this.#pendingFullPeers.size > 0) {
-      const capacity = this.#ensurePublicationCapacity(this.#authority.nextPublicationEpoch(true));
-      if (!capacity.ok) return capacity;
-      const published = this.#authority.publishFull();
-      if (!published.ok) return err(published.error);
-      const sent = this.#sendPublished(published.value, [...this.#peerIds]);
-      if (!sent.ok) return err(sent.error);
-      this.#pendingFullPeers.clear();
-      // A fresh baseline is the first packet of the new epoch for every
-      // replica.  Do not append the same-tick delta: a receiver must be able
-      // to observe and apply sequence 1 before any incremental publication.
-      return ok(undefined);
+    let failure: NetError | EndpointError | undefined;
+    for (const peerId of [...this.#peerIds]) {
+      // Socket-open precedes logical session-open/resume. Publishing under the
+      // provisional transport identity can leak an epoch-zero baseline on resume.
+      if (!this.#announcedPeers.has(peerId)) continue;
+      const sessionId = this.#sessionForPeer(peerId);
+      let publication = this.#publications.get(peerId);
+      if (publication === undefined) {
+        publication = {
+          sessionId,
+          epoch: 0,
+          sequence: 0,
+          acknowledgedSequence: 0,
+          ledger: new Map(),
+        };
+        this.#publications.set(peerId, publication);
+      }
+      const full = this.#pendingFullPeers.has(peerId);
+      if (!full && publication.ledger.size >= this.#policy.maxPendingPackets) {
+        failure ??= this.#ledgerBoundError();
+        continue;
+      }
+      const published = full
+        ? this.#authority.publishFull(sessionId, this.#visibility)
+        : this.#authority.publish(sessionId, this.#visibility);
+      if (!published.ok) {
+        failure ??= published.error;
+        continue;
+      }
+      const packet = published.value;
+      const sent = this.#endpoint.send(peerId, packet.bytes);
+      if (!sent.ok) {
+        if (sent.error.code === 'connection-closed') this.#forgetPeer(peerId);
+        else {
+          // Projection has advanced; a failed transport write must next send
+          // a fresh baseline rather than an unobservable sequence gap.
+          this.#pendingFullPeers.add(peerId);
+          failure ??= sent.error;
+        }
+        continue;
+      }
+      if (packet.epoch !== publication.epoch) {
+        publication.ledger.clear();
+        publication.acknowledgedSequence = 0;
+      }
+      publication.epoch = packet.epoch;
+      publication.sequence = packet.sequence;
+      publication.ledger.set(packet.sequence, packet.bytes);
+      this.#epoch = packet.epoch;
+      this.#sequence = packet.sequence;
+      this.#pendingFullPeers.delete(peerId);
     }
-    const capacity = this.#ensurePublicationCapacity(this.#authority.nextPublicationEpoch());
-    if (!capacity.ok) return capacity;
-    const published = this.#authority.publish();
-    if (!published.ok) return err(published.error);
-    const sent = this.#sendPublished(published.value, [...this.#peerIds]);
-    if (!sent.ok) return err(sent.error);
-    return ok(undefined);
+    return failure === undefined ? ok(undefined) : err(failure);
   }
 
   dispose(): void {
@@ -613,6 +653,7 @@ export class NetSession {
     this.#endpoint = undefined;
     this.#replica?.coordinator.clear();
     this.#replica = undefined;
+    this.#clearPublications();
     this.#authority = undefined;
     this.#peerIds.clear();
     this.#sessionPeers.clear();
@@ -644,18 +685,32 @@ export class NetSession {
     }
     const created = createSessionId(peerId);
     const sessionId = created.ok ? created.value : this.#sessionId;
-    this.#bindSession(sessionId, peerId);
+    // A policy-equipped authority binds only an announced logical identity.
+    if (this.#visibility === undefined) this.#bindSession(sessionId, peerId);
     return sessionId;
   }
 
   #bindSession(sessionId: SessionId, peerId: PeerId): void {
     for (const [mappedSessionId, mappedPeerId] of this.#sessionPeers)
-      if (mappedSessionId === sessionId || mappedPeerId === peerId)
+      if (mappedSessionId === sessionId || mappedPeerId === peerId) {
+        if (mappedSessionId !== sessionId || mappedPeerId !== peerId) {
+          const old = this.#publications.get(mappedPeerId);
+          if (old !== undefined) {
+            if (mappedPeerId === peerId) this.#authority?.rebindSession(old.sessionId, sessionId);
+            else this.#authority?.forgetSession(old.sessionId);
+          }
+          this.#publications.delete(mappedPeerId);
+          this.#pendingFullPeers.add(mappedPeerId);
+        }
         this.#sessionPeers.delete(mappedSessionId);
+      }
     this.#sessionPeers.set(sessionId, peerId);
   }
 
   #forgetPeer(peerId: PeerId): void {
+    const publication = this.#publications.get(peerId);
+    if (publication !== undefined) this.#authority?.forgetSession(publication.sessionId);
+    this.#publications.delete(peerId);
     this.#peerIds.delete(peerId);
     for (const [sessionId, mappedPeerId] of this.#sessionPeers)
       if (mappedPeerId === peerId) this.#sessionPeers.delete(sessionId);

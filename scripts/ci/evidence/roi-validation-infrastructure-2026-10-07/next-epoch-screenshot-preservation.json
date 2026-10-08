@@ -1,0 +1,12 @@
+[
+  {
+    "path": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-validation-infrastructure/scripts/ci/evidence/roi-validation-infrastructure-2026-10-07/ci-first-sdk-restored-preview.png",
+    "bytes": 322245,
+    "sha256": "d81d7b612a79b3a211049813396a29fde24562514f8e3eca5d600ca48f071cbd"
+  },
+  {
+    "path": "/private/tmp/roi-validation-infrastructure-20261007/sdk-npm-first-artifact/view-registry/runtime-js/live/failure.png",
+    "bytes": 322245,
+    "sha256": "d81d7b612a79b3a211049813396a29fde24562514f8e3eca5d600ca48f071cbd"
+  }
+]

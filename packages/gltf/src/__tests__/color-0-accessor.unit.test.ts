@@ -11,15 +11,7 @@ type Fixture = {
     readonly byteOffset?: number;
     readonly byteStride?: number;
   }[];
-  readonly accessors: readonly {
-    readonly bufferView: number;
-    readonly byteOffset?: number;
-    readonly componentType: number;
-    readonly count: number;
-    readonly normalized?: boolean;
-    readonly type: string;
-    readonly sparse?: unknown;
-  }[];
+  readonly accessors: readonly import('../accessor/decode-accessor').AccessorJson[];
 };
 
 type ColorError = {
@@ -51,10 +43,9 @@ function inputFor(name: string, accessorIndex = 0) {
   return {
     accessorIndex,
     accessor,
-    bufferView: view,
-    buffer: decodeBase64(payload),
+    bufferViews: fixture.bufferViews,
+    buffers: [decodeBase64(payload)],
     semantic: 'COLOR_0' as const,
-    bufferIndex: view.buffer,
   };
 }
 
@@ -133,9 +124,9 @@ describe('COLOR_0 accessor support matrix', () => {
     const base = inputFor('float-vec3', 1);
     const accessor = { ...base.accessor, ...patch };
     if (reason === 'range') {
-      const bytes = base.buffer.slice();
+      const bytes = requireValue(base.buffers[0]).slice();
       new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat32(24, 2, true);
-      const result = decodeColorAccessor({ ...base, accessor, buffer: bytes });
+      const result = decodeColorAccessor({ ...base, accessor, buffers: [bytes] });
       expectColorError(result, 'gltf-color-accessor-malformed', reason, 1);
       return;
     }
@@ -145,9 +136,9 @@ describe('COLOR_0 accessor support matrix', () => {
 
   it('rejects non-finite FLOAT values as malformed rather than publishing partial data', () => {
     const base = inputFor('float-vec3', 1);
-    const bytes = base.buffer.slice();
+    const bytes = requireValue(base.buffers[0]).slice();
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat32(24, Number.NaN, true);
-    const result = decodeColorAccessor({ ...base, buffer: bytes });
+    const result = decodeColorAccessor({ ...base, buffers: [bytes] });
     expectColorError(result, 'gltf-color-accessor-malformed', 'finite', 1);
   });
 
@@ -155,7 +146,7 @@ describe('COLOR_0 accessor support matrix', () => {
     const base = inputFor('float-vec3', 1);
     const result = decodeColorAccessor({
       ...base,
-      bufferView: { ...base.bufferView, buffer: 4 },
+      bufferViews: [{ ...requireValue(base.bufferViews[0]), buffer: 4 }],
     });
     expectColorError(result, 'gltf-color-accessor-malformed', 'reference', 1);
   });
@@ -164,11 +155,23 @@ describe('COLOR_0 accessor support matrix', () => {
     const base = inputFor('float-vec3', 1);
     const sparse = decodeColorAccessor({
       ...base,
-      accessor: { ...base.accessor, sparse: { count: 1 } },
+      accessor: {
+        ...base.accessor,
+        sparse: {
+          count: 1,
+          indices: { bufferView: 9, componentType: 5121 },
+          values: { bufferView: 10 },
+        },
+      },
     });
-    expectColorError(sparse, 'gltf-color-accessor-unsupported', 'sparse', 1);
+    expectColorError(sparse, 'gltf-color-accessor-malformed', 'bounds', 1);
 
     const morph = decodeColorAccessor(base, { morph: true });
     expectColorError(morph, 'gltf-color-accessor-unsupported', 'morph', 1);
   });
 });
+
+function requireValue<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error('missing fixture value');
+  return value;
+}

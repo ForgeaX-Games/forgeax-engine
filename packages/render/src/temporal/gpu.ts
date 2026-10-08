@@ -8,6 +8,7 @@ import type {
   TextureFormat,
   TextureView,
 } from '@forgeax/engine-rhi';
+import { cloudHistoryExtent } from '../cloud/temporal';
 import type { DeviceScope } from '../device/device-scope';
 import {
   GPU_TEXTURE_USAGE_COPY_SRC,
@@ -92,13 +93,6 @@ function createSurface(
   });
   if (!view.ok) throw view.error;
   return { texture: texture.value, view: view.value };
-}
-
-function cloudHistoryExtent(width: number, height: number): { width: number; height: number } {
-  return {
-    width: Math.max(1, Math.ceil(width / 2)),
-    height: Math.max(1, Math.ceil(height / 2)),
-  };
 }
 
 function createState(
@@ -435,4 +429,78 @@ export function retireTemporalGpuStateAfterFence(
       retireTemporalGpuState(state);
     },
   );
+}
+
+/*
+ * Frame-level lifecycle of the TAA/CloudLayer ping-pong state. `temporalGpuState`
+ * is the staged writer, `activeTemporalGpuState` the last accepted one, and
+ * `retiringTemporalGpuStates` the generations waiting on their queue fence.
+ */
+
+/** Stage `state` as this frame's temporal history writer. */
+export function stageTemporalGpuWrite(frameState: RenderFrameState, state: TemporalGpuState): void {
+  stageTemporalGpuSubmit(state);
+  frameState.temporalGpuState = state;
+}
+
+/** Promote the staged writer after an accepted submit; the replaced generation retires after its fence. */
+export function commitStagedTemporalGpuState(
+  frameState: RenderFrameState,
+  queue: RhiQueue,
+  hooks: { readonly onReplaced: () => void; readonly onRetireFailure: (cause: unknown) => void },
+): void {
+  const staged = frameState.temporalGpuState;
+  if (staged === undefined || !commitTemporalGpuSubmit(staged)) return;
+  const previous = frameState.activeTemporalGpuState;
+  frameState.activeTemporalGpuState = staged;
+  if (previous !== undefined && previous !== staged) {
+    hooks.onReplaced();
+    retireTemporalGpuStateAfterFence(
+      previous,
+      queue,
+      frameState.retiringTemporalGpuStates,
+      hooks.onRetireFailure,
+    );
+  }
+  frameState.temporalGpuState = undefined;
+}
+
+/** Retire the accepted state after its fence once no temporal producer remains. */
+export function retireActiveTemporalGpuState(
+  frameState: RenderFrameState,
+  queue: RhiQueue,
+  onRetireFailure: (cause: unknown) => void,
+): void {
+  const active = frameState.activeTemporalGpuState;
+  if (active === undefined) return;
+  retireTemporalGpuStateAfterFence(
+    active,
+    queue,
+    frameState.retiringTemporalGpuStates,
+    onRetireFailure,
+  );
+  frameState.activeTemporalGpuState = undefined;
+}
+
+/** Drop the staged write of a failed frame; an unaccepted fresh allocation retires now. */
+export function abortStagedTemporalGpuState(frameState: RenderFrameState): void {
+  const staged = frameState.temporalGpuState;
+  if (staged === undefined) return;
+  abortTemporalGpuSubmit(staged);
+  if (staged !== frameState.activeTemporalGpuState) retireTemporalGpuState(staged);
+  frameState.temporalGpuState = undefined;
+}
+
+/** Retire every temporal generation immediately at disposal or device recovery. */
+export function releaseTemporalGpuStates(frameState: RenderFrameState): void {
+  if (frameState.temporalGpuState !== undefined) {
+    retireTemporalGpuState(frameState.temporalGpuState);
+    frameState.temporalGpuState = undefined;
+  }
+  if (frameState.activeTemporalGpuState !== undefined) {
+    retireTemporalGpuState(frameState.activeTemporalGpuState);
+    frameState.activeTemporalGpuState = undefined;
+  }
+  for (const retiring of frameState.retiringTemporalGpuStates) retireTemporalGpuState(retiring);
+  frameState.retiringTemporalGpuStates.clear();
 }

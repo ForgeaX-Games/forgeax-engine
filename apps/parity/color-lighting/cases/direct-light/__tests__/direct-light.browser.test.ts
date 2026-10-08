@@ -169,7 +169,7 @@ describe('direct-light URP browser producer evidence', () => {
     }
   }, 120_000);
 
-  it('keeps the 80B DirectLightSlot raw kind/tile bits through the browser pack transport', () => {
+  it('keeps the 96B DirectLightSlot raw channel/kind/tile bits through the browser pack transport', () => {
     const packed = packDirectLightSlot(browserSpotSnapshot);
     const transported = structuredClone(packed);
     const storageBytes = new Uint8Array(packDirectLightSlot(browserSpotSnapshot).buffer);
@@ -177,12 +177,13 @@ describe('direct-light URP browser producer evidence', () => {
     const rawU32 = new Uint32Array(transported.buffer);
 
     expect(transported).toBeInstanceOf(Float32Array);
-    expect(transported.byteLength).toBe(80);
+    expect(transported.byteLength).toBe(96);
     expect(storageBytes).toEqual(uniformBytes);
     const kindWord = rawU32[16] ?? 0;
     expect(kindWord & DIRECT_LIGHT_SLOT_KIND_MASK).toBe(DirectLightSlotKind.SPOT);
     expect(kindWord >>> DIRECT_LIGHT_SLOT_PCF_SHIFT).toBe(3);
     expect(rawU32[17]).toBe(3);
+    expect(rawU32[20]).toBe(0xffffffff);
     expect(transported[12]).toBeCloseTo(0.005, 6);
     expect(transported[13]).toBeCloseTo(0.05, 6);
     expect(transported[14]).toBe(1);

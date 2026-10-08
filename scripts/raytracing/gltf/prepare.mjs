@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { meshIrToMeshAsset, toMaterialAsset } from '../../../packages/gltf/src/bridge.ts';
+import { meshIrToMeshAsset, toMaterialAsset } from '@forgeax/engine-gltf';
+import { parseGltfFromFile } from '@forgeax/engine-gltf/node';
+import { parseImage } from '@forgeax/engine-image/parse-image';
 import { deriveTextureColorSpace } from '../../../packages/gltf/src/image-color-space.ts';
 import { cookGltfMeshCards } from '../../../packages/gltf/src/mesh-cards.ts';
-import { parseGltfFromFile } from '../../../packages/gltf/src/node-file-entry.ts';
-import { parseImage } from '../../../packages/image/src/parse-image.ts';
 import { mat4 } from '../../../packages/math/dist/index.mjs';
 import { buildRaySurfaceScene } from '../../../packages/render/dist/internal.mjs';
 import {
@@ -37,6 +37,7 @@ const imports = Object.fromEntries(
     'forgeax_ray::traversal',
     'forgeax_pbr::ray_bsdf',
     'forgeax_pbr::brdf',
+    'forgeax_pbr::ibl_shared',
     'forgeax_pbr::lighting_attenuation',
     'forgeax_view::common',
     'forgeax_view::tonemap',

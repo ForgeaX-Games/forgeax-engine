@@ -91,3 +91,17 @@
 @media (max-width: 600px) {
   .vase-panel { top: auto; bottom: 14px; width: 210px; }
 }
+
+.guide button { pointer-events: auto; cursor: pointer; padding: 4px 10px; border: 1px solid #678; border-radius: 4px; background: #203040; color: white; }
+
+@media (max-width: 600px) and (max-height: 360px) {
+  .guide, .vase-panel {
+    box-sizing: border-box;
+    width: calc(50% - 21px);
+    max-height: calc(100% - 28px);
+    overflow: auto;
+    pointer-events: auto;
+  }
+  .vase-panel { top: 14px; bottom: auto; }
+  .vase-panel label { flex-wrap: wrap; gap: 4px; }
+}

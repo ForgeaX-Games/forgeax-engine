@@ -83,13 +83,19 @@ it.each([
       )
     ).unwrap();
     const projection = assets.getMaterialProjectionForPayload(material);
-    expect(
-      new Set(
-        projection?.passes.flatMap((pass) =>
-          pass.programs.map((program) => program.specializationKey),
-        ),
-      ).size,
-    ).toBe(2);
+    if (projection === undefined) throw new Error('material projection is missing');
+    const programs = projection.passes.flatMap((pass) => pass.programs);
+    const capabilities = [...new Set(programs.map((program) => program.context.capability))];
+    expect(capabilities.sort()).toEqual(['storage-buffer', 'storage-buffer-atmosphere']);
+    // Left and Center/Right retain distinct programs in each device capability context.
+    for (const capability of capabilities)
+      expect(
+        new Set(
+          programs
+            .filter((program) => program.context.capability === capability)
+            .map((program) => program.specializationKey),
+        ).size,
+      ).toBe(2);
     const world = new World();
     const handle = world.allocSharedRef<'MaterialAsset', MaterialAsset>('MaterialAsset', material);
     world

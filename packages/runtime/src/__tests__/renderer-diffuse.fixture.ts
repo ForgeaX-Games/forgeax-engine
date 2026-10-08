@@ -16,7 +16,7 @@ import * as webgpu from '@forgeax/engine-rhi-webgpu';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { ok } from '@forgeax/engine-types';
 import { assert, expect } from 'vitest';
-import type { RayPathFixture } from '../../../render/src/__tests__/raytracing/path-tracer.commands';
+import type { RayPublicationSet } from '../../../render/src/__tests__/raytracing/path-tracer.commands';
 import { constructRuntimeRendererHost } from '../renderer-host';
 import { renderValue } from './standard-gbuffer-replay.fixture';
 
@@ -24,7 +24,7 @@ type Save = (name: string, bytes: Uint8Array) => void | Promise<void>;
 
 /** Ordinary Renderer and real cooked material publication. No test-owned render passes. */
 export async function verifyRendererDiffuse(
-  fixture: RayPathFixture,
+  fixture: RayPublicationSet,
   save: Save,
   manifestUrl?: string,
   reconstruction?: 'combined',
@@ -158,7 +158,7 @@ export async function verifyRendererDiffuse(
         artifacts: Object.fromEntries(
           Object.entries(material.cookedPublication.artifacts).map(([path, bytes]) => [
             path,
-            { bytes: Uint8Array.from(bytes) },
+            { bytes: new TextEncoder().encode(bytes) },
           ]),
         ),
       }),
@@ -212,11 +212,11 @@ export async function verifyRendererDiffuse(
     renderPath: 'deferred' as const,
     ibl: false,
     ssao: false,
-    shadows: 'off' as const,
     visibleSurface: true,
   };
   const settings = {
     ...(reconstruction === undefined ? {} : { reconstruction }),
+    gather: 'exact' as const,
     maxBounces: 1,
     maxDistance: 100,
     seed: 47,
@@ -292,13 +292,21 @@ export async function verifyRendererDiffuse(
   const giInspection = () => {
     const gi = renderer.inspect().diffuseGi;
     assert(gi, 'Renderer exposes its GI preparation state');
+    assert(!('gather' in gi), 'this fixture selects the exact ray gather');
     return gi;
   };
   const centers: Record<string, readonly number[]> = {};
   try {
     renderValue(renderer.setProfile(directProfile));
     for (let i = 0; i < 8; i++) await draw();
+    // Preserve the direct-light control frame before asserting its pixels.
+    // A missing surface or rejected draw must retain its real RHI owner evidence.
+    const directPending = recorder.captureFrame();
+    (await recorder.frameBoundary()).unwrap();
     const direct = await hdr('direct');
+    (await recorder.frameBoundary()).unwrap();
+    const directTape = (await directPending).unwrap();
+    await save('direct.rhitape', directTape.bytes);
     centers.direct = direct.center;
     expect(direct.center[0]).toBeGreaterThan(0);
     renderValue(renderer.setProfile({ ...directProfile, diffuseGi: settings }));

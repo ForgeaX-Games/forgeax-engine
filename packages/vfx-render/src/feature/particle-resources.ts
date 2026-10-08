@@ -15,15 +15,18 @@ import {
   ok,
   type Result,
 } from '@forgeax/engine-types';
-import type { ParticleRendererSourceV3 } from '@forgeax/engine-vfx';
+import {
+  isParticleTopologyRenderer,
+  type ParticleRendererSourceV3,
+  type ParticleTopologyRendererSourceV3,
+} from '@forgeax/engine-vfx';
 import {
   PARTICLE_MESH_DEFAULTS,
   PARTICLE_MESH_GEOMETRY,
 } from '../../../render/src/features/particle-mesh-layout';
 
 type ParticleRendererKind = ParticleRendererSourceV3['kind'];
-type ParticleTopologyRenderer = Extract<ParticleRendererSourceV3, { readonly capacity: number }>;
-type ParticleTopologyKind = ParticleTopologyRenderer['kind'];
+type ParticleTopologyKind = ParticleTopologyRendererSourceV3['kind'];
 
 export const PARTICLE_SHADER_IDENTIFIERS = Object.freeze({
   billboard: 'forgeax::vfx-render.particles.billboard',
@@ -71,8 +74,8 @@ export function createTopologyResourcePlan(
       hint: 'declare a ribbon, trail, or beam renderer',
       detail: { path: 'renderer' },
     });
-  const value = renderer as Partial<ParticleRendererSourceV3> & Record<string, unknown>;
-  if (value.kind !== 'ribbon' && value.kind !== 'trail' && value.kind !== 'beam')
+  const value = renderer as ParticleRendererSourceV3;
+  if (!isParticleTopologyRenderer(value))
     return err({
       code: 'vfx-topology-resource-invalid',
       expected: 'ribbon, trail, or beam',
@@ -121,7 +124,7 @@ export function createTopologyResourcePlan(
     });
   const vertexStride = 12 * 4;
   const segments =
-    value.kind === 'trail' ? capacity * Math.max(1, (value.historyLength as number) - 1) : capacity;
+    value.kind === 'trail' ? capacity * Math.max(1, value.historyLength - 1) : capacity;
   return ok({
     topology: value.kind,
     capacity,
@@ -130,7 +133,7 @@ export function createTopologyResourcePlan(
     indirectBytes: 20,
     resourceKey: `vfx-topology-${value.kind}`,
     ...(value.kind === 'ribbon' ? { stripKey: 'alive-index' as const } : {}),
-    ...(value.kind === 'trail' ? { historyLength: value.historyLength as number } : {}),
+    ...(value.kind === 'trail' ? { historyLength: value.historyLength } : {}),
     ...(value.kind === 'beam' ? { endpointField: 'velocity' as const } : {}),
   });
 }
@@ -415,8 +418,7 @@ export function particleRendererRenderState(
   authored: MaterialRenderState | undefined,
 ): MaterialRenderState | undefined {
   if (authored !== undefined) return authored;
-  const isTopology = kind === 'ribbon' || kind === 'trail' || kind === 'beam';
-  if (kind !== 'billboard' && !isTopology) return undefined;
+  if (kind === 'mesh') return undefined;
   const mode = kind === 'billboard' ? (blend ?? 'alpha') : 'alpha';
   if (mode === 'opaque-cutout') {
     return {

@@ -57,6 +57,19 @@ describe('generated host pointer ownership', () => {
       });
       const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
       try {
+        const errors: string[] = [];
+        page.on('pageerror', (error) => errors.push(error.message));
+        await page.setContent(
+          generatedHtml.replace(/<script type="module"[^>]*>[\s\S]*?<\/script>/g, ''),
+        );
+        expect(
+          await page.evaluate(() => {
+            const event = new KeyboardEvent('keydown', { key: 'w', cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+          }),
+        ).toBe(true);
+        expect(errors).toEqual([]);
         await page.setContent(
           `<!doctype html><html><head><style>${style}</style><style>
             #hud { position: absolute; inset: 0; pointer-events: none; }

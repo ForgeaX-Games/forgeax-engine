@@ -541,8 +541,8 @@ export function validateCameraBloom(
  * CameraView opts cameras into simultaneous, ordered viewport/target output.
  * Without CameraView, ActiveCamera selects the single display view. The orthographic path reuses the
  * same near / far as the perspective path — both variants share the single
- * Camera archetype (30 schema fields, including the Bloom controls, one
- * historyVersion u32 column, the `clearColor` array<f32,4> column, and the
+ * Camera archetype (32 schema fields, including the Bloom controls, one
+ * historyVersion u32 column, the `targetLayer` u32 column, the `clearColor` array<f32,4> column, and the
  * `autoAspect` bool column).
  *
  * @example Perspective camera at (0, 0, 3) looking down -Z (zero-config tonemap):
@@ -616,6 +616,10 @@ export const Camera = defineComponent('Camera', {
   // non-zero shared targets are auxiliary producers whose views and receipt
   // promotion remain owned by Renderer.
   target: { type: 'shared<RenderTarget>', simulationTransient: true },
+  // Layer of `target` this camera writes: cube face, `2d-array` layer, or
+  // `3d` depth slice (Three.js reuses activeCubeFace the same way). Zero for
+  // a 2D target; writers of one target must name distinct layers.
+  targetLayer: { type: 'u32', default: 0 },
   // feat-20260709 M3 / D-3: clear-color is one inline `array<f32,4>` column.
   // The earlier 4-scalar form (clearR/G/B/A) was chosen when this was believed
   // to be the only SoA-safe shape; the Transform (pos/quat/scale) and light
@@ -641,7 +645,7 @@ export const Camera = defineComponent('Camera', {
 
 // ─── Camera POD type (derived from Camera token — single source, AC-07) ─────
 //
-// ShapeOf<SchemaOf<typeof Camera>> resolves the 30-field POD from the Camera
+// ShapeOf<SchemaOf<typeof Camera>> resolves the 32-field POD from the Camera
 // token's schema, which is itself derived from Camera.fields[k].type (D-A7).
 // This replaces the hand-maintained CameraDataPod interface — the field set
 // lives exclusively in the Camera component definition above.

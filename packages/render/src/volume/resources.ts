@@ -13,7 +13,7 @@ import { MAX_VOLUMETRIC_FOG_OWNERS } from './component';
 export const VOLUME_FROXEL_FORMAT = 'rgba8unorm' as const;
 export const VOLUME_HISTORY_FORMAT = 'rgba16float' as const;
 export const VOLUME_RESOLVED_FORMAT = 'rgba16float' as const;
-export const VOLUME_DEPTH_FORMAT = 'r32float' as const;
+
 export const VOLUME_PACKING_Z = 4;
 /** Renderer-owned parameter allocation shared by staging and inspection. */
 export const VOLUMETRIC_FOG_PARAMS_BYTES = (1 + MAX_VOLUMETRIC_FOG_OWNERS) * 9 * 16;

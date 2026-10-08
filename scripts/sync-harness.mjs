@@ -19,10 +19,11 @@ import { spawnSync } from 'node:child_process';
 //   - local clone divergence                    -> warn and skip by default;
 //     FORGEAX_HARNESS_STRICT=1 opts into a loud exit 1 for maintenance/CI
 //     callers that require a reconciled clone.
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { shareHarness } from './lib/shared-harness.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -50,9 +51,19 @@ if (process.env.FORGEAX_SKIP_HARNESS_SYNC) {
   process.exit(0);
 }
 
-const token = resolveToken();
 const sparseDocs = process.env.FORGEAX_HARNESS_SPARSE_DOCS === '1';
+const sparseDocsPaths = process.env.FORGEAX_HARNESS_SPARSE_DOCS_PATHS;
 const strictDivergence = process.env.FORGEAX_HARNESS_STRICT === '1';
+
+try {
+  if (!sparseDocs && shareHarness(root)) {
+    process.stdout.write('[harness:sync] shared primary .forgeax-harness (no clone)\n');
+    if (!strictDivergence) process.exit(0);
+  }
+} catch (error) {
+  warnExit0(`cannot mount the primary Harness: ${error.message}`);
+}
+const token = resolveToken();
 
 function git(args, opts = {}) {
   // Git 2.34 on the self-hosted runner does not honor GIT_CONFIG_COUNT for
@@ -68,7 +79,9 @@ function git(args, opts = {}) {
   return spawnSync('git', authArgs, {
     ...spawnOpts,
     encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...extraEnv },
+    // Routine sync keeps capture/dataset pointers; hydrate an explicit path
+    // later with git lfs pull instead of downloading every historical payload.
+    env: { ...process.env, ...extraEnv, GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1' },
   });
 }
 
@@ -80,6 +93,53 @@ function warnExit0(msg) {
 function failLoud(msg) {
   process.stderr.write(`[harness:sync] FORGEAX_HARNESS_DIVERGED: ${msg}\n`);
   process.exit(1);
+}
+
+function materializeSparseDocs(commit) {
+  if (sparseDocsPaths === undefined) return;
+  if (!sparseDocs) {
+    failLoud('FORGEAX_HARNESS_SPARSE_DOCS_PATHS requires FORGEAX_HARNESS_SPARSE_DOCS=1');
+  }
+
+  let paths;
+  try {
+    paths = JSON.parse(sparseDocsPaths);
+  } catch {
+    failLoud('FORGEAX_HARNESS_SPARSE_DOCS_PATHS must be a JSON array');
+  }
+  if (
+    !Array.isArray(paths) ||
+    paths.length === 0 ||
+    paths.some(
+      (path) =>
+        typeof path !== 'string' ||
+        !path.startsWith('docs/') ||
+        path.includes('\\') ||
+        path.split('/').some((part) => part === '' || part === '.' || part === '..'),
+    )
+  ) {
+    failLoud('FORGEAX_HARNESS_SPARSE_DOCS_PATHS must contain safe docs-relative paths');
+  }
+
+  const harnessRoot = resolve(DIR);
+  const harnessPrefix = `${harnessRoot}${sep}`;
+  for (const path of paths) {
+    const blob = git(['show', `${commit}:${path}`], { cwd: DIR, maxBuffer: 16 * 1024 * 1024 });
+    if (blob.status !== 0) {
+      warnExit0(
+        `requested documentation blob is unavailable at ${commit}:${path}: ${(blob.stderr || '').trim()}`,
+      );
+    }
+    const destination = resolve(DIR, path);
+    if (!destination.startsWith(harnessPrefix)) {
+      failLoud(`sparse documentation path escapes the harness checkout: ${path}`);
+    }
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, blob.stdout, 'utf8');
+  }
+  process.stdout.write(
+    `[harness:sync] materialized ${paths.length} requested documentation file(s)\n`,
+  );
 }
 
 if (!existsSync(resolve(DIR, '.git'))) {
@@ -107,7 +167,7 @@ if (!existsSync(resolve(DIR, '.git'))) {
       `clone failed (offline?); .forgeax-harness not materialised:\n${(r.stderr || '').trim()}`,
     );
   }
-  if (sparseDocs) {
+  if (sparseDocs && sparseDocsPaths === undefined) {
     const sparse = git(['sparse-checkout', 'set', 'docs'], { cwd: DIR });
     if (sparse.status !== 0) {
       warnExit0(
@@ -121,6 +181,7 @@ if (!existsSync(resolve(DIR, '.git'))) {
       );
     }
   }
+  materializeSparseDocs('HEAD');
   process.stdout.write('[harness:sync] cloned forgeax-engine-harness\n');
   process.exit(0);
 }
@@ -135,8 +196,15 @@ if (fetch.status !== 0) {
   );
 }
 
+if (sparseDocsPaths !== undefined) {
+  materializeSparseDocs('FETCH_HEAD');
+  process.stdout.write('[harness:sync] refreshed requested documentation from origin/main\n');
+  process.exit(0);
+}
+
 const ff = git(['merge', '--ff-only', 'origin/main'], { cwd: DIR });
 if (ff.status === 0) {
+  materializeSparseDocs('HEAD');
   process.stdout.write('[harness:sync] fast-forwarded .forgeax-harness to origin/main\n');
   process.exit(0);
 }

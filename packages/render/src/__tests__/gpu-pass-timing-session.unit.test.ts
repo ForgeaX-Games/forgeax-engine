@@ -4,15 +4,29 @@ import type {
   QuerySet,
   RhiCommandEncoder,
   RhiDevice,
+  ShaderModule,
 } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { gpuPassFrameMilliseconds } from '../pipeline/dynamic-resolution';
+import type { GpuPassTimingOptions } from '../record/gpu-pass-timing/contract';
 import { createPassTimingInstrumentation } from '../record/gpu-pass-timing/instrumentation';
 import {
-  createGpuPassTimingSession,
+  createGpuPassTimingSession as createTimingSession,
   type GpuPassTimingCapture,
+  type GpuPassTimingSessionOptions,
 } from '../record/gpu-pass-timing/session.js';
+
+function createGpuPassTimingSession(
+  device: RhiDevice,
+  options: GpuPassTimingOptions = {},
+  sessionOptions: GpuPassTimingSessionOptions = {},
+) {
+  return createTimingSession(device, options, {
+    shaderModuleFactory: { createShaderModule: () => ok({} as ShaderModule) },
+    ...sessionOptions,
+  });
+}
 
 function makeDevice() {
   const calls: string[] = [];
@@ -23,6 +37,10 @@ function makeDevice() {
       timestampQuery: true,
       timestampPeriodNanoseconds: 1,
     },
+    createBindGroupLayout: vi.fn(() => ok({} as never)),
+    createBindGroup: vi.fn(() => ok({} as never)),
+    createPipelineLayout: vi.fn(() => ok({} as never)),
+    createComputePipeline: vi.fn(() => ok({} as never)),
     createQuerySet: vi.fn(() => {
       calls.push('create-query-set');
       return { ok: true, value: {} as QuerySet };
@@ -51,7 +69,12 @@ function encoder() {
   return {
     resolveQuerySet: vi.fn(() => ({ ok: true, value: undefined })),
     copyBufferToBuffer: vi.fn(),
-    encodeEmptyComputePass: vi.fn(),
+    beginComputePass: vi.fn(() => ({
+      setPipeline: vi.fn(),
+      setBindGroup: vi.fn(),
+      dispatchWorkgroups: vi.fn(),
+      end: vi.fn(),
+    })),
   } as unknown as RhiCommandEncoder;
 }
 
@@ -62,6 +85,37 @@ const identity = {
 };
 
 describe('GPU pass timing session', () => {
+  it('allocates marker work only for copies, reuses it and releases its private buffer once', () => {
+    const { device, buffers } = makeDevice();
+    const session = createGpuPassTimingSession(device, { maxFramesInFlight: 1 }).unwrap();
+    const first = session.beginFrame(identity).unwrap();
+    first.recordPass({ passName: 'scene', passKind: 'raster', executionIndex: 0 });
+    first.abort();
+    expect(device.createComputePipeline).not.toHaveBeenCalled();
+    expect(buffers).toHaveLength(2);
+    for (let frameId = 20; frameId < 22; frameId += 1) {
+      const capture = session.beginFrame({ ...identity, frameId }).unwrap();
+      const copy = { passName: 'copy', passKind: 'copy' as const, executionIndex: 0 };
+      capture.recordPass(copy);
+      const commandEncoder = encoder();
+      capture.copyBoundaryBefore(copy, commandEncoder);
+      capture.copyBoundaryAfter(copy, commandEncoder);
+      expect(commandEncoder.beginComputePass).toHaveBeenCalledTimes(2);
+      const passes = (commandEncoder.beginComputePass as ReturnType<typeof vi.fn>).mock.results;
+      for (const pass of passes) {
+        expect(pass.value.dispatchWorkgroups).toHaveBeenCalledWith(1);
+        expect(pass.value.end).toHaveBeenCalledTimes(1);
+      }
+      capture.abort();
+    }
+    expect(device.createComputePipeline).toHaveBeenCalledTimes(1);
+    expect(buffers).toHaveLength(3);
+    expect(buffers[2]).toEqual({ size: 4, usage: 0x80 });
+    session.dispose();
+    session.dispose();
+    expect(device.destroyBuffer).toHaveBeenCalledTimes(3);
+  });
+
   it('records two views and composition in one capture with independent DRS intervals', async () => {
     const { device } = makeDevice();
     const session = createGpuPassTimingSession(
@@ -285,22 +339,26 @@ describe('GPU pass timing session', () => {
 
     const commandEncoder = {
       ...encoder(),
-      encodeEmptyComputePass: vi.fn(),
+      beginComputePass: vi.fn(() => ({
+        setPipeline: vi.fn(),
+        setBindGroup: vi.fn(),
+        dispatchWorkgroups: vi.fn(),
+        end: vi.fn(),
+      })),
     } as unknown as RhiCommandEncoder;
     capture.copyBoundaryBefore(copy, commandEncoder);
     capture.copyBoundaryAfter(copy, commandEncoder);
-    const markerCalls = (commandEncoder.encodeEmptyComputePass as ReturnType<typeof vi.fn>).mock
-      .calls;
+    const markerCalls = (commandEncoder.beginComputePass as ReturnType<typeof vi.fn>).mock.calls;
     expect(markerCalls[0]?.[0]).toMatchObject({
-      timestampWrites: { endOfPassWriteIndex: 2 },
+      timestampWrites: { beginningOfPassWriteIndex: 2 },
     });
     expect(markerCalls[1]?.[0]).toMatchObject({
-      timestampWrites: { beginningOfPassWriteIndex: 3 },
+      timestampWrites: { endOfPassWriteIndex: 3 },
     });
     expect(markerCalls[0]?.[0]).not.toHaveProperty('label');
     expect(markerCalls[1]?.[0]).not.toHaveProperty('label');
     expect(capture.encodeTail(commandEncoder)).toMatchObject({ ok: true });
-    expect(commandEncoder.encodeEmptyComputePass).toHaveBeenCalledTimes(2);
+    expect(commandEncoder.beginComputePass).toHaveBeenCalledTimes(2);
     expect(commandEncoder.resolveQuerySet).toHaveBeenCalledWith(
       expect.anything(),
       0,
@@ -334,11 +392,16 @@ describe('GPU pass timing session', () => {
     recordCopy(first);
     const firstEncoder = {
       ...encoder(),
-      encodeEmptyComputePass: vi.fn(),
+      beginComputePass: vi.fn(() => ({
+        setPipeline: vi.fn(),
+        setBindGroup: vi.fn(),
+        dispatchWorkgroups: vi.fn(),
+        end: vi.fn(),
+      })),
     } as unknown as RhiCommandEncoder;
     first.copyBoundaryBefore(copy, firstEncoder);
     first.copyBoundaryAfter(copy, firstEncoder);
-    const firstCalls = (firstEncoder.encodeEmptyComputePass as ReturnType<typeof vi.fn>).mock.calls;
+    const firstCalls = (firstEncoder.beginComputePass as ReturnType<typeof vi.fn>).mock.calls;
     first.encodeTail(firstEncoder);
     first.abort();
 
@@ -346,20 +409,24 @@ describe('GPU pass timing session', () => {
     recordCopy(second);
     const secondEncoder = {
       ...encoder(),
-      encodeEmptyComputePass: vi.fn(),
+      beginComputePass: vi.fn(() => ({
+        setPipeline: vi.fn(),
+        setBindGroup: vi.fn(),
+        dispatchWorkgroups: vi.fn(),
+        end: vi.fn(),
+      })),
     } as unknown as RhiCommandEncoder;
     second.copyBoundaryBefore(copy, secondEncoder);
     second.copyBoundaryAfter(copy, secondEncoder);
-    const secondCalls = (secondEncoder.encodeEmptyComputePass as ReturnType<typeof vi.fn>).mock
-      .calls;
+    const secondCalls = (secondEncoder.beginComputePass as ReturnType<typeof vi.fn>).mock.calls;
 
     expect(secondCalls[0]?.[0]).toBe(firstCalls[0]?.[0]);
     expect(secondCalls[1]?.[0]).toBe(firstCalls[1]?.[0]);
     expect(firstCalls[0]?.[0]).toMatchObject({
-      timestampWrites: { endOfPassWriteIndex: 2 },
+      timestampWrites: { beginningOfPassWriteIndex: 2 },
     });
     expect(firstCalls[1]?.[0]).toMatchObject({
-      timestampWrites: { beginningOfPassWriteIndex: 3 },
+      timestampWrites: { endOfPassWriteIndex: 3 },
     });
   });
 
@@ -393,9 +460,15 @@ describe('GPU pass timing session', () => {
     let calls = 0;
     const commandEncoder = {
       ...encoder(),
-      encodeEmptyComputePass: vi.fn(() => {
+      beginComputePass: vi.fn(() => {
         calls += 1;
         if (calls === failureCall) throw new Error(`raw ${phase} marker failed`);
+        return {
+          setPipeline: vi.fn(),
+          setBindGroup: vi.fn(),
+          dispatchWorkgroups: vi.fn(),
+          end: vi.fn(),
+        };
       }),
     } as unknown as RhiCommandEncoder;
 

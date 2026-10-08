@@ -70,20 +70,18 @@ beforeAll(async () => {
   scenario = await buildPublicationScenario();
 });
 
-it('publishes one program per pass with independent module artifacts', () => {
-  expect(scenario.record.programs).toHaveLength(2);
+it('publishes independent pass artifacts in both View capability layouts', () => {
+  expect(scenario.record.programs).toHaveLength(4);
   expect(Object.keys(scenario.first.artifacts)).toHaveLength(2);
-  expect(
-    scenario.record.programs.map((program) =>
-      program.selections.map((selection) => selection.pass),
-    ),
-  ).toEqual([['Forward'], ['Overlay']]);
-});
-
-it('keeps specialization keys distinct for independent pass modules', () => {
-  expect(new Set(scenario.record.programs.map((program) => program.specializationKey)).size).toBe(
-    2,
-  );
+  for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+    const programs = scenario.record.programs.filter((program) =>
+      program.selections.some((selection) => selection.context.capability === capability),
+    );
+    expect(
+      programs.map((program) => program.selections.map((selection) => selection.pass)),
+    ).toEqual([['Forward'], ['Overlay']]);
+    expect(new Set(programs.map((program) => program.specializationKey)).size).toBe(2);
+  }
 });
 
 it('reuses programs across GUIDs while changing material publication identity', () => {

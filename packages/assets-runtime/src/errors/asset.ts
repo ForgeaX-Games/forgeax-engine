@@ -18,39 +18,6 @@ import {
   type AssetMeshBinContractViolationReason,
 } from '@forgeax/engine-types';
 
-export type TexturePackVerificationCause =
-  | 'byte-length'
-  | 'digest-mismatch'
-  | 'packing-order-mismatch'
-  | 'shape-mismatch';
-
-export interface TexturePackVerificationDetail {
-  readonly guid: string;
-  readonly sourceKey: string;
-  readonly generation: number;
-  readonly stage: 'producer' | 'loader';
-  readonly cause: TexturePackVerificationCause;
-  readonly expectedBytes?: number;
-  readonly actualBytes?: number;
-  readonly expectedDigest?: string;
-  readonly actualDigest?: string;
-}
-
-/** Structured failure for the producer/loader texture contract. */
-export class TexturePackVerificationError extends Error {
-  readonly code = 'texture-pack-verification-failed' as const;
-  readonly expected: string;
-  readonly hint = 'repair the producer output and retry the same texture GUID generation';
-  readonly detail: TexturePackVerificationDetail;
-
-  constructor(detail: TexturePackVerificationDetail, expected: string) {
-    super(`[TexturePackVerificationError] ${detail.cause}: ${expected}`);
-    this.name = 'TexturePackVerificationError';
-    this.expected = expected;
-    this.detail = detail;
-  }
-}
-
 export class MeshBinAssetError extends AssetError {
   readonly subject = 'mesh-bin' as const;
   readonly sourceKey: string;

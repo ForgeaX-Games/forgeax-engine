@@ -1,3 +1,4 @@
+import { RAY_QUERY_FEATURE } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
 import type { Tape } from '../protocol/types';
 import { replayDeviceRequest } from '../replay/device-request';
@@ -32,6 +33,16 @@ describe('replay device descriptor features', () => {
       ]);
     });
   }
+  it('enables adapter timestamps for per-pass replay timing without requiring them', () => {
+    expect(replayDeviceRequest(empty, new Set(['timestamp-query']), {}).requiredFeatures).toEqual([
+      'timestamp-query',
+    ]);
+    const recorded = { ...empty, header: { ...empty.header, rhiCaps: { timestampQuery: true } } };
+    expect(
+      replayDeviceRequest(recorded, new Set(['timestamp-query']), {}).requiredFeatures,
+    ).toEqual(['timestamp-query']);
+    expect(replayDeviceRequest(recorded, new Set(), {})).toEqual({});
+  });
   it('does not impose a renderer depth format on generic tapes', () => {
     expect(replayDeviceRequest(empty, new Set(['depth32float-stencil8']), {})).toEqual({});
   });
@@ -73,5 +84,21 @@ describe('replay device descriptor features', () => {
       ],
     };
     expect(replayDeviceRequest(tape, new Set(), {}).requiredFeatures).toEqual(['primitive-index']);
+  });
+  it('requests the Ray Query extension when the tape builds acceleration structures', () => {
+    const tape: Tape = {
+      ...empty,
+      events: [
+        {
+          kind: 'createTlas',
+          handleId: 'tlas:1',
+          desc: { maxInstances: 1 },
+        },
+      ],
+    };
+    expect(replayDeviceRequest(tape, new Set(), {}).requiredFeatures).toEqual([RAY_QUERY_FEATURE]);
+    expect(replayDeviceRequest(empty, new Set([RAY_QUERY_FEATURE as GPUFeatureName]), {})).toEqual(
+      {},
+    );
   });
 });

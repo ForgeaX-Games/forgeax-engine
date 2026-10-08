@@ -19,8 +19,13 @@ await context.fiber.restart();
 ```
 
 `scenePlugin()` is a native Cordis plugin. Its Fiber installs hierarchy
-propagation and removes it when the realm unloads. The direct
-`propagateTransforms(world)` entry point returns `Result<void, SceneError>`;
+propagation and removes it when the realm unloads.
+
+`PROPAGATE_TRANSFORMS_FIXED_SYSTEM` is the public FixedUpdate ordering anchor for
+local Transform writers, including navigation and distance-based path following. Register a writer with
+`before: [PROPAGATE_TRANSFORMS_FIXED_SYSTEM]` after installing `scenePlugin()`.
+
+The direct `propagateTransforms(world)` entry point returns `Result<void, SceneError>`;
 branch on `error.code` and repair a diagnosable stale edge, mirror mismatch, or
 cycle through `World.set`/`World.removeComponent` (or the owning structural
 command) before retrying while the World is healthy.
@@ -59,6 +64,10 @@ const level: SceneAsset = {
 > recursive instance graphs fail before entity creation. A direct POD scene has
 > no persistent source identity; choose a Pack output key before saving it.
 
+Authored primitive fields are checked before storage conversion: scalar types, finite floating-point values, integer ranges and fixed-array lengths must match the declared schema. Typed numeric author arrays project their values instead of reinterpreting bytes. Malformed values return `asset-package-invalid` before any scene entity is spawned. Omitted fields still use schema defaults.
+
+Schema-declared scalar and array entity references bind after all owned entities and mount carriers exist. Forward and cyclic references therefore resolve to the current instance; hierarchy still follows its parent-first ordering. This does not make hierarchy cycles valid.
+
 ### Publication fence for loaded scenes
 
 Catalog-loaded scenes carry their publication evidence in the producer/loading
@@ -74,6 +83,13 @@ mismatched tuple returns `asset-generation-fence-mismatch` with `expected`,
 recook the producer, then open the current publication and retry. Direct
 anonymous POD scenes have no Catalog fence and remain addressable only for their
 current in-memory instance; saving one requires an explicit Pack/output key.
+
+Each `SceneInstance.state` names the actual `SceneInstanceState` payload in
+World's managed reference store. `worldGetSceneInstanceState` resolves that
+identity; reverse binding diagnostics query live SceneInstance entities. There
+is no parallel state catalogue or placeholder payload. Override records are
+projected directly into the owned state; the former internal
+`worldMountOverridesToStateMap` export is removed.
 
 Each SceneInstanceState retains the schema-declared shared references in its
 source, including arrays and instance overrides, until that state is destroyed.

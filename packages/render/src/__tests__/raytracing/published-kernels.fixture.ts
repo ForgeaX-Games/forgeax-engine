@@ -17,6 +17,7 @@ export async function loadPublishedRayKernels(manifestUrl: string) {
     query: select('queryTriangles'),
     transport: select('accumulate'),
     raster: select('generateRasterRays'),
+    placement: select('placeRasterProbes'),
     composite: select('fs_ray_diffuse'),
     reconstruction: select('reconstructDiffuse'),
   };

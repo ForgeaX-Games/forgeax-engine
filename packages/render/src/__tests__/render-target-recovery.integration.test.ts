@@ -60,7 +60,7 @@ describe('RenderTarget recovery integration', () => {
     const ticket = createRenderTargetReadbackTicket(target.value, {
       deviceGeneration: 1,
       mipLevel: 0,
-      face: 2,
+      layer: 2,
       width: 4,
       height: 4,
       bytesPerPixel: 4,

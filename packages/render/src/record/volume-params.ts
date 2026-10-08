@@ -5,16 +5,24 @@ import type { RenderResourceScope } from '../publication/resource-scope';
 import type { SpotLightProjectorFrameContext, VolumetricFogFrameContext } from '../render-contract';
 import type { ExtractedLights, ExtractedVolumetricFog } from '../render-system-extract';
 import { VOLUMETRIC_FOG_PARAMS_BYTES } from '../volume/resources';
-import type { RenderFrameState } from './frame-snapshot';
+import type { RenderFrameState, VolumetricFogParamsState } from './frame-snapshot';
 import type { RenderSystemInternals } from './render-context';
 
-type VolumetricFogParamsSlot = 0 | 1;
+export function emptyVolumetricFogParams(): VolumetricFogParamsState {
+  return { buffers: [null, null], pending: null, accepted: null };
+}
 
-function nextVolumetricFogParamsSlot(frameState: RenderFrameState): VolumetricFogParamsSlot {
-  const accepted = frameState.volumetricFogParamsAcceptedSlot;
-  const pending = frameState.volumetricFogParamsPendingSlot;
-  if (pending !== null && pending !== accepted) return pending;
-  return accepted === null ? 0 : accepted === 0 ? 1 : 0;
+/** Accept the pending slot; called only after its queue submission succeeded. */
+export function promoteVolumetricFogParams(state: VolumetricFogParamsState): void {
+  if (state.pending === null) return;
+  state.accepted = state.pending;
+  state.pending = null;
+}
+
+function nextVolumetricFogParamsSlot(state: VolumetricFogParamsState): 0 | 1 {
+  const { accepted, pending } = state;
+  if (pending !== null && pending.slot !== accepted?.slot) return pending.slot;
+  return accepted?.slot === 0 ? 1 : 0;
 }
 
 export function stageVolumetricFogParams(
@@ -22,8 +30,9 @@ export function stageVolumetricFogParams(
   frameState: RenderFrameState,
   params: Float32Array,
 ): Buffer | undefined {
-  const slot = nextVolumetricFogParamsSlot(frameState);
-  let buffer = frameState.volumetricFogParamsBuffers[slot];
+  const state = frameState.volumetricFogParams;
+  const slot = nextVolumetricFogParamsSlot(state);
+  let buffer = state.buffers[slot];
   if (buffer === null) {
     const created = internals.device.createBuffer({
       label: `volumetric-fog-params-${slot}`,
@@ -36,15 +45,14 @@ export function stageVolumetricFogParams(
       return undefined;
     }
     buffer = created.value;
-    frameState.volumetricFogParamsBuffers[slot] = buffer;
+    state.buffers[slot] = buffer;
   }
   const written = internals.device.queue.writeBuffer(buffer, 0, params);
   if (!written.ok) {
     internals.errorRegistry.fire(written.error);
     return undefined;
   }
-  frameState.volumetricFogParamsPendingSlot = slot;
-  frameState.volumetricFogPendingParams = new Float32Array(params);
+  state.pending = { slot, params: new Float32Array(params) };
   return buffer;
 }
 

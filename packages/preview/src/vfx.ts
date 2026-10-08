@@ -157,14 +157,7 @@ export const vfxPreview = defineTool(subjectDescriptor('vfx'), (args, context) =
   (async () => {
     const host = context.require(previewHostCapability);
     if (!host.ok) return host;
-    return host.value.withSession(async (mechanisms) =>
-      executeVfxPreview(args, {
-        ...(mechanisms.assets === undefined ? {} : { assets: mechanisms.assets }),
-        ...(mechanisms.renderer === undefined ? {} : { renderer: mechanisms.renderer }),
-        runId: mechanisms.runId,
-        ...(mechanisms.artifacts === undefined ? {} : { artifacts: mechanisms.artifacts }),
-      }),
-    );
+    return host.value.withSession(async (mechanisms) => executeVfxPreview(args, mechanisms));
   })(),
 );
 export const vfxPreviewPlugin = nativePreviewPlugin('vfx', vfxPreview);

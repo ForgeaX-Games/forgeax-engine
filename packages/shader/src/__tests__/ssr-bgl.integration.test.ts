@@ -41,7 +41,14 @@ beforeAll(async () => {
 async function compile(name: keyof typeof SOURCES): Promise<CompileValue> {
   const result = await compiler.compileShader(SOURCES[name], {
     id: `forgeax_ssr::${name}`,
-    imports: { 'forgeax_view::common': COMMON, 'forgeax_pbr::gbuffer': GBUFFER },
+    imports: {
+      'forgeax_view::common': COMMON,
+      'forgeax_pbr::gbuffer': GBUFFER,
+      'forgeax_depth_pyramid::sample': readFileSync(
+        resolve(import.meta.dirname, '../depth-pyramid-sample.wgsl'),
+        'utf8',
+      ),
+    },
   });
   expect(result.ok, result.ok ? undefined : result.error?.message).toBe(true);
   if (!result.ok || result.value === undefined) throw new Error(`failed to compile ${name}`);
@@ -70,10 +77,10 @@ function storageTexture(
 }
 
 describe('SSR built-in shader binding contract', () => {
-  it('reflects the depth pyramid seed as a depth input plus r32float storage output', async () => {
+  it('reflects the depth pyramid seed as depth inputs plus r32float storage output', async () => {
     const value = await compile('pyramidSeed');
     const reflected = entries(value);
-    expect(reflected).toHaveLength(3);
+    expect(reflected).toHaveLength(4);
     expect(reflected[0]).toMatchObject({
       binding: 0,
       texture: { sampleType: 'depth', viewDimension: '2d' },
@@ -84,6 +91,10 @@ describe('SSR built-in shader binding contract', () => {
       viewDimension: '2d',
     });
     expect(reflected[2]).toMatchObject({ binding: 2, buffer: { type: 'uniform' } });
+    expect(reflected[3]).toMatchObject({
+      binding: 3,
+      texture: { sampleType: 'depth', viewDimension: '2d', multisampled: true },
+    });
     expect(JSON.parse(value.manifestEntry.bindings)).toEqual(value.bindings);
   });
 

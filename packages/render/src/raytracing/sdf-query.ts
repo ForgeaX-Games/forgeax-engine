@@ -19,6 +19,7 @@ import {
   rayGeometryKey,
   rayReferenceFailure,
 } from './scene';
+import { packGeometricField, packSampledField, SDF_BRICK_EDGE } from './sdf-field-storage';
 
 export const SdfQueryStatus = {
   miss: 0,
@@ -82,11 +83,16 @@ export const SDF_SAMPLE_WGSL = `
 struct Instance { inverse: mat4x4f, ids: vec4u, field: vec4u, origin: vec4f, extent: vec4f, error: vec4f }
 struct Ray { origin: vec3f, tMin: f32, direction: vec3f, tMax: f32, mask: vec4u }
 struct SdfHit { state: vec4u, metrics: vec4f, position: vec4f, normal: vec4f }
-fn sdfTexel(m: Instance, index: u32) -> f32 {
+fn sdfTexel(m: Instance, c: vec3u) -> f32 {
   if(m.error.w>0.5){
-    return unpack2x16snorm(fields[m.field.x+(index>>1u)])[index&1u]*m.extent.w;
+    let edge=${SDF_BRICK_EDGE}u;
+    let dims=(m.field.yzw+vec3u(edge-1u))/edge;
+    let b=c/edge;
+    let entry=fields[m.field.x+(b.z*dims.y+b.y)*dims.x+b.x];
+    let p=c%edge;let local=(p.z*edge+p.y)*edge+p.x;
+    return unpack2x16snorm(fields[m.field.x+entry+(local>>1u)])[local&1u]*m.extent.w;
   }
-  return bitcast<f32>(fields[m.field.x+index]);
+  return bitcast<f32>(fields[m.field.x+(c.z*m.field.z+c.y)*m.field.y+c.x]);
 }
 fn sdfValue(m: Instance, p: vec3f) -> f32 {
   let q=clamp((p-m.origin.xyz)/m.origin.w,vec3f(0),vec3f(m.field.yzw-vec3u(1u)));
@@ -94,7 +100,7 @@ fn sdfValue(m: Instance, p: vec3f) -> f32 {
   let f=q-vec3f(cell); var value=0.0;
   for(var z=0u;z<2u;z++){ for(var y=0u;y<2u;y++){for(var x=0u;x<2u;x++){
     let c=cell+vec3u(x,y,z); let w=select(vec3f(1)-f,f,vec3u(x,y,z)>vec3u(0));
-    value+=sdfTexel(m,(c.z*m.field.z+c.y)*m.field.y+c.x)*w.x*w.y*w.z;
+    value+=sdfTexel(m,c)*w.x*w.y*w.z;
   }}}
   return value;
 }
@@ -192,6 +198,14 @@ export async function createSdfQuery(
     return rayReferenceFailure('SDF profile allows 64 instances and 1..1024 steps', true);
   const scene = packSdfScene(source);
   if (!scene.ok) return scene;
+  const sources = source.map((instance) => ({
+    instanceId: instance.instanceId,
+    key: rayGeometryKey(
+      instance,
+      'missing' in instance.field ? 'missing' : instance.field.meshDigest,
+    ),
+  }));
+  const rayCount = rays.length;
   const owned: Buffer[] = [];
   const dispose = () => {
     for (const b of owned) device.destroyBuffer(b);
@@ -276,20 +290,14 @@ export async function createSdfQuery(
   let disposed = false;
   return ok({
     buffers,
-    sources: source.map((instance) => ({
-      instanceId: instance.instanceId,
-      key: rayGeometryKey(
-        instance,
-        'missing' in instance.field ? 'missing' : instance.field.meshDigest,
-      ),
-    })),
-    rayCount: rays.length,
+    sources,
+    rayCount,
     record(encoder) {
       if (disposed) return rayReferenceFailure('SDF query is disposed');
       const p = encoder.beginComputePass({ label: 'sdf.trace' });
       p.setPipeline(pipeline.value);
       p.setBindGroup(0, group.value);
-      p.dispatchWorkgroups(Math.ceil(rays.length / 64));
+      p.dispatchWorkgroups(Math.ceil(rayCount / 64));
       p.end();
       return ok(undefined);
     },
@@ -317,8 +325,9 @@ export function packSdfScene(
   const fieldOffsets = new Map<MeshDistanceField, number>();
   const instances = new Uint8Array(Math.max(1, source.length) * SDF_INSTANCE_STRIDE),
     iv = new DataView(instances.buffer),
-    words: number[] = [],
+    segments: Uint32Array[] = [],
     ids = new Set<number>();
+  let wordCount = 0;
   for (let i = 0; i < source.length; i++) {
     const m = source[i];
     if (m === undefined) return rayReferenceFailure('missing SDF instance');
@@ -379,32 +388,15 @@ export function packSdfScene(
         return rayReferenceFailure('invalid or incomplete SDF payload');
       let fieldOffset = fieldOffsets.get(field);
       if (fieldOffset === undefined) {
-        const visibility = field.policy.kind === 'sampled-visibility';
-        const wordCount = visibility ? Math.ceil(field.values.length / 2) : field.values.length;
-        if (words.length + wordCount > 4_194_304)
-          return rayReferenceFailure('SDF sample memory exceeds 16 MiB', true);
-        fieldOffset = words.length;
-        if (field.policy.kind === 'sampled-visibility') {
-          // Signed normalized codes preserve zero; the half-step error only
-          // bounds the decoded scalar, never the resulting intersection.
-          const band = field.policy.distanceBand;
-          for (let i = 0; i < field.values.length; i += 2) {
-            let word = 0;
-            for (let lane = 0; lane < 2 && i + lane < field.values.length; lane++) {
-              const value = field.values[i + lane] ?? 0;
-              const code = Math.max(-32767, Math.min(32767, Math.round((value / band) * 32767)));
-              word |= (code & 65535) << (lane * 16);
-            }
-            words.push(word >>> 0);
-          }
-        } else {
-          const bits = new Uint32Array(
-            field.values.buffer,
-            field.values.byteOffset,
-            field.values.length,
-          );
-          for (const word of bits) words.push(word);
-        }
+        const remaining = 4_194_304 - wordCount;
+        const packed =
+          field.policy.kind === 'sampled-visibility'
+            ? packSampledField(field.values, field.bricks, field.policy.distanceBand, remaining)
+            : packGeometricField(field, remaining);
+        if (!packed) return rayReferenceFailure('SDF sample memory exceeds 16 MiB', true);
+        fieldOffset = wordCount;
+        wordCount += packed.length;
+        segments.push(packed);
         fieldOffsets.set(field, fieldOffset);
       }
       [fieldOffset, ...field.dimensions].forEach((v, j) => {
@@ -448,8 +440,11 @@ export function packSdfScene(
       true,
     );
   }
-  return ok({
-    instances,
-    fields: new Uint8Array(new Uint32Array(words.length ? words : [0]).buffer),
-  });
+  const words = new Uint32Array(Math.max(1, wordCount));
+  let offset = 0;
+  for (const segment of segments) {
+    words.set(segment, offset);
+    offset += segment.length;
+  }
+  return ok({ instances, fields: new Uint8Array(words.buffer) });
 }

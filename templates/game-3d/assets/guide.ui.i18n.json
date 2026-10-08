@@ -1,0 +1,22 @@
+{
+  "fallbackLng": "en",
+  "defaultNS": "guide",
+  "resources": {
+    "en": {
+      "guide": {
+        "title": "3C starter",
+        "lock": "Camera locked \u00b7 mouse look active",
+        "unlock": "Click to lock camera, or hold right mouse to look",
+        "controls": "Mouse look \u00b7 WASD move \u00b7 Space jump \u00b7 Esc release"
+      }
+    },
+    "fr": {
+      "guide": {
+        "title": "Prototype 3C",
+        "lock": "Cam\u00e9ra verrouill\u00e9e \u00b7 vue souris active",
+        "unlock": "Cliquez pour verrouiller, ou maintenez le bouton droit",
+        "controls": "Souris \u00b7 WASD d\u00e9placer \u00b7 Espace sauter \u00b7 Esc lib\u00e9rer"
+      }
+    }
+  }
+}

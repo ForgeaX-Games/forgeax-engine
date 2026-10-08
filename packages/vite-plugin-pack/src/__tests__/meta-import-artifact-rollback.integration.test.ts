@@ -5,9 +5,8 @@ import { join } from 'node:path';
 import { DdcEntryStore, DdcLifecycle } from '@forgeax/engine-ddc';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import {
-  commitImportPublication,
-  discardImportPublication,
   ImporterRegistry,
+  publishImportPublication,
   type RunImportMeta,
 } from '@forgeax/engine-import';
 import type { CatalogBuildResult } from '@forgeax/engine-pack/build';
@@ -188,7 +187,7 @@ function imageContext({
   >;
   readonly pendingImportPublications?: Map<
     string,
-    import('@forgeax/engine-import').StagedImportPublication
+    import('@forgeax/engine-import').ImportPublicationInput
   >;
   readonly signal?: AbortSignal;
   readonly abortAfterRead?: boolean;
@@ -566,7 +565,7 @@ describe('meta import artifact publication rollback', () => {
     await writeFile(source, tinyHdr(149, 2));
     const stagedPending = new Map<
       string,
-      import('@forgeax/engine-import').StagedImportPublication
+      import('@forgeax/engine-import').ImportPublicationInput
     >();
     const staged = imageContext({
       root,
@@ -589,7 +588,11 @@ describe('meta import artifact publication rollback', () => {
       acceptedArtifact.bytes,
     );
     if (stagedCandidate === undefined) return;
-    await discardImportPublication(stagedCandidate);
+    // Queued source outputs must not acquire a lease while later synchronous
+    // cooks can still starve the event loop beyond the 30-second lease TTL.
+    const queuedHead = await new DdcLifecycle(root).inspect(IMAGE_GUID, acceptedHead.currentKey);
+    expect(queuedHead.state).toBe('current');
+    expect(queuedHead.activeLease).toBeUndefined();
     stagedPending.clear();
     expect(await new DdcLifecycle(root).inspect(IMAGE_GUID, acceptedHead.currentKey)).toMatchObject(
       {
@@ -633,7 +636,7 @@ describe('meta import artifact publication rollback', () => {
     // returns the DDC head to A, while the disposable B candidate never enters accepted maps.
     const failedPending = new Map<
       string,
-      import('@forgeax/engine-import').StagedImportPublication
+      import('@forgeax/engine-import').ImportPublicationInput
     >();
     const failedCandidateContext = imageContext({
       root,
@@ -650,7 +653,7 @@ describe('meta import artifact publication rollback', () => {
     if (failedCandidate === undefined) return;
     await rm(join(root, `${IMAGE_GUID}.pack.json`), { force: true, recursive: true });
     await mkdir(join(root, `${IMAGE_GUID}.pack.json`));
-    const outerCommit = await commitImportPublication(failedCandidate);
+    const outerCommit = await publishImportPublication(failedCandidate);
     expect(outerCommit.ok).toBe(false);
     expect(outerCommit).toMatchObject({
       error: { code: 'source-package-publication-invalid' },
@@ -666,7 +669,7 @@ describe('meta import artifact publication rollback', () => {
     await writeFile(source, tinyHdr(201, 3));
     const successfulPending = new Map<
       string,
-      import('@forgeax/engine-import').StagedImportPublication
+      import('@forgeax/engine-import').ImportPublicationInput
     >();
     const successfulCandidateContext = imageContext({
       root,
@@ -681,7 +684,7 @@ describe('meta import artifact publication rollback', () => {
     const successfulCandidate = [...successfulPending.values()][0];
     expect(successfulCandidate).toBeDefined();
     if (successfulCandidate === undefined) return;
-    const successfulCommit = await commitImportPublication(successfulCandidate);
+    const successfulCommit = await publishImportPublication(successfulCandidate);
     expect(successfulCommit).toMatchObject({ ok: true, transportPersisted: true });
     accepted.context.setCatalogProjection(successfulCandidateContext.projection);
     accepted.context.metaPackBodies.clear();

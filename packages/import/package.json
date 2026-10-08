@@ -12,10 +12,18 @@
       "browser": "./dist/browser.mjs",
       "import": "./dist/index.mjs"
     },
-    "./package.json": "./package.json"
-    ,"./mesh-bin": {
+    "./package.json": "./package.json",
+    "./mesh-bin": {
       "types": "./dist/mesh-bin.d.ts",
       "import": "./dist/mesh-bin.mjs"
+    },
+    "./mesh-lod-generator": {
+      "types": "./dist/mesh-lod-generator.d.ts",
+      "import": "./dist/mesh-lod-generator.mjs"
+    },
+    "./navigation-bake": {
+      "types": "./dist/navigation-bake.d.ts",
+      "import": "./dist/navigation-bake.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -31,15 +39,19 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-ddc": "workspace:*",
-    "@forgeax/engine-scene": "workspace:*",
+    "@forgeax/engine-ecs": "workspace:*",
     "@forgeax/engine-geometry": "workspace:*",
+    "@forgeax/engine-math": "workspace:*",
     "@forgeax/engine-pack": "workspace:*",
+    "@forgeax/engine-scene": "workspace:*",
     "@forgeax/engine-shader": "workspace:*",
-    "@forgeax/engine-types": "workspace:*",
     "@forgeax/engine-tool-runtime": "workspace:*",
-    "@noble/hashes": "^2.2.0"
+    "@forgeax/engine-types": "workspace:*",
+    "@noble/hashes": "^2.2.0",
+    "@recast-navigation/core": "0.43.1",
+    "@recast-navigation/generators": "0.43.1",
+    "meshoptimizer": "1.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0"

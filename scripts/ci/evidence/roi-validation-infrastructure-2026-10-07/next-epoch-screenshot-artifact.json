@@ -1,0 +1,20 @@
+{
+  "id": 11465485991,
+  "node_id": "MDg6QXJ0aWZhY3QxMTQ2NTQ4NTk5MQ==",
+  "name": "sdk-pr-consumer-evidence-npm",
+  "size_in_bytes": 5704821,
+  "url": "https://api.github.com/repos/ForgeaX-Games/forgeax-engine/actions/artifacts/11465485991",
+  "archive_download_url": "https://api.github.com/repos/ForgeaX-Games/forgeax-engine/actions/artifacts/11465485991/zip",
+  "expired": false,
+  "digest": "sha256:2ea160b8aeb9a3133fe12e381592591c9caa5a761fa0261f5ab48ae10d651633",
+  "created_at": "2026-10-07T06:39:46Z",
+  "updated_at": "2026-10-07T06:39:46Z",
+  "expires_at": "2026-10-10T06:39:36Z",
+  "workflow_run": {
+    "id": 37580668228,
+    "repository_id": 1226953965,
+    "head_repository_id": 1226953965,
+    "head_branch": "fix/roi-validation-infrastructure-20261007",
+    "head_sha": "e4065eac6cb3be0e88bce4009139f34715f487ad"
+  }
+}

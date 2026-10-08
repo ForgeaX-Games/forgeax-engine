@@ -62,10 +62,10 @@ it('reports unsupported DRS, allocates no queries, and restores native TAA on re
     expect(createTiming).not.toHaveBeenCalled();
     if (renderer.requestObservation === undefined)
       throw new Error('missing observation capability');
-    const requested = renderer.requestObservation(['final-srgb']);
+    const requested = renderer.requestObservation(['final-display']);
     if (!requested.ok) throw requested.error;
     expect(draw().ok).toBe(true);
-    expect(renderer.inspect().perFramePassNames).toContain('final-srgb-observation');
+    expect(renderer.inspect().perFramePassNames).toContain('final-display-observation');
     const accepted = renderer.inspect().dynamicResolution?.extent;
     world.set(camera, DynamicResolution, { minScale: 0.5, maxScale: 0.5 }).unwrap();
     failSubmit = true;

@@ -1,3 +1,4 @@
+import { cameraLensProjection } from '../camera-projection';
 import type { RenderResourceScope } from '../publication/resource-scope';
 // @forgeax/engine-runtime - RenderSystem record stage: helpers.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
@@ -146,21 +147,20 @@ export function driveLazyEquirectProjection(
 ): void {
   const store = internals.gpuStore;
   const handle = toShared<'EquirectAsset'>(equirectHandle);
-  const status = store.getCubemapStatus(handle);
-
-  if (status === 'failed') {
+  const failure = store.getCubemapFailure(handle);
+  if (failure !== undefined) {
     // Fire the structured error exactly once per failed source (the store
     // records failed permanently and never retries; R-2 / AC-09).
     if (!frameState.firedEquirectProjectionFailedHandles.has(equirectHandle)) {
       frameState.firedEquirectProjectionFailedHandles.add(equirectHandle);
-      internals.errorRegistry.fire(new EquirectProjectionFailedError(equirectHandle));
+      internals.errorRegistry.fire(new EquirectProjectionFailedError(equirectHandle, failure));
     }
     return;
   }
 
   // 'pending' and 'ready' are both handled downstream (white fallback while
   // pending; real IBL once ready). Only the first sight ('undefined') launches.
-  if (status !== undefined) return;
+  if (store.getCubemapStatus(handle) !== undefined) return;
 
   // First sight: resolve the equirect POD and fire-and-forget the projection.
   const podRes = resolveAssetHandle<EquirectAsset>(world, handle);
@@ -209,23 +209,5 @@ export function computeProjectionMatrix(camera: CameraSnapshot): Mat4 {
     projection.set(camera.captureProjection);
     return projection;
   }
-  // feat-20260613 M6 / w20: branch on projection variant. The view UBO
-  // record path needs the right matrix shape so the main pass renders
-  // correctly under both perspective and orthographic cameras (mirrors
-  // the CSM extract fix in render-system-extract.ts).
-  const proj = mat4.create();
-  if (camera.projection === 'orthographic') {
-    mat4.orthographicReverseZ(
-      proj,
-      camera.orthoLeft,
-      camera.orthoRight,
-      camera.orthoTop,
-      camera.orthoBottom,
-      camera.near,
-      camera.far,
-    );
-  } else {
-    mat4.perspectiveReverseZ(proj, camera.fov, camera.aspect, camera.near, camera.far);
-  }
-  return proj;
+  return cameraLensProjection(camera);
 }

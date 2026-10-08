@@ -52,9 +52,9 @@ export type VolumeTimingObservation =
   | {
       readonly status: 'ready';
       readonly unit: 'ms';
-      /** Time covered by authored volumetric passes only. */
+      /** Envelope of authored volumetric pass boundaries, including gaps and overlap. */
       readonly totalMs: number;
-      /** Time from the first graph pass marker to the final graph marker. */
+      /** Derived envelope of all graph pass boundaries, not a native outer query or FPS. */
       readonly frameMs: number;
       readonly passes: readonly { readonly name: string; readonly milliseconds: number }[];
       /** Cloud producer timings captured by the same physical timestamp lane. */
@@ -71,8 +71,6 @@ export type VolumeTimingObservation =
 function unavailable(reason: string): VolumeTimingObservation {
   return Object.freeze({ status: 'unavailable', reason });
 }
-
-export type VolumeTimingTimestampWrites = GpuTimingPassTimestampWrites;
 
 /**
  * Renderer-owned timestamp capture for the authored volume graph. Query
@@ -260,8 +258,20 @@ export class GpuTimingCapture {
           begin: values.getBigUint64(index * 2 * QUERY_RESULT_BYTES, true),
           end: values.getBigUint64((index * 2 + 1) * QUERY_RESULT_BYTES, true),
         }));
-        const frameBegin = decoded[0]?.begin;
-        const frameEnd = decoded[decoded.length - 1]?.end;
+        const envelope = (entries: typeof decoded): { begin: bigint; end: bigint } | undefined => {
+          const first = entries[0];
+          if (first === undefined) return;
+          let begin = first.begin;
+          let end = first.end;
+          for (const entry of entries) {
+            if (entry.begin < begin) begin = entry.begin;
+            if (entry.end > end) end = entry.end;
+          }
+          return { begin, end };
+        };
+        const frame = envelope(decoded);
+        const frameBegin = frame?.begin;
+        const frameEnd = frame?.end;
         if (
           frameBegin === undefined ||
           frameEnd === undefined ||
@@ -290,8 +300,9 @@ export class GpuTimingCapture {
           milliseconds: (Number(end - begin) * this.#periodNanoseconds) / 1_000_000,
         }));
         const frameMs = (Number(frameEnd - frameBegin) * this.#periodNanoseconds) / 1_000_000;
-        const firstBegin = volumeOnlyDecoded[0]?.begin;
-        const lastEnd = volumeOnlyDecoded[volumeOnlyDecoded.length - 1]?.end;
+        const volume = envelope(volumeOnlyDecoded);
+        const firstBegin = volume?.begin;
+        const lastEnd = volume?.end;
         const totalMs =
           firstBegin === undefined || lastEnd === undefined
             ? 0
@@ -306,8 +317,9 @@ export class GpuTimingCapture {
         ) {
           return unavailable('timestamp query returned a non-finite duration');
         }
-        const cloudFirstBegin = cloudDecoded[0]?.begin;
-        const cloudLastEnd = cloudDecoded[cloudDecoded.length - 1]?.end;
+        const cloud = envelope(cloudDecoded);
+        const cloudFirstBegin = cloud?.begin;
+        const cloudLastEnd = cloud?.end;
         const cloudTotalMs =
           cloudFirstBegin === undefined || cloudLastEnd === undefined
             ? 0

@@ -43,6 +43,7 @@ import type { RenderError } from './errors/render';
 import type { RenderFeatureTargetKind } from './features/targets';
 import type { RenderFeaturePlacement } from './features/types';
 import type { ShadowViewIdentity, ShadowViewProjection } from './gpu-driven/shadow-views';
+import type { StaticShadowLayers } from './gpu-driven/static-shadow-layers';
 import {
   GPU_TEXTURE_USAGE_COPY_SRC,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
@@ -52,7 +53,6 @@ import type { StandardTopologyInputValue } from './pipeline/standard-lighting/to
 import { STANDARD_POST_STAGE_NAMES, type StandardProfile } from './pipeline/standard-profile';
 import type { SurfaceProfile } from './record/render-context';
 import type { FrameObservationDomain, RenderPipelineContext } from './render-contract';
-import type { OcclusionFrameProjection } from './scene/visibility/occlusion-runtime';
 import type { SsrSpatialAdmission } from './ssr/admission';
 import type { TransmissionDemand } from './transmission/projection';
 
@@ -254,6 +254,7 @@ export interface RenderPipelineTopology {
     /** Shape-only barrel admission; numeric mapping stays per-frame data. */
     readonly barrelDistortion?: boolean | undefined;
     readonly lensEffects?: boolean | undefined;
+    readonly lensFlare?: boolean | undefined;
     readonly outline?: boolean | undefined;
   };
   /** Frame-stable Standard output policy; no raw RHI handles enter topology. */
@@ -279,6 +280,7 @@ export interface RenderPipelineTopology {
       | {
           readonly mapSize: number;
           readonly cascadeCount: 1 | 2 | 3 | 4;
+          readonly terrainReceivers?: readonly import('./terrain/shadow-family').TerrainShadowReceiver[];
         };
     readonly spotMapSize: number;
     readonly pointCount: number;
@@ -364,7 +366,9 @@ export function resolveOutputDither(
   return config?.outputDither ?? true;
 }
 
-export interface RenderPipelineFrame extends RenderPipelineContext, RenderGraphFrame {}
+export interface RenderPipelineFrame extends RenderPipelineContext, RenderGraphFrame {
+  readonly probePlacement?: import('./raytracing/renderer-probe-placement').PreparedProbePlacement;
+}
 
 export interface RenderPipelineTarget {
   readonly texture: GraphTexture;
@@ -480,6 +484,8 @@ export interface RenderPipelineFeatureTarget {
 
 export interface RenderPipelineGpuDrivenProjection {
   readonly accesses: readonly GraphAccess[];
+  /** Live CPU eligibility, before material/view culling; false proves no indirect work. */
+  hasWork(filter?: RenderPipelineGpuDrivenFilter, fragmentEntryPoint?: string): boolean;
   encode(
     viewBindGroup: BindGroup,
     pass: RhiRenderPassEncoder,
@@ -604,6 +610,9 @@ export interface GpuDrivenStandardPbrFrameResources {
 export interface RenderPipelineBuildContext<FrameCtx extends RenderPipelineFrame> {
   readonly graph: RenderGraphBuilder<FrameCtx>;
   /** Prepared Renderer transport; this callback only declares work in the same graph. */
+  readonly contributeProbePlacement?: (
+    targets: import('./raytracing/probe-placement-graph').ProbePlacementTargets,
+  ) => Result<void, RenderPipelineBuildError>;
   readonly contributeDiffuseGi?: (
     targets: import('./raytracing/diffuse-graph').RayDiffuseTargets,
   ) => Result<void, RenderPipelineBuildError>;
@@ -690,8 +699,6 @@ export interface RenderPipelineBuildContext<FrameCtx extends RenderPipelineFrame
     readonly destination: GraphTextureView;
     readonly level: number;
   }) => void;
-  /** Renderer-owned occlusion query state for the primary scene pass. */
-  readonly occlusion?: OcclusionFrameProjection;
   projectGpuDriven(target: {
     readonly format: TextureFormat;
     readonly sampleCount: 1 | 4;
@@ -699,9 +706,16 @@ export interface RenderPipelineBuildContext<FrameCtx extends RenderPipelineFrame
     /** Reserve the two-phase HZB occlusion path; see `addLateOcclusion`. */
     readonly lateOcclusion?: boolean;
   }): Result<RenderPipelineGpuDrivenProjection | undefined, RenderPipelineBuildError>;
+  /**
+   * `cameraPyramid` offers the main camera's HZB to the view's caster cull;
+   * the frame graph drops it whenever another consumer samples the shadows.
+   */
   projectGpuDrivenShadow?(
     identity: ShadowViewIdentity,
+    cameraPyramid?: GraphTextureView,
   ): Result<ShadowViewProjection | undefined, RenderGraphError>;
+  /** Renderer-owned static shadow layers the graph imports instead of allocating. */
+  readonly gpuDrivenStaticShadowLayers?: StaticShadowLayers;
   contributeFeatures(
     targets: readonly RenderPipelineFeatureTarget[],
     semanticTargets?: readonly RenderPipelineTarget[],
@@ -716,6 +730,7 @@ export interface RenderPipelineBuildContext<FrameCtx extends RenderPipelineFrame
         }
       | RenderFeaturePlacement,
     passNames?: readonly string[],
+    atmosphere?: import('./environment/luts').GraphAtmosphere,
   ): Result<void, RenderPipelineBuildError>;
   /** Prepare feature-owned shadow draws and their early compute producers once. */
   contributeShadowFeatures?(): Result<

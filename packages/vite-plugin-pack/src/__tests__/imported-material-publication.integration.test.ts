@@ -192,8 +192,13 @@ it('cooks imported material payloads before publishing the complete source packa
     const ray = record.programs.filter((program) =>
       program.selections.some((selection) => selection.context.pipeline === 'ray'),
     );
-    expect(ray).toHaveLength(1);
+    expect(ray).toHaveLength(2);
     expect(ray[0]?.selections[0]).toMatchObject({ pass: 'Forward', entry: 'cs_surface' });
+    expect(ray[1]?.selections[0]).toMatchObject({
+      pass: 'Forward',
+      context: { pass: 'card-capture' },
+      entry: 'vs_card',
+    });
     expect(
       record.programs.some((program) =>
         program.selections.some((selection) => selection.context.pipeline === 'deferred'),

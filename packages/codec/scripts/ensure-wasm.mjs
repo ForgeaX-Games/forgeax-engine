@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PKG = join(SCRIPT_DIR, '..', 'pkg');
 const presenceMarkers = [
+  join(PKG, 'basis_transcoder.mjs'),
   join(PKG, 'basis_transcoder.wasm'),
+  join(PKG, 'encode', 'basis_encoder.mjs'),
   join(PKG, 'encode', 'basis_encoder.wasm'),
 ];
 if (presenceMarkers.every(existsSync)) {

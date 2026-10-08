@@ -36,15 +36,9 @@
 //   handles never collide with builtin slots, and alloc/retain/release/resolve
 //   fail-fast with `BuiltinSlotNotOwnedError` when handed a builtin slot.
 //
-// Storage shape:
-//   - `payloads: Map<number, unknown>` - key = handle u32 = slot index.
-//   - `refcounts: Map<number, number>` - key = handle u32; rc >= 1 while live;
-//                                  removed (not set to 0) on final release
-//                                  so resolve / retain can detect the
-//                                  released state via `payloads.has(raw)`.
-//   - `freeSlots: number[]`        - LIFO stack of recyclable slot indices.
-//   - `nextSlot`                   - bump counter for the never-recycled tail
-//                                  (starts at BUILTIN_BASE; user tier only).
+// One live entry owns payload, refcount and optional intern identity. The
+// reverse object index is weak; generation history survives entry retirement.
+// Free slots form a LIFO stack; fresh slots begin at BUILTIN_BASE.
 //
 // 24 bits = 16_777_215 simultaneous live shared handles - same ceiling as
 // UniqueRefStore + Entity, so the three managed-handle resources fail-fast
@@ -114,15 +108,15 @@ export interface SharedRefReleaseEvidence {
  *   - refcount(handle)            -> number (0 == released; debug + tests)
  *   - _liveCount()                -> live slot count (debug + inspector)
  */
+type SharedRefEntry = { refcount: number } & (
+  | { readonly payload: unknown; readonly target: undefined }
+  | { readonly payload: object; readonly target: string }
+);
+
 export class SharedRefStore {
-  private readonly payloads = new Map<number, unknown>();
-  private readonly refcounts = new Map<number, number>();
+  private readonly entries = new Map<number, SharedRefEntry>();
   private readonly freeSlots: number[] = [];
   private readonly internedByTarget = new Map<string, WeakMap<object, number>>();
-  private readonly internedKeys = new Map<
-    number,
-    { readonly target: string; readonly payload: object }
-  >();
   private nextSlot = BUILTIN_BASE;
   /** Latest published mutation epoch per live handle; not an event journal. */
 
@@ -151,9 +145,15 @@ export class SharedRefStore {
    * produced here (D-15).
    */
   alloc<Target extends string, T = unknown>(target: Target, payload: T): Handle<Target, 'shared'> {
-    void target; // target is a phantom - tag flows only at the type level via Handle<Target,_>.
-    if (payload === null || payload === undefined) {
-      throw new SharedRefPayloadInvalidError(target, payload === null ? 'null' : 'undefined');
+    return this.allocate(target, { payload, refcount: 1, target: undefined });
+  }
+
+  private allocate<Target extends string>(
+    target: Target,
+    entry: SharedRefEntry,
+  ): Handle<Target, 'shared'> {
+    if (entry.payload === null || entry.payload === undefined) {
+      throw new SharedRefPayloadInvalidError(target, entry.payload === null ? 'null' : 'undefined');
     }
     const slot = this.freeSlots.pop() ?? this.nextSlot++;
     if (slot > MAX_SLOT) {
@@ -164,8 +164,7 @@ export class SharedRefStore {
     }
     const gen = this._generations[slot] ?? 0;
     const raw = pack(slot, gen);
-    this.payloads.set(raw, payload);
-    this.refcounts.set(raw, 1);
+    this.entries.set(raw, entry);
     return toShared(raw);
   }
 
@@ -190,14 +189,13 @@ export class SharedRefStore {
     }
 
     const existingRaw = byPayload.get(payload);
-    if (existingRaw !== undefined && this.payloads.has(existingRaw)) {
+    if (existingRaw !== undefined && this.entries.has(existingRaw)) {
       return toShared(existingRaw);
     }
 
-    const handle = this.alloc(target, payload);
+    const handle = this.allocate(target, { payload, refcount: 1, target });
     const raw = unwrapHandle(handle);
     byPayload.set(payload, raw);
-    this.internedKeys.set(raw, { target, payload });
     return handle;
   }
 
@@ -237,11 +235,11 @@ export class SharedRefStore {
     if (handleGen !== storeGen) {
       return err(new SharedRefStaleError(slot, handleGen, storeGen));
     }
-    const payload = this.payloads.get(raw);
-    if (payload === undefined) {
+    const entry = this.entries.get(raw);
+    if (entry === undefined) {
       return err(new SharedRefReleasedError(raw, '<unknown>'));
     }
-    return ok(payload as T);
+    return ok(entry.payload as T);
   }
 
   /**
@@ -269,11 +267,11 @@ export class SharedRefStore {
     if (handleGen !== storeGen) {
       return err(new SharedRefStaleError(slot, handleGen, storeGen));
     }
-    const rc = this.refcounts.get(raw);
-    if (rc === undefined) {
+    const entry = this.entries.get(raw);
+    if (entry === undefined) {
       return err(new SharedRefReleasedError(raw, '<unknown>'));
     }
-    this.refcounts.set(raw, rc + 1);
+    entry.refcount += 1;
     return ok(undefined);
   }
 
@@ -305,27 +303,21 @@ export class SharedRefStore {
       // AC-03: stale release MUST NOT touch rc / payload / freeSlots.
       return err(new SharedRefStaleError(slot, handleGen, storeGen));
     }
-    const rc = this.refcounts.get(raw);
-    if (rc === undefined) {
+    const entry = this.entries.get(raw);
+    if (entry === undefined) {
       return err(new SharedRefDoubleReleaseError(raw, '<unknown>', 0));
     }
-    if (rc > 1) {
-      this.refcounts.set(raw, rc - 1);
+    if (entry.refcount > 1) {
+      entry.refcount -= 1;
       return ok(undefined);
     }
     // rc === 1 -> drop. Capture the payload for release evidence before
     // clearing the live slot; nullish payloads never enter the store.
-    const payload = this.payloads.get(raw);
-    const internedKey = this.internedKeys.get(raw);
-    if (internedKey !== undefined) {
-      const byPayload = this.internedByTarget.get(internedKey.target);
-      if (byPayload?.get(internedKey.payload) === raw) {
-        byPayload.delete(internedKey.payload);
-      }
-      this.internedKeys.delete(raw);
+    if (entry.target !== undefined) {
+      const byPayload = this.internedByTarget.get(entry.target);
+      if (byPayload?.get(entry.payload) === raw) byPayload.delete(entry.payload);
     }
-    this.refcounts.delete(raw);
-    this.payloads.delete(raw);
+    this.entries.delete(raw);
     // Gen increment + retire (AC-07): bump gen; once it would exceed MAX_GEN
     // (gen 255 is still usable; the bump to 256 triggers retire) the slot is
     // permanently retired — NOT pushed to freeSlots. This prevents handle
@@ -337,7 +329,7 @@ export class SharedRefStore {
     }
     // else: slot retired (gen exceeded MAX_GEN) - never returns to freeSlots.
     const evidence = Object.freeze({
-      payload,
+      payload: entry.payload,
       refcount: 0 as const,
       generation,
       evidence: 'released' as const,
@@ -353,11 +345,11 @@ export class SharedRefStore {
    */
   refcount<Target extends string>(handle: Handle<Target, 'shared'>): number {
     const raw = unwrapHandle(handle);
-    return this.refcounts.get(raw) ?? 0;
+    return this.entries.get(raw)?.refcount ?? 0;
   }
 
   /** @internal Diagnostic count of live slots. Exposed for tests + inspector. */
   _liveCount(): number {
-    return this.payloads.size;
+    return this.entries.size;
   }
 }

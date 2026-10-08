@@ -1,6 +1,7 @@
 import type { Result, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
 import { RhiError } from '@forgeax/engine-rhi';
 import type { ShaderCatalog } from '@forgeax/engine-shader';
+import { atmosphereAvailable } from '../environment/capability';
 
 import {
   invokeDeviceCreateShaderModule,
@@ -68,6 +69,15 @@ export async function prewarmRequiredMaterialShaders({
 
     for (const variant of manifestEntry.variants) {
       if (!isOrdinaryMaterialVariant(variant)) continue;
+      if (
+        'ATMOSPHERE_AVAILABLE' in variant.defines &&
+        variant.defines.ATMOSPHERE_AVAILABLE !==
+          atmosphereAvailable(
+            rhiDevice.caps.storageBuffer && rhiDevice.caps.backendKind !== 'wgpu-webgl2',
+            rhiDevice.limits.maxSampledTexturesPerShaderStage,
+          )
+      )
+        continue;
       const variantSource = prepareLowLimitMaterialShaderEntry(
         { ...entry, source: variant.composedWgsl },
         rhiDevice.limits.maxSampledTexturesPerShaderStage,

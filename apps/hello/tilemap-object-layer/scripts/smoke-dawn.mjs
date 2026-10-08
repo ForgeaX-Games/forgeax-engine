@@ -59,7 +59,7 @@ async function deferred(reason) {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (importErr) {
   await deferred(
     `dawn-node import failed: ${importErr instanceof Error ? importErr.message : String(importErr)}`,
@@ -298,7 +298,7 @@ world
   .unwrap();
 
 // Sprite entity for sub-scene (e). Needs a sampler + material so it lands in
-// the same sprite-bucket TransparentEntry queue as tilemap-spawned per-cell
+// the same transparent dispatch queue as tilemap-spawned per-cell
 // entities (AC-13 anchor).
 world.allocSharedRef('SamplerAsset', {
   kind: 'sampler',

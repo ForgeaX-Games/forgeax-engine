@@ -1,6 +1,7 @@
 import type {
   GraphAccess,
   GraphResourceResolver,
+  GraphTextureView,
   RenderGraphBuilder,
   RenderGraphError,
 } from '@forgeax/engine-render-graph';
@@ -14,9 +15,14 @@ import {
   type ShadowViewProjection,
   shadowViewRasterAccesses,
 } from './gpu-driven/shadow-views';
+import {
+  STATIC_SHADOW_LAYER_USAGE,
+  type StaticShadowLayers,
+} from './gpu-driven/static-shadow-layers';
 
 type ProjectGpuDrivenShadow = (
   identity: ShadowViewIdentity,
+  cameraPyramid?: GraphTextureView,
 ) => Result<ShadowViewProjection | undefined, RenderGraphError>;
 
 import {
@@ -51,12 +57,33 @@ function shadowViewCacheMiss(
 ): ShadowViewInvalidationReason | undefined {
   const context = frame as _InternalRenderPipelineContext;
   const gpuShadowViews = context.gpuDrivenShadowViews;
+  if (identity.terrainReceiver !== undefined) {
+    const logical = { kind: 'directional' as const, index: identity.index };
+    return (
+      gpuShadowViews?.invalidationReason(logical) ??
+      gpuShadowViews?.invalidationReason({ ...logical, layer: 'static' }) ??
+      context.directionalShadowCacheMiss
+    );
+  }
   if (gpuShadowViews !== undefined) return gpuShadowViews.invalidationReason(identity);
-  return identity.kind === 'directional' ? context.directionalShadowCacheMiss : 'uncached';
+  if (identity.kind !== 'directional') return 'uncached';
+  const cascades = context.directionalShadowCascadeMiss;
+  return cascades !== undefined && identity.index < cascades.length
+    ? cascades[identity.index]
+    : context.directionalShadowCacheMiss;
 }
 
 interface ShadowViewRaster {
-  readonly executeIf: (frame: RenderPipelineFrame) => boolean;
+  /**
+   * Decides this frame's raster. `follow` names the reason a view that would
+   * otherwise hit still rasters because the layer it composes was rebuilt.
+   */
+  readonly executeIf: (
+    frame: RenderPipelineFrame,
+    follow?: ShadowViewInvalidationReason,
+  ) => boolean;
+  /** The reason decided this frame; undefined on a hit. */
+  readonly reason: () => ShadowViewInvalidationReason | undefined;
   /**
    * Regions a static-layer content miss re-rasters over its retained depth;
    * undefined on a hit or a miss that clears the layer.
@@ -69,35 +96,54 @@ interface ShadowViewRaster {
   ) => void;
 }
 
+/** A target that outlives the compiled graph, with the depth it retains. */
+interface RetainedShadowTarget {
+  /** Whether the target holds depth from a submitted raster. */
+  readonly retained: () => boolean;
+  /** Records that the staged frame rasters the target. */
+  readonly rastered: () => void;
+}
+
 /**
  * A freshly compiled graph owns a newly allocated target, so its first
- * execution rasters the layer even when the view cache hits. Later frames
- * raster only a missed view or a feature-drawn view the pool cannot prove.
- * Every decision and its draw count land in the frame's shadow raster ledger;
- * `identity === undefined` marks the empty spot target, which is no view.
+ * execution rasters the layer even when the view cache hits. A retained
+ * target instead rasters while it holds no submitted depth, whichever graph
+ * runs. Later frames raster only a missed view or a feature-drawn view the
+ * pool cannot prove. Every decision and its draw count land in the frame's
+ * shadow raster ledger; `identity === undefined` marks the empty spot target,
+ * which is no view.
  */
 function shadowViewRaster(
   identity: ShadowViewIdentity | undefined,
   shadowFeatures: RenderFeatureShadowDraws<RenderPipelineFrame> | undefined,
+  target?: RetainedShadowTarget,
 ): ShadowViewRaster {
   let graphCompiled = true;
   let slot = -1;
+  let decided: ShadowViewInvalidationReason | undefined;
   let dirtyRects: readonly ShadowDirtyRect[] | undefined;
   return {
     dirtyRects: () => dirtyRects,
-    executeIf: (frame) => {
-      const reason: ShadowViewInvalidationReason | undefined = graphCompiled
+    reason: () => decided,
+    executeIf: (frame, follow) => {
+      const empty = target === undefined ? graphCompiled : !target.retained();
+      const reason: ShadowViewInvalidationReason | undefined = empty
         ? 'graph-compiled'
         : identity === undefined
           ? undefined
           : shadowFeatures !== undefined
             ? 'feature-draws'
-            : shadowViewCacheMiss(frame, identity);
+            : (shadowViewCacheMiss(frame, identity) ?? follow);
       graphCompiled = false;
+      decided = reason;
+      if (reason !== undefined) target?.rastered();
       const context = frame as _InternalRenderPipelineContext;
       // A fresh graph target holds no retained depth to redraw over.
       dirtyRects =
-        identity === undefined || reason === undefined || reason === 'graph-compiled'
+        identity === undefined ||
+        identity.terrainReceiver !== undefined ||
+        reason === undefined ||
+        reason === 'graph-compiled'
           ? undefined
           : context.gpuDrivenShadowViews?.dirtyRects(identity);
       slot =
@@ -107,6 +153,7 @@ function shadowViewRaster(
               identity,
               reason,
               context.gpuDrivenShadowViews?.texelCulled(identity),
+              context.gpuDrivenShadowViews?.cameraCulled(identity),
               dirtyRects?.length,
             );
       return reason !== undefined;
@@ -163,6 +210,38 @@ function shadowLayerTarget(
 }
 
 /**
+ * The static layers' array, imported from the renderer-owned store so a
+ * recompile keeps the retained depth. Without a store the graph owns it.
+ */
+function createStaticShadowArrayTarget(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  staticLayers: StaticShadowLayers | undefined,
+  label: string,
+  size: number,
+  layers: number,
+): Result<RenderPipelineTarget, RenderGraphError> {
+  if (staticLayers === undefined) return createShadowArrayTarget(graph, label, size, layers);
+  const texture = graph.importTexture(
+    label,
+    {
+      format: 'depth32float',
+      size: { width: size, height: size, depthOrArrayLayers: layers },
+      usage: STATIC_SHADOW_LAYER_USAGE,
+    },
+    () => staticLayers.texture(label, size, layers),
+  );
+  if (!texture.ok) return texture;
+  const view = graph.view(texture.value, {
+    label: `${label}.view`,
+    dimension: '2d-array',
+    aspect: 'depth-only',
+    arrayLayerCount: layers,
+  });
+  if (!view.ok) return view;
+  return ok({ texture: texture.value, view: view.value, format: 'depth32float', sampleCount: 1 });
+}
+
+/**
  * Every shadow view owns one array layer and clears it when it rasters, so a
  * miss never erases a neighbouring view retained by a cache hit.
  */
@@ -215,6 +294,8 @@ function recordStaticLayeredShadowPass(
   name: string,
   target: RenderPipelineTarget,
   staticArray: RenderPipelineTarget,
+  staticLayers: StaticShadowLayers | undefined,
+  staticLabel: string,
   layer: number,
   size: number,
   raster: ShadowViewRaster,
@@ -224,13 +305,22 @@ function recordStaticLayeredShadowPass(
     resources: GraphResourceResolver,
   ) => void,
   extraAccesses: readonly GraphAccess[],
-): Result<void, RenderGraphError> {
+): Result<ShadowViewRaster, RenderGraphError> {
   const staticIdentity: ShadowViewIdentity = Object.freeze({ ...identity, layer: 'static' });
   const staticProjection = projectGpuDrivenShadow(staticIdentity);
   if (!staticProjection.ok) return staticProjection;
   const staticLayer = shadowLayerTarget(graph, staticArray, `${name}-static-layer`, layer);
   if (!staticLayer.ok) return staticLayer;
-  const staticRaster = shadowViewRaster(staticIdentity, undefined);
+  const staticRaster = shadowViewRaster(
+    staticIdentity,
+    undefined,
+    staticLayers === undefined
+      ? undefined
+      : {
+          retained: () => staticLayers.retained(staticLabel, layer),
+          rastered: () => staticLayers.rastered(staticLabel, layer),
+        },
+  );
   // A pool-proven content miss re-rasters only its dirty regions over the
   // retained layer; any other miss clears it.
   const staticAdded = recordShadowPass(
@@ -266,8 +356,13 @@ function recordStaticLayeredShadowPass(
       { resource: staticLayer.value.view, usage: 'copy-src' },
       { resource: target.view, usage: 'copy-dst' },
     ],
+    // A static layer rebuilt from an empty target changes the composed
+    // layer even when the final view's own cache hits.
     executeIf: (frame) => {
-      rasterFinal = raster.executeIf(frame);
+      rasterFinal = raster.executeIf(
+        frame,
+        staticRaster.reason() === 'graph-compiled' ? 'static-layer-changed' : undefined,
+      );
       return rasterFinal;
     },
     encode: ({ encoder, resources }) => {
@@ -283,7 +378,7 @@ function recordStaticLayeredShadowPass(
     },
   });
   if (!copied.ok) return copied;
-  return recordShadowPass(
+  const recorded = recordShadowPass(
     graph,
     name,
     target,
@@ -292,6 +387,7 @@ function recordStaticLayeredShadowPass(
     extraAccesses,
     'load',
   );
+  return recorded.ok ? ok(staticRaster) : recorded;
 }
 
 export function addTypedShadowPasses(
@@ -301,6 +397,12 @@ export function addTypedShadowPasses(
     | ProjectGpuDrivenShadow
     | RenderFeatureShadowDraws<RenderPipelineFrame>,
   features?: RenderFeatureShadowDraws<RenderPipelineFrame>,
+  /**
+   * The main camera's HZB pyramid. Final directional and spot views skip
+   * casters whose every reachable receiver it proves hidden.
+   */
+  cameraPyramid?: GraphTextureView,
+  staticLayers?: StaticShadowLayers,
 ): Result<TypedShadowTargets, RenderGraphError> {
   const projectGpuDrivenShadow =
     typeof projectGpuDrivenShadowOrFeatures === 'function'
@@ -312,20 +414,21 @@ export function addTypedShadowPasses(
       : (projectGpuDrivenShadowOrFeatures ?? features);
   let directional: RenderPipelineTarget | undefined;
   if (topology.shadow.directional !== 'disabled') {
-    const { mapSize, cascadeCount } = topology.shadow.directional;
+    const { mapSize, cascadeCount, terrainReceivers = [] } = topology.shadow.directional;
     const target = createShadowArrayTarget(
       graph,
       'directional-shadow-depth',
       mapSize,
-      Math.max(MIN_SHADOW_ARRAY_LAYERS, cascadeCount),
+      Math.max(MIN_SHADOW_ARRAY_LAYERS, cascadeCount * (1 + terrainReceivers.length)),
     );
     if (!target.ok) return target;
     const directionalTarget = target.value;
     directional = directionalTarget;
     let directionalStatic: RenderPipelineTarget | undefined;
     if (projectGpuDrivenShadow !== undefined) {
-      const staticTarget = createShadowArrayTarget(
+      const staticTarget = createStaticShadowArrayTarget(
         graph,
+        staticLayers,
         'directional-shadow-static',
         mapSize,
         Math.max(MIN_SHADOW_ARRAY_LAYERS, cascadeCount),
@@ -333,9 +436,13 @@ export function addTypedShadowPasses(
       if (!staticTarget.ok) return staticTarget;
       directionalStatic = staticTarget.value;
     }
+    const cascadeWork: {
+      readonly accesses: readonly GraphAccess[];
+      readonly staticRaster: ShadowViewRaster | undefined;
+    }[] = [];
     for (let cascade = 0; cascade < cascadeCount; cascade += 1) {
       const identity = Object.freeze({ kind: 'directional' as const, index: cascade });
-      const shadowProjection = projectGpuDrivenShadow?.(identity);
+      const shadowProjection = projectGpuDrivenShadow?.(identity, cameraPyramid);
       if (shadowProjection !== undefined && !shadowProjection.ok) return shadowProjection;
       const layer = shadowLayerTarget(
         graph,
@@ -371,6 +478,8 @@ export function addTypedShadowPasses(
               `shadowCascade${cascade}`,
               layer.value,
               directionalStatic,
+              staticLayers,
+              'directional-shadow-static',
               cascade,
               mapSize,
               raster,
@@ -386,6 +495,89 @@ export function addTypedShadowPasses(
               accesses,
             );
       if (!added.ok) return added;
+      cascadeWork.push({ accesses, staticRaster: added.value ?? undefined });
+    }
+    for (const [rootIndex, receiver] of terrainReceivers.entries()) {
+      for (let cascade = 0; cascade < cascadeCount; cascade += 1) {
+        const physicalLayer = cascadeCount * (rootIndex + 1) + cascade;
+        const name = `shadowCascade${cascade}.terrain-${receiver.worldId}-${receiver.entityKey}`;
+        const layer = shadowLayerTarget(graph, directionalTarget, `${name}.depth`, physicalLayer);
+        if (!layer.ok) return layer;
+        const identity = Object.freeze({
+          kind: 'directional' as const,
+          index: cascade,
+          terrainReceiver: receiver,
+        });
+        const raster = shadowViewRaster(identity, shadowFeatures);
+        const encode = (
+          pass: RhiRenderPassEncoder,
+          frame: RenderPipelineFrame,
+          resources: GraphResourceResolver,
+        ) =>
+          encodeDirectionalShadowPass(
+            frame as never,
+            pass,
+            cascade,
+            shadowFeatures === undefined
+              ? undefined
+              : (view) => shadowFeatures.encode(pass, frame, resources, view),
+            receiver,
+          );
+        let rasterFinal = false;
+        if (directionalStatic !== undefined) {
+          // This layer contains only GPU settled casters. Canonical Terrain is
+          // a CPU residual and cannot contribute its front faces to it.
+          const sourceLayer = shadowLayerTarget(
+            graph,
+            directionalStatic,
+            `${name}.gpu-static`,
+            cascade,
+          );
+          if (!sourceLayer.ok) return sourceLayer;
+          const staticArray = directionalStatic;
+          const copied = graph.addCopyPass(`${name}.static-copy`, {
+            accesses: [
+              { resource: sourceLayer.value.view, usage: 'copy-src' },
+              { resource: layer.value.view, usage: 'copy-dst' },
+            ],
+            executeIf: (frame) => {
+              // The copied layer can be empty after a rejected submit even
+              // when the logical GPU pool hits. Its actual producer, ordered
+              // before this copy by the resource read, owns that decision.
+              const staticChanged = cascadeWork[cascade]?.staticRaster?.reason() !== undefined;
+              rasterFinal = raster.executeIf(
+                frame,
+                staticChanged ? 'static-layer-changed' : undefined,
+              );
+              return rasterFinal;
+            },
+            encode: ({ encoder, resources }) => {
+              const source = resources.texture(staticArray.texture);
+              if (!source.ok) throw source.error;
+              const target = resources.texture(directionalTarget.texture);
+              if (!target.ok) throw target.error;
+              encoder.copyTextureToTexture(
+                { texture: source.value as never, origin: { x: 0, y: 0, z: cascade } },
+                { texture: target.value as never, origin: { x: 0, y: 0, z: physicalLayer } },
+                { width: mapSize, height: mapSize, depthOrArrayLayers: 1 },
+              );
+            },
+          });
+          if (!copied.ok) return copied;
+        }
+        const added = recordShadowPass(
+          graph,
+          name,
+          layer.value,
+          directionalStatic === undefined
+            ? raster
+            : { executeIf: () => rasterFinal, encode: raster.encode },
+          encode,
+          cascadeWork[cascade]?.accesses ?? [],
+          directionalStatic === undefined ? 'clear' : 'load',
+        );
+        if (!added.ok) return added;
+      }
     }
     const observation = graph.addCopyPass('directional-shadow-observation', {
       accesses: [{ resource: directionalTarget.view, usage: 'copy-src' }],
@@ -437,8 +629,9 @@ export function addTypedShadowPasses(
     };
     let pointStatic: RenderPipelineTarget | undefined;
     if (projectGpuDrivenShadow !== undefined) {
-      const staticTarget = createShadowArrayTarget(
+      const staticTarget = createStaticShadowArrayTarget(
         graph,
+        staticLayers,
         'point-shadow-static',
         topology.shadow.pointFaceSize,
         topology.shadow.pointCount * 6,
@@ -498,6 +691,8 @@ export function addTypedShadowPasses(
                 name,
                 faceTarget,
                 pointStatic,
+                staticLayers,
+                'point-shadow-static',
                 pointIndex * 6 + face,
                 topology.shadow.pointFaceSize,
                 raster,
@@ -519,8 +714,9 @@ export function addTypedShadowPasses(
   if (!spot.ok) return spot;
   let spotStatic: RenderPipelineTarget | undefined;
   if (projectGpuDrivenShadow !== undefined && topology.shadow.spotCount > 0) {
-    const staticTarget = createShadowArrayTarget(
+    const staticTarget = createStaticShadowArrayTarget(
       graph,
+      staticLayers,
       'spot-shadow-static',
       topology.shadow.spotMapSize,
       SPOT_SHADOW_LAYERS,
@@ -532,7 +728,7 @@ export function addTypedShadowPasses(
   // the layer the receiver samples through `shadowAtlasTile == i`.
   for (let spotIndex = 0; spotIndex < Math.max(1, topology.shadow.spotCount); spotIndex += 1) {
     const identity = Object.freeze({ kind: 'spot' as const, index: spotIndex });
-    const shadowProjection = projectGpuDrivenShadow?.(identity);
+    const shadowProjection = projectGpuDrivenShadow?.(identity, cameraPyramid);
     if (shadowProjection !== undefined && !shadowProjection.ok) return shadowProjection;
     const layer = shadowLayerTarget(graph, spot.value, `spot-shadow-layer-${spotIndex}`, spotIndex);
     if (!layer.ok) return layer;
@@ -566,6 +762,8 @@ export function addTypedShadowPasses(
             name,
             layer.value,
             spotStatic,
+            staticLayers,
+            'spot-shadow-static',
             spotIndex,
             topology.shadow.spotMapSize,
             raster,

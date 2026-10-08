@@ -122,17 +122,8 @@ export function recordStandardLutFailure(
   });
 }
 
-/** Detached, bounded LUT facts for renderer inspection. */
-export interface StandardLutInspection {
-  readonly resident: string | null;
-  readonly lastKnownGood: string | null;
-  readonly sourceKey: string | null;
-  readonly targetGeneration: number;
-  readonly deviceEpoch: number;
-  readonly recentFailure?: StandardLutFailure;
-  readonly reset: readonly StandardLutResetReason[];
-  readonly receipt: Readonly<{ frameId: number; committed: boolean }>;
-}
+/** Detached, bounded LUT facts for renderer inspection: a frozen copy of the state. */
+export type StandardLutInspection = StandardLutState;
 
 export function inspectStandardLutState(state: StandardLutState): Readonly<StandardLutInspection> {
   return Object.freeze({

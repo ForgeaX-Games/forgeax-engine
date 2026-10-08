@@ -93,7 +93,7 @@ export async function verifyAdaptiveDrs(
   const capture = async (name: string) => {
     if (renderer.requestObservation === undefined)
       throw new Error('missing observation capability');
-    value(renderer.requestObservation(['final-srgb']));
+    value(renderer.requestObservation(['final-display']));
     const pending = recorder.captureFrame();
     value(await recorder.frameBoundary());
     const receipt = await draw();
@@ -101,8 +101,8 @@ export async function verifyAdaptiveDrs(
     const recorded = value(await pending);
     await save(`${name}.rhitape`, recorded.bytes);
     const observation = value(
-      await renderer.observe(receipt, { include: ['final-srgb'] }),
-    ).observations?.find((o) => o.domain === 'final-srgb');
+      await renderer.observe(receipt, { include: ['final-display'] }),
+    ).observations?.find((o) => o.domain === 'final-display');
     if (observation === undefined) throw new Error('missing final output');
     const { width, height, bytesPerRow, format } = observation.metadata;
     expect(width).toBe(128);

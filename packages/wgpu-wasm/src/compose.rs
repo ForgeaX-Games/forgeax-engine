@@ -46,7 +46,8 @@ pub fn compose_shader(
 
     // Composition validates source capability, not the eventual GPU device.
     // Match the final validator below; runtime device admission stays in RHI.
-    let mut composer = Composer::default().with_capabilities(naga::valid::Capabilities::all());
+    let mut composer = Composer::default();
+    composer.capabilities = naga::valid::Capabilities::all();
 
     // naga_oil 0.22's `add_composable_module` rejects a module whose `#import`
     // targets are not yet registered with the composer. The `imports` map

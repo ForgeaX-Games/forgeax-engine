@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { RenderFeaturePlannedFrame } from '../../features/plan';
 import { GPU_TEXTURE_USAGE_COPY_SRC } from '../../gpu-texture-usage';
 import { createAutoExposureGraphPlan } from '../../pipeline/standard-output/auto-exposure/graph';
+import { createTemporalFrameTransaction } from '../../temporal/frame';
 import { getTextureIdentity, validateGraphTargetCaptureReadback } from '../frame-snapshot';
 import {
   executeCompiledFrameGraph,
@@ -39,8 +40,17 @@ function executeCapture(overrides: CaptureOverrides = {}) {
     execute: () => ok(undefined),
   };
   const frameState = {
-    compiledFrameGraph: graph,
-    compiledFrameGraphTopologyKey: 'synthetic-capture',
+    temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
+    compiledFrameGraph: {
+      graph,
+      topologyKey: 'synthetic-capture',
+      targets: {
+        graphGeneration: 7,
+        getColorTargetTexture: () => (overrides.target === false ? undefined : texture),
+        getColorTargetDescriptor: () => (overrides.target === false ? undefined : descriptor),
+        getColorTargetView: () => undefined,
+      },
+    },
     frameNumber: 13,
     graphTargetCapture: {
       name: 'standard-output-color',
@@ -60,15 +70,6 @@ function executeCapture(overrides: CaptureOverrides = {}) {
         },
       },
     },
-    perFrameGraph:
-      overrides.target === false
-        ? undefined
-        : {
-            graphGeneration: 7,
-            getColorTargetTexture: () => (overrides.target === false ? undefined : texture),
-            getColorTargetDescriptor: () => (overrides.target === false ? undefined : descriptor),
-            getColorTargetView: () => undefined,
-          },
   } as never;
   const encoder = {
     copyTextureToBuffer: (...args: unknown[]) => copies.push(args),

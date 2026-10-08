@@ -14,7 +14,7 @@ import type { AnimationTargetIdValue } from './animation-target.js';
 // exclusively consumed by AnimationClip; no other asset or component references them.
 
 /** Stable target identity linking a sampler to a scene entity. */
-export interface AnimationChannel {
+export interface AnimationTransformChannel {
   /** Stable animation target identity. */
   readonly targetId: AnimationTargetIdValue;
   /** Target transform property: 'translation' | 'rotation' | 'scale' | 'weights'. */
@@ -22,6 +22,23 @@ export interface AnimationChannel {
   /** Sampler driving this channel. */
   readonly sampler: AnimationSampler;
 }
+
+/** An explicitly bound object/component property, using the same player clock. */
+export interface AnimationPropertyChannel {
+  readonly targetId: AnimationTargetIdValue;
+  readonly property: 'property';
+  /** Binding name supplied to bindObjectProperty or bindComponentProperty. */
+  readonly binding: string;
+  readonly sampler:
+    | AnimationSampler
+    | {
+        readonly input: Float32Array;
+        readonly output: readonly string[] | readonly boolean[];
+        readonly interpolation: 'STEP';
+      };
+}
+
+export type AnimationChannel = AnimationTransformChannel | AnimationPropertyChannel;
 
 /**
  * Animation sampler — keyframe curve for a single animation-target-property pair.
@@ -38,7 +55,7 @@ export interface AnimationChannel {
 export interface AnimationSampler {
   readonly input: Float32Array;
   readonly output: Float32Array;
-  readonly interpolation: 'LINEAR' | 'STEP';
+  readonly interpolation: 'LINEAR' | 'STEP' | 'CUBICSPLINE';
 }
 
 /**
@@ -52,6 +69,17 @@ export interface AnimationClip {
   readonly kind: 'animation-clip';
   readonly duration: number;
   readonly channels: readonly AnimationChannel[];
+  /** Sorted discrete keys; effects are consumed after pose evaluation. */
+  readonly events?: readonly AnimationTimelineKey[];
+}
+
+/** Reusable per-target influence. It is ordinary program data, not a new asset kind. */
+export interface AnimationMask {
+  readonly defaultWeight: number;
+  readonly targets: readonly {
+    readonly targetId: AnimationTargetIdValue;
+    readonly weight: number;
+  }[];
 }
 
 // === AnimationGraph asset POD + node union (feat-20260713 M2 / w13) ==============
@@ -139,4 +167,20 @@ export interface AnimationGraph {
   readonly kind: 'animation-graph';
   readonly nodes: readonly AnimationGraphNode[];
   readonly root: number;
+}
+
+/** Realm-neutral timeline commands. GUIDs resolve at the consuming owner. */
+export type AnimationTimelineAction =
+  | {
+      readonly kind: 'method';
+      readonly name: string;
+      readonly args: readonly (number | string | boolean | null)[];
+    }
+  | { readonly kind: 'audio'; readonly clip: string | null; readonly fromPosition: number }
+  | { readonly kind: 'animation'; readonly clip: string | null; readonly fromPosition: number };
+
+export interface AnimationTimelineKey {
+  readonly time: number;
+  readonly targetId: AnimationTargetIdValue;
+  readonly action: AnimationTimelineAction;
 }

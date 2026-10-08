@@ -6,6 +6,7 @@ import type {
   RhiDevice,
   Texture,
   TextureView,
+  Tlas,
 } from '@forgeax/engine-rhi';
 import { err, ok, RenderGraphError, type Result } from './errors.js';
 import type { ResolvedColorTargetDescriptor } from './graph.js';
@@ -20,6 +21,7 @@ import { handleData, releaseGraphTexture } from './kernel-internal.js';
 import type {
   CompiledRenderGraph,
   CompiledRenderGraphInfo,
+  GraphAccelerationStructure,
   GraphBuffer,
   GraphResourceResolver,
   GraphTexture,
@@ -30,10 +32,18 @@ import type {
   RenderGraphResourceAllocationInspection,
 } from './types.js';
 
+/** Acceleration structures derive no RHI usage bits; a declared access keeps them live. */
+function isResolved<FrameCtx>(compiled: CompiledResource<FrameCtx>): boolean {
+  return compiled.record.kind === 'acceleration-structure'
+    ? compiled.firstUse !== null
+    : compiled.usage !== 0;
+}
+
 interface FrameResources {
   readonly buffers: ReadonlyMap<number, Buffer>;
   readonly textures: ReadonlyMap<number, Texture>;
   readonly views: ReadonlyMap<number, TextureView>;
+  readonly accelerationStructures: ReadonlyMap<number, Tlas>;
 }
 
 interface AllocationEntry {
@@ -47,8 +57,10 @@ interface AllocationEntry {
  * imported handles are references owned by the caller and remain byte-unknown.
  */
 class RenderGraphAllocationLedger {
-  private readonly live = new Map<unknown, number | undefined>();
-  private readonly pending = new Map<unknown, number | undefined>();
+  private readonly allocations = new Map<
+    unknown,
+    { bytes: number | undefined; state: 'live' | 'pending-retirement' }
+  >();
   private liveBytes = 0;
   private pendingBytes = 0;
   private peakBytes = 0;
@@ -72,7 +84,9 @@ class RenderGraphAllocationLedger {
       peakBytes: this.peakBytes,
       successfulAllocationCount: this.successfulAllocationCount,
       successfulAllocationBytes: this.successfulAllocationBytes,
-      pendingRetirementCount: this.pending.size,
+      pendingRetirementCount: [...this.allocations.values()].filter(
+        (entry) => entry.state === 'pending-retirement',
+      ).length,
       retiredBytes: this.retiredBytes,
       failedAllocationRollbacks: 0,
       failedAllocationRollbackBytes: 0,
@@ -82,56 +96,41 @@ class RenderGraphAllocationLedger {
   }
 
   state(handle: unknown): 'live' | 'pending-retirement' | 'released' {
-    return this.live.has(handle)
-      ? 'live'
-      : this.pending.has(handle)
-        ? 'pending-retirement'
-        : 'released';
+    return this.allocations.get(handle)?.state ?? 'released';
   }
 
   retireAll(): void {
-    for (const handle of [...this.live.keys()]) this.retire(handle);
+    for (const entry of this.allocations.values()) {
+      if (entry.state !== 'live') continue;
+      entry.state = 'pending-retirement';
+      if (entry.bytes !== undefined) {
+        this.liveBytes -= entry.bytes;
+        this.pendingBytes += entry.bytes;
+      }
+    }
   }
 
   release(handle: unknown): void {
-    const pendingBytes = this.pending.get(handle);
-    if (pendingBytes !== undefined || this.pending.has(handle)) {
-      this.pending.delete(handle);
-      if (pendingBytes !== undefined) this.pendingBytes -= pendingBytes;
-      if (pendingBytes === undefined) this.unknownByteSizeCount -= 1;
-      this.retiredBytes += pendingBytes ?? 0;
-      return;
-    }
-    const liveBytes = this.live.get(handle);
-    if (liveBytes !== undefined || this.live.has(handle)) {
-      this.live.delete(handle);
-      if (liveBytes !== undefined) this.liveBytes -= liveBytes;
-      if (liveBytes === undefined) this.unknownByteSizeCount -= 1;
-      this.retiredBytes += liveBytes ?? 0;
+    const entry = this.allocations.get(handle);
+    if (entry === undefined) return;
+    this.allocations.delete(handle);
+    if (entry.bytes === undefined) this.unknownByteSizeCount -= 1;
+    else {
+      if (entry.state === 'live') this.liveBytes -= entry.bytes;
+      else this.pendingBytes -= entry.bytes;
+      this.retiredBytes += entry.bytes;
     }
   }
 
   private allocate(handle: unknown, bytes: number | undefined, newlyAllocated: boolean): void {
-    if (this.live.has(handle) || this.pending.has(handle)) return;
-    this.live.set(handle, bytes);
+    if (this.allocations.has(handle)) return;
+    this.allocations.set(handle, { bytes, state: 'live' });
     if (newlyAllocated) this.successfulAllocationCount += 1;
     if (bytes === undefined) this.unknownByteSizeCount += 1;
     else {
       this.liveBytes += bytes;
       if (newlyAllocated) this.successfulAllocationBytes += bytes;
     }
-    this.updatePeak();
-  }
-
-  private retire(handle: unknown): void {
-    const bytes = this.live.get(handle);
-    if (bytes === undefined && !this.live.has(handle)) return;
-    this.live.delete(handle);
-    if (bytes !== undefined) {
-      this.liveBytes -= bytes;
-      this.pendingBytes += bytes;
-    }
-    this.pending.set(handle, bytes);
     this.updatePeak();
   }
 
@@ -167,18 +166,16 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
     private readonly colorTargetDescriptors: ReadonlyMap<string, ResolvedColorTargetDescriptor>,
   ) {
     const infoByLabel = new Map(info.resources.map((resource) => [resource.label, resource]));
-    const seen = new Set<unknown>();
     const entries: AllocationEntry[] = [];
     let importedResourceCount = 0;
     for (const compiled of resources.values()) {
-      if (compiled.usage === 0) continue;
+      if (!isResolved(compiled)) continue;
       const handle = compiled.texture ?? compiled.buffer;
       if (compiled.record.origin === 'imported') {
         importedResourceCount += 1;
         continue;
       }
-      if (handle === undefined || seen.has(handle)) continue;
-      seen.add(handle);
+      if (handle === undefined) continue;
       entries.push({
         handle,
         bytes: infoByLabel.get(compiled.record.label)?.byteSize,
@@ -483,9 +480,10 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
     const buffers = new Map<number, Buffer>();
     const textures = new Map<number, Texture>();
     const views = new Map<number, TextureView>();
+    const accelerationStructures = new Map<number, Tlas>();
 
     for (const compiled of this.resources.values()) {
-      if (compiled.usage === 0) continue;
+      if (!isResolved(compiled)) continue;
       try {
         if (compiled.record.kind === 'texture') {
           const texture =
@@ -494,6 +492,8 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
               : compiled.record.resolve(frame);
           if (texture === undefined) return err(resolutionError(compiled.record.label));
           textures.set(compiled.record.id, texture);
+        } else if (compiled.record.kind === 'acceleration-structure') {
+          accelerationStructures.set(compiled.record.id, compiled.record.resolve(frame));
         } else {
           const buffer =
             compiled.record.origin === 'created' ? compiled.buffer : compiled.record.resolve(frame);
@@ -525,7 +525,7 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
       if (!created.ok) return err(resolutionError(compiledView.record.label, created.error));
       views.set(compiledView.record.id, created.value);
     }
-    return ok({ buffers, textures, views });
+    return ok({ buffers, textures, views, accelerationStructures });
   }
 
   private createPassResolver(
@@ -533,7 +533,7 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
     frameResources: FrameResources,
   ): GraphResourceResolver {
     const lookup = (
-      resource: GraphBuffer | GraphTexture | GraphTextureView,
+      resource: GraphBuffer | GraphTexture | GraphTextureView | GraphAccelerationStructure,
       expectedKind: ResourceHandleData['kind'],
     ): Result<ResourceHandleData, RenderGraphError> => {
       const data = handleData(resource);
@@ -597,6 +597,18 @@ export class CompiledRenderGraphImpl<FrameCtx extends RenderGraphFrame>
         return view === undefined
           ? err(resolutionError(this.views.get(data.value.id)?.record.label ?? 'texture view'))
           : ok(view);
+      },
+      accelerationStructure: (resource) => {
+        const data = lookup(resource, 'acceleration-structure');
+        if (!data.ok) return data;
+        const tlas = frameResources.accelerationStructures.get(data.value.id);
+        return tlas === undefined
+          ? err(
+              resolutionError(
+                this.resources.get(data.value.id)?.record.label ?? 'acceleration structure',
+              ),
+            )
+          : ok(tlas);
       },
     };
   }

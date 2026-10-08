@@ -3,6 +3,44 @@ import { userEvent } from 'vitest/browser';
 import { attachBrowserInputBackend } from '../browser-backend';
 
 describe('browser edge latch (real Chromium)', () => {
+  it('reads chord button masks and latches both transitions between browser scans', () => {
+    const canvas = document.createElement('canvas');
+    canvas.tabIndex = 0;
+    document.body.append(canvas);
+    canvas.focus();
+    const handle = attachBrowserInputBackend(canvas, { pointerLockAllowed: () => false });
+    const dispatch = (type: string, button: number, buttons: number) =>
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 1,
+          pointerType: 'mouse',
+          button,
+          buttons,
+          bubbles: true,
+        }),
+      );
+    try {
+      dispatch('pointerdown', 2, 2);
+      handle.backend.sample();
+      dispatch('pointermove', 0, 3);
+      dispatch('pointermove', 0, 2);
+      expect(handle.backend.sample()).toMatchObject({
+        buttons: [false, false, true],
+        pressedButtons: [true, false, false],
+        releasedButtons: [true, false, false],
+      });
+      dispatch('pointerup', 2, 0);
+      expect(handle.backend.sample()).toMatchObject({
+        buttons: [false, false, false],
+        releasedButtons: [false, false, true],
+      });
+      expect(handle.backend.sample().releasedButtons).toEqual([false, false, false]);
+    } finally {
+      handle();
+      canvas.remove();
+    }
+  });
+
   it('keeps trusted low-frequency down/up edges until the next sample', async () => {
     const canvas = document.createElement('canvas');
     canvas.width = 320;

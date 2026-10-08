@@ -1,4 +1,7 @@
-import { transmissionBackdropAvailable } from '../assembly/device-feature-admission';
+import {
+  standardTransmissionAdmission,
+  transmissionBackdropAvailable,
+} from '../assembly/device-feature-admission';
 import { getOrCreateIblCache } from '../ibl/IblPipelineCache';
 import type { RenderResourceScope } from '../publication/resource-scope';
 import type { _InternalRenderPipelineContext } from './render-context';
@@ -19,6 +22,7 @@ import {
   type BindGroupLayout,
   type Buffer,
   type RenderPipeline,
+  type RhiBindingResource,
   RhiError,
   type Sampler,
   type TextureView,
@@ -30,6 +34,7 @@ import {
   DEFAULT_UNLIT_PARAM_SCHEMA,
   STANDARD_PHYSICAL_TEXTURE_FIELDS,
   STANDARD_PIPELINE_PARAM_SCHEMA,
+  STANDARD_SHARED_TRANSMISSION_SLOTS,
 } from '@forgeax/engine-shader';
 import type {
   Handle,
@@ -47,6 +52,7 @@ import {
   assembleMaterialWithSkylightEntries,
   type SkylightBindGroupResources,
   type SurfaceMediumBindGroupResources,
+  skylightBindGroupResources,
   type TextureInjectionResource,
   type TransmissionBindGroupResources,
 } from '../ibl/skylight-bind-group';
@@ -65,7 +71,7 @@ import {
   resolveRenderTargetMaterialSource,
 } from '../targets/material-source';
 import { canvasTextureState, isCanvasTextureSource } from '../textures/canvas-texture';
-import type { StandardReflectionProbeBinding } from './frame-lighting';
+import { isExternalTextureSource } from '../textures/external-texture';
 import type {
   BindGroupCounts,
   MaterialBgAssemblyCacheEntry,
@@ -211,27 +217,6 @@ export function isEntityFullyTransparent(source: {
     if (mats[j]?.transparent !== true) return false;
   }
   return true;
-}
-
-/**
- * feat-city-glb Bug 5: true when the entity has at least one transparent AND at
- * least one opaque submesh — i.e. it must be drawn in BOTH the geometry pass
- * (opaque submeshes) and the blend sub-pass (transparent submeshes). A pure-
- * opaque or pure-transparent entity returns false (handled by the whole-entity
- * fast paths).
- *
- * @internal
- */
-export function entityHasTransparentSubmesh(source: {
-  readonly material: MaterialSnapshot;
-  readonly materials?: readonly MaterialSnapshot[];
-}): boolean {
-  const mats = source.materials;
-  if (mats === undefined) return source.material.transparent === true;
-  for (let j = 0; j < mats.length; j++) {
-    if (mats[j]?.transparent === true) return true;
-  }
-  return false;
 }
 
 /**
@@ -408,59 +393,106 @@ function clearVideoUploadFailureEpisode(
   if (clips?.size === 0) VIDEO_UPLOAD_FAILURE_EPISODES.delete(store);
 }
 
+function videoSourceElement(
+  world: RenderResourceScope,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+): HTMLVideoElement | VideoFrame | undefined {
+  if ('resolveAsset' in world) return world.videoFrame(entityKey, clip);
+  return world.hasResource(VIDEO_SOURCE_PROVIDER_KEY)
+    ? world
+        .getResource<VideoSourceProvider>(VIDEO_SOURCE_PROVIDER_KEY)
+        .getSource(entityKey as EntityHandle, clip)
+    : undefined;
+}
+
+const DIRECT_VIDEO_KEYS = new WeakMap<DynamicTextureStore, Map<number, object>>();
+
+/** texture_external slots sample in source orientation, so their copies use a separate unflipped key. */
+function directVideoKey(store: DynamicTextureStore, clip: Handle<'VideoAsset', 'shared'>): object {
+  let keys = DIRECT_VIDEO_KEYS.get(store);
+  if (keys === undefined) {
+    keys = new Map();
+    DIRECT_VIDEO_KEYS.set(store, keys);
+  }
+  let key = keys.get(handleSlot(clip));
+  if (key === undefined) {
+    key = {};
+    keys.set(handleSlot(clip), key);
+  }
+  return key;
+}
+
+/**
+ * Copy path for one VideoPlayer field. `slotExternal` selects the unflipped
+ * copy that a `texture_external` slot samples when zero-copy import is absent.
+ */
 export function videoTextureView(
   world: RenderResourceScope,
   store: DynamicTextureStore | undefined,
   runtime: RenderSystemRuntime,
   entityKey: number,
   clip: Handle<'VideoAsset', 'shared'>,
-  highPerfAvailable: boolean,
+  slotExternal = false,
 ): TextureView | undefined {
   if (store === undefined) return undefined;
-  const provider =
-    !('resolveAsset' in world) && world.hasResource(VIDEO_SOURCE_PROVIDER_KEY)
-      ? world.getResource<VideoSourceProvider>(VIDEO_SOURCE_PROVIDER_KEY)
-      : undefined;
-  const element =
-    'resolveAsset' in world
-      ? world.videoFrame(entityKey, clip)
-      : provider?.getSource(entityKey as EntityHandle, clip);
-  // AC-10 double-miss: a VideoPlayer entity can reach NEITHER upload path this
-  // frame — no host HTMLVideoElement (general copyExternalImageToTexture path)
-  // AND no high-perf GPUExternalTexture path. This is the genuine "this backend
-  // exposes no usable video upload path" case (no provider registered, or the
-  // provider yields nothing while the high-perf reserved hook is unavailable —
-  // OOS-5 keeps it always false today). Rather than silently binding the
-  // default view, fire the structured VideoUploadUnsupportedError on the engine
-  // error channel so an AI user can detect the dead path via `.code` / `.hint`
-  // (charter P3; AC-10 signal lives on the REAL per-frame upload path, not an
-  // orphan system). The default view is still bound this frame so the draw
-  // does not crash (graceful degradation), but the failure is no longer silent.
-  if (element === undefined && !highPerfAvailable) {
+  const key = slotExternal ? directVideoKey(store, clip) : clip;
+  const element = videoSourceElement(world, entityKey, clip);
+  // Both upload paths need a host element. Bind the last good (or default)
+  // view so the draw survives, but report the dead path once per episode.
+  if (element === undefined) {
     if (markVideoUploadFailureEpisode(store, entityKey, clip)) {
       runtime.errorRegistry.fire(new VideoUploadUnsupportedError());
     }
-    return store.getView(clip);
-  }
-  // D-2 / w17 high-perf reserved hook: a future GPUExternalTexture import path
-  // would key off `highPerfAvailable` here. It is always false today
-  // (importExternalTexture absent), so the general copyExternalImageToTexture
-  // path below is the sole route end-to-end.
-  if (element === undefined) {
-    clearVideoUploadFailureEpisode(store, entityKey, clip);
-    return store.getView(clip);
+    return store.getView(key);
   }
   const extent = videoSourceExtent(element);
-  if (extent === undefined) return store.getView(clip);
+  if (extent === undefined) return store.getView(key);
   const { width, height } = extent;
-  const uploaded = store.uploadFrame(clip, element, width, height);
-  if (uploaded === undefined) return store.getView(clip);
+  const uploaded = store.uploadFrame(key, element, width, height, { flipY: !slotExternal });
+  if (uploaded === undefined) return store.getView(key);
   if (!uploaded.ok) {
     runtime.errorRegistry.fire(uploaded.error);
-    return store.getView(clip);
+    return store.getView(key);
   }
   clearVideoUploadFailureEpisode(store, entityKey, clip);
   return uploaded.value;
+}
+
+/**
+ * Binding for one VideoPlayer field. A `texture_external` slot imports the
+ * current frame zero-copy when the device reports `caps.externalTexture`;
+ * everything else takes the copy path.
+ */
+export function videoBindingResource(
+  world: RenderResourceScope,
+  runtime: RenderSystemRuntime,
+  entityKey: number,
+  clip: Handle<'VideoAsset', 'shared'>,
+  highPerfAvailable: boolean,
+  slotExternal: boolean,
+): RhiBindingResource | undefined {
+  if (slotExternal && highPerfAvailable && runtime.externalTextures !== undefined) {
+    const element = videoSourceElement(world, entityKey, clip);
+    const external =
+      element !== undefined && videoSourceExtent(element) !== undefined
+        ? runtime.externalTextures.importVideoFrame(element)
+        : undefined;
+    if (external !== undefined) {
+      const store = runtime.dynamicTextureStore;
+      if (store !== undefined) clearVideoUploadFailureEpisode(store, entityKey, clip);
+      return { kind: 'externalTexture', value: external };
+    }
+  }
+  const view = videoTextureView(
+    world,
+    runtime.dynamicTextureStore,
+    runtime,
+    entityKey,
+    clip,
+    slotExternal,
+  );
+  return view === undefined ? undefined : { kind: 'textureView', value: view };
 }
 
 // The canonical schema owns the runtime fallback's binding order as well as
@@ -478,28 +510,6 @@ const LEGACY_MATERIAL_TEXTURE_SCALE_FIELDS = [
   'occlusionTexture',
 ] as const;
 const DEFAULT_LEGACY_TEXTURE_SCALES = new Float32Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
-
-export interface StandardReflectionProbeMaterialProjection {
-  readonly probeIndex: number | undefined;
-  readonly fallbackToSkylight: boolean;
-}
-
-/** Keeps the fallback output as a same-pass, linear-HDR material projection. */
-export function standardPbrFallbackDemand(
-  projection: StandardReflectionProbeMaterialProjection,
-): boolean {
-  return projection.probeIndex !== undefined || projection.fallbackToSkylight;
-}
-
-/** Projects the selected scene row into the Standard material lane. */
-export function projectReflectionProbeMaterialBinding(
-  binding: StandardReflectionProbeBinding,
-): StandardReflectionProbeMaterialProjection {
-  return {
-    probeIndex: binding.probeIndex,
-    fallbackToSkylight: binding.useSkylight,
-  };
-}
 
 /** Derives the logical-content UV scale for an uploaded material texture. */
 export function materialTextureUvScale(
@@ -529,7 +539,7 @@ export function materialRenderTargetSourceForField(
   resolveSource?: RenderSystemRuntime['resolveRenderTargetTextureSource'],
 ): RenderTargetMaterialSourceBinding | undefined {
   const source = material.textureSources?.get(field);
-  return source === undefined || isCanvasTextureSource(source)
+  return source === undefined || isCanvasTextureSource(source) || isExternalTextureSource(source)
     ? undefined
     : (resolveSource?.(source) ?? resolveRenderTargetMaterialSource(source));
 }
@@ -713,6 +723,28 @@ export function userRegionTextureFieldOrder(
   return fields;
 }
 
+const TARGET_VIEW_DIMENSION_FOR_PARAMETER: Readonly<Record<string, string>> = {
+  texture2d: '2d',
+  texture_cube: 'cube',
+  texture3d: '3d',
+  texture2d_array: '2d-array',
+};
+
+/**
+ * A target source binds only into a param of its own view dimension; a
+ * mismatch would invalidate the material BGL, so the draw stays on the
+ * fallback and is reported non-resident.
+ */
+export function renderTargetSourceFitsParameter(
+  binding: RenderTargetMaterialSourceBinding,
+  field: string | undefined,
+  schema?: readonly ParamSchemaEntry[],
+): boolean {
+  const type = schema?.find((entry) => entry.name === field)?.type;
+  const expected = type === undefined ? undefined : TARGET_VIEW_DIMENSION_FOR_PARAMETER[type];
+  return expected === undefined || expected === binding.view.dimension;
+}
+
 /**
  * feat-20260621-learn-render-5-5-parallax M2 / w8: the fallback texture view
  * for a user-region field when no handle is provided (graceful, charter P3).
@@ -730,6 +762,12 @@ export function defaultViewForUserRegionField(
     // Use it until a receipt-promoted RenderTarget source becomes available;
     // binding a 2D view here would invalidate the custom cube material BGL.
     return pipelineState.skylightFallback?.prefilterView ?? pipelineState.defaultWhiteTextureView;
+  }
+  if (parameter?.type === 'texture3d') {
+    return pipelineState.defaultWhite3dTextureView ?? pipelineState.defaultWhiteTextureView;
+  }
+  if (parameter?.type === 'texture2d_array') {
+    return pipelineState.defaultWhite2dArrayTextureView ?? pipelineState.defaultWhiteTextureView;
   }
   if (field === 'normalTexture') return pipelineState.defaultNormalTextureView;
   if (field === 'baseColorTexture') return pipelineState.fallbackTextureView;
@@ -1012,7 +1050,8 @@ function recordIblMaterialBinding(
   const iblEntries = entries.slice(skylightBindingStart, skylightBindingStart + 6);
   const projected: IblBindingEntryInspection[] = [];
   for (const entry of iblEntries) {
-    if (entry.resource.kind === 'externalTexture') continue;
+    const { kind } = entry.resource;
+    if (kind === 'externalTexture' || kind === 'accelerationStructure') continue;
     const value =
       entry.resource.kind === 'buffer' ? entry.resource.value.buffer : entry.resource.value;
     if (typeof value !== 'object' || value === null) continue;
@@ -1265,16 +1304,47 @@ export function buildPerSubmeshMaterialBg(
     standardMaterial || smPerShaderBgl === undefined,
     isCanonicalStandardPbrMaterialShader(smShaderId) || smPerShaderBgl === undefined,
   );
+  // Below the dedicated budget, the shared transmission variant reads its
+  // transmission resources through the split scalar-map pairs it leaves unused.
+  const sharedTransmissionSlots =
+    smShaderId !== undefined &&
+    standardTransmissionAdmission(
+      { ...submeshMaterial, materialShaderId: smShaderId },
+      runtime.device.limits.maxSampledTexturesPerShaderStage,
+    )?.kind === 'shared'
+      ? new Map<string, string>(
+          STANDARD_SHARED_TRANSMISSION_SLOTS.map((entry) => [entry.host, entry.resource]),
+        )
+      : undefined;
   const smBglPairCount = smUserRegionFields.length;
   for (let fi = 0; fi < smBglPairCount; fi++) {
-    const slot = smUserRegionFields[fi];
+    const canonicalSlot = smUserRegionFields[fi];
+    const sharedResource =
+      canonicalSlot === undefined ? undefined : sharedTransmissionSlots?.get(canonicalSlot);
+    const samplerBinding = 1 + fi * 2;
+    const textureBinding = samplerBinding + 1;
+    if (sharedResource === 'transmissionBackdropTexture') {
+      smBaseEntries.push(
+        {
+          binding: samplerBinding,
+          resource: { kind: 'sampler', value: pipelineState.defaultSampler },
+        },
+        {
+          binding: textureBinding,
+          resource: {
+            kind: 'textureView',
+            value: transmissionBackdropView ?? pipelineState.defaultWhiteTextureView,
+          },
+        },
+      );
+      continue;
+    }
+    const slot = sharedResource ?? canonicalSlot;
     const field =
       slot !== undefined && isCanonicalStandardPbrMaterialShader(smShaderId)
         ? standardNormalInputField(slot, submeshMaterial.standardTextureMask)
         : slot;
-    const samplerBinding = 1 + fi * 2;
-    const textureBinding = samplerBinding + 1;
-    if (omittedTransmissionBindings.has(textureBinding)) {
+    if (sharedResource === undefined && omittedTransmissionBindings.has(textureBinding)) {
       // Keep the logical region length until the shared IBL merger computes
       // its offsets. Omitted slots must not trigger residency requirements.
       smBaseEntries.push(
@@ -1293,8 +1363,14 @@ export function buildPerSubmeshMaterialBg(
       field !== undefined
         ? defaultViewForUserRegionField(field, pipelineState, smSchema)
         : pipelineState.defaultWhiteTextureView;
+    let smResource: RhiBindingResource | undefined;
     const smVideoClip =
       field !== undefined ? submeshMaterial.videoTextureFields?.get(field) : undefined;
+    const smSlotExternal =
+      field !== undefined &&
+      smSchema?.find((entry) => entry.name === field)?.type === 'texture_external';
+    const smRuntimeSource =
+      field === undefined ? undefined : submeshMaterial.textureSources?.get(field);
     const smTargetSource =
       field === undefined
         ? undefined
@@ -1303,7 +1379,10 @@ export function buildPerSubmeshMaterialBg(
             field,
             resolveRenderTargetTextureSource,
           );
-    if (field !== undefined && isCanvasTextureSource(submeshMaterial.textureSources?.get(field))) {
+    if (isExternalTextureSource(smRuntimeSource)) {
+      smResource = runtime.externalTextures?.resolve(smRuntimeSource, smSlotExternal);
+      if (smResource === undefined) materialResourcesResident = false;
+    } else if (field !== undefined && isCanvasTextureSource(smRuntimeSource)) {
       const view = materialCanvasTextureView(submeshMaterial, field, materialWorld, runtime);
       if (view !== undefined) smView = view;
       else materialResourcesResident = false;
@@ -1311,18 +1390,21 @@ export function buildPerSubmeshMaterialBg(
       // The Renderer host resolves the generation-checked physical view. A
       // candidate is never exposed here; until its matching FrameReceipt
       // completes, the material remains on the neutral fallback.
-      if (smTargetSource.textureView !== undefined) smView = smTargetSource.textureView;
-      else materialResourcesResident = false;
+      if (
+        smTargetSource.textureView !== undefined &&
+        renderTargetSourceFitsParameter(smTargetSource, field, smSchema)
+      ) {
+        smView = smTargetSource.textureView;
+      } else materialResourcesResident = false;
     } else if (smVideoClip !== undefined) {
-      const view = videoTextureView(
+      smResource = videoBindingResource(
         materialWorld,
-        runtime.dynamicTextureStore,
         runtime,
         entityKey,
         smVideoClip,
         videoHighPerfAvailable,
+        smSlotExternal,
       );
-      if (view !== undefined) smView = view;
     } else {
       const smHandle =
         field === 'emissiveTexture'
@@ -1345,7 +1427,7 @@ export function buildPerSubmeshMaterialBg(
       },
       {
         binding: textureBinding,
-        resource: { kind: 'textureView' as const, value: smView },
+        resource: smResource ?? { kind: 'textureView' as const, value: smView },
       },
     );
   }
@@ -1364,7 +1446,12 @@ export function buildPerSubmeshMaterialBg(
       field,
       resolveRenderTargetTextureSource,
     );
-    if (isCanvasTextureSource(submeshMaterial.textureSources?.get(field))) {
+    const runtimeSource = submeshMaterial.textureSources?.get(field);
+    if (isExternalTextureSource(runtimeSource)) {
+      const resolved = runtime.externalTextures?.resolve(runtimeSource, false);
+      if (resolved?.kind === 'textureView') view = resolved.value;
+      else materialResourcesResident = false;
+    } else if (isCanvasTextureSource(runtimeSource)) {
       const canvasView = materialCanvasTextureView(submeshMaterial, field, materialWorld, runtime);
       if (canvasView !== undefined) view = canvasView;
       else materialResourcesResident = false;
@@ -1565,17 +1652,6 @@ export function resolveMaterialSkylight(
   // muzzles everything, including the white fallback irradiance cube).
   runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, ZERO_SKYLIGHT_PAYLOAD);
   if (skylight !== undefined && skylightCount >= 1) {
-    // A Skylight exists. Write its intensity + color regardless of whether
-    // a cubemap is bound: with a cubemap the IBL views below light the
-    // ambient; WITHOUT one, the white fallback irradiance cube + this color
-    // give an instant solid-color ambient (downstream integration #4) with
-    // no async precompute. The white fallback only contributes when a
-    // Skylight is present because the zero-payload above sets intensity 0
-    // when no Skylight exists.
-    const [cr, cg, cb] = skylight.color;
-    const [qx, qy, qz, qw] = skylight.rotation;
-    const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb, qx, qy, qz, qw]);
-    runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, uniformPayload);
     const cache = getOrCreateIblCache(runtime.deviceScope);
     if (
       cache.irradianceView !== undefined &&
@@ -1596,24 +1672,20 @@ export function resolveMaterialSkylight(
       brdf: activeViews?.brdf ?? skylightFallback.brdfLutView,
     };
   }
-  const skylightResources =
-    activeViews !== undefined
-      ? {
-          irradianceView: activeViews.irr,
-          irradianceSampler: skylightFallback.sampler,
-          prefilterView: activeViews.pref,
-          prefilterSampler: skylightFallback.sampler,
-          brdfLutView: activeViews.brdf,
-          intensityBuffer: skylightFallback.intensityBuffer,
-        }
-      : {
-          irradianceView: skylightFallback.irradianceView,
-          irradianceSampler: skylightFallback.sampler,
-          prefilterView: skylightFallback.prefilterView,
-          prefilterSampler: skylightFallback.sampler,
-          brdfLutView: skylightFallback.brdfLutView,
-          intensityBuffer: skylightFallback.intensityBuffer,
-        };
+  // White fallback is intentional solid-color ambient only without an authored
+  // image. An explicit image whose IBL views are unavailable must not acquire
+  // that unrelated white radiance while its resources are being prepared.
+  if (
+    skylight !== undefined &&
+    skylightCount >= 1 &&
+    (skylight.equirectHandle === 0 || activeViews !== undefined)
+  ) {
+    const [cr, cg, cb] = skylight.color;
+    const [qx, qy, qz, qw] = skylight.rotation;
+    const uniformPayload = new Float32Array([skylight.intensity, cr, cg, cb, qx, qy, qz, qw]);
+    runtime.device.queue.writeBuffer(skylightFallback.intensityBuffer, 0, uniformPayload);
+  }
+  const skylightResources = skylightBindGroupResources(skylightFallback, activeViews);
   return { skylightResources, activeViews };
 }
 

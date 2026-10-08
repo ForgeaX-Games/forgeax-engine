@@ -4,37 +4,15 @@ import type {
   KernelDispatchSpan,
   SharedKernelDispatch,
   SharedKernelExecutor,
-  SharedSpanBinding,
 } from '@forgeax/engine-ecs/shared';
 import { bindSharedSpan, isSharedSpan, splitSharedSpan } from '@forgeax/engine-ecs/shared';
+import type { KernelInitMessage, KernelJobMessage, KernelPreloadMessage } from './protocol';
 
 export interface KernelPool extends SharedKernelExecutor {
   readonly laneCount: number;
   ready(): Promise<void>;
   takeLastDispatch(): KernelDispatchResult | null;
   dispose(): void;
-}
-
-interface KernelJobMessage {
-  readonly kind: 'kernel-job';
-  readonly moduleUrl: string;
-  readonly binding: SharedSpanBinding;
-  readonly control: Int32Array;
-  readonly status: Int32Array;
-  readonly jobIndex: number;
-}
-
-interface KernelInitMessage {
-  readonly kind: 'kernel-init';
-  readonly ready: Int32Array;
-}
-
-interface KernelPreloadMessage {
-  readonly kind: 'kernel-preload';
-  readonly moduleUrl: string;
-  readonly control: Int32Array;
-  readonly status: Int32Array;
-  readonly jobIndex: number;
 }
 
 interface KernelPreflight {
@@ -45,6 +23,7 @@ interface KernelPreflight {
 export interface KernelPoolOptions {
   readonly lanes?: number;
   readonly timeoutMs?: number;
+  readonly startupTimeoutMs?: number;
   readonly workerFactory?: () => Worker;
 }
 
@@ -52,6 +31,8 @@ export function createKernelPool(options: KernelPoolOptions = {}): KernelPool {
   const hardware = globalThis.navigator?.hardwareConcurrency ?? 2;
   const laneCount = Math.max(1, Math.min(options.lanes ?? hardware - 1, 8));
   const timeoutMs = options.timeoutMs ?? 5_000;
+  const startupTimeoutMs = options.startupTimeoutMs ?? timeoutMs;
+  const startupDeadline = performance.now() + startupTimeoutMs;
   const workers = Array.from(
     { length: laneCount },
     () =>
@@ -69,15 +50,14 @@ export function createKernelPool(options: KernelPoolOptions = {}): KernelPool {
   for (const worker of workers) worker.postMessage(initMessage);
   const waitFor = (control: Int32Array, expected: number, label: string): Promise<void> =>
     new Promise<void>((resolve, reject) => {
-      const started = performance.now();
       const poll = (): void => {
         if (Atomics.load(control, 0) === expected) {
           resolve();
           return;
         }
-        if (performance.now() - started >= timeoutMs) {
+        if (performance.now() >= startupDeadline) {
           for (const worker of workers) worker.terminate();
-          reject(new Error(`${label} did not complete within ${timeoutMs}ms.`));
+          reject(new Error(`${label} did not complete within ${startupTimeoutMs}ms.`));
           return;
         }
         setTimeout(poll, 1);

@@ -1,23 +1,9 @@
-import {
-  CUBE_CAMERA_FACE_ORDER,
-  type CubeCameraFace,
-  type CubeCameraUpdateIntent,
-} from '../components/cube-camera';
+import { CUBE_CAMERA_FACE_ORDER, type CubeCameraFace } from '../components/cube-camera';
 import type { RenderError } from '../errors/render';
 import { RenderTargetOperationFailedError, RenderTargetStateInvalidError } from '../errors/render';
-import type { RenderResult } from '../render-contract';
+import type { CubeCameraSnapshot, RenderResult } from '../render-contract';
 import type { RenderTarget } from '../targets/contracts';
 import { buildCubeCameraFaceViews, type CubeCameraFaceView } from './cube-views';
-
-export interface CubeCaptureRequest {
-  readonly target: RenderTarget;
-  readonly position: readonly [number, number, number];
-  readonly near: number;
-  readonly far: number;
-  readonly updateIntent: CubeCameraUpdateIntent;
-  readonly requestVersion: number;
-  readonly faceBudget: number;
-}
 
 export interface CubeCaptureWork extends CubeCameraFaceView {
   readonly target: RenderTarget;
@@ -63,7 +49,7 @@ export interface CubeCaptureScheduler {
   beginFrame(): void;
   cancel(target: RenderTarget): void;
   invalidate(target: RenderTarget): void;
-  request(request: CubeCaptureRequest): RenderResult<{ readonly scheduled: boolean }, RenderError>;
+  request(request: CubeCameraSnapshot): RenderResult<{ readonly scheduled: boolean }, RenderError>;
   nextWork(): readonly CubeCaptureWork[];
   completeSubmission(
     submitted: boolean,
@@ -73,7 +59,7 @@ export interface CubeCaptureScheduler {
 }
 
 interface PendingCapture {
-  readonly request: CubeCaptureRequest;
+  readonly request: CubeCameraSnapshot;
   readonly views: readonly CubeCameraFaceView[];
   readonly candidateGeneration: number;
   readonly written: Set<CubeCameraFace>;
@@ -116,7 +102,7 @@ function failed(generation: number, cause: unknown): RenderResult<never, RenderE
   };
 }
 
-function validateRequest(request: CubeCaptureRequest): RenderResult<void, RenderError> {
+function validateRequest(request: CubeCameraSnapshot): RenderResult<void, RenderError> {
   if (!Number.isInteger(request.requestVersion) || request.requestVersion < 0) {
     return invalid('generation-mismatch');
   }

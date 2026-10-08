@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { isRetryableLodPerformanceEvidence } from '../run-lod-performance-with-retry.mjs';
 
-const falsification = Array.from({ length: 6 }, () => ({ verdict: 'pass' }));
+const falsification = Array.from({ length: 5 }, () => ({ verdict: 'pass' }));
 
 function evidence(overrides = {}) {
   return {

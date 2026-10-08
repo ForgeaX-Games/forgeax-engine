@@ -1,3 +1,5 @@
+import type { AudioState } from '@forgeax/engine-audio';
+import type { HostAudioConsumer } from '@forgeax/engine-audio-webaudio';
 import type { WorldExecutionHealth } from '@forgeax/engine-ecs/shared';
 import type { GpuPassTimingOptions } from '@forgeax/engine-render';
 import type { Result, RuntimeAssetBinding } from '@forgeax/engine-types';
@@ -68,6 +70,7 @@ export interface ExecutionFault {
 }
 
 export interface ExecutionAudioReport {
+  readonly streaming?: AudioState['streaming'];
   readonly owner: 'host';
   readonly contextState: 'running' | 'suspended' | 'closed';
   readonly activeSourceCount: number;
@@ -145,6 +148,8 @@ export interface ExecutionReport {
 }
 
 export interface ExecutionOptions {
+  /** Host-only factory, called again after rebuild; never transferred to a Worker. */
+  readonly createHostAudio?: () => HostAudioConsumer;
   /** Each omitted worker policy defaults to auto, including render plus kernels. */
   readonly workers?: ExecutionWorkersOptions;
   /** Absolute or import.meta.url-relative URL of an ExecutionBootstrapEntry module. */

@@ -54,3 +54,33 @@ export async function archiveEngineSource({ root, destination, commit }) {
     await rm(temporary, { recursive: true, force: true });
   }
 }
+
+/** Validate each expanded repository against its own public source contract. */
+export function assertSourceDependencyInventory(source, artifacts) {
+  if (
+    JSON.stringify(source.gitDependencies.map((entry) => entry.root)) !==
+    JSON.stringify(SDK_SOURCE_GIT_DEPENDENCIES)
+  )
+    throw new Error('sdk-source-git-dependencies');
+  // The pinned Rust source has its own crate/license closure. View is checked
+  // against its source entry points and subsequently built with the Engine.
+  for (const [dependencyRoot, requiredPaths] of [
+    [
+      'third_party/wgpu',
+      [
+        'Cargo.toml',
+        'LICENSE.MIT',
+        'LICENSE.APACHE',
+        'wgpu/Cargo.toml',
+        'wgpu/src/lib.rs',
+        'naga/Cargo.toml',
+      ],
+    ],
+    ['tools/view', ['package.json', 'LICENSE', 'host.pack.json', 'scripts/build-tool.mjs']],
+  ]) {
+    for (const path of requiredPaths) {
+      if (!artifacts.some((entry) => entry.path === `${source.root}/${dependencyRoot}/${path}`))
+        throw new Error(`sdk-source-git-dependency-incomplete: ${dependencyRoot}/${path}`);
+    }
+  }
+}

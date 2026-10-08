@@ -94,7 +94,7 @@ stateDiagram-v2
 
 Each `begin` persists a strictly increasing generation and an expected head revision. `commit` rechecks the lease, expiry, expected revision, desired key, entry receipt, and integrity before switching `current`. A failed candidate never promotes LKG to current; LKG remains a read-only recovery view.
 
-`DdcGenerationSession` heartbeats active candidate leases while a multi-asset generation is still producing, so atomic publication may outlive one lease interval without weakening the final commit fence. Closing, discarding, or committing a candidate stops its heartbeat.
+`DdcGenerationSession` heartbeats active candidate leases while a multi-asset generation is still producing, so atomic publication may outlive one lease interval without weakening the final commit fence. A heartbeat renews only the persisted, unexpired attempt with its matching revision and desired key; an expired lease cannot be revived. Closing, discarding, or committing a candidate stops its heartbeat.
 
 > [!NOTE]
 > `DdcLifecycle.readCurrentEntry()` is a recovery read for a Pack producer to rehydrate its process-local transport cache after a restart. It accepts only a `current` head with a complete, integrity-checked entry; it never promotes LKG/stale content, mutates the head, or turns DDC into an authoring/runtime transport authority. Catalog and producer state remain the consumer-facing authority.
@@ -125,6 +125,23 @@ recorded as receipt metadata and rebound to the accepted Catalog tuple when
 the payload is restored for transport.
 
 `DdcEntryStore.publish` is idempotent for the same key and integrity. A different payload under the same key remains a conflict; it is never silently overwritten. Staging and destination stay under the injected root so publication does not claim cross-device atomicity.
+
+Commit validates immutable entry bytes before taking the mutable head lock, so
+the same attempt can heartbeat during validation. The lock then fences the
+persisted live expiry, attempt, revision and desired key; a superseding writer or
+expired lease cannot advance current after a slow read. Existing-entry comparison reuses
+the output digests already checked against both complete entries.
+
+Semantic keys, output digests, and entry integrity hash one canonical JSON byte
+sequence incrementally. Binary artifacts retain their existing base64 identity,
+including wrapper field order and padding, without building a string for the
+whole publication. This permits aggregate artifact content above V8's single
+string limit while preserving existing cache keys and conflict checks.
+`canonicalDdcJson` still returns a string for the ordinary stored JSON records.
+Readback validation cooperatively hashes its private parsed JSON and artifact
+buffers, yielding between bounded chunks so lease heartbeats can run. Caller-owned
+inputs and author callbacks retain synchronous canonical evaluation; readback still
+validates every output and integrity digest before returning the entry.
 
 </details>
 

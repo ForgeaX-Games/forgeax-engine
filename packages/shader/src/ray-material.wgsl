@@ -125,10 +125,16 @@ struct ProbeVertex {
 
 #endif
 
+// Hit records carry world geometry only; an identity basis keeps object-space
+// helpers finite while ray admission rejects object-space material inputs.
+fn rayObjectToWorld(value: RayMaterialInput) -> mat3x3f {
+  return mat3x3f(vec3f(1, 0, 0), vec3f(0, 1, 0), vec3f(0, 0, 1));
+}
+
 fn raySurfaceInput(value: RayMaterialInput) -> SurfaceInput {
   return SurfaceInput(value.positionOS.xyz, value.positionWS.xyz, value.normal.xyz, value.vertexNormal.xyz,
     value.tangent, value.outgoing.xyz, value.uvA.xy, value.uvA.zw,
     value.uvB.xy, value.uvB.zw, value.uvC.xy, value.uvC.zw,
     value.uvD.xy, value.uvD.zw, value.color, value.normal.w > 0.0,
-    value.footprintA, value.footprintB);
+    value.footprintA, value.footprintB, rayObjectToWorld(value), 0.0);
 }

@@ -86,7 +86,6 @@ The command creates a temporary DDC root and removes it after verification. It d
 ```sh
 pnpm --filter @forgeax/engine-render build
 node apps/hello/format-tier1/scripts/smoke-dawn.mjs
-pnpm exec vitest run --project dawn packages/render/src/__tests__/morph-culling-reentry.dawn.test.ts
 ```
 
 The Dawn runner records imported `loadByGuid`, standard-lane, and receipt-bound evidence under `evidence/morph-visual-evidence.json`. Headed browser capture is produced separately by the Vite page; screenshot pixels are the visual authority.

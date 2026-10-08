@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildGenerationAggregate,
-  createGenerationAllocator,
   type GenerationAggregate,
   type GenerationPublication,
   publishGeneration,
@@ -64,14 +63,5 @@ describe('generation assembly', () => {
     expect(publication.current?.device.id).toBe('device-4');
     expect(publication.current?.context.id).toBe('context-4');
     expect(publication.current?.pipeline.id).toBe('pipeline-4');
-  });
-
-  it('allocates each candidate generation exactly once without moving the active generation', () => {
-    const allocator = createGenerationAllocator(9);
-
-    expect(allocator.next()).toBe(10);
-    expect(allocator.next()).toBe(11);
-    expect(allocator.next()).toBe(12);
-    expect(allocator.activeGeneration).toBe(9);
   });
 });

@@ -4,6 +4,7 @@
  * extract/record dependency graph.
  */
 
+import type { RenderGraphResourceAllocationInspection } from '@forgeax/engine-render-graph';
 import { type BarrelDistortionMapping, freezeBarrelDistortionMapping } from './barrel-distortion';
 import type { DirectionalShadowFilterLabel } from './components/directional-shadow-filter';
 import type {
@@ -12,7 +13,6 @@ import type {
 } from './errors/gpu-driven';
 import type { DepthOfFieldRequestFailure } from './features/depth-of-field/depth-of-field-params';
 import type { PointsLinesInspection } from './points-lines/inspection';
-import type { LodOcclusionInspection } from './scene/visibility/inspection';
 import type { SsrAdmissionIdentity } from './ssr/identity';
 import type { SsrSpatialInspection } from './ssr/inspection';
 import type { SurfaceGpuIndirectParameters } from './surface/submission-observation';
@@ -23,14 +23,6 @@ export type {
   LodOcclusionWorldAttribution,
   LodOcclusionWorldInspection,
 } from './scene/visibility/inspection';
-
-export interface LodOcclusionInspectionSummary extends LodOcclusionInspection {
-  readonly timing?: {
-    readonly medianUs: number;
-    readonly p95Us: number;
-    readonly samples: number;
-  };
-}
 
 /**
  * SSR M0 inspection is a detached projection of the consumer admission
@@ -46,12 +38,7 @@ export type {
   SsrReflectionFallbackReceipt,
   SsrTemporalReceipt,
 } from './ssr/admission';
-export type {
-  SsrAdmissionError,
-  SsrAdmissionErrorCode,
-  SsrAdmissionErrorDetail,
-  SsrOwnerRecoveryAction,
-} from './ssr/errors';
+export type { SsrOwnerRecoveryAction } from './ssr/errors';
 export type { SsrAdmissionIdentity } from './ssr/identity';
 export type {
   SsrSpatialHistoryInspection,
@@ -163,20 +150,15 @@ export interface BatchTopologyInspection {
   readonly resourceClassSplitReasons?: readonly string[];
 }
 
-/** Logical Engine allocation facts; physical VRAM residency is intentionally unknown. */
-export interface GpuResourceAllocationInspection {
-  readonly unit: 'engine-allocation-bytes';
-  readonly physicalResidency: 'unknown';
-  readonly liveBytes: number;
-  readonly pendingRetirementBytes: number;
-  readonly peakBytes: number;
-  readonly successfulAllocationCount: number;
-  readonly successfulAllocationBytes: number;
-  readonly pendingRetirementCount: number;
-  readonly retiredBytes: number;
-  readonly failedAllocationRollbacks: number;
-  readonly failedAllocationRollbackBytes: number;
-}
+/**
+ * Logical Engine allocation facts in the RenderGraph vocabulary; physical VRAM
+ * residency is intentionally unknown. Token ledgers own no imported or
+ * byte-unknown handles, so those graph-only counters are absent.
+ */
+export type GpuResourceAllocationInspection = Omit<
+  RenderGraphResourceAllocationInspection,
+  'unknownByteSizeCount' | 'importedResourceCount'
+>;
 
 /**
  * Detached evidence for the declarative feature host and typed graph. These
@@ -587,6 +569,8 @@ export interface ShadowViewIdentity {
   readonly index: number;
   /** Optional point-light index when `index` identifies the cube face. */
   readonly face?: number;
+  /** A distinct directional output for one opaque Terrain receiver instance. */
+  readonly terrainReceiver?: import('./terrain/shadow-family').TerrainShadowReceiver;
   /**
    * `'static'` names the retained layer holding only casters that have not
    * changed recently; the view itself (no layer) composes that layer with
@@ -600,7 +584,10 @@ export interface ShadowViewIdentity {
  * member names one real decision site; a hit carries no reason.
  */
 export type ShadowViewInvalidationReason =
-  /** A freshly compiled graph owns a new target, so the layer is empty. */
+  /**
+   * The layer's target holds no depth: a freshly compiled graph owns a new
+   * target, or a renderer-owned static array was allocated or replaced.
+   */
   | 'graph-compiled'
   /** Render-feature casters have no content revision the cache can prove. */
   | 'feature-draws'
@@ -614,6 +601,8 @@ export type ShadowViewInvalidationReason =
   | 'artifact-changed'
   /** The skin palette buffer or pose content changed. */
   | 'skin-palette-changed'
+  /** The camera clipping that shadow casters honor changed. */
+  | 'view-clipping-changed'
   /** The view's static layer rastered, so the composed layer is rebuilt from it. */
   | 'static-layer-changed'
   /** Map size, cascade count, filter quality, pipeline, or graph topology changed. */
@@ -627,7 +616,12 @@ export type ShadowViewInvalidationReason =
   /** The light view-projection or culling planes changed. */
   | 'view-changed'
   /** The LOD projected heights for this view changed. */
-  | 'lod-changed';
+  | 'lod-changed'
+  /**
+   * The retained layer omits casters the main camera saw no receivers of, so
+   * it re-rasters without that cull before it may serve later frames.
+   */
+  | 'camera-culled';
 
 /** One shadow view decision of the last submitted frame. */
 export interface ShadowRasterViewInspection {
@@ -644,6 +638,12 @@ export interface ShadowRasterViewInspection {
    * single texel size (perspective lights).
    */
   readonly texelCulled?: number;
+  /**
+   * Casters the view's last observed GPU cull skipped because the main-camera
+   * HZB pyramid hides every receiver their shadow could reach. Present only on
+   * final directional and spot views that rastered under that cull.
+   */
+  readonly cameraCulled?: number;
   /**
    * Present when the miss re-rastered only these many dirty regions over the
    * retained static layer instead of clearing it.
@@ -1009,6 +1009,8 @@ export interface CameraViewInspection {
     | import('./pipeline/dynamic-resolution').DynamicResolutionInspection
     | undefined;
   readonly entityKey: number;
+  /** Present on the derived eye views of a StereoCamera. */
+  readonly eye?: import('./components/stereo-camera').StereoEye;
   readonly viewport: readonly [number, number, number, number];
   readonly width: number;
   readonly height: number;
@@ -1018,4 +1020,6 @@ export interface CameraViewInspection {
   readonly temporal: import('./temporal/inspection').TemporalInspection;
   readonly frustum: { readonly total: number; readonly culled: number };
   readonly visibility: { readonly explicitlyHidden: number };
+  /** This view's diffuse GI lane; field budgets are split across views (`share`). */
+  readonly diffuseGi?: import('./render-contract').RenderInspection['diffuseGi'];
 }

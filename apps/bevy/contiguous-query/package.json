@@ -21,11 +21,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-contiguous-query smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "demo bundle is downstream of engine package metrics" },
-      "fps": { "enabled": false, "reason": "contiguous query is verified by ECS behavior" },
-      "bench": { "enabled": false, "reason": "dense slice behavior is covered by unit and smoke evidence" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-contiguous-query smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle is downstream of engine package metrics"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "contiguous query is verified by ECS behavior"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "dense slice behavior is covered by unit and smoke evidence"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-contiguous-query smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app"
+      }
     }
   },
   "dependencies": {
@@ -39,8 +54,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

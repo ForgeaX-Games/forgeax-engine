@@ -1182,11 +1182,18 @@ beforeAll(async () => {
 
   PBR_ENTRY_IMPORTS = {
     'forgeax_material::displacement': readSrc('standard-displacement.wgsl'),
+    'forgeax_material::terrain_vertex': readSrc('terrain-vertex.wgsl'),
+    'forgeax_material::terrain_surface': readSrc('terrain-surface.wgsl'),
     'forgeax_material::standard_surface': readSrc('standard-surface.wgsl'),
     'forgeax_clipping::planes': readSrc('clipping.wgsl'),
     'forgeax_view::common': COMMON,
     forgeax_scene_temporal: SCENE_TEMPORAL,
     'forgeax_view::fog': readSrc('fog.wgsl'),
+    'forgeax_view::atmosphere': readSrc('view-atmosphere.wgsl'),
+    'forgeax_atmosphere::optics': readSrc('atmosphere-optics.wgsl'),
+    'forgeax_atmosphere::visibility': readSrc('atmosphere-visibility.wgsl'),
+    'forgeax_atmosphere::coordinates': readSrc('atmosphere-coordinates.wgsl'),
+    'forgeax_atmosphere::sampling': readSrc('atmosphere-sampling.wgsl'),
     'forgeax_cloud::layer': readSrc('cloud.wgsl'),
     'forgeax_pbr::brdf': BRDF,
     'forgeax_pbr::specular_aa': readSrc('specular-aa.wgsl'),
@@ -1230,6 +1237,12 @@ beforeAll(async () => {
     'forgeax_view::common': COMMON,
     forgeax_scene_temporal: SCENE_TEMPORAL,
     'forgeax_view::fog': readSrc('fog.wgsl'),
+    'forgeax_view::atmosphere': readSrc('view-atmosphere.wgsl'),
+    'forgeax_cloud::layer': readSrc('cloud.wgsl'),
+    'forgeax_atmosphere::optics': readSrc('atmosphere-optics.wgsl'),
+    'forgeax_atmosphere::visibility': readSrc('atmosphere-visibility.wgsl'),
+    'forgeax_atmosphere::coordinates': readSrc('atmosphere-coordinates.wgsl'),
+    'forgeax_atmosphere::sampling': readSrc('atmosphere-sampling.wgsl'),
   };
 });
 
@@ -1244,6 +1257,7 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
     CLUSTER_FORWARD_AVAILABLE: false,
     TRANSMISSION_AVAILABLE: false,
     GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+    TERRAIN_GEOMETRY_AVAILABLE: false,
   };
   const STORAGE_UNAVAILABLE_DEFINES = {
     STORAGE_BUFFER_AVAILABLE: false,
@@ -1251,6 +1265,7 @@ describe('w3 AC-04 -- common.wgsl #ifdef STORAGE_BUFFER_AVAILABLE dual-path comp
     CLUSTER_FORWARD_AVAILABLE: false,
     TRANSMISSION_AVAILABLE: false,
     GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+    TERRAIN_GEOMETRY_AVAILABLE: false,
   };
 
   it('STORAGE_BUFFER_AVAILABLE=true compose succeeds (storage path)', async () => {
@@ -1295,6 +1310,7 @@ describe('w4 AC-08 -- three entry shaders uniform variant (STORAGE_BUFFER_AVAILA
     CLUSTER_FORWARD_AVAILABLE: false,
     TRANSMISSION_AVAILABLE: false,
     GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+    TERRAIN_GEOMETRY_AVAILABLE: false,
   };
 
   it('forgeax::default-standard-pbr uniform variant compose succeeds', async () => {

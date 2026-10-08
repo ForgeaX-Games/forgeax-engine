@@ -10,7 +10,10 @@ import { mat4 } from '@forgeax/engine-math';
 import type { Buffer, RhiQueue } from '@forgeax/engine-rhi';
 import { normalizeClippingPlanes } from '@forgeax/engine-types';
 import type { DirectionalShadowQuality } from '../components/directional-shadow-filter';
-import type { FogFrame } from '../extract/environment';
+import { LIGHTING_CHANNELS_DEFAULT } from '../components/lighting-channels';
+import { LineCapValue, LineWidthUnitsValue } from '../components/lines';
+import { writeAtmosphereUniform } from '../environment/uniform';
+import type { AtmosphereParameters, FogFrame } from '../extract/environment';
 import type { PointsLinesStyle } from '../points-lines/snapshot';
 import type { CameraSnapshot } from '../render-contract';
 import type {
@@ -23,7 +26,7 @@ import type { TemporalView as LegacyTemporalView } from '../temporal/temporal-vi
 import type { TemporalView } from '../temporal/view';
 import { computeProjectionMatrix, computeViewMatrix } from './helpers';
 
-export const VIEW_UNIFORM_BYTES = 1168;
+export const VIEW_UNIFORM_BYTES = 1280;
 export const POINTS_LINES_VIEW_BYTES = 176;
 export const POINTS_LINES_VIEW_SLOT_STRIDE = 256;
 export const POINTS_LINES_VIEW_SLOT_COUNT = 1024;
@@ -136,11 +139,18 @@ export function writePointsLinesViewUbo(
     payload[36] = style.sizePx;
     payload[38] = style.shape === 'circle' ? 1 : 0;
   } else if (style?.kind === 'lines') {
-    payload[36] = style.widthPx;
+    payload[36] = style.width;
     payload[37] = 1;
+    // World widths scale by the projection's vertical focal factor; the shader
+    // divides by each endpoint's clip w (1 for orthographic cameras).
+    payload[39] =
+      style.widthUnits === LineWidthUnitsValue.world
+        ? Math.abs(projection[5] ?? 0) * height * 0.5
+        : 0;
     payload[40] = style.dashSize ?? 1;
     payload[41] = style.gapSize ?? 0;
     payload[42] = style.dashOffset ?? 0;
+    payload[43] = style.cap === LineCapValue.round ? 1 : 0;
   } else {
     payload[36] = 1;
   }
@@ -179,7 +189,7 @@ export function writePointsLinesViewUbo(
  *   ssrParams (maxDistance, thickness, maxRoughness, enabled).
  *   [240..255] cloud shadow projection, [256..279] clippingPlanes,
  *   [280..283] clippingControl, [284..287] fogColorDensity,
- *   [288..291] fogHeightOpacity (heightFalloff, maxOpacity, translucent-fog slot, reserved).
+ *   [288..291] fogHeightOpacity (heightFalloff, maxOpacity, translucent-fog slot, frame time).
  *
  * @internal
  */
@@ -198,8 +208,14 @@ export function writeViewUbo(
     readonly up: readonly [number, number, number];
     readonly range: number;
     readonly lowSun: boolean;
+    readonly baseHeight?: number;
+    readonly thickness?: number;
   },
   fog?: Pick<FogFrame, 'color' | 'density' | 'heightFalloff' | 'maxOpacity'>,
+  atmosphere?: AtmosphereParameters,
+  atmosphereCapture = false,
+  /** Render sample elapsed seconds; the existing fogHeightOpacity.w lane. */
+  frameTimeSeconds?: number,
 ): void {
   const byteOffset = typeof temporalOrOffset === 'number' ? temporalOrOffset : 0;
   const resolvedTemporal = typeof temporalOrOffset === 'number' ? undefined : temporalOrOffset;
@@ -241,10 +257,17 @@ export function writeViewUbo(
     viewPayload.set([fog.color[0], fog.color[1], fog.color[2], fog.density], 284);
     viewPayload.set([fog.heightFalloff, fog.maxOpacity, 0, 0], 288);
   }
+  // The clock is available even when fog is disabled; no per-material publication.
+  const frameTime = Math.fround(frameTimeSeconds ?? 0);
+  viewPayload[291] = Number.isFinite(frameTime) ? frameTime : 0;
+  if (atmosphere !== undefined)
+    writeAtmosphereUniform(viewPayload, 292, atmosphere, camera.far, atmosphereCapture ? 64 : 0);
   for (let i = 0; i < 16; i++) viewPayload[i] = mainProjection[i] ?? 0;
   viewPayload[16] = light.direction[0] ?? 0;
   viewPayload[17] = light.direction[1] ?? -1;
   viewPayload[18] = light.direction[2] ?? 0;
+  new Uint32Array(viewPayload.buffer, viewPayload.byteOffset, viewPayload.length)[19] =
+    light.lightingChannels ?? LIGHTING_CHANNELS_DEFAULT;
   viewPayload[20] = light.color[0] ?? 0;
   viewPayload[21] = light.color[1] ?? 0;
   viewPayload[22] = light.color[2] ?? 0;
@@ -310,6 +333,8 @@ export function writeViewUbo(
     viewPayload[240] = cloudShadowProjection.origin[0] ?? 0;
     viewPayload[241] = cloudShadowProjection.origin[1] ?? 0;
     viewPayload[242] = cloudShadowProjection.origin[2] ?? 0;
+    viewPayload[243] = cloudShadowProjection.baseHeight ?? 0;
+    viewPayload[247] = cloudShadowProjection.thickness ?? 0;
     viewPayload[244] = cloudShadowProjection.right[0] ?? 0;
     viewPayload[245] = cloudShadowProjection.right[1] ?? 0;
     viewPayload[246] = cloudShadowProjection.right[2] ?? 0;
@@ -376,6 +401,10 @@ export function writeViewUbo(
     }
   }
 
+  if (atmosphereCapture && atmosphere !== undefined) {
+    viewPayload[290] = 1;
+    viewPayload[317] = 0;
+  }
   const viewUploadResult = queue.writeBuffer(viewUniformBuffer, byteOffset, viewPayload);
   if (!viewUploadResult.ok) throw viewUploadResult.error;
 

@@ -77,7 +77,14 @@ describe('multi-camera submission barrier', () => {
     'submit',
   ] as const)('keeps every history unchanged after %s fails', (failure) => {
     const f = fixture(failure);
-    expect(submitFrameRecordings([f.record(1), f.record(2)])).toBe(false);
+    if (failure === 'submit')
+      expect(() => submitFrameRecordings([f.record(1), f.record(2)])).toThrowError(
+        expect.objectContaining({
+          code: 'frame-submit-rejected',
+          detail: { operation: 'draw', stage: 'submit', accepted: false },
+        }),
+      );
+    else expect(submitFrameRecordings([f.record(1), f.record(2)])).toBe(false);
     expect(f.committed).toEqual([]);
     expect(f.aborted).toEqual([1, 2]);
   });

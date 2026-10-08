@@ -320,7 +320,7 @@ try {
 
   await page.evaluate(() => globalThis.__bloomCarrierProbe.setStage('resize'));
   await page.evaluate(() => globalThis.__bloomCarrierProbe.resize(200, 112));
-  await waitForSubmitted(60);
+  await waitForSubmitted(process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 8 : 60);
   await captureStage('resize');
 
   await page.evaluate(() => globalThis.__bloomCarrierProbe.setStage('re-enabled'));

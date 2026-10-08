@@ -282,7 +282,7 @@ async function bootstrap(target: HTMLCanvasElement): Promise<void> {
   );
   if (!objectLayerSpawn.ok) return logErr('object TileLayer', objectLayerSpawn.error);
 
-  // Player: per-entity sprite riding the same TransparentEntry queue
+  // Player: per-entity sprite riding the same transparent dispatch queue
   // as the tilemap-spawned per-cell entities (charter P4 consistent
   // abstraction). Y-sort lets the player walk behind / in front of
   // tall objects automatically (foot anchor at pivot.y).

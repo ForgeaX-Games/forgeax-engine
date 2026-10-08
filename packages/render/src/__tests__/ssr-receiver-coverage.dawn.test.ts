@@ -37,9 +37,10 @@ async function composePixels(
   const radianceHeight = Math.max(1, Math.floor(height / 2));
   const device = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
   const common = readFileSync(resolve(process.cwd(), 'packages/shader/src/common.wgsl'), 'utf8');
-  const viewStruct = common.match(/struct View\s*\{[\s\S]*?\};/)?.[0];
-  expect(viewStruct).toBeDefined();
-  if (viewStruct === undefined) throw new Error('Shared View struct missing');
+  const viewDeclarations = common.match(/struct (?:AtmosphereMedium|View)\s*\{[\s\S]*?\};/g);
+  expect(viewDeclarations).toHaveLength(2);
+  if (viewDeclarations?.length !== 2) throw new Error('Shared View declarations missing');
+  const viewStruct = viewDeclarations.join('\n');
   const source = (
     options.source ??
     readFileSync(resolve(process.cwd(), 'packages/shader/src/ssr-compose.wgsl'), 'utf8')
@@ -241,23 +242,21 @@ it('does not compose a half-resolution reflection onto a differently facing full
 });
 
 it('keeps the rough reflected lobe beyond a mirror miss without admitting disabled or incompatible receivers', async () => {
-  // A real confidence-weighted step pyramid: two red hits, then two misses.
-  // At full pixel 6, mip zero misses but the rough lobe still covers red.
-  const radiance = [1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
-  const mips = [
-    [1, 0, 0, 1, 0, 0, 0, 0],
-    // Presentation mips carry radiance premultiplied by coverage.
-    [0.5, 0, 0, 0.5],
-  ];
+  // A real confidence-weighted step pyramid: one red hit, then one miss.
+  // At full pixel 3, mip zero misses but the rough lobe still covers red.
+  const radiance = [1, 0, 0, 1, 0, 0, 0, 0];
+  // One exact mip average keeps the numeric oracle independent of backend
+  // trilinear LOD quantization; the production shader still selects the LOD.
+  const mips = [[0.5, 0, 0, 0.5]];
   // Use the UNORM8-decoded roughness in the independent LOD oracle.
-  const normals = Array.from({ length: 16 }, () => [0.5, 1, 0.5, 0.75]).flat();
-  const pixels = await composePixels(8, normals, radiance, { mips });
-  // Mip 1 is zero here; mip 2 contributes 0.5 * 0.125 confidence. Decode
-  // fallback 0.1 through FP16 independently, then apply the delta formula.
-  const confidence = 0.5 * ((Math.round(0.75 * 255) / 255) ** 2 * 2 - 1);
+  const normals = Array.from({ length: 8 }, () => [0.5, 1, 0.5, 0.75]).flat();
+  const pixels = await composePixels(4, normals, radiance, { mips });
+  // The base misses and mip 1 contributes 0.5 * roughness^2 confidence.
+  // Decode fallback 0.1 through FP16, then apply the independent delta formula.
+  const confidence = 0.5 * (Math.round(0.75 * 255) / 255) ** 2;
   const fallback = 0.0999755859375;
-  expect(pixels[24], 'rough lobe red').toBeCloseTo(confidence * (1 - fallback), 4);
-  expect(pixels[25], 'weighted fallback replacement').toBeCloseTo(-confidence * fallback, 4);
+  expect(pixels[12], 'rough lobe red').toBeCloseTo(confidence * (1 - fallback), 4);
+  expect(pixels[13], 'weighted fallback replacement').toBeCloseTo(-confidence * fallback, 4);
   for (const options of [
     { enabled: 0 },
     { enabled: Number.NaN },
@@ -267,16 +266,16 @@ it('keeps the rough reflected lobe beyond a mirror miss without admitting disabl
     { roughnessLimit: 0.74 },
     { coverage: 0 },
   ]) {
-    const guarded = await composePixels(8, normals, radiance, { ...options, mips });
+    const guarded = await composePixels(4, normals, radiance, { ...options, mips });
     // Disabled, over-cutoff, and zero-coverage receivers must not contribute
     // even a signed-zero/quantization residue.
-    expect(guarded.slice(24, 28).every((value) => value === 0)).toBe(true);
+    expect(guarded.slice(12, 16).every((value) => value === 0)).toBe(true);
   }
   const sideNormals = [...normals];
-  sideNormals.splice(7 * 4, 3, 1, 0.5, 0.5);
-  const side = await composePixels(8, sideNormals, radiance, { mips });
+  sideNormals.splice(3 * 4, 3, 1, 0.5, 0.5);
+  const side = await composePixels(4, sideNormals, radiance, { mips });
   expect(
-    side.slice(28, 32).every((value) => value === 0),
+    side.slice(12, 16).every((value) => value === 0),
     'no top lobe on side',
   ).toBe(true);
 });
@@ -314,7 +313,8 @@ it('matches the loop baseline on the same Dawn inputs within the compose error b
     resolve(process.cwd(), 'packages/shader/src/ssr-compose.wgsl'),
     'utf8',
   );
-  const baselineReceiver = `fn ssrReceiverSample(uv : vec2<f32>, normal : vec3<f32>) -> SsrReceiverSample {
+  const baselineReceiver = `fn ssrReceiverSample(uv : vec2<f32>, packedNormal : u32, lod : f32) -> SsrReceiverSample {
+  let normal = decodeStandardNormalRoughness(packedNormal).xyz;
   let size = vec2<i32>(textureDimensions(radiance, 0));
   let coordinate = uv * vec2<f32>(size) - vec2<f32>(0.5);
   let first = vec2<i32>(floor(coordinate));
@@ -393,8 +393,8 @@ it('matches the loop baseline on the same Dawn inputs within the compose error b
   expect(maxDifference2d, '2x2 receiver taps').toBeLessThanOrEqual(0.00025);
 
   const wrongTapSource = source.replace(
-    'let sample11 = textureLoad(radiance, pixel11, 0);',
-    'let sample11 = textureLoad(radiance, pixel10, 0);',
+    'sum += textureLoad(radiance, pixel11, 0) * weight11;',
+    'sum += textureLoad(radiance, pixel10, 0) * weight11;',
   );
   expect(wrongTapSource).not.toBe(source);
   const wrong2d = await composePixels(4, allCompatibleNormals, twoDimensionalRadiance, {

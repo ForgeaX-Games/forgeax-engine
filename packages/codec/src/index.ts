@@ -18,13 +18,6 @@ export {
   transcodeBasis,
   transcodeKtx2,
 } from './basis-transcoder.js';
-export type { BlockParams } from './block-format.js';
-export {
-  blockParamsForFormat,
-  bytesPerRow,
-  isCompressedFormat,
-  rowsPerImage,
-} from './block-format.js';
 export type { CodecError, CodecErrorCode, CodecOk, CodecResult } from './errors.js';
 export { codecError } from './errors.js';
 export { KTX2_IDENTIFIER, ktx2ColorSpace, ktx2LevelsToRGBA, parseKtx2 } from './ktx2.js';

@@ -12,6 +12,7 @@ import {
 } from '@forgeax/engine-host/transport';
 import {
   createAuthorityCoordinator,
+  isTerminalNetSessionState,
   type NetEndpoint,
   type NetSession,
   netPlugin,
@@ -232,8 +233,7 @@ async function configureSnakeServer(world: World): Promise<SnakeGameState> {
       const activeGame = world.getResource<SnakeGameState>('snake-game');
       const fixedDeltaSeconds = world.getResource(FixedTime).delta;
       const recoverySnapshot = activeSession.getRecoverySnapshot();
-      if (recoverySnapshot.state.kind === 'failed' || recoverySnapshot.state.kind === 'retired')
-        return;
+      if (isTerminalNetSessionState(recoverySnapshot.state)) return;
       const wasStarted = activeGame.started;
       const rawMessages = activeSession.drainRawMessages();
       const sessionIds = activeSession.getSessionSnapshot().sessionIds;

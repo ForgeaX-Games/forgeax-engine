@@ -53,24 +53,23 @@ interface RetainedRecordStore {
 interface RecorderState {
   readonly limits: RecorderLimits;
   readonly phaseCatalog: RecorderPhaseCatalog;
-  readonly phaseArrays: Record<ProfileSource, readonly string[]>;
-  readonly phaseSets: Record<ProfileSource, ReadonlySet<string>>;
+  readonly phaseCache: Record<
+    ProfileSource,
+    { definition: readonly string[]; names: ReadonlySet<string> }
+  >;
   readonly recordStore: RetainedRecordStore;
   readonly captureId: string;
-  readonly clock: ProfileClock;
   readonly allocationReport: { profilerEventObjectAllocations: number } | undefined;
   frameCount: number;
   lastFrameId: number;
   currentFrameId: number | undefined;
   openSources: Array<ProfileSource | undefined>;
   openPhaseNames: Array<string | undefined>;
-  openFrameIds: Array<number | undefined>;
   openStartMicros: Array<number | undefined>;
   openDepth: number;
   droppedEventCount: number;
   firstAffectedFrameId: number | undefined;
   lastAffectedFrameId: number | undefined;
-  overflow: boolean;
   finished: boolean;
 }
 
@@ -88,7 +87,6 @@ export function validateRecorderLimits(limits: RecorderLimits): ProfilerResult<v
 }
 
 function recordOverflow(state: RecorderState, frameId: number): void {
-  state.overflow = true;
   state.droppedEventCount += 1;
   state.firstAffectedFrameId ??= frameId;
   state.lastAffectedFrameId = frameId;
@@ -103,11 +101,10 @@ function sourceHasPhase(state: RecorderState, source: string, phase: string): bo
   if (source !== 'app' && source !== 'render') return false;
   const key = source;
   const phases = state.phaseCatalog[key];
-  if (state.phaseArrays[key] !== phases) {
-    state.phaseArrays[key] = phases;
-    state.phaseSets[key] = new Set(phases);
+  if (state.phaseCache[key].definition !== phases) {
+    state.phaseCache[key] = { definition: phases, names: new Set(phases) };
   }
-  return state.phaseSets[key].has(phase);
+  return state.phaseCache[key].names.has(phase);
 }
 
 function sourceError(source: string, phase: string, frameId: number): ProfilerResult<never> {
@@ -190,28 +187,18 @@ function materializeRecords(state: RecorderState): ProfileRecord[] {
       const parentPhase = retained.parentPhases[index];
       const startMicros = requireRetained(retained.startMicros[index]);
       const endMicros = requireRetained(retained.endMicros[index]);
-      records[index] =
-        parentSource === undefined
-          ? {
-              kind: 'phase',
-              source,
-              frameId,
-              phase,
-              startMicros,
-              endMicros,
-              durationMicros: endMicros - startMicros,
-            }
-          : {
-              kind: 'phase',
-              source,
-              frameId,
-              phase,
-              parentSource,
-              parentPhase: requireRetained(parentPhase),
-              startMicros,
-              endMicros,
-              durationMicros: endMicros - startMicros,
-            };
+      records[index] = {
+        kind: 'phase',
+        source,
+        frameId,
+        phase,
+        startMicros,
+        endMicros,
+        durationMicros: endMicros - startMicros,
+        ...(parentSource === undefined
+          ? {}
+          : { parentSource, parentPhase: requireRetained(parentPhase) }),
+      };
     } else {
       records[index] = {
         kind: 'skip',
@@ -229,11 +216,12 @@ function materializeRecords(state: RecorderState): ProfileRecord[] {
 }
 
 function buildCapture(state: RecorderState): ProfileCapture {
-  const status = state.overflow
-    ? 'overflow'
-    : state.frameCount < state.limits.frameLimit || state.currentFrameId !== undefined
-      ? 'partial'
-      : 'complete';
+  const status =
+    state.droppedEventCount > 0
+      ? 'overflow'
+      : state.frameCount < state.limits.frameLimit || state.currentFrameId !== undefined
+        ? 'partial'
+        : 'complete';
   const completeness = {
     status,
     retainedEventCount: state.recordStore.count,
@@ -274,13 +262,9 @@ export function createRecorder(
   const state: RecorderState = {
     limits,
     phaseCatalog,
-    phaseArrays: {
-      app: phaseCatalog.app,
-      render: phaseCatalog.render,
-    },
-    phaseSets: {
-      app: new Set(phaseCatalog.app),
-      render: new Set(phaseCatalog.render),
+    phaseCache: {
+      app: { definition: phaseCatalog.app, names: new Set(phaseCatalog.app) },
+      render: { definition: phaseCatalog.render, names: new Set(phaseCatalog.render) },
     },
     recordStore: {
       kinds: new Array(initialRecordCapacity),
@@ -295,20 +279,17 @@ export function createRecorder(
       count: 0,
     },
     captureId,
-    clock,
     allocationReport,
     frameCount: 0,
     lastFrameId: 0,
     currentFrameId: undefined,
     openSources: [],
     openPhaseNames: [],
-    openFrameIds: [],
     openStartMicros: [],
     openDepth: 0,
     droppedEventCount: 0,
     firstAffectedFrameId: undefined,
     lastAffectedFrameId: undefined,
-    overflow: false,
     finished: false,
   };
 
@@ -344,7 +325,6 @@ export function createRecorder(
       const index = state.openDepth;
       state.openSources[index] = source;
       state.openPhaseNames[index] = phase;
-      state.openFrameIds[index] = frameId;
       state.openStartMicros[index] = clock.nowMicros();
       state.openDepth += 1;
       return OK_VOID;
@@ -357,7 +337,7 @@ export function createRecorder(
       state.openDepth = index;
       const source = state.openSources[index];
       const phase = state.openPhaseNames[index];
-      const frameId = state.openFrameIds[index];
+      const frameId = state.currentFrameId;
       const startMicros = state.openStartMicros[index];
       if (
         source === undefined ||
@@ -370,7 +350,7 @@ export function createRecorder(
       const parentIndex = index - 1;
       const parentSource = parentIndex >= 0 ? state.openSources[parentIndex] : undefined;
       const parentPhase = parentIndex >= 0 ? state.openPhaseNames[parentIndex] : undefined;
-      if (!state.overflow) {
+      if (state.droppedEventCount === 0) {
         const endMicros = Math.max(startMicros, clock.nowMicros());
         retainPhaseRecord(
           state,
@@ -395,7 +375,7 @@ export function createRecorder(
         return { ok: false, error: stateError('recordSkip') };
       if (!sourceHasPhase(state, input.source, input.phase))
         return sourceError(input.source, input.phase, frameId);
-      if (state.overflow) recordOverflow(state, frameId);
+      if (state.droppedEventCount > 0) recordOverflow(state, frameId);
       else retainSkipRecord(state, input.source, frameId, input.phase, input.reason);
       return OK_VOID;
     },

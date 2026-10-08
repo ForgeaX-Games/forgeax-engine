@@ -113,13 +113,11 @@ import {
 import {
   assembleMaterialWithSkylightEntries,
   createSkylightFallback,
-  mergeSkylightIntoMaterialBgl,
 } from '../../../render/src/ibl/skylight-bind-group';
 import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../../../render/src/pbr-pipeline';
 import { INSTANCE_STORAGE_STRIDE_FLOATS } from '../../../render/src/record/mesh-ssbo';
 import { selectSwapChainFormat } from '../../../render/src/render-system';
 import { createSkinPaletteAllocator } from '../../../render/src/systems/skin-palette-allocator';
-import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { drawWithOwners } from './renderer-test-utils';
 
@@ -225,8 +223,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../../../render/src/systems/transparent-sort-config';
 import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
-import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
-import { transparentSortEntries } from '../systems/transparent-sort';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 void [
@@ -248,7 +244,6 @@ void [
   MeshFilter,
   MeshRenderer,
   Name,
-  REC709_LUMA_WEIGHTS,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   Skin,
@@ -298,7 +293,6 @@ void [
   it,
   makeMockShaderRegistry,
   mat4,
-  mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
   propagateTransforms,
   readFileSync,
@@ -310,8 +304,6 @@ void [
   standardMaterialShaderVariants,
   subscribeRendererErrors,
   toShared,
-  tonemapReinhardLuminance,
-  transparentSortEntries,
   unwrapRendererError,
   urpPipeline,
   vec3,
@@ -343,7 +335,6 @@ type __MergedKeep =
   | Texture
   | TextureFormat
   | TextureView
-  | TransparentEntry
   | WorldType;
 
 {
@@ -425,7 +416,7 @@ type __MergedKeep =
   // M2 / w3: spawn data migrated to SoA inline arrays. Single-clip legacy
   // path: clips[0] = handle, weights[0] = 1, speeds[0] = speed, times[0] = 0;
   // slots 1..3 stay zero. `world.set({ time: t })` becomes a partial column
-  // write `world.set({ times: new Float32Array([t,0,0,0]) })`. Reads of
+  // write `world.set({ times: new Float64Array([t,0,0,0]) })`. Reads of
   // `.time` route through `.times[0]`. Old expectations preserved (time
   // advance / looping modulo / paused skip) — schema cut only.
   function spawnLegacySinglePlayer(
@@ -446,7 +437,7 @@ type __MergedKeep =
             0 as Handle<'AnimationClip', 'shared'>,
             0 as Handle<'AnimationClip', 'shared'>,
           ],
-          times: new Float32Array([0, 0, 0, 0]),
+          times: new Float64Array([0, 0, 0, 0]),
           weights: new Float32Array([1, 0, 0, 0]),
           speeds: new Float32Array([speed, 1, 1, 1]),
           paused,
@@ -457,12 +448,12 @@ type __MergedKeep =
   }
 
   function readLegacyTime(world: World, e: EntityHandle): number {
-    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float32Array };
+    const ap = world.get(e, AnimationPlayer).unwrap() as unknown as { times: Float64Array };
     return ap.times[0] ?? 0;
   }
 
   function writeLegacyTime(world: World, e: EntityHandle, t: number): void {
-    world.set(e, AnimationPlayer, { times: new Float32Array([t, 0, 0, 0]) });
+    world.set(e, AnimationPlayer, { times: new Float64Array([t, 0, 0, 0]) });
   }
 
   describe('T-17 — advanceAnimationPlayer time advance (AC-17 / AC-18)', () => {
@@ -539,7 +530,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -578,7 +569,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -613,7 +604,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -719,7 +710,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -776,7 +767,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -859,7 +850,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -925,7 +916,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -977,7 +968,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1035,7 +1026,7 @@ type __MergedKeep =
               toShared<'AnimationClip'>(3),
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1 / 3, 1 / 3, 1 / 3, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1088,7 +1079,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([0.6, 0.6, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1133,7 +1124,7 @@ type __MergedKeep =
                 0 as Handle<'AnimationClip', 'shared'>,
                 0 as Handle<'AnimationClip', 'shared'>,
               ],
-              times: new Float32Array([0, 0, 0, 0]),
+              times: new Float64Array([0, 0, 0, 0]),
               weights: new Float32Array([-0.5, 0, 0, 0]),
               speeds: new Float32Array([1, 0, 0, 0]),
             },
@@ -1198,7 +1189,7 @@ type __MergedKeep =
                 0 as Handle<'AnimationClip', 'shared'>,
                 0 as Handle<'AnimationClip', 'shared'>,
               ],
-              times: new Float32Array([0.5, 0.2, 0, 0]),
+              times: new Float64Array([0.5, 0.2, 0, 0]),
               weights: new Float32Array([0.5, 0.5, 0, 0]),
               speeds: new Float32Array([1, 1, 1, 1]),
               paused: true,
@@ -1224,7 +1215,7 @@ type __MergedKeep =
 
       // Times unchanged by paused gate
       const apRes = world.get(animE, AnimationPlayer).unwrap() as unknown as {
-        times: Float32Array;
+        times: Float64Array;
       };
       expect(apRes.times[0]).toBeCloseTo(0.5);
       expect(apRes.times[1]).toBeCloseTo(0.2);
@@ -1255,7 +1246,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0.5, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1306,7 +1297,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1365,7 +1356,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1416,7 +1407,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1480,7 +1471,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0.5, 0.5, 0, 0]),
+            times: new Float64Array([0.5, 0.5, 0, 0]),
             weights: new Float32Array([0.5, 0.5, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1524,7 +1515,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0.5, 0, 0, 0]),
+            times: new Float64Array([0.5, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([-2, 1, 1, 1]),
           },
@@ -1559,7 +1550,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },
@@ -1624,7 +1615,7 @@ type __MergedKeep =
               0 as Handle<'AnimationClip', 'shared'>,
               0 as Handle<'AnimationClip', 'shared'>,
             ],
-            times: new Float32Array([0, 0, 0, 0]),
+            times: new Float64Array([0, 0, 0, 0]),
             weights: new Float32Array([1, 0, 0, 0]),
             speeds: new Float32Array([1, 1, 1, 1]),
           },

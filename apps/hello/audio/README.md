@@ -33,6 +33,7 @@ It saves before/after PNG evidence under `apps/hello/audio/.forgeax-audio/browse
 | **Pack-index asset loading** | SFX GUID flows through `assets.loadByGuid<AudioClipAsset>`; the injected audio loader resolves the Vite catalog row and decodes it before the demo mints an `AudioSource.clip` shared ref. |
 | **Spatial panning** | `AudioSource.spatialBlend=1.0` creates a PannerNode; `syncListenerFromWorldMatrix(l, worldMatrix)` syncs the listener position/orientation each frame from the listener entity's `GlobalTransform.world` mat4. |
 | **Collision cleanup** | A dynamic ECS actor reads `CollidingEntities`, starts its own spatial `AudioSource` on contact, then `world.despawn()` removes the Collider and audio source; the browser gate verifies `activeSourceCount` returns to zero. |
+| **Playback controls** | Play/pause/resume/stop and 0.25x–3x speed use ECS controls; Host-owned lowpass/highpass chains and a reused FFT drive a canvas and 24 ordinary mesh bars. |
 | **Overlay readout** | Left/top overlay shows listener-emitter distance + L/R pan as text (charter F2: text anchors spatial audio verification). |
 
 ## Controls
@@ -125,3 +126,12 @@ The SFX audio file lives in the `forgeax-engine-assets/` git submodule
 GUID -- the demo boots without errors but plays no sound. This is the
 charter P3 explicit-failure contract: silent demo when assets are missing,
 not a crash.
+
+## Audio control evidence
+
+The right-hand panel loops the same Pack-loaded clip. Pause retains decoded
+progress and the filter graph; resume recreates only the one-shot native source.
+The spectrum tap follows source filters and volume, before spatial/bus mixing.
+
+See [native signal/performance and RHI validation](../../../packages/audio-webaudio/bench/README.md)
+for reproducer commands, pinned Three.js/UE references and evidence boundaries.

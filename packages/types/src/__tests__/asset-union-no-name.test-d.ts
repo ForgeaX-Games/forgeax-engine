@@ -77,6 +77,9 @@ function exhaustiveAssetKindSwitch(asset: Asset): string {
       return 'TilesetAsset';
     case 'video':
       return 'VideoAsset';
+    case 'navigation-mesh':
+    case 'terrain':
+      return 'TerrainAsset';
     case 'particle-effect':
       return 'ParticleEffectAsset';
     default: {

@@ -49,7 +49,8 @@ export {
 export type { MountOverride, SceneInstanceMount } from './instances/runtime-types';
 export {
   type SceneAssetResolver,
-  type SceneInstanceStatePayload,
+  type SceneInstanceOverrideRecord,
+  type SceneInstanceState,
   type SceneInstantiateDiagnostic,
   type SceneInstantiateFlatOk,
   type SceneInstantiateOk,
@@ -68,13 +69,11 @@ export {
   worldInstantiateSceneFlat,
   worldInstantiateScenePayload,
   worldInstantiateSceneRec,
-  worldMountOverridesToStateMap,
   worldReattachSceneMember,
   worldRemoveSceneOverride,
   worldResolveMountSource,
   worldResolveSceneAsset,
   worldResolveSceneEntity,
-  worldResolveSceneInstanceStatePayload,
   worldSetSceneAssetResolver,
   worldSetSceneOverride,
   worldSpawnMountEntity,
@@ -94,6 +93,7 @@ export {
   type SceneHierarchySnapshot,
 } from './systems/hierarchy-projection';
 export {
+  PROPAGATE_TRANSFORMS_FIXED_SYSTEM,
   PROPAGATE_TRANSFORMS_SYSTEM,
   propagateTransforms,
   registerPropagateTransforms,

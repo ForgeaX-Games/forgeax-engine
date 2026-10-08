@@ -24,7 +24,7 @@ describe('M16 terminal cleanup red reproducers', () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const replication = createProfile();
     const world = new World();
-    const replica = createReplicaCoordinator(world, replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(world, replication);
     const session = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
     session.attachReplica(replica, replication.limits);
     authorityEndpoint.poll();

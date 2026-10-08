@@ -8,6 +8,7 @@ import {
 } from '@forgeax/engine-net';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import WebSocket, { WebSocketServer } from 'ws';
+import { alreadyClosed, connectionClosed, connectionFailed, normalizeCause } from './errors';
 import {
   BoundedEventQueue,
   DEFAULT_MAX_QUEUED_BYTES,
@@ -120,14 +121,7 @@ export function listenWebSocketEndpoint(
           peer?.queue.closed ||
           (!socket && Number.isInteger(peerId) && peerId > 0 && peerId < nextPeerId)
         )
-          return err(
-            new EndpointError({
-              code: 'connection-closed',
-              expected: ENDPOINT_EXPECTED['connection-closed'],
-              hint: ENDPOINT_ERROR_HINTS['connection-closed'],
-              detail: { peerId },
-            }),
-          );
+          return connectionClosed(peerId);
         if (!socket)
           return err(
             new EndpointError({
@@ -137,15 +131,7 @@ export function listenWebSocketEndpoint(
               detail: { peerId },
             }),
           );
-        if (socket.readyState !== socket.OPEN)
-          return err(
-            new EndpointError({
-              code: 'connection-closed',
-              expected: ENDPOINT_EXPECTED['connection-closed'],
-              hint: ENDPOINT_ERROR_HINTS['connection-closed'],
-              detail: { peerId },
-            }),
-          );
+        if (socket.readyState !== socket.OPEN) return connectionClosed(peerId);
         try {
           if (socket.bufferedAmount + data.byteLength > maxBufferedBytes)
             throw new Error('maxBufferedBytes exceeded; retry after the socket drains');
@@ -217,32 +203,4 @@ function toBytes(data: unknown): Uint8Array | undefined {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
   return undefined;
-}
-
-function connectionFailed(address: string, cause: unknown): Result<never, EndpointError> {
-  return err(
-    new EndpointError({
-      code: 'connection-failed',
-      expected: ENDPOINT_EXPECTED['connection-failed'],
-      hint: ENDPOINT_ERROR_HINTS['connection-failed'],
-      detail: { address, cause: normalizeCause(cause) },
-    }),
-  );
-}
-
-function alreadyClosed(cause: string): Result<never, EndpointError> {
-  return err(
-    new EndpointError({
-      code: 'already-closed',
-      expected: ENDPOINT_EXPECTED['already-closed'],
-      hint: ENDPOINT_ERROR_HINTS['already-closed'],
-      detail: { cause },
-    }),
-  );
-}
-
-function normalizeCause(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-  if (typeof cause === 'string') return cause;
-  return 'WebSocket operation failed without a platform error message.';
 }

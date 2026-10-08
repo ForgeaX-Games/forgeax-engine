@@ -63,6 +63,10 @@ describe('vertex color does not change the material contract', () => {
       'ior',
       'displacementScale',
       'displacementBias',
+      'triplanarSpace',
+      'triplanarScale',
+      'triplanarSharpness',
+      'normalMapSpace',
     ]);
     expect(material.values).not.toHaveProperty('transmission');
     expect(material.values).toHaveProperty('ior', 1.5);

@@ -15,12 +15,17 @@ it('verifies Reverse-Z pixels and capture/replay through browser WebGPU', {
   const result = await constructRuntimeRendererHost(canvas, { rhi: recorder.backend.rhi });
   if (!result.ok) throw result.error;
   try {
-    await verifyReverseZ(result.value.renderer, recorder, async (name, bytes) => {
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += 8192)
-        binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
-      await commands.writeFile(`artifacts/reverse-z/browser/${name}`, btoa(binary), 'base64');
-    });
+    await verifyReverseZ(
+      result.value.renderer,
+      recorder,
+      async (name, bytes) => {
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 8192)
+          binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        await commands.writeFile(`artifacts/reverse-z/browser/${name}`, btoa(binary), 'base64');
+      },
+      import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 8 : 60,
+    );
   } finally {
     await result.value.renderer.dispose();
     canvas.remove();

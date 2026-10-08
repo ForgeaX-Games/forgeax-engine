@@ -99,6 +99,8 @@ export function rayMaterialProgram(
   pass: string,
   input: MaterialPublicationInput,
 ): MaterialCookProgram {
+  if (program.context === 'raster-probe')
+    throw new Error('raster-probe is a diagnostic context, not a material publication');
   const bytes = new TextEncoder().encode(program.wgsl);
   const digest = createMaterialArtifactDigest(bytes);
   const context = {
@@ -106,7 +108,7 @@ export function rayMaterialProgram(
     capability: 'storage-buffer',
     pipeline: 'ray',
     geometry: 'mesh',
-    pass: 'ray-hit',
+    pass: program.context,
     profile: 'forgeax-material-ray-v1',
     toolchain: 'naga-oil',
     instrumentation: 'none',
@@ -132,7 +134,9 @@ export function rayMaterialProgram(
       digest,
       bytes,
     },
-    selections: [{ pass, context, entry: 'cs_surface' }],
+    selections: [
+      { pass, context, entry: program.context === 'ray-hit' ? 'cs_surface' : 'vs_card' },
+    ],
   };
 }
 

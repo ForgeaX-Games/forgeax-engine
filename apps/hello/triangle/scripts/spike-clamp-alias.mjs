@@ -11,7 +11,7 @@
 // This script uses raw dawn-node GPU calls; it does NOT modify engine
 // production code (vertex-attribute-layout.ts is read-only as reference).
 
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 

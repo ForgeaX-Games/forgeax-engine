@@ -33,3 +33,8 @@ it('resolves external raster receiver rays with shared materials and fresh repla
   const { verifyInitialPathRays } = await import('./path-source.fixture');
   await verifyInitialPathRays(await commands.prepareRayPathFixture());
 }, 120000);
+
+it('separates the diffuse receiver from the full BSDF under an open-sky white furnace in browser', async () => {
+  const { verifyPathReceiver } = await import('./path-receiver.fixture');
+  await verifyPathReceiver(await commands.prepareRayPathFixture());
+}, 120000);

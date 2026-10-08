@@ -48,5 +48,31 @@
     "libedit.so.2",
     "libbsd.so.0",
     "libmd.so.0"
-  ]
+  ],
+  "source": {
+    "id": "mesa-25.2.8-lavapipe-source-linux-x64",
+    "url": "https://archive.mesa3d.org/mesa-25.2.8.tar.xz",
+    "sha256": "097842f3e49d996868b38688db87b006f7d4541e93ce86d2f341d8b3e7be7c93",
+    "mesonOptions": [
+      "--buildtype=release",
+      "-Dplatforms=",
+      "-Dvulkan-drivers=swrast",
+      "-Dgallium-drivers=",
+      "-Dopengl=false",
+      "-Dgles1=disabled",
+      "-Dgles2=disabled",
+      "-Dglx=disabled",
+      "-Degl=disabled",
+      "-Dgbm=disabled",
+      "-Dglvnd=disabled",
+      "-Dllvm=enabled",
+      "-Dshared-llvm=enabled",
+      "-Dvideo-codecs=",
+      "-Dvalgrind=disabled",
+      "-Dlibunwind=disabled",
+      "-Dlmsensors=disabled",
+      "-Dbuild-tests=false"
+    ],
+    "libraries": ["libvulkan_lvp.so"]
+  }
 }

@@ -46,7 +46,10 @@ function makeSpyInternals(overrides: {
 }) {
   return {
     frameState: {
-      perFrameGraph: overrides.graph ?? null,
+      compiledFrameGraph:
+        overrides.graph === undefined || overrides.graph === null
+          ? null
+          : { targets: overrides.graph },
     },
     runtime: {
       device: overrides.device ?? {
@@ -60,7 +63,7 @@ function makeSpyInternals(overrides: {
 }
 
 describe('resolveDepthOnlyView', () => {
-  it('returns null when perFrameGraph is null', () => {
+  it('returns null when no compiled graph is installed', () => {
     const internals = makeSpyInternals({ graph: null });
     const result = resolveDepthOnlyView(internals, 'depth', 'test-label');
     expect(result).toBeNull();
@@ -131,7 +134,7 @@ describe('resolveDepthOnlyView', () => {
       getColorTargetTexture: vi.fn().mockReturnValue(fakeTexture),
     } as unknown as RenderGraph;
     const internals = {
-      frameState: { perFrameGraph: graph },
+      frameState: { compiledFrameGraph: { targets: graph } },
       runtime: {
         device: { createTextureView: createTextureViewFn },
         errorRegistry,

@@ -1,7 +1,6 @@
+import type { MeshDistanceFieldDescriptor } from '@forgeax/engine-geometry';
 import type { ScriptablePackAssetKind } from '@forgeax/engine-pack';
 import type {
-  AssetReader,
-  PackAuthoringError,
   PackOutput,
   PluginAssetSource,
   ScriptablePackReadError,
@@ -13,7 +12,6 @@ import type {
   AssetPublicationEnvelope,
   FontAsset,
   ImportError,
-  ImportedAsset,
   MaterialAsset,
   MeshAsset,
   Result,
@@ -77,7 +75,9 @@ type AnimationGraphPackPayload = Omit<AnimationGraph, 'nodes'> & {
 /** Serialized producer payloads; runtime Assets never carry ref indices. */
 export type AssetOutputPayloadByKind = {
   readonly plugin: Extract<Asset, { readonly kind: 'plugin' }>;
-  readonly mesh: MeshAsset;
+  readonly mesh: Omit<MeshAsset, 'distanceField'> & {
+    readonly distanceField?: MeshDistanceFieldDescriptor;
+  };
   readonly material: MaterialPackPayload;
   readonly scene: ScenePackPayload;
   readonly texture: Extract<Asset, { readonly kind: 'texture' }>;
@@ -86,12 +86,18 @@ export type AssetOutputPayloadByKind = {
   readonly font: FontPackPayload;
   readonly 'render-pipeline': Extract<Asset, { readonly kind: 'render-pipeline' }>;
   readonly tileset: TilesetPackPayload;
+  readonly 'navigation-mesh': Extract<Asset, { readonly kind: 'navigation-mesh' }>;
+  readonly terrain: Extract<Asset, { readonly kind: 'terrain' }>;
   readonly video: Extract<Asset, { readonly kind: 'video' }>;
   readonly skeleton: Extract<Asset, { readonly kind: 'skeleton' }>;
   readonly skin: Extract<Asset, { readonly kind: 'skin' }>;
   readonly 'animation-clip': Extract<Asset, { readonly kind: 'animation-clip' }>;
   readonly 'animation-graph': AnimationGraphPackPayload;
-  readonly audio: Extract<Asset, { readonly kind: 'audio' }>;
+  readonly audio: {
+    readonly kind: 'audio';
+    readonly sourceKey: string;
+    readonly mediaType: `audio/${string}`;
+  };
   readonly 'particle-effect': Extract<Asset, { readonly kind: 'particle-effect' }>;
   readonly 'ies-profile': Extract<Asset, { readonly kind: 'ies-profile' }>;
 };
@@ -160,8 +166,3 @@ export interface ScriptablePackDomainError {
   readonly hint: string;
   readonly detail?: unknown;
 }
-
-/** The source authoring contract is owned by Pack; this alias keeps reader typing local. */
-export type ScriptablePackAssetReader = AssetReader;
-export type ScriptablePackAuthoringError = PackAuthoringError;
-export type ScriptablePackImportedAsset = ImportedAsset<unknown>;

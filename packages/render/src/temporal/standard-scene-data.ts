@@ -3,10 +3,13 @@ import type {
   RenderGraphBuilder,
   RenderGraphError,
 } from '@forgeax/engine-render-graph';
-import { ok, type Result } from '@forgeax/engine-types';
+import { err, ok, type Result } from '@forgeax/engine-types';
+import { SceneDataUnavailableError } from '../errors/render';
 import { motionBlurTemporalDemand } from '../features/motion-blur/motion-blur-params';
 import type { RenderExtent } from '../pipeline/render-extent';
 import { renderExtentSize } from '../pipeline/render-extent';
+import { selectMainPassMaterials } from '../record/main-pass';
+import type { _InternalRenderPipelineContext } from '../record/render-context';
 import type { CameraSnapshot } from '../render-contract';
 import type {
   RenderPipelineFrame,
@@ -14,6 +17,7 @@ import type {
   RenderPipelineTarget,
 } from '../render-pipeline';
 import { createRenderPipelineTarget } from '../render-pipeline';
+import { STANDARD_TEMPORAL_FORMAT } from '../standard-attachments';
 import { addTypedFullscreenPass, addTypedScenePass } from '../typed-render-graph-primitives';
 
 /** Scene history and the motion producer must agree on every temporal consumer. */
@@ -136,6 +140,41 @@ export function standardTemporalLaneAdmission(input: {
   };
 }
 
+/**
+ * Standard lanes fail the build when a temporal consumer demands scene data
+ * the lane cannot produce. Capability probes are the sole authority: a
+ * surface/storage format is not evidence that rgba16float targets render.
+ */
+export function requireStandardTemporalLane(input: {
+  readonly demand: StandardTemporalDemand;
+  readonly compute: boolean;
+  readonly storageBuffer: boolean;
+  readonly rgba16floatRenderable: boolean;
+}): Result<void, SceneDataUnavailableError> {
+  const lane = input.compute ? 'clustered' : 'cpu-webgl2';
+  const admission = standardTemporalLaneAdmission({
+    lane,
+    demand: input.demand,
+    capabilities: {
+      compute: input.compute,
+      storageBuffer: input.storageBuffer,
+      rgba16floatRenderable: input.rgba16floatRenderable,
+    },
+  });
+  if (admission.status === 'available' || admission.reason === 'no-demand') return ok(undefined);
+  return err(
+    new SceneDataUnavailableError({
+      featureIdentity: 'forgeax::standard',
+      schema: 'forgeax::scene-data::temporal-v1',
+      lane,
+      reason: admission.reason,
+      missingContributorIds: [],
+      omittedMissingContributorCount: 0,
+      recovery: 'enable-capability',
+    }),
+  );
+}
+
 export function standardTemporalPostOrder(input: {
   readonly taa: boolean;
   readonly motionBlur: boolean;
@@ -155,7 +194,7 @@ export interface StandardSceneDataTargets {
 }
 
 const TEMPORAL_TARGET: GraphTextureDescriptor = {
-  format: 'rgba16float',
+  format: STANDARD_TEMPORAL_FORMAT,
   size: 'surface',
   sampleCount: 1,
 };
@@ -177,13 +216,30 @@ export function addStandardSceneDataPass(
   target: RenderPipelineTarget,
   depth: RenderPipelineTarget,
   gpuDriven?: RenderPipelineGpuDrivenProjection,
+  surfaces: 'opaque' | 'forward-only-opaque' = 'opaque',
 ): Result<void, RenderGraphError> {
+  const selector = { LightMode: ['Deferred', 'Forward'] };
+  const excludeSelector =
+    surfaces === 'forward-only-opaque' ? { LightMode: ['Deferred'] } : undefined;
   return addTypedScenePass(graph, {
     name: 'standard-scene-data',
-    ...(gpuDriven === undefined ? {} : { gpuDriven, gpuDrivenFilter: 'opaque' as const }),
+    // GBuffer already wrote this loaded target. An empty CPU supplement has
+    // no work. The GPU owner derives live eligibility from its encoder predicate.
+    executeIf:
+      surfaces === 'opaque'
+        ? undefined
+        : (frame) =>
+            selectMainPassMaterials(
+              frame as _InternalRenderPipelineContext,
+              selector,
+              'opaque',
+              excludeSelector,
+            )?.size !== 0 || gpuDriven?.hasWork(surfaces, 'fs_temporal') === true,
+    ...(gpuDriven === undefined ? {} : { gpuDriven, gpuDrivenFilter: surfaces }),
     color: target,
     depth,
-    selector: { LightMode: ['Deferred', 'Forward'] },
+    selector,
+    ...(excludeSelector === undefined ? {} : { excludeSelector }),
     // The temporal producer runs before the Surface raw-depth/nearest-layer
     // pair. Keep it on the ordinary opaque Standard lane rather than asking
     // a medium material to assemble a bind group from resources that this
@@ -196,7 +252,7 @@ export function addStandardSceneDataPass(
     // edge by a subpixel, while the loaded scene depth remains the consumer's
     // depth-rejection source for Motion Blur/TAA.
     clearColor: [0, 0, -1, 1],
-    colorLoadOp: 'clear',
+    colorLoadOp: surfaces === 'opaque' ? 'clear' : 'load',
     depthLoadOp: 'load',
   });
 }

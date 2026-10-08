@@ -13,7 +13,7 @@ describe('GPU pass timing Dawn lifecycle', () => {
     const hostModule = resolve(repoRoot, 'packages/render/bench/gpu-pass-timing/dawn-fixture-built.mjs');
     const output = execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', `
       import assert from 'node:assert/strict';
-      const { create, globals } = await import('webgpu');
+      const { create, globals } = await import('@forgeax/engine-dawn-node');
       Object.assign(globalThis, globals);
       Object.defineProperty(globalThis, 'navigator', { value: { gpu: create([]) }, configurable: true });
       const { createDawnGpuPassTimingFixture } = await import(${JSON.stringify(hostModule)});
@@ -57,7 +57,7 @@ describe('GPU pass timing Dawn lifecycle', () => {
       const hostModule = resolve(repoRoot, 'packages/render/bench/gpu-pass-timing/dawn-fixture-built.mjs');
       const childSource = `
         import { writeFile } from 'node:fs/promises';
-        const { create, globals } = await import('webgpu');
+        const { create, globals } = await import('@forgeax/engine-dawn-node');
         Object.assign(globalThis, globals);
         const navigatorScope = {};
         Object.defineProperty(globalThis, 'navigator', {

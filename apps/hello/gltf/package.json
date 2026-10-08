@@ -13,7 +13,11 @@
     "smoke": "node scripts/smoke-dawn.mjs"
   },
   "forgeax": {
-    "bevyExample": { "name": "load_gltf", "category": "glTF", "status": "implemented" },
+    "bevyExample": {
+      "name": "load_gltf",
+      "category": "glTF",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/hello-gltf smoke",
     "_comment": "smokeInvocation = hello-gltf SSOT for AC-14. Literal `pnpm --filter @forgeax/hello-gltf smoke` must match byte-for-byte across apps/hello/gltf/package.json#forgeax.smokeInvocation + .github/workflows/ci.yml + AGENTS.md#Smoke-gate (charter P4 consistent abstraction; mirror of hello-room#forgeax.smokeInvocation).",
     "metrics": {
@@ -55,8 +59,8 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

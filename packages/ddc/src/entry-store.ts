@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { canonicalDdcDigest, canonicalDdcReadbackDigest } from './canonical-json.js';
 import { DdcStoreError } from './errors.js';
 import { canonicalDdcJson } from './key.js';
 
@@ -85,22 +86,24 @@ function sortedArtifacts(entry: DdcEntry): readonly [string, DdcArtifact][] {
 export function ddcOutputDigest(
   entry: Pick<DdcEntry, 'guid' | 'payload' | 'refs' | 'artifacts'>,
 ): string {
-  return `sha256:${digest(
-    canonicalDdcJson({
-      guid: entry.guid,
-      payload: entry.payload,
-      refs: entry.refs,
-      artifacts: Object.fromEntries(
-        sortedArtifacts(entry as DdcEntry).map(([key, artifact]) => [
-          key,
-          {
-            mediaType: artifact.mediaType,
-            bytes: artifact.bytes,
-          },
-        ]),
-      ),
-    }),
-  )}`;
+  return `sha256:${canonicalDdcDigest(outputShape(entry))}`;
+}
+
+function outputShape(entry: Pick<DdcEntry, 'guid' | 'payload' | 'refs' | 'artifacts'>) {
+  return {
+    guid: entry.guid,
+    payload: entry.payload,
+    refs: entry.refs,
+    artifacts: Object.fromEntries(
+      sortedArtifacts(entry as DdcEntry).map(([key, artifact]) => [
+        key,
+        {
+          mediaType: artifact.mediaType,
+          bytes: artifact.bytes,
+        },
+      ]),
+    ),
+  };
 }
 
 function existingResult(
@@ -113,7 +116,8 @@ function existingResult(
   const sameImmutableContent =
     existing.key === candidate.key &&
     existing.guid === candidate.guid &&
-    ddcOutputDigest(existing) === ddcOutputDigest(candidate) &&
+    // Both entries passed readDirectory's complete content/integrity validation.
+    existing.receipt.outputDigest === candidate.receipt.outputDigest &&
     canonicalDdcJson(existingReceipt) === canonicalDdcJson(candidateReceipt);
   return sameImmutableContent ? { result: 'existing', key } : { result: 'conflict', key };
 }
@@ -134,7 +138,10 @@ function entryShape(entry: DdcEntry): Record<string, unknown> {
   };
 }
 
-function integrityFor(entry: DdcEntry): EntryIntegrity {
+function integrityFor(
+  entry: DdcEntry,
+  readback?: Pick<EntryIntegrity, 'payload' | 'entry'>,
+): EntryIntegrity {
   const artifacts = Object.fromEntries(
     sortedArtifacts(entry).map(([key, artifact]) => [
       key,
@@ -146,11 +153,11 @@ function integrityFor(entry: DdcEntry): EntryIntegrity {
     ]),
   );
   return {
-    payload: digest(canonicalDdcJson(entry.payload)),
-    refs: digest(canonicalDdcJson(entry.refs)),
-    receipt: digest(canonicalDdcJson(entry.receipt)),
+    payload: readback?.payload ?? canonicalDdcDigest(entry.payload),
+    refs: canonicalDdcDigest(entry.refs),
+    receipt: canonicalDdcDigest(entry.receipt),
     artifacts,
-    entry: digest(canonicalDdcJson(entryShape(entry))),
+    entry: readback?.entry ?? canonicalDdcDigest(entryShape(entry)),
   };
 }
 
@@ -304,10 +311,16 @@ export class DdcEntryStore {
         artifacts[key] = { mediaType: descriptor.mediaType, bytes };
       }
       const entry = { key: receipt.key, guid: receipt.guid, payload, refs, artifacts, receipt };
-      if (entry.receipt.outputDigest !== ddcOutputDigest(entry)) {
+      // These parsed objects and buffers are owned by this read. Cooperate with
+      // lease heartbeats without exposing caller callbacks across an await.
+      const outputDigest = `sha256:${await canonicalDdcReadbackDigest(outputShape(entry))}`;
+      if (entry.receipt.outputDigest !== outputDigest) {
         throw new DdcStoreError('ddc-entry-invalid', 'receipt output digest does not match entry');
       }
-      const actual = integrityFor(entry);
+      const actual = integrityFor(entry, {
+        payload: await canonicalDdcReadbackDigest(entry.payload),
+        entry: await canonicalDdcReadbackDigest(entryShape(entry)),
+      });
       if (canonicalDdcJson(actual) !== canonicalDdcJson(integrity)) {
         throw new DdcStoreError('ddc-entry-invalid', 'entry integrity mismatch');
       }

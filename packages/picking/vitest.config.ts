@@ -19,6 +19,7 @@ export default defineProject({
   },
   test: {
     environment: 'node',
+    exclude: ['**/*.browser.test.ts', '**/*.dawn.test.ts', '**/node_modules/**', '**/dist/**'],
     name: '@forgeax/engine-picking',
     passWithNoTests: true,
     typecheck: {

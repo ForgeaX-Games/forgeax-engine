@@ -25,10 +25,11 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+// Publish this demo's complete asset closure, without unrelated sibling sources.
 const assetRoots = [
   resolve(here, 'assets'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/meshes/cube-mesh.stub.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/container.jpg.meta.json'),
 ];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('learn-render-1-7-camera');
 

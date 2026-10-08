@@ -1041,7 +1041,7 @@ def _bootstrap(args: argparse.Namespace) -> dict[str, Any]:
   toolchain_layout = _validate_toolchain_layout(lock)
   if args.validate_cache:
     return _validate_cache(args, fingerprint, toolchain_layout)
-  if args.cache_dir.is_dir() and args.archive is None:
+  if args.cache_dir.is_dir():
     try:
       return _validate_cache(args, fingerprint, toolchain_layout)
     except ContractError:

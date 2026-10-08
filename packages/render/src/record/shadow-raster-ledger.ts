@@ -19,6 +19,7 @@ interface ShadowRasterEntry {
   invalidationReason: ShadowViewInvalidationReason | undefined;
   drawCount: number;
   texelCulled: number | undefined;
+  cameraCulled: number | undefined;
   dirtyRectCount: number | undefined;
 }
 
@@ -154,18 +155,27 @@ export class ShadowRasterLedger {
     identity: ShadowViewIdentity,
     invalidationReason: ShadowViewInvalidationReason | undefined,
     texelCulled?: number,
+    cameraCulled?: number,
     dirtyRectCount?: number,
   ): number {
     const slot = this.stagedLength;
     this.stagedLength += 1;
     const entry = this.staged[slot];
     if (entry === undefined) {
-      this.staged.push({ identity, invalidationReason, drawCount: 0, texelCulled, dirtyRectCount });
+      this.staged.push({
+        identity,
+        invalidationReason,
+        drawCount: 0,
+        texelCulled,
+        cameraCulled,
+        dirtyRectCount,
+      });
     } else {
       entry.identity = identity;
       entry.invalidationReason = invalidationReason;
       entry.drawCount = 0;
       entry.texelCulled = texelCulled;
+      entry.cameraCulled = cameraCulled;
       entry.dirtyRectCount = dirtyRectCount;
     }
     return slot;
@@ -203,7 +213,10 @@ export class ShadowRasterLedger {
     for (let slot = 0; slot < this.committedLength; slot += 1) {
       const entry = this.committed[slot] as ShadowRasterEntry;
       drawCount += entry.drawCount;
-      const culled = entry.texelCulled === undefined ? {} : { texelCulled: entry.texelCulled };
+      const culled = {
+        ...(entry.texelCulled === undefined ? {} : { texelCulled: entry.texelCulled }),
+        ...(entry.cameraCulled === undefined ? {} : { cameraCulled: entry.cameraCulled }),
+      };
       if (entry.invalidationReason === undefined) {
         views.push(
           Object.freeze({

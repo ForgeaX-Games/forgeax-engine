@@ -1,4 +1,10 @@
-import { AssetGuid, definePack, definePackageId, PackageId } from '@forgeax/engine-pack/source';
+import {
+  AssetGuid,
+  definePack,
+  definePackageId,
+  PackageId,
+  validatePluginAssetSource,
+} from '@forgeax/engine-pack/source';
 import { err, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import type { ScriptablePackAssetSnapshotSource } from '../scriptable-pack.js';
@@ -445,6 +451,102 @@ describe('ScriptablePack import bridge with optional parameters', () => {
       assetSource,
     });
     expect(result).toMatchObject({ ok: false, error: { code: 'asset-fetch-failed' } });
+  });
+
+  it('keeps a thrown Plugin source validation error structured at the import boundary', async () => {
+    const validated = validatePluginAssetSource({
+      kind: 'plugin',
+      module: { specifier: './behavior.ts' },
+      config: { nested: undefined },
+    });
+    expect(validated.ok).toBe(false);
+    if (validated.ok) throw new Error('expected an invalid Plugin config');
+    const result = await buildScriptablePack({
+      definition: definePack({
+        schemaVersion: '2.0.0',
+        packageId: id('01900000-0000-7000-8000-000000000068'),
+        build: () => {
+          throw validated.error;
+        },
+      }),
+      sourcePath: 'assets/invalid-plugin.pack.ts',
+      outputs: producers(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'plugin-source-invalid',
+        expected: validated.error.expected,
+        hint: validated.error.hint,
+        detail: { path: '$.config.nested', reason: 'expected finite JSON data' },
+      },
+    });
+    if (!result.ok) expect(result.error).toBe(validated.error);
+  });
+
+  it.each([
+    false,
+    true,
+  ])('retains the fallback for an unstructured build throw (accessor: %s)', async (accessor) => {
+    let inspected = false;
+    const cause = accessor
+      ? Object.defineProperty({}, 'code', {
+          get() {
+            inspected = true;
+            throw new Error('diagnostic getter must not run');
+          },
+        })
+      : new Error('author build exploded');
+    const result = await buildScriptablePack({
+      definition: definePack({
+        schemaVersion: '2.0.0',
+        packageId: id('01900000-0000-7000-8000-000000000069'),
+        build: () => {
+          throw cause;
+        },
+      }),
+      sourcePath: 'assets/throwing-build.pack.ts',
+      outputs: producers(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'import-internal-error',
+        detail: {
+          reason: `assets/throwing-build.pack.ts: ${accessor ? '[object Object]' : 'author build exploded'}`,
+        },
+      },
+    });
+    expect(inspected).toBe(false);
+  });
+
+  it('does not let an opaque thrown Proxy hide the original import failure', async () => {
+    const cause = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('diagnostic inspection must not replace the author failure');
+        },
+      },
+    );
+    const result = await buildScriptablePack({
+      definition: definePack({
+        schemaVersion: '2.0.0',
+        packageId: id('01900000-0000-7000-8000-000000000070'),
+        build: () => {
+          throw cause;
+        },
+      }),
+      sourcePath: 'assets/opaque-build.pack.ts',
+      outputs: producers(),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'import-internal-error',
+        detail: { reason: 'assets/opaque-build.pack.ts: [object Object]' },
+      },
+    });
   });
 
   it('converts a throwing output producer into a structured import failure', async () => {

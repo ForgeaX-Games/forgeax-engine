@@ -33,6 +33,8 @@ export interface Integrity {
 }
 
 export interface ArtifactDescriptor {
+  /** Host consumes bounded ranges; the loader admits the descriptor without reading the body. */
+  readonly delivery?: 'stream';
   readonly path: string;
   readonly mediaType: string;
   readonly assetCodec?: AssetCodec;
@@ -83,14 +85,25 @@ export interface PackV2<P = unknown> extends AssetPublicationTuple {
   readonly assets: readonly AssetEnvelopeV2<P>[];
 }
 
-/** Realm-neutral audio source artifact. Decoding belongs to the Host audio consumer. */
-export interface AudioClipAsset {
+/** Cooked PCM16 little-endian WAV window index. Hashes cover data windows only. */
+export interface AudioStreamManifest {
+  readonly format: 'wav-pcm16/1';
+  readonly sampleRate: number;
+  readonly channels: 1 | 2;
+  readonly frames: number;
+  readonly dataOffset: number;
+  readonly chunkFrames: number;
+  readonly hashes: readonly string[];
+}
+
+export type AudioClipAsset = {
   readonly kind: 'audio';
   readonly sourceKey: string;
-  /** Source artifact media type; Web Audio still selects the codec from bytes. */
   readonly mediaType: `audio/${string}`;
-  readonly bytes: Uint8Array;
-}
+} & (
+  | { readonly bytes: Uint8Array; readonly stream?: never }
+  | { readonly bytes?: never; readonly stream: AudioStreamManifest & { readonly url: string } }
+);
 
 export type CookStatus = 'notRequired' | 'notCooked' | 'failed' | 'ready' | 'unknown';
 export type CookFreshness = 'notApplicable' | 'current' | 'stale' | 'unknown';

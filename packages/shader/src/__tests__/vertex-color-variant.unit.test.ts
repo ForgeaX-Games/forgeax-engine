@@ -42,7 +42,9 @@ describe('M4 vertex-color shader contract', () => {
     const text = source(file);
     if (file === 'unlit.wgsl') {
       expect(text).toMatch(/baseColor\.rgb\s*\*\s*texSample\.rgb\s*\*\s*vertexColor\.rgb/);
-      expect(text).toMatch(/baseColor\.a\s*\*\s*texSample\.a\s*\*\s*vertexColor\.a/);
+      expect(text).toMatch(
+        /baseColor\.a\s*\*\s*unlitTextureAlpha\(texSample\.a\)\s*\*\s*vertexColor\.a/,
+      );
     } else {
       expect(text).toContain(
         '#import forgeax_material::slot::surface::{evaluate_surface, evaluate_standard_surface}',

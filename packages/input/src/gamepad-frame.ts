@@ -181,19 +181,26 @@ export function diffGamepadFrame(
   const results: GamepadSlotSample[] = [];
 
   for (const gp of curGamepads) {
+    const tokens = gp.mapping === 'standard' ? undefined : remapLookup?.(gp.id);
+    if (gp.mapping !== 'standard' && !tokens) {
+      results.push(emptySlot(gp.index));
+      continue;
+    }
+    const readpoints = tokens ? remapToStandardLayout(gp, tokens) : standardReadpoints(gp);
     const prevPressed = prev.get(gp.index)?.pressed ?? new Set<number>();
-    results.push(
-      gp.mapping === 'standard'
-        ? diffStandardSlot(gp, prevPressed)
-        : diffNonStandardSlot(gp, prevPressed, remapLookup),
-    );
+    results.push({
+      index: gp.index,
+      standardMapping: true,
+      ...readpoints,
+      ...edges(prevPressed, readpoints.pressed),
+    });
   }
 
   return results;
 }
 
-/** Diff a standard-mapping gamepad slot: raw indices pass through 1:1. */
-function diffStandardSlot(gp: RawGamepadStub, prevPressed: ReadonlySet<number>): GamepadSlotSample {
+/** Read standard-mapping indices without remapping or applying deadzones. */
+function standardReadpoints(gp: RawGamepadStub): RemappedReadpoints {
   const curPressed = new Set<number>();
   const buttonValues = new Map<number, number>();
   const btnCount = Math.min(gp.buttons.length, STANDARD_BUTTON_COUNT);
@@ -203,7 +210,6 @@ function diffStandardSlot(gp: RawGamepadStub, prevPressed: ReadonlySet<number>):
     buttonValues.set(b, btn.value);
     if (btn.pressed) curPressed.add(b);
   }
-  const { justPressed, justReleased } = edges(prevPressed, curPressed);
   // Axes: raw values, no deadzone (OOS-4).
   const axes: [number, number, number, number] = [
     gp.axes[0] ?? 0,
@@ -211,38 +217,5 @@ function diffStandardSlot(gp: RawGamepadStub, prevPressed: ReadonlySet<number>):
     gp.axes[2] ?? 0,
     gp.axes[3] ?? 0,
   ];
-  return {
-    index: gp.index,
-    standardMapping: true,
-    pressed: curPressed,
-    justPressed,
-    justReleased,
-    buttonValues,
-    axes,
-  };
-}
-
-/**
- * Diff a non-standard-mapping gamepad slot (D-1 option A): attempt an
- * acquisition-layer remap via the SDL DB. No lookup / no match falls back
- * to the Feat1 empty signal with connected=true (AC-04).
- */
-function diffNonStandardSlot(
-  gp: RawGamepadStub,
-  prevPressed: ReadonlySet<number>,
-  remapLookup?: (gamepadId: string) => MappingTokens | null,
-): GamepadSlotSample {
-  const tokens = remapLookup ? remapLookup(gp.id) : null;
-  if (!tokens) return emptySlot(gp.index);
-  const { pressed, buttonValues, axes } = remapToStandardLayout(gp, tokens);
-  const { justPressed, justReleased } = edges(prevPressed, pressed);
-  return {
-    index: gp.index,
-    standardMapping: true,
-    pressed,
-    justPressed,
-    justReleased,
-    buttonValues,
-    axes,
-  };
+  return { pressed: curPressed, buttonValues, axes };
 }

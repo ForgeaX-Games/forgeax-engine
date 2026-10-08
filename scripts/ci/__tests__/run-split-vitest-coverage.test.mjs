@@ -2,16 +2,136 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { runGroups } from '../../lib/run-bounded-groups.mjs';
+
+test('exclusive groups wait for active work and block neighboring launches', async () => {
+  const groups = ['first', 'second', 'exclusive', 'fourth', 'fifth'];
+  const active = new Set();
+  const started = [];
+  let peak = 0;
+  const results = await runGroups({
+    groups,
+    concurrency: 2,
+    isExclusive: (group) => group === 'exclusive',
+    runGroupImpl: async (group) => {
+      if (group === 'exclusive') assert.equal(active.size, 0);
+      else assert.equal(active.has('exclusive'), false);
+      active.add(group);
+      started.push(group);
+      peak = Math.max(peak, active.size);
+      await new Promise(setImmediate);
+      if (group === 'exclusive') assert.equal(active.size, 1);
+      active.delete(group);
+      return group;
+    },
+  });
+  assert.deepEqual(results, groups);
+  assert.deepEqual(started, groups);
+  assert.equal(peak, 2, 'ordinary groups retain their requested parallelism');
+});
+
+test('an exclusive failure stops all subsequent launches', async () => {
+  const started = [];
+  await assert.rejects(
+    runGroups({
+      groups: ['before', 'exclusive', 'must-not-start'],
+      concurrency: 2,
+      isExclusive: (group) => group === 'exclusive',
+      runGroupImpl: async (group) => {
+        started.push(group);
+        if (group === 'exclusive') throw new Error('exclusive failure');
+        await new Promise(setImmediate);
+      },
+    }),
+    /exclusive failure/,
+  );
+  assert.deepEqual(started, ['before', 'exclusive']);
+});
+
 import {
   assignCoverageShards,
   buildTypecheckArgs,
   coverageGroupOrder,
   coverageGroups,
+  isExclusiveCoverageGroup,
   parseArgs,
   projectGroups,
   rerootCoverage,
   validateShardManifests,
 } from '../run-split-vitest-coverage.mjs';
+
+test('real generated-game coverage drains compiler children before starting the browser', async () => {
+  const groups = coverageGroups(['@forgeax/engine-devkit', 'unit'], 8);
+  const active = new Set();
+  let browserRuns = 0;
+  await runGroups({
+    groups,
+    concurrency: 2,
+    order: coverageGroupOrder(groups),
+    isExclusive: isExclusiveCoverageGroup,
+    runGroupImpl: async (group) => {
+      const browser = isExclusiveCoverageGroup(group);
+      if (browser) {
+        assert.equal(active.size, 0);
+        browserRuns++;
+      } else assert.ok(![...active].some(isExclusiveCoverageGroup));
+      active.add(group);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (browser) assert.equal(active.size, 1);
+      active.delete(group);
+      return group.label;
+    },
+  });
+  assert.equal(browserRuns, 1);
+  assert.equal(active.size, 0);
+});
+
+test('cold compiler file sets keep one owner and drain all neighboring work', async () => {
+  const groups = coverageGroups(
+    [
+      '@forgeax/engine-devkit',
+      '@forgeax/engine-vite-plugin-shader',
+      '@forgeax/engine-pack',
+      '@forgeax/engine-render',
+      'unit',
+    ],
+    8,
+  );
+  for (const file of [
+    'packages/pack/src/__tests__/material-surface-publication.unit.test.ts',
+    'packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts',
+    'packages/vite-plugin-shader/src/__tests__/public-surface.unit.test.ts',
+    'packages/devkit/src/__tests__/live-dev-process.integration.test.ts',
+    'packages/render/src/__tests__/raytracing/diffuse-gi.unit.test.ts',
+    'packages/render/src/__tests__/raytracing/gi-view.unit.test.ts',
+  ]) {
+    assert.equal(groups.filter((group) => group.files.includes(file)).length, 1);
+    assert.ok(
+      groups
+        .filter((group) => !group.files.includes(file))
+        .every((group) => group.excludes.includes(file) || group.files.length > 0),
+    );
+  }
+  const active = new Set();
+  let exclusiveRuns = 0;
+  await runGroups({
+    groups,
+    concurrency: 2,
+    order: coverageGroupOrder(groups),
+    isExclusive: isExclusiveCoverageGroup,
+    runGroupImpl: async (group) => {
+      if (isExclusiveCoverageGroup(group)) {
+        assert.equal(active.size, 0);
+        exclusiveRuns++;
+      } else assert.ok(![...active].some(isExclusiveCoverageGroup));
+      active.add(group);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (isExclusiveCoverageGroup(group)) assert.equal(active.size, 1);
+      active.delete(group);
+      return group.label;
+    },
+  });
+  assert.equal(exclusiveRuns, 4);
+});
 
 test('allows CI coverage to reuse the repository-wide typecheck gate', () => {
   const options = parseArgs([
@@ -100,7 +220,7 @@ test('prioritizes the measured long coverage tail deterministically', () => {
     groups.map(({ label }) => label),
     [
       '@forgeax/engine-scene,@forgeax/engine-vite-plugin-shader',
-      '@forgeax/engine-vite-plugin-shader:packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts',
+      '@forgeax/engine-vite-plugin-shader:packages/vite-plugin-shader/src/__tests__/vite-plugin-shader.unit.test.ts,packages/vite-plugin-shader/src/__tests__/public-surface.unit.test.ts',
       '@forgeax/engine-runtime',
     ],
   );
@@ -111,12 +231,13 @@ test('isolates a heavy test file into its own child and excludes it elsewhere', 
   const devkitFiles = [
     'packages/devkit/src/__tests__/new-project-workers.e2e.test.ts',
     'packages/devkit/src/__tests__/scene-bootstrap.e2e.test.ts',
+    'packages/devkit/src/__tests__/live-dev-process.integration.test.ts',
   ];
-  const groups = coverageGroups(['@forgeax/engine-ecs', '@forgeax/engine-devkit'], 8);
+  const groups = coverageGroups(['@forgeax/engine-scene', '@forgeax/engine-devkit'], 8);
   assert.deepEqual(
     groups.map(({ projects, files, excludes }) => ({ projects, files, excludes })),
     [
-      { projects: ['@forgeax/engine-ecs'], files: [], excludes: devkitFiles },
+      { projects: ['@forgeax/engine-scene'], files: [], excludes: devkitFiles },
       { projects: ['@forgeax/engine-devkit'], files: [], excludes: devkitFiles },
       { projects: ['@forgeax/engine-devkit'], files: devkitFiles, excludes: [] },
     ],
@@ -287,4 +408,56 @@ test('stops scheduling new groups after the first failure', async () => {
   );
 
   assert.deepEqual(started, ['fail', 'in-flight']);
+});
+
+test('repository scan files have one exclusive coverage owner and remain in the complete roster', async () => {
+  const files = [
+    'packages/ecs/src/__tests__/errors.unit.test.ts',
+    'packages/ecs/src/__tests__/source-scan.unit.test.ts',
+  ];
+  const groups = coverageGroups(['@forgeax/engine-ecs', '@forgeax/engine-scene'], 8);
+  for (const file of files) {
+    assert.equal(groups.filter((group) => group.files.includes(file)).length, 1);
+    assert.ok(
+      groups
+        .filter((group) => !group.files.includes(file))
+        .every((group) => group.excludes.includes(file)),
+    );
+  }
+  const active = new Set();
+  let scanRuns = 0;
+  await runGroups({
+    groups,
+    concurrency: 2,
+    order: coverageGroupOrder(groups),
+    isExclusive: isExclusiveCoverageGroup,
+    runGroupImpl: async (group) => {
+      if (group.files.length > 0) {
+        assert.equal(active.size, 0);
+        scanRuns++;
+      } else assert.ok(![...active].some(isExclusiveCoverageGroup));
+      active.add(group);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (group.files.length > 0) assert.equal(active.size, 1);
+      active.delete(group);
+      return group.label;
+    },
+  });
+  assert.equal(scanRuns, 1);
+});
+
+test('cold Standard raster and ray compilation has one exclusive instrumented owner', () => {
+  const file =
+    'packages/shader-compiler/src/material/__tests__/pack-program-reuse.integration.test.ts';
+  const groups = coverageGroups(
+    ['@forgeax/engine-shader-compiler', '@forgeax/engine-naga', 'unit'],
+    8,
+  );
+  const owners = groups.filter((group) => group.files.includes(file));
+  assert.equal(owners.length, 1);
+  assert.ok(isExclusiveCoverageGroup(owners[0]));
+  assert.deepEqual(owners[0].projects, ['@forgeax/engine-shader-compiler']);
+  assert.ok(
+    groups.filter((group) => group !== owners[0]).every((group) => group.excludes.includes(file)),
+  );
 });

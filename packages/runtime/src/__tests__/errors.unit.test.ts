@@ -13,16 +13,13 @@ import { rhi } from '@forgeax/engine-rhi-null';
 import type { SkinError, SkinErrorCode } from '@forgeax/engine-skinning';
 import type { AssetErrorCode, ImageErrorCode } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { classifyEnvErrorReason } from '../../../render/src/assembly/factory';
 import { EquirectProjectionFailedError } from '../../../render/src/errors/render';
 import { RhiErrorListenerRegistry } from '../../../render/src/lifecycle';
 import {
   PostProcessError,
   type PostProcessErrorCode,
 } from '../../../render/src/post-process-errors';
-import {
-  __classifyEnvErrorReasonForTest,
-  __composeEnvErrorHintForTest,
-} from '../create-renderer-env-classify';
 import { requireRenderer } from './renderer-test-utils';
 
 // feat-20260704-runtime-tier1-decomposition M2 / w12: the eliminated top-level
@@ -42,7 +39,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
     describe('classifyEnvErrorReason', () => {
       it('keeps GPU-class wording for adapter-unavailable', () => {
         const inner = { name: 'RhiError', code: 'adapter-unavailable' };
-        expect(__classifyEnvErrorReasonForTest('no usable rendering backend', inner)).toBe(
+        expect(classifyEnvErrorReason('no usable rendering backend', inner)).toBe(
           'no usable rendering backend',
         );
       });
@@ -50,7 +47,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
       it('keeps GPU-class wording for feature-not-enabled / limit-exceeded / device-lost / oom', () => {
         for (const code of ['feature-not-enabled', 'limit-exceeded', 'device-lost', 'oom']) {
           const inner = { name: 'RhiError', code };
-          expect(__classifyEnvErrorReasonForTest('no usable rendering backend', inner)).toBe(
+          expect(classifyEnvErrorReason('no usable rendering backend', inner)).toBe(
             'no usable rendering backend',
           );
         }
@@ -58,115 +55,36 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
 
       it('switches wording for ShaderError manifest-malformed', () => {
         const inner = { name: 'ShaderError', code: 'manifest-malformed' };
-        expect(__classifyEnvErrorReasonForTest('no usable rendering backend', inner)).toBe(
+        expect(classifyEnvErrorReason('no usable rendering backend', inner)).toBe(
           'engine init failed (ShaderError: manifest-malformed)',
         );
       });
 
       it('switches wording for PackError pack-malformed-pack', () => {
         const inner = { name: 'PackError', code: 'pack-malformed-pack' };
-        expect(__classifyEnvErrorReasonForTest('no usable rendering backend', inner)).toBe(
+        expect(classifyEnvErrorReason('no usable rendering backend', inner)).toBe(
           'engine init failed (PackError: pack-malformed-pack)',
         );
       });
 
       it('falls back to name-only when code is absent', () => {
         const inner = { name: 'AssetError' };
-        expect(__classifyEnvErrorReasonForTest('no usable rendering backend', inner)).toBe(
+        expect(classifyEnvErrorReason('no usable rendering backend', inner)).toBe(
           'engine init failed (AssetError)',
         );
       });
 
       it('returns base message untouched when inner is undefined', () => {
-        expect(__classifyEnvErrorReasonForTest('no usable rendering backend', undefined)).toBe(
+        expect(classifyEnvErrorReason('no usable rendering backend', undefined)).toBe(
           'no usable rendering backend',
         );
       });
 
       it('returns base message untouched when inner is non-object', () => {
         // Non-object inner (string / number) should not crash; keep base message.
-        expect(
-          __classifyEnvErrorReasonForTest('no usable rendering backend', 'oops' as never),
-        ).toBe('no usable rendering backend');
-      });
-
-      it('preserves the Channel-3-fallback variant of the base message', () => {
-        const inner = { name: 'ShaderError', code: 'manifest-malformed' };
-        expect(
-          __classifyEnvErrorReasonForTest(
-            'no usable rendering backend (Channel 3 fallback failed)',
-            inner,
-          ),
-        ).toBe('engine init failed (ShaderError: manifest-malformed)');
-        // GPU inner keeps the Channel-3 suffix verbatim.
-        const gpuInner = { name: 'RhiError', code: 'adapter-unavailable' };
-        expect(
-          __classifyEnvErrorReasonForTest(
-            'no usable rendering backend (Channel 3 fallback failed)',
-            gpuInner,
-          ),
-        ).toBe('no usable rendering backend (Channel 3 fallback failed)');
-      });
-    });
-
-    describe('composeEnvErrorHint (bug-20260610 dual-channel env failure)', () => {
-      // When both Channel 2 (rhi-webgpu) and Channel 3 (rhi-wgpu wasm GL) report
-      // adapter-unavailable / rhi-not-available, the failure is a browser-config
-      // issue (Edge with edge://flags/#enable-unsafe-webgpu = Disabled) rather
-      // than a real GPU absence. The hint surfaces actionable browser guidance.
-      it('emits hint when both errors are adapter-unavailable', () => {
-        const out = __composeEnvErrorHintForTest(
-          { code: 'adapter-unavailable' },
-          { code: 'adapter-unavailable' },
+        expect(classifyEnvErrorReason('no usable rendering backend', 'oops' as never)).toBe(
+          'no usable rendering backend',
         );
-        expect(out).toContain('both channels report environmental failure');
-        expect(out).toContain('edge://flags/#enable-unsafe-webgpu');
-      });
-
-      it('emits hint for adapter-unavailable + rhi-not-available cross', () => {
-        const out = __composeEnvErrorHintForTest(
-          { code: 'adapter-unavailable' },
-          { code: 'rhi-not-available' },
-        );
-        expect(out).toBeDefined();
-        expect(out).toContain('Enabled');
-      });
-
-      it('returns undefined when only one channel reports an env code', () => {
-        // Real-GPU-class failure on one side, asset error on the other — no
-        // browser-config guidance applies.
-        expect(
-          __composeEnvErrorHintForTest(
-            { code: 'adapter-unavailable' },
-            { code: 'manifest-malformed' },
-          ),
-        ).toBeUndefined();
-      });
-
-      it('returns undefined when either side is missing', () => {
-        expect(
-          __composeEnvErrorHintForTest({ code: 'adapter-unavailable' }, undefined),
-        ).toBeUndefined();
-        expect(
-          __composeEnvErrorHintForTest(undefined, { code: 'adapter-unavailable' }),
-        ).toBeUndefined();
-      });
-
-      it('returns undefined for plain Error-like objects without .code', () => {
-        // Edge case: `wgpuError` may be a raw Error from a wasm load throw
-        // (no .code property). The helper must not crash and must not emit
-        // false-positive guidance.
-        const plainErr = new Error('wasm load failed');
-        expect(
-          __composeEnvErrorHintForTest({ code: 'adapter-unavailable' }, plainErr),
-        ).toBeUndefined();
-      });
-
-      it('returns undefined for non-string code values', () => {
-        // RhiError shape always has .code: string, but defensive coverage.
-        expect(
-          __composeEnvErrorHintForTest({ code: 42 }, { code: 'adapter-unavailable' }),
-        ).toBeUndefined();
       });
     });
   });
@@ -423,6 +341,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'feature plan failed';
             case 'graph-build-failed':
               return 'graph build failed';
+            case 'frame-submit-rejected':
             case 'device-operation-failed':
               return 'device operation failed';
             case 'surface-unavailable':
@@ -559,6 +478,8 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'light resource unavailable';
             case 'transmission-capability-missing':
               return 'transmission capability missing';
+            case 'material-sampled-texture-budget-exceeded':
+              return 'material sampled texture budget exceeded';
             case 'projector-binding-failed':
               return 'projector binding failed';
             case 'volume-owner-conflict':
@@ -613,6 +534,7 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'graph-build-failed':
               return 'ok';
+            case 'frame-submit-rejected':
             case 'device-operation-failed':
               return 'ok';
             case 'surface-unavailable':
@@ -736,6 +658,8 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
               return 'ok';
             case 'light-resource-unavailable':
             case 'transmission-capability-missing':
+              return 'ok';
+            case 'material-sampled-texture-budget-exceeded':
               return 'ok';
             case 'projector-binding-failed':
               return 'ok';
@@ -880,7 +804,13 @@ type RuntimeLayerError = RenderError | AssetRuntimeError | SkinError;
             seen.push({ code: e.code, handle: undefined });
           }
         });
-        reg.fire(new EquirectProjectionFailedError(42));
+        reg.fire(
+          new EquirectProjectionFailedError(42, {
+            code: 'invalid-source-format',
+            expected: 'linear HDR',
+            hint: 'use rgba16float',
+          }),
+        );
         expect(seen).toEqual([{ code: 'equirect-projection-failed', handle: 42 }]);
       });
 

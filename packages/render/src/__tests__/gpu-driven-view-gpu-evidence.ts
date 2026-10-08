@@ -1,15 +1,24 @@
 import { frustum, mat4 } from '@forgeax/engine-math';
-import { type CompiledRenderGraph, RenderGraphBuilder } from '@forgeax/engine-render-graph';
-import type { RhiCommandEncoder } from '@forgeax/engine-rhi';
+import {
+  type CompiledRenderGraph,
+  type GraphTextureView,
+  RenderGraphBuilder,
+} from '@forgeax/engine-render-graph';
+import type { Buffer, RhiCommandEncoder, RhiDevice } from '@forgeax/engine-rhi';
 import { _internal_getRawDevice, rhi } from '@forgeax/engine-rhi-webgpu';
 import { ok } from '@forgeax/engine-types';
 import {
   BatchTopology,
   batchLevelStride,
+  batchLodLevelCount,
   GPU_DRIVEN_INDIRECT_COMMAND_BYTES,
 } from '../gpu-driven/batch-topology';
 import type { LodViewCamera } from '../gpu-driven/lod-projection.wgsl';
-import { GPU_DRIVEN_VIEW_WGSL, GpuDrivenView } from '../gpu-driven/view-gpu';
+import {
+  GPU_DRIVEN_VIEW_SHADOW_CAMERA_WGSL,
+  GPU_DRIVEN_VIEW_WGSL,
+  GpuDrivenView,
+} from '../gpu-driven/view-gpu';
 import { GpuScene } from '../gpu-scene';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_MAP_READ } from '../gpu-usage';
 import { getOpaqueResourceIdentity } from '../record/frame-snapshot';
@@ -472,10 +481,162 @@ export interface GpuDrivenViewOcclusionFrame {
   readonly culled: number;
   readonly late: number;
   readonly bufferRebuilds: number;
+  /** Byte offset raster binds the late mirror's first window at. */
+  readonly lateVisibleByteOffset: number;
+  /** Non-empty late-phase indirect commands and their mirror windows. */
+  readonly lateCommands: readonly GpuDrivenViewLateCommand[];
+}
+
+export interface GpuDrivenViewLateCommand {
+  readonly instanceCount: number;
+  readonly firstInstance: number;
+  /** The late window holds exactly the union suffix after the early prefix. */
+  readonly mirrorMatchesUnion: boolean;
 }
 
 const OCCLUSION_PYRAMID_SIZE = 64;
+
+async function readBufferBytes(
+  device: RhiDevice,
+  source: Buffer,
+  size: number,
+): Promise<Uint32Array> {
+  const readback = device
+    .createBuffer({ size, usage: GPU_BUFFER_USAGE_COPY_DST | GPU_BUFFER_USAGE_MAP_READ })
+    .unwrap();
+  const encoder = device.createCommandEncoder({ label: 'gpu-driven-occlusion-readback' }).unwrap();
+  encoder.copyBufferToBuffer(source, 0, readback, 0, size);
+  device.queue.submit([encoder.finish().unwrap()]).unwrap();
+  const mapped = (await readback.mapAsync(GPU_MAP_MODE_READ)).unwrap();
+  const words = new Uint32Array(mapped.getMappedRange().unwrap().slice(0));
+  mapped.unmap();
+  device.destroyBuffer(readback);
+  return words;
+}
+
+/**
+ * Read every non-empty late command and compare its visible window (mirror
+ * region, instance zero) against the union suffix the main command draws.
+ */
+async function readLateCommands(
+  device: RhiDevice,
+  view: GpuDrivenView,
+  topology: BatchTopology,
+): Promise<readonly GpuDrivenViewLateCommand[]> {
+  const inspection = view.inspect();
+  const visibleBuffer = view.visibleBuffer;
+  const indirectBuffer = view.indirectBuffer;
+  if (visibleBuffer === undefined || indirectBuffer === undefined) {
+    throw new Error('GPU-driven occlusion view buffers unavailable');
+  }
+  const mirrorBase = inspection.visibleBufferCapacity;
+  const lateArgsBase = (inspection.indirectCapacity * GPU_DRIVEN_INDIRECT_COMMAND_BYTES) / 4;
+  const visible = await readBufferBytes(device, visibleBuffer, mirrorBase * 16 * 2);
+  const indirect = await readBufferBytes(
+    device,
+    indirectBuffer,
+    inspection.indirectCapacity * GPU_DRIVEN_INDIRECT_COMMAND_BYTES * 2,
+  );
+  const commands: GpuDrivenViewLateCommand[] = [];
+  for (const batch of topology.plan().batches) {
+    const stride = batchLevelStride(batch);
+    for (let level = 0; level < batchLodLevelCount(batch); level += 1) {
+      const args = (batch.indirectOffset + level * GPU_DRIVEN_INDIRECT_COMMAND_BYTES) / 4;
+      const unionCount = indirect[args + 1] ?? 0;
+      const instanceCount = indirect[lateArgsBase + args + 1] ?? 0;
+      if (instanceCount === 0) continue;
+      const segment = batch.visibleBase + level * stride;
+      const early = unionCount - instanceCount;
+      let mirrorMatchesUnion = true;
+      for (let item = 0; item < instanceCount * 4; item += 1) {
+        const union = visible[(segment + early) * 4 + item];
+        const mirror = visible[(mirrorBase + segment) * 4 + item];
+        if (union !== mirror) mirrorMatchesUnion = false;
+      }
+      commands.push({
+        instanceCount,
+        firstInstance: indirect[lateArgsBase + args + 4] ?? -1,
+        mirrorMatchesUnion,
+      });
+    }
+  }
+  return commands;
+}
 const OCCLUSION_EMPTY = 3.402823e38;
+
+type WallCoverage = 'none' | 'left' | 'all';
+
+/**
+ * A furthest-depth pyramid whose wall at distance 5 covers no texel, the left
+ * half of the screen, or all of it; everything else holds the empty clear.
+ */
+function createWallPyramid(device: RhiDevice) {
+  const levels = Math.log2(OCCLUSION_PYRAMID_SIZE) + 1;
+  const descriptor = {
+    format: 'r32float',
+    size: { width: OCCLUSION_PYRAMID_SIZE, height: OCCLUSION_PYRAMID_SIZE },
+    mipLevelCount: levels,
+    usage: 0x04 | 0x02,
+  } as const;
+  const texture = device
+    .createTexture({ label: 'gpu-driven-occlusion-pyramid', ...descriptor })
+    .unwrap();
+  const view = device.createTextureView(texture, { mipLevelCount: levels }).unwrap();
+  return {
+    write(wall: WallCoverage): void {
+      for (let level = 0; level < levels; level += 1) {
+        const size = OCCLUSION_PYRAMID_SIZE >> level;
+        const texels = new Float32Array(size * size).fill(OCCLUSION_EMPTY);
+        // A furthest reduction keeps the wall only where every source texel had it.
+        if (wall === 'all') texels.fill(5);
+        if (wall === 'left' && size > 1) {
+          for (let y = 0; y < size; y += 1) texels.fill(5, y * size, y * size + size / 2);
+        }
+        device.queue
+          .writeTexture(
+            { texture, mipLevel: level, origin: [0, 0, 0] },
+            texels,
+            { offset: 0, bytesPerRow: size * 4, rowsPerImage: size },
+            { width: size, height: size, depthOrArrayLayers: 1 },
+          )
+          .unwrap();
+      }
+    },
+    import<FrameCtx extends { readonly encoder: RhiCommandEncoder }>(
+      graph: RenderGraphBuilder<FrameCtx>,
+    ): GraphTextureView {
+      const imported = graph
+        .importTexture('occlusion-evidence-pyramid', descriptor, () => texture)
+        .unwrap();
+      return graph.importView(imported, { mipLevelCount: levels }, () => view).unwrap();
+    },
+    dispose(): void {
+      device.destroyTexture(texture);
+    },
+  };
+}
+
+/** Reversed-Z orthographic camera at the origin looking down -Z. */
+function occlusionEvidenceCamera() {
+  const near = 0.1;
+  const far = 100;
+  const viewProjection = mat4.identity(mat4.create());
+  viewProjection[0] = 0.5;
+  viewProjection[5] = 0.5;
+  viewProjection[10] = 1 / (far - near);
+  viewProjection[14] = far / (far - near);
+  return {
+    viewProjection,
+    planes: frustum.fromViewProjection(frustum.create(), viewProjection),
+    occlusionCamera: {
+      viewProjection: new Float32Array(viewProjection),
+      near,
+      far,
+      orthographic: true,
+      historyKey: 'occlusion-evidence',
+    },
+  };
+}
 
 /**
  * Two-phase HZB evidence on the real GPU API. A furthest pyramid whose left
@@ -487,13 +648,23 @@ const OCCLUSION_EMPTY = 3.402823e38;
  * buffers rebuild; the hidden cube must still skip the early phase.
  */
 export async function runGpuDrivenViewOcclusionEvidence(
-  options: { readonly occlusionFootprintScale?: number; readonly grow?: boolean } = {},
+  options: {
+    readonly occlusionFootprintScale?: number;
+    readonly grow?: boolean;
+    /** Request `indirect-first-instance`; the late phase must not depend on it. */
+    readonly firstInstanceIndirect?: boolean;
+  } = {},
 ): Promise<readonly GpuDrivenViewOcclusionFrame[]> {
-  const { occlusionFootprintScale, grow = false } = options;
+  const { occlusionFootprintScale, grow = false, firstInstanceIndirect = true } = options;
   const adapter = (await rhi.requestAdapter()).unwrap();
   const device = (
-    await adapter.requestDevice({ requiredFeatures: ['indirect-first-instance'] })
+    await adapter.requestDevice(
+      firstInstanceIndirect ? { requiredFeatures: ['indirect-first-instance'] } : {},
+    )
   ).unwrap();
+  if ((device.caps.firstInstanceIndirect === true) !== firstInstanceIndirect) {
+    throw new Error('GPU-driven occlusion device capability does not match the request');
+  }
   const rawDevice = _internal_getRawDevice(device);
   if (rawDevice === undefined) throw new Error('GPU-driven occlusion raw device unavailable');
   rawDevice.pushErrorScope('validation');
@@ -511,7 +682,9 @@ export async function runGpuDrivenViewOcclusionEvidence(
     return updateSnapshot({ ...value, transform: { world } });
   };
   // Cube bounds span uv x +-0.0625 around 0.25 + x / 4; the wall ends at 0.5.
-  const delta = projection.apply([-1, -0.2, 1].map((x, index) => at(index + 1, x)));
+  // The hidden cube is the last instance so its visible item is never all
+  // zeros, which would hide an unwritten late mirror.
+  const delta = projection.apply([1, -0.2, -1].map((x, index) => at(index + 1, x)));
   const sceneAvailability = GpuScene.create(device, 16).unwrap();
   if (sceneAvailability.status !== 'available') throw new Error('GPU Scene unavailable');
   sceneAvailability.scene.sync(delta).unwrap();
@@ -522,77 +695,20 @@ export async function runGpuDrivenViewOcclusionEvidence(
     shaderModuleFactory: { createShaderModule: () => ok(shader) },
     ...(occlusionFootprintScale === undefined ? {} : { occlusionFootprintScale }),
   }).unwrap();
-  // Reversed-Z orthographic camera at the origin looking down -Z.
-  const near = 0.1;
-  const far = 100;
-  const viewProjection = mat4.identity(mat4.create());
-  viewProjection[0] = 0.5;
-  viewProjection[5] = 0.5;
-  viewProjection[10] = 1 / (far - near);
-  viewProjection[14] = far / (far - near);
-  const planes = frustum.fromViewProjection(frustum.create(), viewProjection);
-  const occlusionCamera = {
-    viewProjection: new Float32Array(viewProjection),
-    near,
-    far,
-    orthographic: true,
-    historyKey: 'occlusion-evidence',
-  };
+  const { planes, occlusionCamera } = occlusionEvidenceCamera();
+  const pyramid = createWallPyramid(device);
 
-  const levels = Math.log2(OCCLUSION_PYRAMID_SIZE) + 1;
-  const pyramid = device
-    .createTexture({
-      label: 'gpu-driven-occlusion-pyramid',
-      format: 'r32float',
-      size: { width: OCCLUSION_PYRAMID_SIZE, height: OCCLUSION_PYRAMID_SIZE },
-      mipLevelCount: levels,
-      usage: 0x04 | 0x02,
-    })
-    .unwrap();
-  const pyramidView = device.createTextureView(pyramid, { mipLevelCount: levels }).unwrap();
-  const writePyramid = (wall: boolean) => {
-    for (let level = 0; level < levels; level += 1) {
-      const size = OCCLUSION_PYRAMID_SIZE >> level;
-      const texels = new Float32Array(size * size).fill(OCCLUSION_EMPTY);
-      // A furthest reduction keeps the wall only where every source texel had it.
-      if (wall && size > 1) {
-        for (let y = 0; y < size; y += 1) texels.fill(5, y * size, y * size + size / 2);
-      }
-      device.queue
-        .writeTexture(
-          { texture: pyramid, mipLevel: level, origin: [0, 0, 0] },
-          texels,
-          { offset: 0, bytesPerRow: size * 4, rowsPerImage: size },
-          { width: size, height: size, depthOrArrayLayers: 1 },
-        )
-        .unwrap();
-    }
-  };
-
+  let lateVisibleBase = 0;
   const compileFrame = () => {
     const graph = new RenderGraphBuilder<{ readonly encoder: RhiCommandEncoder }>();
-    const importedPyramid = graph
-      .importTexture(
-        'occlusion-evidence-pyramid',
-        {
-          format: 'r32float',
-          size: { width: OCCLUSION_PYRAMID_SIZE, height: OCCLUSION_PYRAMID_SIZE },
-          mipLevelCount: levels,
-          usage: 0x04 | 0x02,
-        },
-        () => pyramid,
-      )
-      .unwrap();
-    const importedPyramidView = graph
-      .importView(importedPyramid, { mipLevelCount: levels }, () => pyramidView)
-      .unwrap();
+    const importedPyramidView = pyramid.import(graph);
     const resources = view
       .addPasses(graph, 'gpu-driven', true, undefined, undefined, true)
       .unwrap();
     if (resources.addLateOcclusion === undefined) {
       throw new Error('GPU-driven occlusion did not reserve a late phase');
     }
-    resources.addLateOcclusion(importedPyramidView).unwrap();
+    lateVisibleBase = resources.addLateOcclusion(importedPyramidView).unwrap().lateVisibleBase;
     return graph.compile({ device, surfaceSize: { width: 1, height: 1 } }).unwrap();
   };
 
@@ -605,7 +721,7 @@ export async function runGpuDrivenViewOcclusionEvidence(
       sceneAvailability.scene.sync(grown).unwrap();
       topology.apply(grown);
     }
-    writePyramid(wall);
+    pyramid.write(wall ? 'left' : 'none');
     view
       .update(
         topology.plan(),
@@ -639,6 +755,8 @@ export async function runGpuDrivenViewOcclusionEvidence(
       culled: selection.occlusion.culled,
       late: selection.occlusion.late,
       bufferRebuilds: rebuilds,
+      lateVisibleByteOffset: lateVisibleBase * 16,
+      lateCommands: await readLateCommands(device, view, topology),
     });
   }
 
@@ -647,9 +765,119 @@ export async function runGpuDrivenViewOcclusionEvidence(
   const validationError = await rawDevice.popErrorScope();
   view.dispose();
   sceneAvailability.scene.dispose();
-  device.destroyTexture(pyramid);
+  pyramid.dispose();
   if (validationError !== null) {
     throw new Error(`GPU-driven occlusion validation failed: ${validationError.message}`);
   }
   return frames;
+}
+
+export interface GpuDrivenShadowCameraCullFrame {
+  readonly visible: number;
+  readonly cameraCulled: number;
+}
+
+/**
+ * Shadow-caster camera culling on the real GPU API. Three unit-quarter cubes
+ * sit 10 units in front of the evidence camera at x = -1 (fully behind the
+ * left-half wall), -0.45 (behind the wall, one PCF footprint from its edge)
+ * and +1 (visible). `light: 'camera'` looks along the camera's -Z, so each
+ * caster's receiver prism projects onto its own screen rectangle. `light:
+ * 'side'` looks along +X, so every prism sweeps across the unwalled right
+ * half, where its receivers are visible even though the caster is hidden.
+ * `light: 'singular'` is the side light without its depth row.
+ */
+export async function runGpuDrivenShadowCameraCullEvidence(options: {
+  readonly light: 'camera' | 'side' | 'singular';
+  readonly wall: WallCoverage;
+  /** Omit to leave the cull input unset: the bound kernel must admit all. */
+  readonly ndcDilation?: number;
+}): Promise<GpuDrivenShadowCameraCullFrame> {
+  const adapter = (await rhi.requestAdapter()).unwrap();
+  const device = (await adapter.requestDevice()).unwrap();
+  const rawDevice = _internal_getRawDevice(device);
+  if (rawDevice === undefined) throw new Error('GPU-driven shadow cull raw device unavailable');
+  rawDevice.pushErrorScope('validation');
+  const shader = (
+    await rhi.createShaderModule(device, {
+      code: GPU_DRIVEN_VIEW_SHADOW_CAMERA_WGSL,
+      label: 'gpu-driven-view-shadow-camera-cull',
+    })
+  ).unwrap();
+  const projection = new RenderScene();
+  const delta = projection.apply(
+    [-1, -0.45, 1].map((x, index) => {
+      const value = snapshot(index + 1, x);
+      const world = new Float32Array(value.transform.world);
+      world[14] = -10;
+      return updateSnapshot({ ...value, transform: { world } });
+    }),
+  );
+  const sceneAvailability = GpuScene.create(device, 16).unwrap();
+  if (sceneAvailability.status !== 'available') throw new Error('GPU Scene unavailable');
+  sceneAvailability.scene.sync(delta).unwrap();
+  const topology = new BatchTopology();
+  topology.apply(delta);
+  const view = GpuDrivenView.create({
+    device,
+    shaderModuleFactory: { createShaderModule: () => ok(shader) },
+    shadowCameraCull: true,
+  }).unwrap();
+  const { viewProjection, occlusionCamera } = occlusionEvidenceCamera();
+  // Reversed-Z orthographic light along +X: ndc = (0.5 (z + 10), 0.5 y, (50 - x) / 100).
+  const side = new Float32Array(16);
+  side[8] = 0.5;
+  side[12] = 5;
+  side[5] = 0.5;
+  // 'singular' drops the depth row, so the light matrix has no inverse.
+  side[2] = options.light === 'singular' ? 0 : -0.01;
+  side[14] = 0.5;
+  side[15] = 1;
+  const lightViewProjection = options.light === 'camera' ? new Float32Array(viewProjection) : side;
+  const planes = frustum.fromViewProjection(frustum.create(), lightViewProjection);
+  const pyramid = createWallPyramid(device);
+  pyramid.write(options.wall);
+  view
+    .update(
+      topology.plan(),
+      sceneAvailability.scene,
+      planes,
+      undefined,
+      0,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.ndcDilation === undefined
+        ? undefined
+        : {
+            camera: occlusionCamera,
+            lightViewProjection,
+            ndcDilation: options.ndcDilation,
+            worldDilation: 0,
+          },
+    )
+    .unwrap();
+  const graph = new RenderGraphBuilder<{ readonly encoder: RhiCommandEncoder }>();
+  view
+    .addPasses(graph, 'gpu-driven', true, undefined, undefined, false, pyramid.import(graph))
+    .unwrap();
+  if (!view.cameraCullBound) throw new Error('GPU-driven shadow cull did not bind the pyramid');
+  const compiled = graph.compile({ device, surfaceSize: { width: 1, height: 1 } }).unwrap();
+  view._commitResourceReplacement();
+  const encoder = device.createCommandEncoder({ label: 'gpu-driven-shadow-cull' }).unwrap();
+  compiled.execute({ encoder }).unwrap();
+  device.queue.submit([encoder.finish().unwrap()]).unwrap();
+  await device.queue.onSubmittedWorkDone();
+  const selection = await view.readLodSelection();
+  if (selection === undefined) throw new Error('GPU-driven shadow cull readback unavailable');
+  await compiled.retire();
+  const validationError = await rawDevice.popErrorScope();
+  view.dispose();
+  sceneAvailability.scene.dispose();
+  pyramid.dispose();
+  if (validationError !== null) {
+    throw new Error(`GPU-driven shadow cull validation failed: ${validationError.message}`);
+  }
+  return { visible: selection.visible, cameraCulled: selection.cameraCulled };
 }

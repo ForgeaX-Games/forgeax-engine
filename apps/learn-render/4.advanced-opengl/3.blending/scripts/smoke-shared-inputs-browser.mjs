@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,7 @@ if (chromeChannel === 'chrome-beta') {
     '--use-vulkan=swiftshader',
     '--use-angle=swiftshader',
     '--disable-gpu-driver-bug-workarounds',
-    '--disable-dawn-features=disallow_unsafe_apis',
+    '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
   );
 }
 const browserLaunchOptions = Object.freeze({ headless: browserHeadless, channel: chromeChannel, args: chromeArgs });
@@ -183,7 +184,7 @@ async function browserCheck(origin, resource) {
         if (!response.ok) throw new Error(`preview fetch failed ${path}: ${response.status}`);
         return response.body;
       }));
-      const catalog = JSON.parse(payloads[0]);
+      const catalog = decodeCatalogWire(JSON.parse(payloads[0])).unwrap();
       const manifest = JSON.parse(payloads[1]);
       const originUrl = new URL(origin);
       const hasSharedAsset = Array.isArray(catalog) && catalog.some((entry) => {

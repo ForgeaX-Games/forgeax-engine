@@ -6,7 +6,6 @@ import type {
   RenderSceneBounds,
 } from '@forgeax/engine-render';
 import type { CaptureFrameOptions, RhiDebugError } from '@forgeax/engine-rhi-debug';
-import type { RhiTapeArtifactRef } from '../internal/rhi-capture';
 import type { ExecutionFrameCompletion, ExecutionFrameSubmitted } from './protocol';
 
 export type RenderWorkerInput =
@@ -20,6 +19,7 @@ export type RenderWorkerInput =
       readonly build?: string;
       readonly rhiCapture?: boolean;
       readonly gpuPassTiming?: GpuPassTimingOptions;
+      readonly outputColorSpace?: import('@forgeax/engine-render').OutputColorSpace;
     }
   | {
       readonly kind: 'draw';
@@ -34,10 +34,24 @@ export type RenderWorkerInput =
       readonly requestId: number;
       readonly options: Omit<CaptureFrameOptions, 'signal'>;
     }
+  | {
+      readonly kind: 'terrain-height';
+      readonly requestId: number;
+      readonly frameId: number;
+      readonly request: import('@forgeax/engine-render').SubmittedTerrainHeightRequest;
+    }
   | { readonly kind: 'capture-cancel'; readonly requestId: number }
   | { readonly kind: 'bounds'; readonly requestId: number; readonly entity: number }
   | { readonly kind: 'dispose' };
 export type RenderWorkerOutput =
+  | {
+      readonly kind: 'terrain-height-result';
+      readonly requestId: number;
+      readonly result: import('@forgeax/engine-render').RenderResult<
+        number | undefined,
+        import('@forgeax/engine-types').TerrainError
+      >;
+    }
   | {
       readonly kind: 'bounds-result';
       readonly requestId: number;
@@ -47,12 +61,17 @@ export type RenderWorkerOutput =
       readonly kind: 'capture-result';
       readonly requestId: number;
       readonly result:
-        | { readonly ok: true; readonly value: RhiTapeArtifactRef }
+        | {
+            readonly ok: true;
+            /** The materialized container; its buffer is transferred, not cloned. */
+            readonly value: { readonly kind: 'rhi-tape'; readonly bytes: Uint8Array<ArrayBuffer> };
+          }
         | { readonly ok: false; readonly error: RhiDebugError };
     }
   | {
       readonly kind: 'ready';
       readonly capabilities: import('@forgeax/engine-rhi').RhiCaps;
+      readonly limits?: Readonly<Record<string, number>>;
     }
   | {
       readonly kind: 'submitted';

@@ -33,7 +33,6 @@ import {
   type Result,
   type RhiAdapter,
   type RhiCanvasContext,
-  type RhiCanvasSurfaceDescriptorFacts,
   type RhiCanvasSurfacePresentationProof,
   type RhiDevice,
   type RhiError,
@@ -119,16 +118,6 @@ export type GpuCanvasContextLike = {
   getCurrentTexture(): unknown;
 };
 
-/** Configure-time presentation evidence; it does not include pixel readback. */
-export interface RawSurfacePresentationProof {
-  readonly descriptor: boolean;
-  readonly acquisition: boolean;
-  readonly validation: boolean;
-  readonly surfaceIdentity?: string;
-  readonly requested?: RhiCanvasSurfaceDescriptorFacts;
-  readonly validated?: RhiCanvasSurfaceDescriptorFacts;
-}
-
 type SurfaceProofContext = GpuCanvasContextLike & {
   readonly probeSurfacePresentation?: () => RhiCanvasSurfacePresentationProof;
 };
@@ -136,11 +125,6 @@ type SurfaceProofContext = GpuCanvasContextLike & {
 type MutableCanvasContext = Omit<RhiCanvasContext, 'presentationProof'> & {
   presentationProof?: RhiCanvasSurfacePresentationProof;
 };
-
-/** Presentation proof is conjunctive; partial probes must fail closed. */
-export function validateSurfacePresentationProof(proof: RawSurfacePresentationProof): boolean {
-  return proof.descriptor && proof.acquisition && proof.validation;
-}
 
 /**
  * Build a `RhiCanvasContext` over a raw GPUCanvasContext. The forgeax form
@@ -257,6 +241,11 @@ export function makeCanvasContext(
         for (const key in desc as unknown as Record<string, unknown>) {
           mirrored[key] = (desc as unknown as Record<string, unknown>)[key];
         }
+        // wgpu surfaces expose no presentation color space or tone mapping:
+        // the surface is always sRGB-interpreted. Never forward the request;
+        // getConfiguration omits both fields so callers detect the absence.
+        delete mirrored.colorSpace;
+        delete mirrored.toneMapping;
         if ('device' in mirrored) {
           const forgeaxDevice = desc.device as unknown as {
             _internal_raw?: unknown;
@@ -313,7 +302,13 @@ export function makeCanvasContext(
     },
     getConfiguration(): CanvasConfiguration | undefined {
       const c = rawContext.getConfiguration();
-      return c === null ? undefined : (c as unknown as CanvasConfiguration);
+      if (c === null || c === undefined) return undefined;
+      const {
+        colorSpace: _colorSpace,
+        toneMapping: _toneMapping,
+        ...supported
+      } = c as unknown as Record<string, unknown>;
+      return supported as unknown as CanvasConfiguration;
     },
     getCurrentTexture(): Result<Texture, RhiError> {
       try {

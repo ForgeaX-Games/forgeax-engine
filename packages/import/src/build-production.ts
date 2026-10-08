@@ -8,14 +8,18 @@ import {
 } from '@forgeax/engine-pack/build';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
-import type { LegacyPackInventoryDocument } from '@forgeax/engine-pack/scanner';
 import {
-  PackageId,
-  parsePackSourceJson,
-  projectDirectPackJson,
-  resolvePackParameterInheritance,
-} from '@forgeax/engine-pack/source';
-import { loadScriptablePack } from '@forgeax/engine-pack/source-node';
+  type LegacyPackInventoryDocument,
+  resolvePackSourceSubjects,
+  type ScriptablePackSourceDeclaration,
+} from '@forgeax/engine-pack/scanner';
+import { PackageId, projectDirectPackJson } from '@forgeax/engine-pack/source';
+import {
+  createLazyScriptablePackDefinition,
+  createScriptablePackModuleExecutorPool,
+  createScriptablePackSourceSnapshot,
+  type ScriptablePackSourceSnapshot,
+} from '@forgeax/engine-pack/source-node';
 import type {
   AssetPublicationEnvelope,
   AssetPublicationOutput,
@@ -26,10 +30,11 @@ import type {
 } from '@forgeax/engine-types';
 import type { ImportRunnerFs } from './import-runner.js';
 import type { ImporterRegistry } from './importer-registry.js';
+import { projectMaterialPackTransport } from './material-pack-transport.js';
 import { projectImportProductForBuild } from './pack-projection.js';
 import {
   canonicalScriptableSourcePath,
-  declaredPackExternalOutputs,
+  createDeclaredPackAssetSnapshotSource,
   type PreparedScriptablePack,
   prepareDirectPackTransport,
   prepareLegacyPackTransport,
@@ -77,6 +82,7 @@ export interface BuildProductionOptions {
   readonly directCurrentProjection: Record<string, unknown>;
   readonly authoredCookedCurrentProjection: Record<string, unknown>;
   readonly runtimeBinding?: Pick<RuntimeAssetBinding, 'scopeId' | 'generation'>;
+  readonly sourceSnapshot?: ScriptablePackSourceSnapshot;
   readonly sink: BuildProductionSink;
   readonly fail: (failure: BuildProductionFailure) => Error;
 }
@@ -134,30 +140,6 @@ interface PackBuildBundle {
   readonly entries: readonly PackIndexEntry[];
 }
 
-type PackSourceSubject = {
-  readonly kind: 'source';
-  readonly packageId: PackageId;
-  readonly sourcePath: string;
-  readonly definition: import('@forgeax/engine-pack/source').AnyScriptablePackDefinition;
-  readonly sourceClosure: readonly import('@forgeax/engine-pack/source').ScriptablePackSourceClosureEntry[];
-};
-
-type PackInstanceSubject = {
-  readonly kind: 'instance';
-  readonly packageId: PackageId;
-  readonly parent: PackageId;
-  readonly values: Readonly<Record<string, unknown>>;
-  readonly sourcePath: string;
-};
-
-type PackDirectSubject = {
-  readonly kind: 'direct';
-  readonly packageId: PackageId;
-  readonly sourcePath: string;
-};
-
-type PackSourceIndexSubject = PackSourceSubject | PackInstanceSubject | PackDirectSubject;
-
 function dynamicFailure(context: BuildProductionOptions, value: unknown): never {
   const candidate = value !== null && typeof value === 'object' ? value : {};
   const error = candidate as {
@@ -193,217 +175,115 @@ function packCatalogSourcePath(context: BuildProductionOptions, sourcePath: stri
 async function buildPackSources(
   context: BuildProductionOptions,
 ): Promise<readonly PackBuildBundle[]> {
-  const subjects = new Map<string, PackSourceIndexSubject>();
-  for (const [sourcePath, declaration] of context.inventory.sourceDeclarations) {
-    if (declaration.format === 'pack.ts') {
-      const key = PackageId.format(declaration.definition.packageId).toLowerCase();
-      subjects.set(key, {
-        kind: 'source',
-        packageId: declaration.definition.packageId,
-        sourcePath,
-        definition: declaration.definition,
-        sourceClosure: declaration.sourceClosure,
-      });
-      continue;
-    }
-    if (declaration.format !== 'pack.json' || declaration.value.schemaVersion !== '3.0.0') {
-      continue;
-    }
-    const parsed = parsePackSourceJson(declaration.value);
-    if (!parsed.ok) dynamicFailure(context, parsed.error);
-    if (parsed.value.format === 'direct') {
-      subjects.set(PackageId.format(parsed.value.packageId).toLowerCase(), {
-        kind: 'direct',
-        packageId: parsed.value.packageId,
-        sourcePath,
-      });
-    } else {
-      subjects.set(PackageId.format(parsed.value.packageId).toLowerCase(), {
-        kind: 'instance',
-        packageId: parsed.value.packageId,
-        parent: parsed.value.parent,
-        values: parsed.value.values,
-        sourcePath,
+  const subjects = await resolvePackSourceSubjects(context.inventory.sourceDeclarations);
+  if (!subjects.ok) dynamicFailure(context, subjects.error);
+  const executors = createScriptablePackModuleExecutorPool({ maxWorkers: 1, maxTasksPerWorker: 1 });
+  const sourceSnapshot = context.sourceSnapshot ?? createScriptablePackSourceSnapshot();
+  const definitionFor = (source: ScriptablePackSourceDeclaration) =>
+    createLazyScriptablePackDefinition({
+      sourcePath: source.sourcePath,
+      definition: source.definition,
+      sourceClosure: source.sourceClosure,
+      sourceSnapshot,
+      executors,
+    });
+  try {
+    const policy = (packageId: PackageId) => ({
+      base: context.basePrefix === '' ? '/' : context.basePrefix,
+      packagePath: `assets/${PackageId.format(packageId)}.pack.json`,
+      artifactPath: scriptableArtifactPath,
+    });
+    const inputs: ScriptablePackInput[] = [];
+    for (const source of subjects.value.sources) {
+      inputs.push({
+        sourcePath: source.sourcePath,
+        displaySourcePath: packCatalogSourcePath(context, source.sourcePath),
+        definition: definitionFor(source),
+        sourceClosure: source.sourceClosure,
+        publicationGeneration: context.generation,
+        policy: policy(source.definition.packageId),
       });
     }
-  }
-  const sourceSubject = (packageId: PackageId): PackSourceSubject | undefined => {
-    const subject = subjects.get(PackageId.format(packageId).toLowerCase());
-    return subject?.kind === 'source' ? subject : undefined;
-  };
-  const readSubject = async (packageId: PackageId) => {
-    const subject = subjects.get(PackageId.format(packageId).toLowerCase());
-    if (subject === undefined) return undefined;
-    if (subject.kind === 'source') {
-      return {
-        format: 'source' as const,
-        packageId: subject.packageId,
-        parameters: 'parameters' in subject.definition ? subject.definition.parameters : [],
-      } satisfies import('@forgeax/engine-pack/source').PackParameterRootSubject;
+    for (const instance of subjects.value.instances) {
+      inputs.push({
+        sourcePath: instance.sourcePath,
+        displaySourcePath: packCatalogSourcePath(context, instance.sourcePath),
+        definition: definitionFor(instance.root),
+        sourceClosure: instance.root.sourceClosure,
+        subjectPackageId: instance.packageId,
+        values: instance.values,
+        publicationGeneration: context.generation,
+        policy: policy(instance.packageId),
+      });
     }
-    if (subject.kind === 'instance') {
-      return {
-        format: 'instance' as const,
-        packageId: subject.packageId,
-        parent: subject.parent,
-        values: subject.values,
-      } satisfies import('@forgeax/engine-pack/source').PackParameterInstanceSubject;
-    }
-    return {
-      format: 'direct' as const,
-      packageId: subject.packageId,
-    } satisfies import('@forgeax/engine-pack/source').PackDirectSubject;
-  };
+    if (inputs.length === 0) return [];
 
-  const orderedSubjects = [...subjects.values()].sort((left, right) =>
-    left.sourcePath.localeCompare(right.sourcePath),
-  );
-  const inputs: ScriptablePackInput[] = [];
-  for (const subject of orderedSubjects) {
-    if (subject.kind === 'source') {
-      const packageId = PackageId.format(subject.packageId);
-      const loaded = await loadScriptablePack(subject.sourcePath);
-      if (!loaded.ok) dynamicFailure(context, loaded.error);
-      if (PackageId.format(loaded.value.packageId) !== packageId) {
+    const requiredGuids = context.inventory.entries.flatMap((entry) => {
+      const parsed = AssetGuid.parse(entry.guid);
+      if (!parsed.ok) dynamicFailure(context, parsed.error);
+      return [parsed.value];
+    });
+    const assetSource = createDeclaredPackAssetSnapshotSource(
+      context.inventory.sourceDeclarations,
+      context.cookers,
+      requiredGuids,
+      {
+        importerRegistry: context.importerRegistry,
+        fsForImport: context.fsForImport,
+      },
+    );
+    const availableGuids = new Set(
+      requiredGuids.map((guid) => AssetGuid.format(guid).toLowerCase()),
+    );
+    const built = await produceScriptablePackProducts({
+      sources: inputs,
+      assetSource,
+      cookers: context.cookers,
+      availableGuids,
+    });
+    if (!built.ok) dynamicFailure(context, built.error);
+
+    const bundles: PackBuildBundle[] = [];
+    for (const input of inputs) {
+      const prepared = built.value.get(input.displaySourcePath);
+      if (prepared === undefined) {
         dynamicFailure(context, {
-          code: 'pack-source-revision-conflict',
-          expected: 'the ScriptablePack source packageId to remain fixed during production',
-          hint: 'retry after source writes settle and rebuild the current generation',
-          detail: {
-            sourcePath: subject.sourcePath,
-            scannedPackageId: packageId,
-            loadedPackageId: PackageId.format(loaded.value.packageId),
-          },
+          code: 'pack-build-failed',
+          expected: 'the worklist to return one prepared result per source subject',
+          hint: 'rerun Pack source generation from a clean inventory',
+          detail: { sourcePath: input.sourcePath },
         });
       }
-      inputs.push({
-        sourcePath: subject.sourcePath,
-        displaySourcePath: packCatalogSourcePath(context, subject.sourcePath),
-        definition: loaded.value,
-        sourceClosure: subject.sourceClosure,
-        publicationGeneration: context.generation,
-        policy: {
-          base: context.basePrefix === '' ? '/' : context.basePrefix,
-          packagePath: `assets/${packageId}.pack.json`,
-          artifactPath: scriptableArtifactPath,
-        },
-      });
+      const packageId = PackageId.format(input.subjectPackageId ?? input.definition.packageId);
+      const stagedByGuid = new Map(
+        prepared.product.stagedOutputs.map((output) => [
+          AssetGuid.format(output.guid).toLowerCase(),
+          output,
+        ]),
+      );
+      const entries = projectPackageCatalog(
+        prepared.product.product.assets.map((asset, sourceIndex) => {
+          const staged = stagedByGuid.get(asset.guid.toLowerCase());
+          return {
+            guid: asset.guid,
+            kind: asset.kind,
+            sourcePath: input.displaySourcePath,
+            sourceIndex,
+            ...(staged?.sourceKey === undefined ? {} : { sourceKey: staged.sourceKey }),
+            refs: asset.refs.map((reference) => reference.guid),
+            execution: 'cooked' as const,
+            packageId,
+            provenance: { provider: 'pack-ts', version: '2.0.0' },
+          };
+        }),
+        `${context.basePrefix === '/' ? '' : context.basePrefix}/${input.displaySourcePath}`,
+      );
+      bundles.push({ input, prepared, entries });
     }
+    return bundles;
+  } finally {
+    await executors.dispose();
   }
-  for (const subject of orderedSubjects) {
-    if (subject.kind !== 'instance') continue;
-    const resolved = await resolvePackParameterInheritance(
-      {
-        format: 'instance',
-        packageId: subject.packageId,
-        parent: subject.parent,
-        values: subject.values,
-      },
-      readSubject,
-    );
-    if (!resolved.ok) dynamicFailure(context, resolved.error);
-    const root = sourceSubject(resolved.value.rootPackageId);
-    if (root === undefined) {
-      dynamicFailure(context, {
-        code: 'pack-parent-has-no-parameters',
-        expected: 'the instance parent chain to terminate at a ScriptablePack source',
-        hint: 'point the instance at a ScriptablePack *.pack.ts source with parameters',
-        detail: { packageId: PackageId.format(subject.packageId) },
-      });
-    }
-    const loaded = await loadScriptablePack(root.sourcePath);
-    if (!loaded.ok) dynamicFailure(context, loaded.error);
-    if (PackageId.format(loaded.value.packageId) !== PackageId.format(root.packageId)) {
-      dynamicFailure(context, {
-        code: 'pack-source-revision-conflict',
-        expected: 'the ScriptablePack parent packageId to remain fixed during production',
-        hint: 'retry after source writes settle and rebuild the current generation',
-        detail: {
-          sourcePath: root.sourcePath,
-          scannedPackageId: PackageId.format(root.packageId),
-          loadedPackageId: PackageId.format(loaded.value.packageId),
-        },
-      });
-    }
-    const packageId = PackageId.format(subject.packageId);
-    inputs.push({
-      sourcePath: subject.sourcePath,
-      displaySourcePath: packCatalogSourcePath(context, subject.sourcePath),
-      definition: loaded.value,
-      sourceClosure: root.sourceClosure,
-      subjectPackageId: subject.packageId,
-      values: resolved.value.values,
-      publicationGeneration: context.generation,
-      policy: {
-        base: context.basePrefix === '' ? '/' : context.basePrefix,
-        packagePath: `assets/${packageId}.pack.json`,
-        artifactPath: scriptableArtifactPath,
-      },
-    });
-  }
-  if (inputs.length === 0) return [];
-
-  const requiredGuids = context.inventory.entries.flatMap((entry) => {
-    const parsed = AssetGuid.parse(entry.guid);
-    if (!parsed.ok) dynamicFailure(context, parsed.error);
-    return [parsed.value];
-  });
-  const externalOutputs = await declaredPackExternalOutputs(
-    context.inventory.sourceDeclarations,
-    context.cookers,
-    requiredGuids,
-    {
-      importerRegistry: context.importerRegistry,
-      fsForImport: context.fsForImport,
-    },
-  );
-  const availableGuids = new Set(requiredGuids.map((guid) => AssetGuid.format(guid).toLowerCase()));
-  const built = await produceScriptablePackProducts({
-    sources: inputs,
-    declaredExternalOutputs: externalOutputs,
-    cookers: context.cookers,
-    availableGuids,
-  });
-  if (!built.ok) dynamicFailure(context, built.error);
-
-  const bundles: PackBuildBundle[] = [];
-  for (const input of inputs) {
-    const prepared = built.value.get(input.displaySourcePath);
-    if (prepared === undefined) {
-      dynamicFailure(context, {
-        code: 'pack-build-failed',
-        expected: 'the worklist to return one prepared result per source subject',
-        hint: 'rerun Pack source generation from a clean inventory',
-        detail: { sourcePath: input.sourcePath },
-      });
-    }
-    const packageId = PackageId.format(input.subjectPackageId ?? input.definition.packageId);
-    const stagedByGuid = new Map(
-      prepared.product.stagedOutputs.map((output) => [
-        AssetGuid.format(output.guid).toLowerCase(),
-        output,
-      ]),
-    );
-    const entries = projectPackageCatalog(
-      prepared.product.product.assets.map((asset, sourceIndex) => {
-        const staged = stagedByGuid.get(asset.guid.toLowerCase());
-        return {
-          guid: asset.guid,
-          kind: asset.kind,
-          sourcePath: input.displaySourcePath,
-          sourceIndex,
-          ...(staged?.sourceKey === undefined ? {} : { sourceKey: staged.sourceKey }),
-          refs: asset.refs.map((reference) => reference.guid),
-          execution: 'cooked' as const,
-          packageId,
-          provenance: { provider: 'pack-ts', version: '2.0.0' },
-        };
-      }),
-      `${context.basePrefix === '/' ? '' : context.basePrefix}/${input.displaySourcePath}`,
-    );
-    bundles.push({ input, prepared, entries });
-  }
-  return bundles;
 }
 
 function updateImportedEntries(
@@ -474,7 +354,7 @@ async function emitPackDocument(
       : `assets/${options.packageName}`,
     name: options.packageName,
     originalFileName: options.originalFileName,
-    source: JSON.stringify(options.pack),
+    source: JSON.stringify(projectMaterialPackTransport(options.pack)),
   });
   const packageUrl = work.context.sink.fileUrl(work.context.sink.getFileName(referenceId));
   const receiptUrls = new Map<string, string>();
@@ -534,9 +414,8 @@ async function emitAuthoredPack(
     });
   }
   if (declaration.value.schemaVersion === '3.0.0') {
-    const parsed = parsePackSourceJson(declaration.value);
-    if (!parsed.ok) dynamicFailure(work.context, parsed.error);
-    if (parsed.value.format !== 'direct') {
+    const parsed = declaration.value;
+    if (parsed.format !== 'direct') {
       dynamicFailure(work.context, {
         code: 'catalog-declaration-missing',
         expected: 'a direct v3 Pack declaration for an indexed authored output',
@@ -544,17 +423,16 @@ async function emitAuthoredPack(
         detail: { stage: 'scan', sourcePath: packPath },
       });
     }
-    const projected = projectDirectPackJson(parsed.value);
-    if (!projected.ok) dynamicFailure(work.context, projected.error);
+    const projected = projectDirectPackJson(parsed);
     const prepared = await prepareDirectPackTransport({
-      projected: projected.value,
+      projected,
       sourcePath: packPath,
       sourceRevision: declaration.sourceRevision,
       availableGuids,
       cookers: work.context.cookers,
       policy: {
         base: work.context.basePrefix === '' ? '/' : work.context.basePrefix,
-        packagePath: `assets/${projected.value.packageId}.pack.json`,
+        packagePath: `assets/${projected.packageId}.pack.json`,
         artifactPath: (assetGuid, key) => `${assetGuid}/${key}.bin`,
         sink: () => {},
       },

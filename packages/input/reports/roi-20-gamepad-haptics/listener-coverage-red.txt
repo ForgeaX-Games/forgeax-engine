@@ -1,0 +1,59 @@
+Testing types with tsc and vue-tsc is an experimental feature.
+Breaking changes might not follow SemVer, please pin Vitest's version when using it.
+
+ RUN  v4.1.11 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/input
+
+ ❯ |@forgeax/engine-input| __tests__/browser-backend.cases.unit.test.ts (20 tests | 2 failed) 32ms
+       × attaches input, visibility, pointer-lock-error, and click listeners 6ms
+       × detach removes every listener and is idempotent on second call 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@forgeax/engine-input| __tests__/browser-backend.cases.unit.test.ts > browser-backend.test.ts > attachBrowserInputBackend (browser-backend.ts) > attaches input, visibility, pointer-lock-error, and click listeners
+AssertionError: expected 15 to be 12 // Object.is equality
+
+- Expected
++ Received
+
+- 12
++ 15
+
+ ❯ __tests__/browser-backend.cases.unit.test.ts:273:31
+    271|         const { canvas, doc, win, store } = buildBBFakes();
+    272|         attachBrowserInputBackend(canvas, { document: doc, window: win…
+    273|         expect(store.count()).toBe(12);
+       |                               ^
+    274|       });
+    275|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |@forgeax/engine-input| __tests__/browser-backend.cases.unit.test.ts > browser-backend.test.ts > attachBrowserInputBackend (browser-backend.ts) > detach removes every listener and is idempotent on second call
+AssertionError: expected 15 to be 12 // Object.is equality
+
+- Expected
++ Received
+
+- 12
++ 15
+
+ ❯ __tests__/browser-backend.cases.unit.test.ts:397:31
+    395|         const { canvas, doc, win, store } = buildBBFakes();
+    396|         const handle = attachBrowserInputBackend(canvas, { document: d…
+    397|         expect(store.count()).toBe(12);
+       |                               ^
+    398|         handle();
+    399|         expect(store.count()).toBe(0);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 18 passed (20)
+Type Errors  no errors
+   Start at  20:14:11
+   Duration  2.22s (transform 1.55s, setup 0ms, import 1.65s, tests 32ms, environment 0ms)
+
+undefined
+/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/input:
+[ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL] Command failed with exit code 1: vitest run __tests__/browser-backend.cases.unit.test.ts '--maxWorkers=1'

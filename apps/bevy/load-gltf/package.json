@@ -21,11 +21,26 @@
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-load-gltf smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "demo bundle downstream of engine package sizes" },
-      "fps": { "enabled": false, "reason": "demo-specific fps evidence is not the gate" },
-      "bench": { "enabled": false, "reason": "not a benchmark demo" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-load-gltf smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; Bevy example reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle downstream of engine package sizes"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "demo-specific fps evidence is not the gate"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "not a benchmark demo"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-load-gltf smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy example reproduction"
+      }
     }
   },
   "dependencies": {
@@ -42,8 +57,8 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

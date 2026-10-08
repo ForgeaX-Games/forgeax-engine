@@ -71,6 +71,20 @@ Successful `new` also performs a two-second, best-effort check of the configured
 > [!IMPORTANT]
 > A successful build is not acceptance. Verify the exact ZIP that will be distributed; the verifier creates a project, installs from the bundled pnpm store with networking disabled, and runs `new`, `skill verify`, `doctor`, `test`, `build`, `dev`, and `preview`.
 
+If full archive verification fails while a source build is still active, follow
+[SDK source preparation ownership](../../scripts/ci/README.md#sdk-source-preparation-ownership),
+retain the failed consumer and run the process regression before repeating the
+complete archive gate.
+
+SDK PR preflight uses the [CI operating guide](../../scripts/ci/README.md) for its bounded disposable-consumer workload. PR preflight transfers one byte-verified seed to four independent consumer groups and requires their complete identity/conservation aggregate. Exact archive and extracted template bytes remain immutable; formal Candidate/Release qualification keeps the default full workload. A passing PR workload is not a sealed release Candidate.
+
+The View consumer owns the real independent-input/UI run against the verified
+installed Engine and the complete JS live-to-saved-to-cold chain; Project owns
+the complete TS chain and installed Game 3D. Each cold replay stays with its own
+live publication. Independent validation never delays seed transport or falls
+back to contributor packages. Default archive and npm validation retain every
+installed journey; measure the four-group critical path separately from queueing.
+
 ## Preflight
 
 Run from the Engine repository root:
@@ -89,6 +103,15 @@ command -v unzip
 | Node | `>=22.13.0` | Select a supported Node installation |
 | pnpm | Available to the SDK builder | Enable the repository-declared package manager with Corepack |
 | ZIP tools | `zip` and `unzip` on `PATH` | Install the platform ZIP tools |
+
+For contributor PR CI timing, follow the [SDK critical-path guide](../../scripts/ci/README.md#october-5-sdk-critical-path-balance).
+Its four consumers balance complete owners: Project includes installed-package
+JS/TS live/cold and Game 3D View journeys; View owns paired diagnostics. Default
+archive and Candidate/Release qualification still run the complete roster.
+Measure all preparation and terminal work, with Runner waiting reported separately.
+Matching shader profile inputs may accelerate PR builds only after the current
+compiler/source/profile and payload bytes validate; report cold and warm runs
+separately, and rebuild missing or stale inputs from source.
 
 ## Build and verify
 
@@ -126,10 +149,12 @@ gh workflow run sdk-release-candidate.yml \
 
 The source checkout, SDK ZIP, npm tarballs, and source snapshot all use the
 pinned SHA. The collision gate may run the current workflow commit's Preview
-smoke script as its witness; its source commit, witness commit, and script blob
-are recorded in the gate report. This repairs a test timeout without changing
-the release bytes. Both commits must be on current main, and the source still
-needs its own successful push CI baseline.
+smoke script as its witness only when the pinned source already contains that
+script's Preview-disposal handshake; otherwise it keeps the source-owned smoke
+script. The source commit, actual witness commit, and script blob are recorded
+in the gate report. This repairs a test timeout without introducing a new
+lifecycle contract into older release bytes. Both commits must be on current
+main, and the source still needs its own successful push CI baseline.
 
 The Candidate workflow binds the current `origin/main` commit and its CI baseline, builds the SDK seed once, runs npm-consumer and exact archive/browser gates against it while the reproducibility and collision lanes rebuild the same commit in parallel, compares their evidence with the exact seed (npm-tree byte inventory, version/tag collision) in `seal`, then seals `sdk-candidate.json` with per-file SHA-256 and npm integrity. The normal baseline is a successful `ci.yml` `push` run for that exact main SHA; when an admin merge is intentionally tree-empty, the workflow may instead reuse a successful `ci.yml` `push` run for the merge commit's first parent, but only after proving the two commit trees are byte-identical and recording that basis in the run summary. A PR check, a non-empty merge, or an unrelated SHA is never interchangeable. If neither baseline exists, Candidate remains fail-closed and must not be promoted. The reproducibility lane keeps full Git history because `sdk:build` validates the feature-catalog baseline ancestry; a depth-1 checkout can falsely reject a valid main commit. Record the successful workflow run ID; only a sealed Candidate is promotable.
 
@@ -324,6 +349,9 @@ material compilation or package bytes. See the [SDK/Dawn workload evidence](../.
 
 | Signal | Owning input | Action |
 |:--|:--|:--|
+| `selectedBrowser.playerRead` or inspection-list stage times out | SDK browser observation / game-owned read | Retain the failing stage and real execution diagnostics; keep the original observation budget and drain the owned page, browser and daemon before retrying. A progress heartbeat is not completion. |
+| `Pack service worker preparation timed out during ...` | Pack native module delivery | Inspect the reported registration lookup, registration or page-control phase in `packages/pack/src/program-browser.ts`, then the DevKit runtime delivery host. Keep the actual native Pack execution gate; do not block service workers or replace the program with static content. |
+| `Unable to replace auth placeholder in .git/config` or `could not migrate git directory` during recursive checkout preparation | Persistent standalone View Git metadata, possibly with a stale absorption destination | Repair the pre-checkout absorption route in the [CI guide](../../scripts/ci/README.md#sdk-candidate-critical-path), then dispatch a new Candidate with the same verified source SHA. |
 | `sdk-dirty-checkout` | Git source identity | Commit or remove unintended changes |
 | `sdk-package-*` | Bare public package directories | Repair package visibility, exports, wrapper removal, or file closure; rebuild |
 | `package-runtime-dependency-closure` | Built package JavaScript plus package manifests | Move every external `@forgeax/engine-*` runtime import out of `devDependencies` and into `dependencies`, `optionalDependencies`, or `peerDependencies`; rebuild |
@@ -358,3 +386,5 @@ to check sourceKey and definitions, then inspect native Fiber state to confirm
 activation. Verify a new session after code or configuration changes; engine and
 frontend effects own scene and DOM cleanup respectively. For source reuse, read
 `help asset source import` or `help asset clone` and transfer the author closure.
+
+SDK PR browser owners use the existing Runner CPU-affinity envelope for independent inputs and all npm/archive qualifications. Diagnose quota and inherited mask through the [CI guide](../../scripts/ci/README.md#sdk-software-gpu-cpu-envelope); retain full consumer execution and measure its effect on the final commit.

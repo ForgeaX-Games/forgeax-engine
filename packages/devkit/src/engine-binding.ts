@@ -12,7 +12,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { commandError, readProjectFacts } from './project.js';
+import { readProjectFacts } from './project.js';
 import type { CommandError, CommandResult, ProjectCommandOptions } from './types.js';
 
 export const ENGINE_BINDING_SCHEMA_VERSION = '1.0.0' as const;
@@ -352,6 +352,14 @@ async function readManifest(path: string): Promise<PackageManifest> {
   return value as PackageManifest;
 }
 
+/** Byte identity for a selected installed package; shared with frontend source admission. */
+export async function enginePackageRuntimeIdentity(packageRoot: string): Promise<string> {
+  const manifest = await readManifest(resolve(packageRoot, 'package.json'));
+  return digestText(
+    `${manifestDigest(manifest)}\0${runtimeDigest(await collectRuntimeFiles(packageRoot, manifest))}`,
+  );
+}
+
 export async function inspectEngineWorkspace(
   workspaceInput: string,
 ): Promise<CommandResult<EngineWorkspaceStatus>> {
@@ -682,8 +690,4 @@ export async function engineDoctorCommand(
 
 export function engineBindingFilePath(rootInput = process.cwd()): string {
   return bindingFile(resolve(rootInput));
-}
-
-export function engineBindingError(cause: unknown): CommandError {
-  return commandError(cause, 'engine-binding-failed');
 }

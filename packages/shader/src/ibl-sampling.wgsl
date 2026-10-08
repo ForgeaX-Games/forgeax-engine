@@ -21,6 +21,7 @@
 //   - sampleReflectionProbeSpecular(..., probeMap, probeSampler, ...)
 
 #import forgeax_pbr::ibl_shared::{fresnelSchlickRoughness, inverseRotateEnvironment}
+#import forgeax_pbr::brdf::{specularF90}
 
 // Decode the renderer's Skylight/probe scalar without touching the probe box
 // metadata carried in the color lanes. A negative intensity is the
@@ -71,9 +72,9 @@ fn specularEnvironmentAlbedo(
   // The preintegrated LUT has one level; explicit LOD remains valid when the
   // Standard evaluator is selected by a non-uniform particle control path.
   let envBRDF = textureSampleLevel(brdfLut, brdfLutSampler, vec2<f32>(NdotV, roughness), 0.0).rg;
-  let fssEss = fresnelSchlickRoughness(NdotV, F0, roughness) * envBRDF.r + envBRDF.g;
+  let fssEss = fresnelSchlickRoughness(NdotV, F0, roughness) * envBRDF.r + envBRDF.g * specularF90(F0);
   let ems = clamp(1.0 - envBRDF.r - envBRDF.g, 0.0, 1.0);
-  let favg = F0 + (vec3<f32>(1.0) - F0) * (1.0 / 21.0);
+  let favg = F0 + (vec3<f32>(specularF90(F0)) - F0) * (1.0 / 21.0);
   let fms = fssEss * favg / (vec3<f32>(1.0) - ems * favg);
   return fssEss + fms * ems;
 }

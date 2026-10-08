@@ -47,7 +47,8 @@ import {
   audioPlugin,
   type AudioBackend,
 } from '@forgeax/engine-audio';
-import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import { WebAudioEngine, webAudioPlugin } from '@forgeax/engine-audio-webaudio';
+import { installAudioControls } from './audio-controls';
 import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import {
   Collider,
@@ -70,8 +71,10 @@ if (!canvas) throw new Error('hello-audio: missing <canvas id="app"> in index.ht
 
 // M3 (w16): input is now in the canvas-form default set (D-2); audioPlugin()
 // provides the Host-owned backend before the ECS audio consumer activates.
+const hostAudio = new WebAudioEngine();
 const appRes = await createApp(canvas, {
-  plugins: [webAudioPlugin(), audioPlugin(), physicsPlugin('rapier-3d')],
+  ...(runtimeBinding !== undefined && import.meta.env.DEV ? { assetRuntimeBinding: runtimeBinding } : {}),
+  plugins: [webAudioPlugin(hostAudio), audioPlugin(), physicsPlugin('rapier-3d')],
 }, {
   ...forgeaxBundlerAdapter(),
   importTransport: createRuntimeAssetImportTransport(runtimeBinding),
@@ -171,6 +174,8 @@ if (!sfxGuid.ok) {
 } else {
   const loadRes = await assets.loadByGuid<AudioClipAsset>(sfxGuid.value);
   if (loadRes.ok) {
+    if (loadRes.value.stream)
+      throw new Error('[hello-audio] stale-decode fixture requires a buffered short SFX');
     sfxClipHandle = world.allocSharedRef('AudioClipAsset', loadRes.value);
     world.set(emitterEntity, AudioSource, {
       clip: sfxClipHandle,
@@ -505,6 +510,8 @@ world
     },
   })
   .unwrap();
+
+if (sfxClipHandle !== HANDLE_NONE) installAudioControls(app, hostAudio, sfxClipHandle);
 
 const startRes = app.start();
 if (!startRes.ok) {

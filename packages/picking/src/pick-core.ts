@@ -15,9 +15,10 @@
 // (`undefined` for pick, `[]`/`undefined` for the vertex queries).
 
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { mat4, ray } from '@forgeax/engine-math';
+import { box3, mat4, ray, type Vec3Like, vec3 } from '@forgeax/engine-math';
 import { Camera, type CameraProjection, cameraProjectionFromF32 } from '@forgeax/engine-render';
 import { GlobalTransform } from '@forgeax/engine-scene';
+import type { MeshAsset } from '@forgeax/engine-types';
 import { PickError } from './pick-errors';
 
 /**
@@ -143,4 +144,41 @@ export function computeScreenRay(
   ray.screenToRay(r, screenX, screenY, viewportWidth, viewportHeight, view, proj, projectionKind);
 
   return { ray: r, view, proj, projectionKind };
+}
+
+/** The point kernel and corner order shared by precise picking queries. */
+export function visitMeshBoundsCorners(
+  bounds: NonNullable<MeshAsset['aabb']>,
+  matrix: mat4.Mat4Like,
+  visit: (point: Vec3Like) => void,
+): void {
+  // Keep the point kernel's w=0 convention, Float32 rounding and corner order.
+  // transformBox3 intentionally has a different perspective-degenerate rule.
+  const point = vec3.create();
+  for (let corner = 0; corner < 8; corner++) {
+    point[0] = bounds[corner & 1 ? 3 : 0] as number;
+    point[1] = bounds[corner & 2 ? 4 : 1] as number;
+    point[2] = bounds[corner & 4 ? 5 : 2] as number;
+    mat4.transformPoint(point, matrix, point);
+    visit(point);
+  }
+}
+
+/** Triangle bounds retain Math.min/max's propagation of invalid coordinates. */
+export function rayHitsMeshBounds(
+  screenRay: ray.Ray,
+  bounds: MeshAsset['aabb'],
+  matrix: mat4.Mat4Like,
+): boolean {
+  if (bounds === undefined || (bounds[0] as number) > (bounds[3] as number)) return true;
+  const worldBounds = box3.create();
+  worldBounds[0] = worldBounds[1] = worldBounds[2] = Infinity;
+  worldBounds[3] = worldBounds[4] = worldBounds[5] = -Infinity;
+  visitMeshBoundsCorners(bounds, matrix, (point) => {
+    for (let axis = 0; axis < 3; axis++) {
+      worldBounds[axis] = Math.min(worldBounds[axis] as number, point[axis] as number);
+      worldBounds[axis + 3] = Math.max(worldBounds[axis + 3] as number, point[axis] as number);
+    }
+  });
+  return ray.rayAabbIntersects(screenRay, worldBounds).hit;
 }

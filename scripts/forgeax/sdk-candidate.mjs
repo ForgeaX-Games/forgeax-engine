@@ -12,7 +12,7 @@ import { filesUnder, sha256 } from './sdk-lib.mjs';
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const candidateSchemaPath = resolve(repositoryRoot, 'schemas/sdk-candidate.schema.json');
-export const CANDIDATE_SCHEMA_VERSION = '1.0.0';
+export const CANDIDATE_SCHEMA_VERSION = '1.1.0';
 export const CANDIDATE_GATES = Object.freeze([
   'npm-consumer',
   'archive-browser',
@@ -156,6 +156,8 @@ export async function sealCandidate({
   if (!/^[0-9a-f]{40}$/.test(buildResult.engineCommit ?? '')) {
     throw new Error('sdk-candidate-engine-commit-invalid');
   }
+  if (!/^[0-9a-f]{40}$/.test(buildResult.viewCommit ?? ''))
+    throw new Error('sdk-candidate-view-commit-invalid');
   const runId = Number(sourceWorkflowRunId);
   if (!Number.isInteger(runId) || runId < 1) throw new Error('sdk-candidate-source-run-id-invalid');
 
@@ -200,6 +202,7 @@ export async function sealCandidate({
     candidateId: `${version}-${buildResult.engineCommit.slice(0, 12)}`,
     sdkVersion: version,
     engineCommit: buildResult.engineCommit,
+    viewCommit: buildResult.viewCommit,
     sourceWorkflowRunId: runId,
     artifacts,
     npmPackages,
@@ -247,6 +250,12 @@ export async function validateCandidate({ candidateRoot, expectedVersion, expect
       throw new Error(`sdk-candidate-artifact-mismatch: ${entry.path}`);
     }
   }
+  const buildIdentity = await readJson(
+    resolve(root, 'sdk-build-result.json'),
+    'sdk-candidate-build-result-missing',
+  );
+  if (buildIdentity.viewCommit !== candidate.viewCommit)
+    throw new Error('sdk-candidate-view-commit-mismatch');
   const gateNames = candidate.gates.map(({ name }) => name);
   if (
     gateNames.length !== CANDIDATE_GATES.length ||

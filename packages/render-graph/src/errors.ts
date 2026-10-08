@@ -18,6 +18,8 @@
 //
 // Related: plan-strategy D-3; research Finding 8; AC-15.
 
+import type { GraphPassKind } from './types.js';
+
 /**
  * Private code-to-detail authority for the complete RenderGraphError surface.
  *
@@ -170,7 +172,8 @@ export interface CapabilityDetail extends ResourceAccessDetail {
     | 'storage-buffer'
     | 'storage-texture'
     | 'indirect'
-    | 'color-attachments';
+    | 'color-attachments'
+    | 'ray-query';
 }
 
 export interface DescriptorDetail {
@@ -182,7 +185,7 @@ export interface DescriptorDetail {
 
 export interface PassFailureDetail {
   readonly passName: string;
-  readonly passKind: 'raster' | 'compute' | 'copy';
+  readonly passKind: GraphPassKind;
   readonly cause: unknown;
 }
 

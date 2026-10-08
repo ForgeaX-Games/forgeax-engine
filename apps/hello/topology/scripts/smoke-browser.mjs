@@ -97,7 +97,7 @@ try {
     const runtimeReady = inspection.length === 2 && inspection.every(
       (entry) => entry.lane !== 'pending' && entry.lane !== 'refused' && entry.drawCount > 0 && entry.sourceBytes > 0,
     ) && point?.style?.kind === 'points' && point.style.sizePx === 16 && point.style.shape === 'circle'
-      && line?.style?.kind === 'lines' && line.style.widthPx === 4;
+      && line?.style?.kind === 'lines' && line.style.width === 4;
     const laneMatches = evidence.validationErrors === 0
       && evidence.evidenceLane === testCase.name
       && evidence.backend === testCase.name
@@ -144,7 +144,7 @@ try {
     const falsified = name === 'point-square'
       ? point?.style?.shape === 'square'
       : name === 'line-width'
-        ? line?.style?.widthPx === 1
+        ? line?.style?.width === 1
         : name === 'dpr'
           ? evidence.viewport?.dpr === 2
           : name === 'resize'

@@ -120,7 +120,7 @@ export function collectRecoveryBaseline(): RecoveryBaseline {
       sourceCheck('packages/net/src/session/net-session.ts', 'receiveEvents(): readonly NetError[]'),
       sourceCheck('packages/net/src/session/net-session.ts', 'publish(): Result<void, NetError | EndpointError>'),
       sourceCheck('packages/net/src/replication/replica.ts', 'clear(): void'),
-      sourceCheck('packages/net/src/replication/replica.ts', 'disconnect(): void'),
+      sourceCheck('packages/net/src/session/net-session.ts', 'dispose(): void'),
     ],
     intendedFalsifiers: [
       { acceptanceId: 'AC-02', invariant: 'A rejected pre-baseline mutation leaves the local projection unchanged.', expectedOutcome: 'structured rejection and unchanged World state' },

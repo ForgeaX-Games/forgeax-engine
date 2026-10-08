@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } fr
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyProvenance } from '../../packages/wgpu-wasm/scripts/provenance.mjs';
 import { appPackages } from '../build-task-cache.mjs';
 import { runBrowserCommand } from './run-browser-gate-with-retry.mjs';
 
@@ -102,6 +103,27 @@ export async function main(
     }
   };
   const shared = 'shared-app-inputs';
+  let coreRestored = false;
+  const publishOutputs = (families) => {
+    // Only generated output roots cross the staging boundary; never overlay source.
+    const copyOutputs = (directory) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const path = join(directory, entry.name);
+        if (
+          entry.name === 'dist' ||
+          entry.name === 'pkg' ||
+          path === join(stage, 'packages/preview/assets/canonical-kit')
+        ) {
+          const destination = join(root, path.slice(stage.length + 1));
+          rmSync(destination, { recursive: true, force: true });
+          cpSync(path, destination, { recursive: true });
+        } else copyOutputs(path);
+      }
+    };
+    for (const family of families)
+      if (existsSync(join(stage, family))) copyOutputs(join(stage, family));
+  };
   try {
     return await prepareInputs({
       restore: async () => {
@@ -119,21 +141,38 @@ export async function main(
           ...process.env,
           FORGEAX_ARTIFACT_EXPECTED_SHA: process.env.EXPECTED_PRODUCT_SHA,
         };
-        // One bounded attempt per family. Rebuilding beats minutes of CDN retries.
-        const deadline = Date.now() + 60_000;
-        for (const [ids, path] of [
-          [options['artifact-ids'], stage],
-          ...(needsShared
-            ? [[options['shared-artifact-id'], join(stage, 'shared-app-inputs-transfer')]]
-            : []),
-        ]) {
-          const timeoutMs = deadline - Date.now();
-          if (timeoutMs <= 0) throw new Error('artifact acceleration budget exhausted');
-          await invoke(
-            ['scripts/ci/download-artifact-with-retry.mjs', '--artifact-ids', ids, '--path', path],
-            { timeoutMs, env },
-          );
-        }
+        // Independent archives use disjoint staging paths. Start both within
+        // the upstream 120-second bound: serial transfer consumed the shared
+        // archive's budget and forced a full app rebuild in run 37078788317.
+        const deadline = Date.now() + 120_000;
+        const transfers = await Promise.allSettled(
+          [
+            [options['artifact-ids'], stage],
+            ...(needsShared
+              ? [[options['shared-artifact-id'], join(stage, 'shared-app-inputs-transfer')]]
+              : []),
+          ].map(async ([ids, path]) => {
+            const timeoutMs = deadline - Date.now();
+            if (timeoutMs <= 0) throw new Error('artifact acceleration budget exhausted');
+            await invoke(
+              [
+                'scripts/ci/download-artifact-with-retry.mjs',
+                '--artifact-ids',
+                ids,
+                '--path',
+                path,
+              ],
+              { timeoutMs, env },
+            );
+            if (path === stage) coreRestored = true;
+          }),
+        );
+        // Drain every writer before verification, recovery or stage deletion.
+        // Cancellation takes precedence over an acceleration miss.
+        const failure =
+          transfers.find((result) => result.status === 'rejected' && result.reason.cancelled) ??
+          transfers.find((result) => result.status === 'rejected');
+        if (failure) throw failure.reason;
         if (needsShared) await invoke(['scripts/ci/unpack-shared-app-inputs.mjs', '--root', stage]);
         return true;
       },
@@ -150,6 +189,8 @@ export async function main(
           throw new Error(
             `shared input fingerprint mismatch: consumer=${consumer} expected=${options['input-fingerprint']} observed=${manifest.inputFingerprint}`,
           );
+        if (needsShared && existsSync(join(inputRoot, shared, 'compiler')))
+          await verifyProvenance({ pkgDirectory: join(inputRoot, shared, 'compiler') });
         await invoke([
           'scripts/ci/verify-build-artifact-input.mjs',
           '--consumer',
@@ -160,29 +201,38 @@ export async function main(
         ]);
       },
       publish: async () => {
-        // Only generated output roots cross the staging boundary; never overlay source.
-        const copyOutputs = (directory) => {
-          for (const entry of readdirSync(directory, { withFileTypes: true })) {
-            if (!entry.isDirectory()) continue;
-            const path = join(directory, entry.name);
-            if (
-              entry.name === 'dist' ||
-              entry.name === 'pkg' ||
-              path === join(stage, 'packages/preview/assets/canonical-kit')
-            ) {
-              const destination = join(root, path.slice(stage.length + 1));
-              rmSync(destination, { recursive: true, force: true });
-              cpSync(path, destination, { recursive: true });
-            } else copyOutputs(path);
-          }
-        };
-        for (const family of ['packages', ...(needsApps ? ['apps'] : [])])
-          if (existsSync(join(stage, family))) copyOutputs(join(stage, family));
+        publishOutputs(['packages', ...(needsApps ? ['apps'] : [])]);
         if (!needsShared) return;
+        const compiler = join(stage, shared, 'compiler');
+        if (existsSync(compiler)) {
+          const destination = join(root, 'packages/wgpu-wasm/pkg');
+          rmSync(destination, { recursive: true, force: true });
+          cpSync(compiler, destination, { recursive: true });
+        }
         rmSync(join(root, shared), { recursive: true, force: true });
         cpSync(join(stage, shared), join(root, shared), { recursive: true });
       },
       rebuild: async () => {
+        if (!needsApps && coreRestored) {
+          // A shared transfer failure does not invalidate the independently
+          // SHA/digest-admitted core archive. Verify its own declared classes
+          // before retaining native bytes for the normal source rebuild.
+          try {
+            await invoke([
+              'scripts/ci/verify-build-artifact-input.mjs',
+              '--consumer',
+              consumer,
+              '--root',
+              stage,
+              '--transfer-artifact',
+              'core-build',
+            ]);
+            publishOutputs(['packages']);
+          } catch (error) {
+            if (error.cancelled) throw error;
+            console.warn(`[ci-inputs] core recovery unavailable: ${error.message}`);
+          }
+        }
         rmSync(stage, { recursive: true, force: true });
         if (needsApps) {
           // A failed app transfer must not discard the independently usable

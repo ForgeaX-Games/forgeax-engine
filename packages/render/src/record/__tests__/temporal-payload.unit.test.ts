@@ -171,7 +171,44 @@ describe('temporal GPU payloads', () => {
     const payload = new Float32Array(uploads[0]?.buffer ?? new ArrayBuffer(0));
     expect(Array.from(payload.slice(16, 19))).toEqual([0, -1, 0]);
     expect(Array.from(payload.slice(20, 23))).toEqual([0, 0, 0]);
-    expect(Array.from(payload.slice(16, 23)).every(Number.isFinite)).toBe(true);
+    expect([...payload.slice(16, 19), ...payload.slice(20, 23)].every(Number.isFinite)).toBe(true);
+    expect(new Uint32Array(payload.buffer)[19]).toBe(0xffffffff);
+  });
+
+  it('publishes a finite renderer clock with fog off and changes no other View bytes', () => {
+    const { queue, uploads, offsets } = recordingQueue();
+    const light = {
+      kind: 'directional' as const,
+      direction: vec3.create(0, -1, 0),
+      color: vec3.create(1, 1, 1),
+      intensity: 1,
+      contactShadowLength: 0,
+    };
+    const args = [
+      queue,
+      {} as Buffer,
+      camera(),
+      light,
+      { point: [], spot: [] } as never,
+      [],
+    ] as const;
+    const tail = [0, undefined, undefined, undefined, undefined, false] as const;
+    writeViewUbo(...args);
+    writeViewUbo(...args, ...tail, 12.5);
+    writeViewUbo(...args, ...tail, Number.NaN);
+    writeViewUbo(...args, ...tail, Number.POSITIVE_INFINITY);
+    writeViewUbo(...args, ...tail, Number.MAX_VALUE);
+    const primary = uploads.filter((_, index) => offsets[index] === 0);
+    expect(primary).toHaveLength(5);
+    const baseline = primary[0];
+    for (const [index, bytes] of primary.entries()) {
+      const value = new Float32Array(bytes.slice().buffer);
+      expect(value.byteLength).toBe(VIEW_UNIFORM_BYTES);
+      expect(value[291]).toBe(index === 1 ? 12.5 : 0);
+      expect(Array.from(value.slice(284, 291))).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      value[291] = 0;
+      expect(new Uint8Array(value.buffer)).toEqual(baseline);
+    }
   });
 
   it('keeps directional orientation independent from light intensity', () => {
@@ -329,7 +366,10 @@ describe('temporal GPU payloads', () => {
     expect(Array.from(payload.slice(0, 16))).toEqual(Array.from(identityMatrix()));
     expect(Array.from(payload.slice(16, 32))).toEqual(Array.from(identityMatrix()));
     expect(Array.from(payload.slice(32, 36))).toEqual([1, 1, 0, 0]);
-    expect(Array.from(payload.slice(36))).toEqual(new Array(28).fill(0));
+    expect(Array.from(new Uint32Array(payload.buffer).slice(36, 40))).toEqual([
+      0, 0, 0xffffffff, 0,
+    ]);
+    expect(Array.from(payload.slice(40))).toEqual(new Array(24).fill(0));
   });
 
   it('uploads main and shadow slots as one pack and resends only changed runs', () => {

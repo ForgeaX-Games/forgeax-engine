@@ -87,6 +87,90 @@ describe('keyed SceneAsset compiler', () => {
     expect(result.value.asset.mounts?.[0]?.overrides?.[0]?.localId).toBe(3);
   });
 
+  it('keeps independent instance ranges, converted carrier components, and nested hierarchy overrides together', () => {
+    const world = new World();
+    register(world);
+    const grandchild: SceneAsset = {
+      kind: 'scene',
+      entities: { leaf: { components: { KeyedSceneMarker: { value: 7 } } } },
+    };
+    const child: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        leaf: { components: { KeyedSceneMarker: { value: 2 }, ChildOf: { parent: 'inner' } } },
+        inner: { components: {}, instance: { source: 'grandchild' } },
+      },
+    };
+    const parent: SceneAsset = {
+      kind: 'scene',
+      entities: {
+        root: { components: {} },
+        z: { components: {}, instance: { source: 'child' } },
+        a: {
+          components: {
+            ChildOf: { parent: 'root' },
+            Children: { entities: ['z', ['z', 'inner', 'leaf']] },
+          },
+          instance: {
+            source: 'child',
+            overrides: [
+              { target: ['leaf'], components: { KeyedSceneMarker: { value: 9 } } },
+              { target: ['inner', 'leaf'], components: { ChildOf: { parent: 'root' } } },
+            ],
+          },
+        },
+      },
+    };
+    const grandHandle = world.allocSharedRef('SceneAsset', grandchild);
+    const childHandle = world.allocSharedRef('SceneAsset', child);
+    const parentHandle = world.allocSharedRef('SceneAsset', parent);
+    const result = compile(
+      world,
+      parentHandle,
+      parent,
+      new Map([
+        [Number(grandHandle), grandchild],
+        [Number(childHandle), child],
+        [Number(parentHandle), parent],
+      ]),
+      new Map([
+        ['grandchild', grandHandle],
+        ['child', childHandle],
+      ]),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.asset.mounts).toMatchObject([
+      {
+        localId: 1,
+        memberFirst: 3,
+        memberCount: 3,
+        parent: 0,
+        components: { Children: { entities: [2, 8] } },
+        overrides: [
+          { localId: 3, comp: 'KeyedSceneMarker', field: 'value', value: 9 },
+          { localId: 5, comp: 'ChildOf', value: { parent: 0 } },
+        ],
+      },
+      { localId: 2, memberFirst: 6, memberCount: 3 },
+    ]);
+    expect(result.value.asset.mounts?.[0]?.components?.ChildOf).toBeUndefined();
+    expect(result.value.rootLocalIds).toEqual([0, 2]);
+    expect(
+      [...result.value.hierarchyParentByLocalId].sort(([left], [right]) => left - right),
+    ).toEqual([
+      [1, 0],
+      [3, 4],
+      [4, 1],
+      [5, 0],
+      [6, 7],
+      [7, 2],
+      [8, 7],
+    ]);
+    expect(result.value.resolveAddress(['a', 'inner', 'leaf'])).toBe(5);
+    expect(result.value.resolveAddress(['z', 'inner', 'missing'])).toBeUndefined();
+  });
+
   it('rejects hierarchy cycles before producing a runtime projection', () => {
     const world = new World();
     register(world);

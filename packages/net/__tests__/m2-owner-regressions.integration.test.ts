@@ -130,18 +130,26 @@ function sendAck(
   replication: ReturnType<typeof profile>,
   epoch: number,
   sequence: number,
+  sessionId = 2,
 ): void {
   const ack = encodeReplicationPacket(
     {
       version: 2,
       kind: 'ack',
-      sessionId: 1 as ReplicationPacket['sessionId'],
+      sessionId: sessionId as ReplicationPacket['sessionId'],
       epoch,
       acknowledgedSequence: sequence,
     },
     replication.limits,
   ).unwrap();
   endpoint.send(1 as PeerId, ack).unwrap();
+}
+
+function announceMemoryPeer(endpoint: NetEndpoint, session: NetSession, replication: ReturnType<typeof profile>): void {
+  endpoint.send(1 as PeerId, encodeReplicationPacket({
+    version: 2, kind: 'session-open', sessionId: 2 as ReplicationPacket['sessionId'], epoch: 0, sequence: 0,
+  }, replication.limits).unwrap()).unwrap();
+  expect(session.receiveEvents()).toEqual([]);
 }
 
 describe('M2 confirmed owner regressions', () => {
@@ -152,6 +160,11 @@ describe('M2 confirmed owner regressions', () => {
     const events: EndpointEvent[] = [
       { kind: 'peer-connected', peerId: stalePeerId },
       { kind: 'peer-connected', peerId: livePeerId },
+      ...[stalePeerId, livePeerId].map((peerId): EndpointEvent => ({
+        kind: 'message', peerId, data: encodeReplicationPacket({
+          version: 2, kind: 'session-open', sessionId: peerId as ReplicationPacket['sessionId'], epoch: 0, sequence: 0,
+        }, replication.limits).unwrap(),
+      })),
     ];
     const sendAttempts: PeerId[] = [];
     const endpoint: NetEndpoint = {
@@ -343,12 +356,13 @@ describe('M2 confirmed owner regressions', () => {
     session.attachAuthority(createAuthorityCoordinator(new World(), replication));
     session.receiveEvents();
     replicaEndpoint.poll();
+    announceMemoryPeer(replicaEndpoint, session, replication);
 
     expect(session.publish().ok).toBe(true);
     expect(session.getRecoverySnapshot().pendingPackets).toBe(1);
 
     const ackBytes = encodeReplicationPacket(
-      { version: 2, kind: 'ack', sessionId: 1 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
+      { version: 2, kind: 'ack', sessionId: 2 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
       replication.limits,
     ).unwrap();
     replicaEndpoint.send(1 as PeerId, ackBytes).unwrap();
@@ -367,6 +381,7 @@ describe('M2 confirmed owner regressions', () => {
     });
     session.attachAuthority(createAuthorityCoordinator(new World(), replication));
     session.receiveEvents();
+    announceMemoryPeer(peerEndpoint, session, replication);
 
     expect(session.publish().ok).toBe(true);
     expect(session.publish().ok).toBe(false);
@@ -379,7 +394,7 @@ describe('M2 confirmed owner regressions', () => {
     expect(firstPacket.sequence).toBe(1);
 
     const ack = encodeReplicationPacket(
-      { version: 2, kind: 'ack', sessionId: 1 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
+      { version: 2, kind: 'ack', sessionId: 2 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
       replication.limits,
     ).unwrap();
     peerEndpoint.send(1 as PeerId, ack).unwrap();
@@ -405,12 +420,13 @@ describe('M2 confirmed owner regressions', () => {
     });
     session.attachAuthority(createAuthorityCoordinator(new World(), replication));
     session.receiveEvents();
+    announceMemoryPeer(peerEndpoint, session, replication);
     expect(session.publish().ok).toBe(true);
     expect(session.getRecoverySnapshot().pendingPackets).toBe(1);
     peerEndpoint.poll();
 
     const ack = encodeReplicationPacket(
-      { version: 2, kind: 'ack', sessionId: 1 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
+      { version: 2, kind: 'ack', sessionId: 2 as ReplicationPacket['sessionId'], epoch: 0, acknowledgedSequence: 1 },
       replication.limits,
     ).unwrap();
     peerEndpoint.send(1 as PeerId, ack).unwrap();
@@ -431,7 +447,7 @@ describe('M2 confirmed owner regressions', () => {
     expect(session.getRecoverySnapshot().pendingPackets).toBeLessThanOrEqual(2);
   });
 
-  it('broadcasts one fresh epoch baseline to every active peer before the shared delta', () => {
+  it('keeps late-join baselines and deltas independent for every active peer', () => {
     const replication = profile();
     const transport = createMultiPeerEndpoint();
     const authorityWorld = new World();
@@ -441,8 +457,8 @@ describe('M2 confirmed owner regressions', () => {
     authoritySession.attachAuthority(authority);
 
     const initialEndpoint = transport.addPeer(2);
-    const initialReplicaSession = new NetSession({ endpoint: initialEndpoint, maxRawMessages: 8 });
-    const initialReplica = createReplicaCoordinator(new World(), replication, initialEndpoint);
+    const initialReplicaSession = new NetSession({ endpoint: initialEndpoint, sessionId: 2, maxRawMessages: 8 });
+    const initialReplica = createReplicaCoordinator(new World(), replication);
     initialReplicaSession.attachReplica(initialReplica, replication.limits);
     initialReplicaSession.receiveEvents();
     authoritySession.receiveEvents();
@@ -466,8 +482,8 @@ describe('M2 confirmed owner regressions', () => {
     disconnectedEndpoint.poll();
     disconnectedEndpoint.close();
     const lateEndpoint = transport.addPeer(4);
-    const lateReplicaSession = new NetSession({ endpoint: lateEndpoint, maxRawMessages: 8 });
-    const lateReplica = createReplicaCoordinator(new World(), replication, lateEndpoint);
+    const lateReplicaSession = new NetSession({ endpoint: lateEndpoint, sessionId: 4, maxRawMessages: 8 });
+    const lateReplica = createReplicaCoordinator(new World(), replication);
     lateReplicaSession.attachReplica(lateReplica, replication.limits);
     lateReplicaSession.receiveEvents();
     authoritySession.receiveEvents();
@@ -478,14 +494,15 @@ describe('M2 confirmed owner regressions', () => {
     const lateFreshPackets = freshPackets.filter(({ peerId }) => peerId === (4 as PeerId));
     expect(freshPackets.every(({ peerId }) => peerId !== (3 as PeerId))).toBe(true);
     expect(initialFreshPackets.map(({ packet }) => [packet.kind, packet.epoch, packet.sequence])).toEqual([
-      ['baseline', 1, 1],
+      ['delta', 0, 3],
     ]);
     expect(lateFreshPackets.map(({ packet }) => [packet.kind, packet.epoch, packet.sequence])).toEqual([
-      ['baseline', 1, 1],
+      ['baseline', 0, 1],
     ]);
     const initialBaseline = initialFreshPackets[0]?.packet;
     const lateBaseline = lateFreshPackets[0]?.packet;
-    expect(initialBaseline).toEqual(lateBaseline);
+    expect(initialBaseline).toMatchObject({ kind: 'delta', entities: [] });
+    expect(lateBaseline).toMatchObject({ kind: 'baseline', entities: [{ id: 1 }] });
     expect(initialReplicaSession.receiveEvents()).toEqual([]);
     expect(lateReplicaSession.receiveEvents()).toEqual([]);
     expect(initialReplica.snapshot()).toEqual(lateReplica.snapshot());
@@ -494,17 +511,17 @@ describe('M2 confirmed owner regressions', () => {
     expect(authoritySession.publish().ok).toBe(true);
     const deltaPackets = sentPackets(transport, deltaStart, replication);
     expect(deltaPackets.filter(({ peerId }) => peerId === (2 as PeerId)).map(({ packet }) => [packet.kind, packet.epoch, packet.sequence])).toEqual([
-      ['delta', 1, 2],
+      ['delta', 0, 4],
     ]);
     expect(deltaPackets.filter(({ peerId }) => peerId === (4 as PeerId)).map(({ packet }) => [packet.kind, packet.epoch, packet.sequence])).toEqual([
-      ['delta', 1, 2],
+      ['delta', 0, 2],
     ]);
 
-    sendAck(initialEndpoint, replication, 1, 2);
-    sendAck(lateEndpoint, replication, 1, 2);
+    sendAck(initialEndpoint, replication, 0, 4);
+    sendAck(lateEndpoint, replication, 0, 2, 4);
     expect(authoritySession.receiveEvents()).toEqual([]);
     expect(authoritySession.getRecoverySnapshot()).toMatchObject({
-      epoch: 1,
+      epoch: 0,
       sequence: 2,
       acknowledgedSequence: 2,
       pendingPackets: 0,

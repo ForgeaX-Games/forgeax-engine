@@ -32,15 +32,6 @@
 import { mat4, vec3 } from '@forgeax/engine-math';
 
 /**
- * Resolved world transform shape (feat-20260601 D-6): a single column-major
- * mat4 carried as 16 contiguous floats -- the `GlobalTransform.world` column array
- * view written by propagateTransforms.
- */
-export interface WorldMatrixData {
-  readonly worldMatrix: Float32Array;
-}
-
-/**
  * Pure function: write a world mat4's position/orientation to the Web Audio
  * listener's AudioParams.
  *

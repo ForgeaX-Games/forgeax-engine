@@ -113,13 +113,11 @@ import {
 import {
   assembleMaterialWithSkylightEntries,
   createSkylightFallback,
-  mergeSkylightIntoMaterialBgl,
 } from '../../../render/src/ibl/skylight-bind-group';
 import { buildPbrPipelineLayouts, buildUnlitMaterialBgl } from '../../../render/src/pbr-pipeline';
 import { INSTANCE_STORAGE_STRIDE_FLOATS } from '../../../render/src/record/mesh-ssbo';
 import { selectSwapChainFormat } from '../../../render/src/render-system';
 import { createSkinPaletteAllocator } from '../../../render/src/systems/skin-palette-allocator';
-import type { TransparentEntry } from '../../../render/src/systems/transparent-sort-config';
 import { standardMaterialShaderVariants } from './helpers/standard-material-manifest';
 import { drawWithOwners } from './renderer-test-utils';
 
@@ -204,7 +202,10 @@ import {
   type InstanceBufferCacheEntry,
 } from '../../../render/src/instance-buffer-cache';
 import { standardPipeline as urpPipeline } from '../../../render/src/pipeline/standard-pipeline';
-import { ZERO_CAMERA_CLEAR_FALLBACK } from '../../../render/src/record/frame-snapshot';
+import {
+  emptyFrameRecordingOutputs,
+  ZERO_CAMERA_CLEAR_FALLBACK,
+} from '../../../render/src/record/frame-snapshot';
 import {
   warnMultiLightDirectional,
   warnMultiLightPoint,
@@ -225,8 +226,6 @@ import {
   TRANSPARENT_SORT_MODE_LAYER_Z,
 } from '../../../render/src/systems/transparent-sort-config';
 import { spriteAnimationTickSystem } from '../systems/sprite-animation-tick';
-import { REC709_LUMA_WEIGHTS, tonemapReinhardLuminance } from '../systems/tonemap';
-import { transparentSortEntries } from '../systems/transparent-sort';
 import { makeMockShaderRegistry } from './helpers/mock-shader-registry';
 
 void [
@@ -248,7 +247,6 @@ void [
   MeshFilter,
   MeshRenderer,
   Name,
-  REC709_LUMA_WEIGHTS,
   SPRITE_PLAYBACK_MODE_CLAMP,
   SPRITE_PLAYBACK_MODE_LOOP,
   Skin,
@@ -298,7 +296,6 @@ void [
   it,
   makeMockShaderRegistry,
   mat4,
-  mergeSkylightIntoMaterialBgl,
   prepareExtractContext,
   propagateTransforms,
   readFileSync,
@@ -310,8 +307,6 @@ void [
   standardMaterialShaderVariants,
   subscribeRendererErrors,
   toShared,
-  tonemapReinhardLuminance,
-  transparentSortEntries,
   unwrapRendererError,
   urpPipeline,
   vec3,
@@ -343,7 +338,6 @@ type __MergedKeep =
   | Texture
   | TextureFormat
   | TextureView
-  | TransparentEntry
   | WorldType;
 
 {
@@ -637,7 +631,7 @@ type __MergedKeep =
         {
           frameNumber: 0,
           compiledFrameGraph: null,
-          compiledFrameGraphTopologyKey: null,
+          frameOutputs: emptyFrameRecordingOutputs(),
           retiredCompiledFrameGraphs: new Set(),
           instanceBuffers: new Map(),
           transientInstanceBuffers: [],
@@ -757,7 +751,7 @@ type __MergedKeep =
         {
           frameNumber: 0,
           compiledFrameGraph: null,
-          compiledFrameGraphTopologyKey: null,
+          frameOutputs: emptyFrameRecordingOutputs(),
           retiredCompiledFrameGraphs: new Set(),
           instanceBuffers,
           warnedZeroLightStandard: false,
@@ -831,7 +825,7 @@ type __MergedKeep =
         {
           frameNumber: 0,
           compiledFrameGraph: null,
-          compiledFrameGraphTopologyKey: null,
+          frameOutputs: emptyFrameRecordingOutputs(),
           retiredCompiledFrameGraphs: new Set(),
           instanceBuffers,
           warnedZeroLightStandard: false,

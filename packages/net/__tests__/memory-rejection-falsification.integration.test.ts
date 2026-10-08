@@ -146,7 +146,7 @@ describe('memory protocol rejection falsification', () => {
     const replication = profile();
     const { endpoints: [authorityEndpoint, replicaEndpoint], controller } =
       createMemoryEndpointPairWithController();
-    const replica = createReplicaCoordinator(new World(), replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(new World(), replication);
     const session = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
     session.attachReplica(replica, replication.limits);
     authorityEndpoint.poll();

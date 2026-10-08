@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 // Dawn smoke for Bevy's 3d/skybox reproduction.
 // FALSIFY=remove-skybox removes the component and must remove the skybox pass.
@@ -21,7 +22,7 @@ const errors = [];
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   console.error(`[smoke] FAIL - webgpu import: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -96,9 +97,11 @@ const { buildSkyboxWorld } = await import(pathToFileURL(resolve(appRoot, 'src', 
 
 const distDir = resolve(appRoot, 'dist');
 const packIndexPath = resolve(distDir, 'pack-index.json');
+let packIndexWire;
 let packIndex;
 try {
-  packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+  packIndexWire = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+  packIndex = decodeCatalogWire(packIndexWire).unwrap();
 } catch (error) {
   console.error(`[smoke] FAIL - cannot read ${packIndexPath}; run the demo build first: ${error}`);
   process.exit(1);
@@ -124,7 +127,7 @@ const hdrBytes = new Uint8Array(
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
   if (url === '/pack-index.json') {
-    return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+    return { ok: true, json: () => Promise.resolve(packIndexWire), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
   if (url === hdrEntry.packageUrl) {
     return {

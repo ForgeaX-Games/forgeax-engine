@@ -24,11 +24,15 @@ import type {
   BindGroupDescriptor,
   BindGroupLayout,
   BindGroupLayoutDescriptor,
+  Blas,
+  BlasDescriptor,
   Buffer,
   BufferDescriptor,
   CommandEncoderDescriptor,
   ComputePipeline,
   ComputePipelineDescriptor,
+  ExternalTexture,
+  ExternalTextureDescriptor,
   PipelineLayout,
   PipelineLayoutDescriptor,
   QuerySet,
@@ -44,6 +48,7 @@ import type {
   RhiFeatures,
   RhiLimits,
   RhiQueue,
+  RhiRayQueryLimits,
   RhiRenderPipelineOps,
   Sampler,
   SamplerDescriptor,
@@ -51,12 +56,28 @@ import type {
   TextureDescriptor,
   TextureView,
   TextureViewDescriptor,
+  Tlas,
+  TlasDescriptor,
 } from '@forgeax/engine-rhi';
-import { RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
+import {
+  RhiError as RhiErrorClass,
+  rayQueryUnsupported,
+  validateRayQueryBindGroupLayout,
+} from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
 import { Bookkeeper } from './bookkeeping';
 import { probeR32FloatCapability } from './internal/r32float-capability';
-import { createRenderBundleEncoder } from './render-bundle';
+import { createRenderBundleEncoder } from './pass-encoders';
+import { NullAccelerationStructures, nullRayQueryCaps } from './ray-query';
+
+/**
+ * RhiNull device options. `rayQuery` opts the device into a simulated Ray
+ * Query profile with the given limits (structural BLAS/TLAS bookkeeping, no
+ * tracing); omitted, `caps.rayQuery` reports `backend-has-no-ray-query`.
+ */
+export interface RhiNullDeviceOptions {
+  readonly rayQuery?: RhiRayQueryLimits | undefined;
+}
 
 /** Monotonic device-id source so each RhiNullDevice owns a distinct id; the id
  *  threads into the Bookkeeper for cross-device handle-chain validation. */
@@ -92,6 +113,8 @@ export class RhiNullDevice implements RhiDevice {
   private readonly deviceGeneration: number;
   private readonly enabledFeatures: RhiFeatures;
   private r32FloatProbe: ReturnType<typeof probeR32FloatCapability> | undefined;
+  /** @internal Acceleration-structure ledger shared with this device's command encoders. */
+  readonly _accelerationStructures: NullAccelerationStructures;
 
   /** Per-frame total draw count across all pass encoders executed this frame
    *  (aggregated by the command encoder on finish, then reset). M3 unit tests
@@ -114,10 +137,15 @@ export class RhiNullDevice implements RhiDevice {
     queue: RhiQueue,
     encoderFactory: CommandEncoderFactory,
     enabledFeatures: ReadonlySet<GPUFeatureName> = new Set(),
+    options: RhiNullDeviceOptions = {},
   ) {
     this.enabledFeatures = new Set(enabledFeatures) as RhiFeatures;
     this.deviceGeneration = nextDeviceId;
     this.internalBookkeeper = new Bookkeeper(nextDeviceId++);
+    this._accelerationStructures = new NullAccelerationStructures(
+      nullRayQueryCaps(options.rayQuery),
+      this.internalBookkeeper,
+    );
     this.nullQueue = queue;
     this.encoderFactory = encoderFactory;
   }
@@ -149,7 +177,10 @@ export class RhiNullDevice implements RhiDevice {
       rgba16floatRenderable: true,
       rg11b10ufloatRenderable: true,
       float32Filterable: true,
+      textureImport: true,
+      externalTexture: true,
       maxColorAttachments: 8,
+      rayQuery: this._accelerationStructures.caps,
     };
   }
 
@@ -173,12 +204,45 @@ export class RhiNullDevice implements RhiDevice {
     return NEVER;
   }
 
-  createBuffer(_desc: BufferDescriptor): Result<Buffer, RhiErrorType> {
-    return ok(this.internalBookkeeper.register('Buffer') as unknown as Buffer);
+  createBuffer(desc: BufferDescriptor): Result<Buffer, RhiErrorType> {
+    const usage = typeof desc.usage === 'number' ? desc.usage : 0;
+    const admitted = this._accelerationStructures.admitBuffer(usage);
+    if (!admitted.ok) return admitted;
+    const buffer = this.internalBookkeeper.register('Buffer') as unknown as Buffer;
+    this._accelerationStructures.rememberBuffer(buffer, usage);
+    return ok(buffer);
   }
 
   createTexture(_desc: TextureDescriptor): Result<Texture, RhiErrorType> {
     return ok(this.internalBookkeeper.register('Texture') as unknown as Texture);
+  }
+
+  nativeDevice(): Result<GPUDevice, RhiErrorType> {
+    return err(
+      new RhiErrorClass({
+        code: 'feature-not-enabled',
+        expected: 'a backend that owns a native GPUDevice',
+        hint: 'RhiNull is headless; create interop textures on a WebGPU renderer',
+      }),
+    );
+  }
+
+  /** Structural admission: the same shape/usage rules as WebGPU, without a device. */
+  async importTexture(texture: GPUTexture): Promise<Result<Texture, RhiErrorType>> {
+    if (texture.dimension !== '2d' || (texture.usage & TEXTURE_BINDING) === 0) {
+      return err(
+        new RhiErrorClass({
+          code: 'rhi-descriptor-invalid',
+          expected: 'a 2d texture with TEXTURE_BINDING usage',
+          hint: `got dimension='${texture.dimension}', usage=0x${texture.usage.toString(16)}`,
+        }),
+      );
+    }
+    return ok(this.internalBookkeeper.register('Texture') as unknown as Texture);
+  }
+
+  importExternalTexture(_desc: ExternalTextureDescriptor): Result<ExternalTexture, RhiErrorType> {
+    return ok(this.internalBookkeeper.register('ExternalTexture') as unknown as ExternalTexture);
   }
 
   destroyBuffer(buf: Buffer): Result<void, RhiErrorType> {
@@ -193,6 +257,22 @@ export class RhiNullDevice implements RhiDevice {
     return this.internalBookkeeper.destroy(tex);
   }
 
+  createBlas(desc: BlasDescriptor): Result<Blas, RhiErrorType> {
+    return this._accelerationStructures.createBlas(desc);
+  }
+
+  createTlas(desc: TlasDescriptor): Result<Tlas, RhiErrorType> {
+    return this._accelerationStructures.createTlas(desc);
+  }
+
+  destroyBlas(blas: Blas): Result<void, RhiErrorType> {
+    return this._accelerationStructures.destroy(blas, 'destroyBlas');
+  }
+
+  destroyTlas(tlas: Tlas): Result<void, RhiErrorType> {
+    return this._accelerationStructures.destroy(tlas, 'destroyTlas');
+  }
+
   createTextureView(
     _texture: Texture,
     _desc: TextureViewDescriptor,
@@ -204,11 +284,27 @@ export class RhiNullDevice implements RhiDevice {
     return ok(this.internalBookkeeper.register('Sampler') as unknown as Sampler);
   }
 
-  createBindGroupLayout(_desc: BindGroupLayoutDescriptor): Result<BindGroupLayout, RhiErrorType> {
+  createBindGroupLayout(desc: BindGroupLayoutDescriptor): Result<BindGroupLayout, RhiErrorType> {
+    const gate = validateRayQueryBindGroupLayout(this._accelerationStructures.caps, desc);
+    if (!gate.ok) return gate;
     return ok(this.internalBookkeeper.register('BindGroupLayout') as unknown as BindGroupLayout);
   }
 
-  createBindGroup(_desc: BindGroupDescriptor): Result<BindGroup, RhiErrorType> {
+  createBindGroup(desc: BindGroupDescriptor): Result<BindGroup, RhiErrorType> {
+    const { caps } = this._accelerationStructures;
+    for (const entry of desc.entries) {
+      if (entry.resource.kind !== 'accelerationStructure') continue;
+      if (!caps.supported) return rayQueryUnsupported(`bind group entry ${entry.binding}`, caps);
+      if (!this._accelerationStructures.isBuiltTlas(entry.resource.value)) {
+        return err(
+          new RhiErrorClass({
+            code: 'rhi-descriptor-invalid',
+            expected: 'a live TLAS built by encoder.buildAccelerationStructures',
+            hint: `bind group entry ${entry.binding} binds a TLAS that is destroyed or was never built`,
+          }),
+        );
+      }
+    }
     return ok(this.internalBookkeeper.register('BindGroup') as unknown as BindGroup);
   }
 
@@ -266,6 +362,8 @@ export class RhiNullDevice implements RhiDevice {
 /** Empty numeric-limits map. The headless backend reports no concrete numeric
  *  limits; capability planning reads caps booleans instead. */
 const EMPTY_LIMITS: RhiLimits = {} as RhiLimits;
+
+const TEXTURE_BINDING = 0x04;
 
 /** A Promise that never settles, mirroring a live GPUDevice.lost that stays
  *  unsettled while the device is healthy. */

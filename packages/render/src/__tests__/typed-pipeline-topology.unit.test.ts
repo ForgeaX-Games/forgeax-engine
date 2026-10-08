@@ -548,7 +548,7 @@ describe('typed built-in pipeline topology', () => {
     expect(source).not.toContain('pixelPayload');
   });
 
-  it('orders HDRP compute, shadow, deferred, SSAO, forward, observation, and output work', () => {
+  it('orders HDRP compute, g-buffer, shadow, SSAO, lighting, forward, observation, and output work', () => {
     const compiled = compile(
       standardPipeline,
       topology('forgeax::standard', {
@@ -561,8 +561,11 @@ describe('typed built-in pipeline topology', () => {
     const names = info.passes.map((pass) => pass.name);
     const ordered = [
       'cluster-membership-producer',
-      'directional-shadow-observation',
+      // Deferred shadows follow the g-buffer so final casters can test the
+      // camera depth pyramid the g-buffer phases produce.
       'g-buffer',
+      'shadowCascade0',
+      'directional-shadow-observation',
       'ssao-calc',
       'ssao-blur',
       'lighting',
@@ -978,6 +981,7 @@ describe('Standard two-phase GPU occlusion topology', () => {
         requests.push(target.lateOcclusion === true);
         return ok({
           accesses: [{ resource: indirect.value, usage: 'indirect-read' as const }],
+          hasWork: () => true,
           encode: () => {},
           ...(target.lateOcclusion === true
             ? {
@@ -1041,16 +1045,18 @@ describe('Standard two-phase GPU occlusion topology', () => {
     ]);
   });
 
-  it('adds no late phase under MSAA, when the asset opts out, or without a reservation', () => {
+  it('seeds the late phase from every MSAA sample', () => {
     const msaaRequests: boolean[] = [];
     const msaa = passNames(
       topology('forgeax::standard', { camera: { antialias: 'msaa' } }),
       msaaRequests,
     );
-    expect(msaaRequests).not.toContain(true);
-    expect(msaa).not.toContain('main-late');
-    expect(msaa).not.toContain('occlusion-depth-pyramid-seed');
+    expect(msaaRequests).toContain(true);
+    expect(msaa).toContain('main-late');
+    expect(msaa).toContain('occlusion-depth-pyramid-seed');
+  });
 
+  it('adds no late phase when the asset opts out or without a reservation', () => {
     const optOutRequests: boolean[] = [];
     const optOut = passNames(
       topology('forgeax::standard', { config: { gpuOcclusion: false } }),

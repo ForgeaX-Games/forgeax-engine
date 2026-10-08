@@ -160,18 +160,18 @@ async function createFixtureServer(): Promise<FixtureServer> {
       // subsequent same-file write in a short-lived macOS temp fixture. The
       // polling watcher is deterministic here and still exercises Vite's
       // real file->HMR path; production projects keep their own watch policy.
-      watch: { usePolling: true, interval: 50 },
+      // Keep chokidar's default 100 ms polling interval. Its change-event
+      // throttle lasts 50 ms; polling at that same boundary can consume a
+      // rapid repair's stat change while suppressing its only change event.
+      watch: { usePolling: true },
     },
     optimizeDeps: { noDiscovery: true },
   });
   const watcherReady = new Promise<void>((resolveReady) => {
     server.watcher.once('ready', resolveReady);
   });
-  const originalSend = server.ws.send.bind(server.ws);
-  server.ws.send = ((payload: unknown) => {
-    observation.payloads.push(payload);
-    return originalSend(payload as never);
-  }) as typeof server.ws.send;
+  // Observe the actual WebSocket delivery once. Recording both server.send
+  // and client.message can credit an edit with the previous packet's duplicate.
   server.watcher.on('change', (file) => observation.watcherFiles.push(file));
   await server.listen();
   // `getWatched()` can list files before chokidar has completed its initial
@@ -239,6 +239,77 @@ function waitForPayload(
 let activeFixture!: FixtureServer;
 
 describe('direct WGSL Vite HMR ownership', () => {
+  it(
+    'replaces HTTP publication after source and import HMR while retaining failed edits as LKG',
+    async () => {
+      const fixture = await createFixtureServer();
+      try {
+        const { root, rawShaderPath, server, observation } = fixture;
+        const dependencyPath = join(root, 'value.wgsl');
+        const dependency = (value: string) =>
+          `#define_import_path direct_hmr::value\nfn amount() -> f32 { return ${value}; }\n`;
+        const source = `#define_import_path direct_hmr::raw
+#import direct_hmr::value::{amount}
+@group(0) @binding(0) var<storage, read_write> output: f32;
+@compute @workgroup_size(1) fn main() { output = amount(); }
+`;
+        await writeFile(dependencyPath, dependency('0.25'), 'utf8');
+        const initialChange = waitForFileChange(server, rawShaderPath);
+        await writeFile(rawShaderPath, source, 'utf8');
+        await initialChange;
+        await server.transformRequest('/raw-shader.wgsl?import');
+        const address = server.httpServer?.address();
+        if (address === undefined || address === null || typeof address === 'string')
+          throw new Error('Missing fixture HTTP address');
+        const readManifest = async (): Promise<string> => {
+          const response = await fetch(`http://127.0.0.1:${address.port}/shaders/manifest.json`);
+          expect(response.status).toBe(200);
+          return response.text();
+        };
+        const edit = async (path: string, code: string): Promise<void> => {
+          observation.payloads.length = 0;
+          const changed = waitForFileChange(server, path);
+          const updated = waitForPayload(
+            observation,
+            (payload) =>
+              typeof payload === 'object' &&
+              payload !== null &&
+              'type' in payload &&
+              (payload.type === 'update' || payload.type === 'error'),
+          );
+          await writeFile(path, code, 'utf8');
+          await changed;
+          expect(await updated).toMatchObject({ type: 'update' });
+        };
+
+        const original = await readManifest();
+        expect(await Promise.all([readManifest(), readManifest()])).toEqual([original, original]);
+        await edit(rawShaderPath, source.replace('output = amount()', 'output = amount() * 2.0'));
+        await server.transformRequest('/raw-shader.wgsl?import');
+        const sourceChanged = await readManifest();
+        expect(sourceChanged).not.toBe(original);
+
+        await edit(dependencyPath, dependency('0.75'));
+        await server.transformRequest('/raw-shader.wgsl?import');
+        const importChanged = await readManifest();
+        expect(importChanged).not.toBe(sourceChanged);
+
+        await edit(dependencyPath, dependency('invalid'));
+        await expect(server.transformRequest('/raw-shader.wgsl?import')).rejects.toBeDefined();
+        expect(await readManifest()).toBe(importChanged);
+
+        await edit(dependencyPath, dependency('0.9'));
+        await server.transformRequest('/raw-shader.wgsl?import');
+        const repaired = await readManifest();
+        expect(repaired).not.toBe(importChanged);
+        expect(await readManifest()).toBe(repaired);
+      } finally {
+        await closeFixtureServer(fixture);
+      }
+    },
+    DIRECT_WGSL_HMR_TEST_TIMEOUT_MS,
+  );
+
   beforeAll(async () => {
     activeFixture = await createFixtureServer();
   }, DIRECT_WGSL_HMR_TEST_TIMEOUT_MS);

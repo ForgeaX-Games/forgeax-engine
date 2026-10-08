@@ -11,7 +11,9 @@ import { optionalAssetPack } from '../../shared/src/optional-asset-pack.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..');
-const assetRoots = [resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures')];
+const assetRoots = [
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/newport_loft.hdr.meta.json'),
+];
 const runtimeBinding = createStandaloneRuntimeAssetBinding('hello-physical-material');
 const exactHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: monorepoRoot, encoding: 'utf8' }).trim();
 const materialPackages = [

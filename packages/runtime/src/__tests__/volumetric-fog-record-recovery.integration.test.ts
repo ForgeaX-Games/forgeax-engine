@@ -15,7 +15,10 @@ import { rhi as nullRhi, RhiNullAdapter } from '@forgeax/engine-rhi-null';
 import { Transform } from '@forgeax/engine-scene';
 import { err, type Result, type TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { renderLifecycleManifestUrl } from '../../../render/src/__tests__/shader-manifest-fixture';
+import {
+  renderLifecycleManifestUrl,
+  standardPbrManifestRow,
+} from '../../../render/src/__tests__/shader-manifest-fixture';
 import { createRenderer } from '../createRenderer';
 
 const VOLUME_MANIFEST = `data:application/json,${encodeURIComponent(
@@ -29,6 +32,7 @@ const VOLUME_MANIFEST = `data:application/json,${encodeURIComponent(
       { hash: 'volume-temporal', wgsl: 'fn volume_temporal() {}', glsl: '', bindings: '' },
       { hash: 'volume-composite', wgsl: 'fn volume_fs() {}', glsl: '', bindings: '' },
     ],
+    materialShaders: [standardPbrManifestRow('f_schlick')],
   }),
 )}`;
 

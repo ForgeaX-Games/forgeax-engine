@@ -1,5 +1,6 @@
 import { mat4, vec3 } from '@forgeax/engine-math';
 import { isStandardPbrMaterialShader } from '../pbr-pipeline';
+import { type RecordProfileRunner, runRecordProfilePhase } from '../record/render-context';
 import type { CameraSnapshot } from '../render-contract';
 import type { RenderSceneSlot } from '../scene/render-scene-types';
 import { lodDraws, selectLod } from '../scene/visibility/lod-selector';
@@ -7,7 +8,6 @@ import {
   batchLodLevelCount,
   type GpuDrivenBatch,
   type GpuDrivenBatchLod,
-  type GpuDrivenCandidate,
   projectedHeightForCandidate,
   type SubmissionPlan,
 } from './batch-topology';
@@ -26,20 +26,6 @@ export function selectedLodLevel(
     ready: coverages.map(() => true),
     historyValid: false,
   }).level;
-}
-
-export function selectedLodRange(
-  batch: Pick<GpuDrivenBatch, 'key'>,
-  lod: GpuDrivenBatchLod | undefined,
-  level: number,
-): { readonly first: number; readonly count: number; readonly baseVertex: number } {
-  return (
-    (level === 0 ? undefined : lod?.ranges?.[level - 1]) ?? {
-      first: batch.key.first,
-      count: batch.key.count,
-      baseVertex: batch.key.baseVertex,
-    }
-  );
 }
 
 /** Indirect raster commands of admitted batches: one per LOD level slot. */
@@ -85,9 +71,43 @@ export function rasterLodDraws(
   });
 }
 
+export interface LodProjectionPlan {
+  readonly groups: readonly {
+    readonly source: GpuDrivenBatch;
+    readonly primitiveIndex: number;
+    readonly candidateCount: number;
+  }[];
+  readonly primitives: readonly number[];
+}
+
+/** CPU LOD inputs belong to the batch and primitive, independently of instance index. */
+export function prepareLodProjectionPlan(source: SubmissionPlan): LodProjectionPlan {
+  const groups: { source: GpuDrivenBatch; primitiveIndex: number; candidateCount: number }[] = [];
+  const primitives = new Set<number>();
+  for (const batch of source.batches) {
+    if ((batch.lod?.coverages.length ?? 0) <= 1) continue;
+    const byPrimitive = new Map<number, (typeof groups)[number]>();
+    for (const candidate of batch.candidates) {
+      const primitive = candidate.primitiveIndex;
+      const group = byPrimitive.get(primitive);
+      if (group !== undefined) group.candidateCount += 1;
+      else {
+        const next = { source: batch, primitiveIndex: primitive, candidateCount: 1 };
+        byPrimitive.set(primitive, next);
+        groups.push(next);
+        primitives.add(primitive);
+      }
+    }
+  }
+  return {
+    groups: Object.freeze(groups.map((group) => Object.freeze(group))),
+    primitives: Object.freeze([...primitives]),
+  };
+}
+
 export interface LodProjectionState {
   readonly selectionFingerprint: string;
-  /** Selected raster levels per `prepared.lodCandidates` entry. */
+  /** Selected raster levels per `prepared.lodPlan.groups` entry. */
   readonly selections: readonly (readonly number[])[];
   readonly projectedHeights?: ReadonlyMap<number, number>;
 }
@@ -98,13 +118,16 @@ const NO_LOD_SELECTIONS: readonly (readonly number[])[] = Object.freeze([]);
 export function lodSelectionChangeCount(
   previous: readonly (readonly number[])[],
   next: readonly (readonly number[])[],
+  plan: LodProjectionPlan,
 ): number {
-  if (previous.length !== next.length) return next.length;
+  if (previous.length !== next.length)
+    return plan.groups.reduce((count, group) => count + group.candidateCount, 0);
   let changed = 0;
   for (let index = 0; index < next.length; index += 1) {
     const left = previous[index] as readonly number[];
     const right = next[index] as readonly number[];
-    if (left.length !== right.length || left.some((level, at) => level !== right[at])) changed += 1;
+    if (left.length !== right.length || left.some((level, at) => level !== right[at]))
+      changed += plan.groups[index]?.candidateCount ?? 0;
   }
   return changed;
 }
@@ -116,33 +139,46 @@ export function lodSelectionChangeCount(
  * payload and do not rebuild an otherwise identical plan.
  */
 export function lodProjectionState(
-  prepared: {
-    readonly lodCandidates: readonly {
-      readonly source: GpuDrivenBatch;
-      readonly candidate: GpuDrivenCandidate;
-    }[];
-    readonly lodPrimitives: readonly number[];
-  },
+  prepared: { readonly lodPlan: LodProjectionPlan },
   camera: CameraSnapshot,
   slotAt: (primitiveIndex: number) => RenderSceneSlot | undefined,
+  profile?: RecordProfileRunner,
 ): LodProjectionState {
-  if (prepared.lodCandidates.length === 0) {
-    return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
-  }
-  const projectedHeights = new Map<number, number>();
-  for (const primitive of prepared.lodPrimitives) {
-    const slot = slotAt(primitive);
-    if (slot !== undefined)
-      projectedHeights.set(primitive, projectedHeightForCandidate(slot, camera));
-  }
-  const selections = prepared.lodCandidates.map(({ source, candidate }) =>
-    rasterLodDraws(
-      source,
-      source.lod,
-      projectedHeights.get(candidate.primitiveIndex) ?? Number.NaN,
-    ).map((draw) => draw.level),
-  );
-  return { selectionFingerprint: JSON.stringify(selections), selections, projectedHeights };
+  return runRecordProfilePhase(profile, 'record/gpu-driven-prepare/filter/lod', () => {
+    if (prepared.lodPlan.groups.length === 0) {
+      return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
+    }
+    const projectedHeights = runRecordProfilePhase(
+      profile,
+      'record/gpu-driven-prepare/filter/lod/projection',
+      () => {
+        const heights = new Map<number, number>();
+        for (const primitive of prepared.lodPlan.primitives) {
+          const slot = slotAt(primitive);
+          if (slot !== undefined) heights.set(primitive, projectedHeightForCandidate(slot, camera));
+        }
+        return heights;
+      },
+    );
+    const selections = runRecordProfilePhase(
+      profile,
+      'record/gpu-driven-prepare/filter/lod/selection',
+      () =>
+        prepared.lodPlan.groups.map(({ source, primitiveIndex }) =>
+          rasterLodDraws(
+            source,
+            source.lod,
+            projectedHeights.get(primitiveIndex) ?? Number.NaN,
+          ).map((draw) => draw.level),
+        ),
+    );
+    const selectionFingerprint = runRecordProfilePhase(
+      profile,
+      'record/gpu-driven-prepare/filter/lod/identity',
+      () => JSON.stringify(selections),
+    );
+    return { selectionFingerprint, selections, projectedHeights };
+  });
 }
 
 /**
@@ -205,32 +241,61 @@ export function shadowLodHeightFloor(
  * coarser than `main` selects for the same candidate.
  */
 export function shadowLodProjectionState(
-  prepared: {
-    readonly lodCandidates: readonly {
-      readonly source: GpuDrivenBatch;
-      readonly candidate: GpuDrivenCandidate;
-    }[];
-  },
+  prepared: { readonly lodPlan: LodProjectionPlan },
   matrix: Float32Array,
   main: LodProjectionState,
   slotAt: (primitiveIndex: number) => RenderSceneSlot | undefined,
+  profile?: RecordProfileRunner,
 ): LodProjectionState {
-  if (prepared.lodCandidates.length === 0) {
-    return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
-  }
-  const camera = lodViewCameraFromMatrix(matrix);
-  const projectedHeights = new Map<number, number>();
-  const selections = prepared.lodCandidates.map(({ source, candidate }, index) => {
-    const primitive = candidate.primitiveIndex;
-    const slot = slotAt(primitive);
-    const mainLevel = Math.min(...(main.selections[index] ?? [0]));
-    const light = slot === undefined ? Number.NaN : projectedHeightForCandidate(slot, camera);
-    // An invalid light height resolves to the root, as in the GPU cull.
-    const height = Number.isFinite(light)
-      ? Math.max(light, shadowLodHeightFloor(source.lod, mainLevel))
-      : Number.NaN;
-    projectedHeights.set(primitive, height);
-    return rasterLodDraws(source, source.lod, height).map((draw) => draw.level);
-  });
-  return { selectionFingerprint: JSON.stringify(selections), selections, projectedHeights };
+  return runRecordProfilePhase(
+    profile,
+    'record/gpu-driven-prepare/shadow-views/project-view/lod',
+    () => {
+      if (prepared.lodPlan.groups.length === 0) {
+        return { selectionFingerprint: '', selections: NO_LOD_SELECTIONS };
+      }
+      const projectedHeights = new Map<number, number>();
+      const heights = runRecordProfilePhase(
+        profile,
+        'record/gpu-driven-prepare/shadow-views/project-view/lod/projection',
+        () => {
+          const camera = lodViewCameraFromMatrix(matrix);
+          const lightHeights = new Map<number, number>();
+          for (const primitive of prepared.lodPlan.primitives) {
+            const slot = slotAt(primitive);
+            lightHeights.set(
+              primitive,
+              slot === undefined ? Number.NaN : projectedHeightForCandidate(slot, camera),
+            );
+          }
+          return prepared.lodPlan.groups.map(({ source, primitiveIndex }, index) => {
+            const light = lightHeights.get(primitiveIndex) ?? Number.NaN;
+            const mainLevel = Math.min(...(main.selections[index] ?? [0]));
+            const height = Number.isFinite(light)
+              ? Math.max(light, shadowLodHeightFloor(source.lod, mainLevel))
+              : Number.NaN;
+            // Preserve the existing last-owner payload when batches share a primitive.
+            projectedHeights.set(primitiveIndex, height);
+            return height;
+          });
+        },
+      );
+      const selections = runRecordProfilePhase(
+        profile,
+        'record/gpu-driven-prepare/shadow-views/project-view/lod/selection',
+        () =>
+          prepared.lodPlan.groups.map(({ source }, index) =>
+            rasterLodDraws(source, source.lod, heights[index] ?? Number.NaN).map(
+              (draw) => draw.level,
+            ),
+          ),
+      );
+      const selectionFingerprint = runRecordProfilePhase(
+        profile,
+        'record/gpu-driven-prepare/shadow-views/project-view/lod/identity',
+        () => JSON.stringify(selections),
+      );
+      return { selectionFingerprint, selections, projectedHeights };
+    },
+  );
 }

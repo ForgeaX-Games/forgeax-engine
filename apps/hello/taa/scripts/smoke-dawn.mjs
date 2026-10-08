@@ -521,7 +521,7 @@ async function runDawnFeatureWorkload(kind) {
     for (let index = 0; index < frameCount; index += 1) {
       world.update(1 / 60).unwrap();
       if (index === frameCount - 1 && kind !== 'manual' && !timingMode) {
-        const requested = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-srgb']);
+        const requested = renderer.requestObservation?.(['linear-hdr', 'linear-ldr', 'final-display']);
         if (requested === undefined || !requested.ok) {
           observationError = requested === undefined ? 'observation-request-unavailable' : requested.error.code;
         }
@@ -613,7 +613,7 @@ async function runDawnFeatureWorkload(kind) {
     if (!completed.ok) observationError = completed.error.code;
     if (kind !== 'manual' && observationError === undefined) {
       const observed = await renderer.observe(finalReceipt, {
-        include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+        include: ['linear-hdr', 'linear-ldr', 'final-display'],
       });
       if (!observed.ok) observationError = observed.error.code;
       else stageObservations = observed.value.observations ?? [];
@@ -660,7 +660,7 @@ async function runDawnFeatureWorkload(kind) {
     const stageDomains = {
       'linear-hdr': 'linear-HDR',
       'linear-ldr': 'linear-LDR',
-      'final-srgb': 'final-sRGB',
+      'final-display': 'final-sRGB',
     };
     const stages = await Promise.all(
       stageObservations.map(async (observation) => ({
@@ -1087,7 +1087,7 @@ if (performanceAdmissionMode) {
       sourceSha: sha256File(resolve(appRoot, 'src', 'main.ts')),
       buildSha: buildDigest ?? sha256File(resolve(appRoot, 'dist', 'index.html')),
       stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-        id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+        id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
         domain,
         readback: { rawHash: sha256File(resolve(appRoot, 'dist', 'index.html')), frame: frames - 1 },
       })),
@@ -1353,7 +1353,7 @@ const report = {
     sourceSha: sha256File(resolve(appRoot, 'src', 'main.ts')),
     buildSha: sha256File(resolve(appRoot, 'dist', 'index.html')),
     stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-      id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+      id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
       domain,
       readback: { rawHash: sha256File(resolve(appRoot, 'dist', 'index.html')), frame: frames - 1 },
     })),

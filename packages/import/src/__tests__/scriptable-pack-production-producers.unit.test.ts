@@ -17,6 +17,7 @@ import type {
   SceneAsset,
   SkeletonAsset,
   SkinAsset,
+  TerrainAsset,
   TextureAsset,
   TilesetAsset,
   VideoAsset,
@@ -88,6 +89,46 @@ const matrixAssets = [
   } satisfies MeshAsset,
   { kind: 'material', values: { roughness: 0.5 } } satisfies MaterialAsset,
   { kind: 'scene', entities: {} } satisfies SceneAsset,
+  {
+    kind: 'navigation-mesh',
+    version: 'recast-poly/1',
+    sourceDigest: 'fixture',
+    settings: {
+      radius: 0.3,
+      height: 1.8,
+      maxSlopeDeg: 45,
+      maxStep: 0.3,
+      cellSize: 0.1,
+      cellHeight: 0.05,
+    },
+    vertices: [0, 0, 0, 1, 0, 0, 0, 0, 1],
+    polygons: [[0, 1, 2]],
+  } satisfies Extract<Asset, { kind: 'navigation-mesh' }>,
+  {
+    kind: 'terrain',
+    materialEncoding: { kind: 'weights' },
+    columns: 2,
+    rows: 2,
+    spacing: 1,
+    subsectionVertices: 2,
+    heights: new Float32Array(4),
+    weights: new Float32Array(0),
+    layers: [],
+    heightRange: [0, 0],
+    grids: [AssetGuid.format(MESH_GUID)],
+    sections: [
+      {
+        x: 0,
+        z: 0,
+        minHeight: 0,
+        maxHeight: 0,
+        activeLayers: [],
+        heightTexture: AssetGuid.format(ATLAS_GUID),
+        weightTexture: AssetGuid.format(ATLAS_GUID),
+        material: AssetGuid.format(MATERIAL_GUID),
+      },
+    ],
+  } satisfies TerrainAsset,
   {
     kind: 'texture',
     shape: { viewDimension: '2d', extent: { width: 1, height: 1 } },
@@ -213,7 +254,7 @@ describe('standard ScriptablePack output producers', () => {
   it('registers the production producer versions for all ordinary Asset kinds', () => {
     const registry = createStandardAssetOutputProducerRegistry();
     expect(registry.versions()).toEqual({
-      'animation-clip': 'ordinary-pod/1',
+      'animation-clip': 'animation-clip/2',
       'animation-graph': 'ordinary-pod/1',
       audio: 'ordinary-pod/1',
       equirect: 'ordinary-pod/1',
@@ -225,10 +266,12 @@ describe('standard ScriptablePack output producers', () => {
       plugin: 'plugin-definition/1',
       'render-pipeline': 'ordinary-pod/1',
       sampler: 'ordinary-pod/1',
-      scene: 'scene-pack/3',
+      scene: 'scene-pack/4',
       skeleton: 'ordinary-pod/1',
       skin: 'ordinary-pod/1',
       texture: 'texture-pack/1',
+      terrain: 'ordinary-pod/1',
+      'navigation-mesh': 'ordinary-pod/1',
       tileset: 'ordinary-pod/1',
       video: 'ordinary-pod/1',
     });
@@ -255,6 +298,8 @@ describe('standard ScriptablePack output producers', () => {
       'ies-profile',
       'particle-effect',
       'plugin',
+      'terrain',
+      'navigation-mesh',
     ] as const;
 
     expect(Object.keys(registry.versions()).sort()).toEqual([...expectedKinds].sort());
@@ -513,4 +558,38 @@ describe('standard ScriptablePack output producers', () => {
       expect(result.value.payload).not.toHaveProperty('scriptableKind');
     }
   });
+});
+
+it('retains audio and sub-animation GUID closure in timeline key order', async () => {
+  const registry = createStandardAssetOutputProducerRegistry();
+  const events = [
+    {
+      time: 0.1,
+      targetId: '00000000000000000000000000000000' as AnimationClip['channels'][number]['targetId'],
+      action: { kind: 'audio' as const, clip: AssetGuid.format(ATLAS_GUID), fromPosition: 0 },
+    },
+    {
+      time: 0.2,
+      targetId: '00000000000000000000000000000000' as AnimationClip['channels'][number]['targetId'],
+      action: { kind: 'animation' as const, clip: AssetGuid.format(OUTPUT_GUID), fromPosition: 0 },
+    },
+    {
+      time: 0.3,
+      targetId: '00000000000000000000000000000000' as AnimationClip['channels'][number]['targetId'],
+      action: { kind: 'audio' as const, clip: null, fromPosition: 0 },
+    },
+  ];
+  const producer = registry.get('animation-clip');
+  if (producer === undefined) throw new Error('missing animation producer');
+  const result = await producer.produce({
+    guid: AssetGuid.format(OUTPUT_GUID),
+    sourceKey: 'timeline/closure',
+    asset: { kind: 'animation-clip', duration: 1, channels: [], events },
+  });
+  if (!result.ok) throw result.error;
+  expect(result.value.refs.map((ref) => ref.guid)).toEqual([
+    AssetGuid.format(ATLAS_GUID),
+    AssetGuid.format(OUTPUT_GUID),
+  ]);
+  expect(result.value.payload).toMatchObject({ events });
 });

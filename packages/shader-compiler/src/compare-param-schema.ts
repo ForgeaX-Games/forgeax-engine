@@ -193,6 +193,16 @@ function resourceKindCompatible(
   if (expected.storageTexture !== undefined) {
     return actual.storageTexture !== undefined;
   }
+  if (expected.externalTexture !== undefined) {
+    // Naga reflects `texture_external` as a handle with no layout sub-object.
+    return (
+      actual.externalTexture !== undefined ||
+      (actual.buffer === undefined &&
+        actual.texture === undefined &&
+        actual.sampler === undefined &&
+        actual.storageTexture === undefined)
+    );
+  }
   return false;
 }
 
@@ -239,6 +249,9 @@ function describeEntry(entry: BindGroupLayoutEntry): string {
   if (entry.storageTexture !== undefined) {
     return 'storage texture';
   }
+  if (entry.externalTexture !== undefined) {
+    return 'texture_external';
+  }
   return 'unknown resource';
 }
 
@@ -266,6 +279,9 @@ function synthesiseWgslHint(expected: BindGroupLayoutEntry, expectedParam: strin
     const wgslSamplerType =
       expected.sampler.type === 'comparison' ? 'sampler_comparison' : 'sampler';
     return `add the missing WGSL declaration: ${at} var ${expectedParam}: ${wgslSamplerType};`;
+  }
+  if (expected.externalTexture !== undefined) {
+    return `add the missing WGSL declaration: ${at} var ${expectedParam}: texture_external;`;
   }
   if (expected.storageTexture !== undefined) {
     return `add the missing WGSL storage-texture declaration at ${at} for paramSchema entry '${expectedParam}'`;

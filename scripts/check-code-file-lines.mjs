@@ -113,10 +113,14 @@ export function isCodeFilePath(path, firstLine) {
   return false;
 }
 
+// The staged listing outgrew Node's 1 MiB default buffer (ENOBUFS) at ~10k files.
+const GIT_LIST_MAX_BUFFER = 64 * 1024 * 1024;
+
 function readTrackedEntries(root) {
   try {
     const output = execFileSync('git', ['-C', root, 'ls-files', '--cached', '--stage', '-z'], {
       encoding: 'utf8',
+      maxBuffer: GIT_LIST_MAX_BUFFER,
     });
     return splitNullSeparated(output).map((entry) => {
       const tabIndex = entry.indexOf('\t');

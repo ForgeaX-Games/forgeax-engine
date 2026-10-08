@@ -52,15 +52,16 @@ it.each([
     throw new Error('Missing cooked metadata');
   assets.recordMaterialReadiness(record.guid, {
     status: 'Ready',
-    guid: record.guid,
-    materialGuid: record.guid,
-    publicationGeneration: record.publicationGeneration,
-    specializationKey: record.specializationKey,
-    artifactDigest: record.artifactDigest,
-    sourceClosure: record.sourceClosure,
-    parameterContract: record.parameterContract,
-    record,
-    programs: record.programs,
+    record: {
+      ...record,
+      materialGuid: record.guid,
+      publicationGeneration: record.publicationGeneration,
+      specializationKey: record.specializationKey,
+      artifactDigest: record.artifactDigest,
+      sourceClosure: record.sourceClosure,
+      parameterContract: record.parameterContract,
+      programs: record.programs,
+    },
   });
   const world = new World();
   const material = world.internSharedRef('MaterialAsset', source);

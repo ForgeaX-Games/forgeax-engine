@@ -200,7 +200,7 @@ The schema is the SSOT in [`src/asset-evidence.ts`](./src/asset-evidence.ts). Pr
 
 ## API index
 
-`export type` only on the main entry, zero runtime constants. Full main-entry export list at [`src/index.ts`](./src/index.ts).
+Main entry: types plus pure functions over them (e.g. `Result` helpers, `isTriangleTopology` / `isStripTopology` over `PrimitiveTopology`), zero runtime constants. Full main-entry export list at [`src/index.ts`](./src/index.ts).
 
 | Category | Exports | Description |
 |:--|:--|:--|
@@ -706,3 +706,33 @@ the root declaration. `validateMaterialOutputs` returns
 `material-output-contract-invalid` with material, pass, location and reason.
 `MaterialRenderState.outputs` is the selected pass projection used by pipeline
 caching, not an additional authoring field. See [public MRT](../render/README.md#public-material-mrt).
+
+
+`MeshAsset.distanceField` optionally retains validated offline `MeshDistanceField`
+POD and source `sectionSidedness`. Geometry owns the algorithm/codec; Import owns
+production and Assets Runtime owns publication admission. The field is local to
+that Mesh identity and does not imply a renderer, instance placement, material
+alpha coverage, or live deformation support.
+Loaded attachments also retain `artifact.integrity` and `artifact.assetCodec`
+from their verified publication. `artifact` is absent on generated field data
+before admission; geometry/source digests cannot substitute for the encoded
+artifact digest or its codec profile.
+
+`MaterialProgramAbi.sceneIndexEntry` is optional: absence means a direct-only
+program, rather than a synthetic GPU Scene entry. Row bytes and vertex/resource
+facts remain producer-derived; consumers admit indirect work only when the
+scene entry is present. `unlitMaterialParameters` shares one authored parameter
+contract between format producers and rendering factories.
+
+## Terrain asset vocabulary
+
+`TerrainSource` is a finite metre-based XZ heightfield with ordered weight/height/alpha layers. `TerrainAsset` adds GUID-linked grids and sections without replacing author samples. The ordinary Asset union and shared handle vocabulary include `terrain` / `TerrainAsset`. Terrain validation failures use the closed `TerrainError` discriminant. Source constraints and producer/runtime boundaries are documented by [Terrain](../terrain/README.md).
+
+The `navigation-mesh` Scriptable Pack kind carries portable baked navigation
+polygons. Its explicit build-time producer is `@forgeax/engine/import/navigation-bake`;
+ordinary Cook/Catalog delivery preserves the GUID and producer freshness digest.
+Player loading carries no Recast compiler dependency.
+
+## Audio source publication
+
+`AudioClipAsset` is a closed buffered/streamed union: encoded `bytes` or a versioned PCM16 `stream` with HTTP locator. `ArtifactDescriptor.delivery: 'stream'` requests deferred body admission; loaders and decoders preserve the ordinary descriptor/GUID authority. Host streaming failures and counters follow [the audio contract](../audio-webaudio/README.md#long-audio-through-source-meta-and-guid).

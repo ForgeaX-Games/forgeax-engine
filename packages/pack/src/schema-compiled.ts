@@ -1,4 +1,4 @@
-import type { PackV2 } from '@forgeax/engine-types';
+import { err, ok, type PackV2, type PackV2Error, type Result } from '@forgeax/engine-types';
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import metaSchemaJson from '../schema/meta.schema.json' with { type: 'json' };
@@ -198,4 +198,17 @@ export function buildMaterialAssetValidator(
   };
 
   return localAjv.compile(materialSchema);
+}
+
+export function parsePackV2(value: unknown): Result<PackV2, PackV2Error> {
+  if (!validatePackV2(value)) {
+    return err({
+      code: 'pack-v2-envelope-invalid',
+      expected: 'a Pack v2 envelope with unique asset GUIDs and valid descriptors',
+      hint: 'validate the pack against packages/pack/schema/pack.schema.json and re-cook it',
+      detail: { observed: 'invalid pack', expected: 'schemaVersion 2.0.0' },
+    });
+  }
+
+  return ok(value);
 }

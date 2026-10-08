@@ -54,7 +54,7 @@ describe('UI importer artifact finalization', () => {
       { path: 'icons/panel.png', mimeType: 'image/png' },
       { path: 'fonts/hud.woff2', mimeType: 'font/woff2' },
     ]);
-    expect(artifactUrl).toHaveBeenCalledTimes(4);
+    expect(artifactUrl).toHaveBeenCalledTimes(2);
     expect(result.value).not.toHaveProperty('sourceDependencies');
     expect(result.value).not.toHaveProperty('resourceLedger');
   });

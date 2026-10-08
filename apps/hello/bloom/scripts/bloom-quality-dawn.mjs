@@ -55,7 +55,7 @@ if (downEntry === undefined || upEntry === undefined || compositeEntry === undef
   throw new Error('cooked Bloom shader entries are incomplete');
 }
 
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 const gpu = create([]);
 const adapter = await gpu.requestAdapter();

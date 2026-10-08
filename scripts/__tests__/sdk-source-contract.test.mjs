@@ -108,3 +108,68 @@ test('SDK manifest admits a pack-only template set with no copied resources', as
     false,
   );
 });
+
+test('SDK CI workload edits only the generated consumer and rejects fixture drift', async () => {
+  const source = await readFile(new URL('../forgeax/verify-sdk.mjs', import.meta.url), 'utf8');
+  const body = source.slice(
+    source.indexOf(
+      "  if (process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1') {",
+      source.indexOf('async function verifySelectedTemplate()'),
+    ),
+    source.indexOf(
+      '  const selectedManifest = JSON.parse(',
+      source.indexOf('async function verifySelectedTemplate()'),
+    ),
+  );
+  const apply = new (Object.getPrototypeOf(async () => {}).constructor)(
+    'resolve',
+    'readFile',
+    'writeFile',
+    'selectedProject',
+    'process',
+    'console',
+    body,
+  );
+  const root = await mkdtemp(resolve(tmpdir(), 'sdk-ci-consumer-'));
+  const original = await readFile(
+    new URL('../../templates/game-3d/assets/scene.pack.ts', import.meta.url),
+    'utf8',
+  );
+  const path = resolve(root, 'assets/scene.pack.ts');
+  try {
+    await mkdir(resolve(root, 'assets'));
+    await writeFile(path, original);
+    await apply(resolve, readFile, writeFile, root, { env: {} }, { log() {} });
+    assert.equal(await readFile(path, 'utf8'), original, 'full qualification keeps original bytes');
+    await apply(
+      resolve,
+      readFile,
+      writeFile,
+      root,
+      { env: { FORGEAX_BROWSER_CI_LIGHTWEIGHT: '1' } },
+      { log() {} },
+    );
+    assert.equal(await readFile(path, 'utf8'), original.replace('mapSize: 2048,', 'mapSize: 256,'));
+    assert.equal(
+      await readFile(
+        new URL('../../templates/game-3d/assets/scene.pack.ts', import.meta.url),
+        'utf8',
+      ),
+      original,
+      'source template remains immutable',
+    );
+    await assert.rejects(
+      apply(
+        resolve,
+        readFile,
+        writeFile,
+        root,
+        { env: { FORGEAX_BROWSER_CI_LIGHTWEIGHT: '1' } },
+        { log() {} },
+      ),
+      /sdk-ci-shadow-fixture-changed/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

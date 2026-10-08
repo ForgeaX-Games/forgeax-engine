@@ -1,5 +1,6 @@
+import type { ImportDiagnostic } from '@forgeax/engine-types';
 import { type DefaultTreeAdapterTypes, parseFragment } from 'parse5';
-import { type AuthoringDiagnostic, diagnostic, sourceRange } from './diagnostics.js';
+import { sourceRange } from './diagnostics.js';
 import { UI_AUTHORING_PROFILE, type UiAuthoringCategory } from './profile.js';
 
 type DocumentFragment = DefaultTreeAdapterTypes.DocumentFragment;
@@ -10,7 +11,7 @@ export interface HtmlAuthoringParse {
   readonly sourcePath: string;
   readonly source: string;
   readonly category: UiAuthoringCategory;
-  readonly diagnostics: readonly AuthoringDiagnostic[];
+  readonly diagnostics: readonly ImportDiagnostic[];
   readonly references: readonly {
     readonly value: string;
     readonly range: ReturnType<typeof sourceRange>;
@@ -83,8 +84,8 @@ function walk(node: ParentNode, visit: (element: Element) => void): void {
   }
 }
 
-function syntaxDiagnostics(source: string, sourcePath: string): AuthoringDiagnostic[] {
-  const diagnostics: AuthoringDiagnostic[] = [];
+function syntaxDiagnostics(source: string, sourcePath: string): ImportDiagnostic[] {
+  const diagnostics: ImportDiagnostic[] = [];
   const stack: { name: string; index: number }[] = [];
   const tokenPattern = /<\/?([a-z][\w:-]*)(?:\s[^<>]*?)?\/?\s*>/gi;
   for (const match of source.matchAll(tokenPattern)) {
@@ -94,44 +95,40 @@ function syntaxDiagnostics(source: string, sourcePath: string): AuthoringDiagnos
     if (match[0]?.startsWith('</')) {
       const last = stack.pop();
       if (last?.name !== name) {
-        diagnostics.push(
-          diagnostic({
-            code: 'html-unbalanced-tag',
-            severity: 'error',
-            sourcePath,
-            sourceRange: sourceRange(source, start, start + match[0].length),
-            rule: 'html-grammar',
-            expected: `closing </${last?.name ?? 'known element'}>`,
-            actual: match[0],
-            hint: 'Close HTML elements in their opening order.',
-          }),
-        );
+        diagnostics.push({
+          code: 'html-unbalanced-tag',
+          severity: 'error',
+          sourcePath,
+          sourceRange: sourceRange(source, start, start + match[0].length),
+          rule: 'html-grammar',
+          expected: `closing </${last?.name ?? 'known element'}>`,
+          actual: match[0],
+          hint: 'Close HTML elements in their opening order.',
+        });
       }
     } else if (!match[0]?.endsWith('/>')) stack.push({ name, index: start });
   }
   for (const entry of stack) {
-    diagnostics.push(
-      diagnostic({
-        code: 'html-unclosed-tag',
-        severity: 'error',
-        sourcePath,
-        sourceRange: sourceRange(
-          source,
-          entry.index,
-          entry.index + Math.max(entry.name.length + 1, 2),
-        ),
-        rule: 'html-grammar',
-        expected: `closing </${entry.name}>`,
-        actual: 'end of source',
-        hint: `Add a closing </${entry.name}> tag.`,
-      }),
-    );
+    diagnostics.push({
+      code: 'html-unclosed-tag',
+      severity: 'error',
+      sourcePath,
+      sourceRange: sourceRange(
+        source,
+        entry.index,
+        entry.index + Math.max(entry.name.length + 1, 2),
+      ),
+      rule: 'html-grammar',
+      expected: `closing </${entry.name}>`,
+      actual: 'end of source',
+      hint: `Add a closing </${entry.name}> tag.`,
+    });
   }
   return diagnostics;
 }
 
 export function parseHtmlAuthoring(source: string, sourcePath: string): HtmlAuthoringParse {
-  const diagnostics: AuthoringDiagnostic[] = syntaxDiagnostics(source, sourcePath);
+  const diagnostics: ImportDiagnostic[] = syntaxDiagnostics(source, sourcePath);
   const references: { value: string; range: ReturnType<typeof sourceRange> }[] = [];
   let category: UiAuthoringCategory = 'native';
   const parts = new Set<string>();
@@ -142,18 +139,16 @@ export function parseHtmlAuthoring(source: string, sourcePath: string): HtmlAuth
     const elementRange = locationFor(source, element);
     if (tag === 'script' || !UI_AUTHORING_PROFILE.html.nativeElements.includes(tag)) {
       category = 'runtime-bound';
-      diagnostics.push(
-        diagnostic({
-          code: 'runtime-html-surface',
-          severity: 'error',
-          sourcePath,
-          sourceRange: elementRange,
-          rule: 'html-native-elements',
-          expected: 'a supported semantic HTML element',
-          actual: `<${tag}>`,
-          hint: 'Move executable or custom runtime markup into a framework island.',
-        }),
-      );
+      diagnostics.push({
+        code: 'runtime-html-surface',
+        severity: 'error',
+        sourcePath,
+        sourceRange: elementRange,
+        rule: 'html-native-elements',
+        expected: 'a supported semantic HTML element',
+        actual: `<${tag}>`,
+        hint: 'Move executable or custom runtime markup into a framework island.',
+      });
     }
     if (
       tag === 'template' &&
@@ -162,18 +157,16 @@ export function parseHtmlAuthoring(source: string, sourcePath: string): HtmlAuth
       )
     ) {
       category = 'runtime-bound';
-      diagnostics.push(
-        diagnostic({
-          code: 'invalid-template',
-          severity: 'error',
-          sourcePath,
-          sourceRange: elementRange,
-          rule: 'html-template-hook',
-          expected: 'template[data-ui-template] with a non-empty name',
-          actual: '<template>',
-          hint: 'Name templates with data-ui-template so the consumer can clone them explicitly.',
-        }),
-      );
+      diagnostics.push({
+        code: 'invalid-template',
+        severity: 'error',
+        sourcePath,
+        sourceRange: elementRange,
+        rule: 'html-template-hook',
+        expected: 'template[data-ui-template] with a non-empty name',
+        actual: '<template>',
+        hint: 'Name templates with data-ui-template so the consumer can clone them explicitly.',
+      });
     }
     for (const attr of element.attrs) {
       const name = attr.name.toLowerCase();
@@ -181,83 +174,73 @@ export function parseHtmlAuthoring(source: string, sourcePath: string): HtmlAuth
       const range = attributeOffset(source, element, attr.name);
       if (name.startsWith('on')) {
         category = 'runtime-bound';
-        diagnostics.push(
-          diagnostic({
-            code: 'runtime-event-handler',
-            severity: 'error',
-            sourcePath,
-            sourceRange: range,
-            rule: 'html-event-handlers',
-            expected: 'data-ui-action with a consumer-side listener',
-            actual: name,
-            hint: 'Remove inline event handlers and bind behavior from the framework island.',
-          }),
-        );
+        diagnostics.push({
+          code: 'runtime-event-handler',
+          severity: 'error',
+          sourcePath,
+          sourceRange: range,
+          rule: 'html-event-handlers',
+          expected: 'data-ui-action with a consumer-side listener',
+          actual: name,
+          hint: 'Remove inline event handlers and bind behavior from the framework island.',
+        });
       } else if (name === 'style') {
         category = category === 'runtime-bound' ? category : 'normalizable';
-        diagnostics.push(
-          diagnostic({
-            code: 'inline-style',
-            severity: 'error',
-            sourcePath,
-            sourceRange: range,
-            rule: 'html-inline-style',
-            expected: 'stylesheet-owned declarations',
-            actual: value,
-            hint: 'Move inline declarations to the companion CSS source.',
-          }),
-        );
+        diagnostics.push({
+          code: 'inline-style',
+          severity: 'error',
+          sourcePath,
+          sourceRange: range,
+          rule: 'html-inline-style',
+          expected: 'stylesheet-owned declarations',
+          actual: value,
+          hint: 'Move inline declarations to the companion CSS source.',
+        });
       } else if (name.startsWith('data-ui-') || name === 'data-framework-island') {
         if (!allowedHookNames.has(name) || value.trim().length === 0) {
           category = 'runtime-bound';
-          diagnostics.push(
-            diagnostic({
-              code: 'invalid-ui-hook',
-              severity: 'error',
-              sourcePath,
-              sourceRange: range,
-              rule: 'html-ui-hooks',
-              expected: 'a supported non-empty ForgeaX UI hook',
-              actual: `${name}=${value}`,
-              hint: 'Use data-ui-part, data-ui-action, data-ui-template, or data-framework-island with a non-empty value.',
-            }),
-          );
+          diagnostics.push({
+            code: 'invalid-ui-hook',
+            severity: 'error',
+            sourcePath,
+            sourceRange: range,
+            rule: 'html-ui-hooks',
+            expected: 'a supported non-empty ForgeaX UI hook',
+            actual: `${name}=${value}`,
+            hint: 'Use data-ui-part, data-ui-action, data-ui-template, or data-framework-island with a non-empty value.',
+          });
         }
         if (name === 'data-ui-part' && value.trim().length > 0) {
           if (parts.has(value))
-            diagnostics.push(
-              diagnostic({
-                code: 'duplicate-ui-part',
-                severity: 'warning',
-                sourcePath,
-                sourceRange: range,
-                rule: 'html-ui-part-unique',
-                expected: 'one element per data-ui-part value',
-                actual: value,
-                hint: 'Rename one part so scenario selectors remain unambiguous.',
-              }),
-            );
+            diagnostics.push({
+              code: 'duplicate-ui-part',
+              severity: 'warning',
+              sourcePath,
+              sourceRange: range,
+              rule: 'html-ui-part-unique',
+              expected: 'one element per data-ui-part value',
+              actual: value,
+              hint: 'Rename one part so scenario selectors remain unambiguous.',
+            });
           parts.add(value);
         }
       } else if (urlAttributes.has(name) && value.length > 0) {
         const urlClass = urlCategory(value);
         if (urlClass !== 'native') {
           category = category === 'runtime-bound' ? category : urlClass;
-          diagnostics.push(
-            diagnostic({
-              code: urlClass === 'runtime-bound' ? 'runtime-url' : 'root-absolute-url',
-              severity: 'error',
-              sourcePath,
-              sourceRange: rangeOfValue(source, element, attr.name, value),
-              rule: 'html-companion-url',
-              expected: 'a package-relative companion or #fragment URL',
-              actual: value,
-              hint:
-                urlClass === 'runtime-bound'
-                  ? 'Use a package-relative companion URL.'
-                  : 'Remove the leading root or parent traversal from the URL.',
-            }),
-          );
+          diagnostics.push({
+            code: urlClass === 'runtime-bound' ? 'runtime-url' : 'root-absolute-url',
+            severity: 'error',
+            sourcePath,
+            sourceRange: rangeOfValue(source, element, attr.name, value),
+            rule: 'html-companion-url',
+            expected: 'a package-relative companion or #fragment URL',
+            actual: value,
+            hint:
+              urlClass === 'runtime-bound'
+                ? 'Use a package-relative companion URL.'
+                : 'Remove the leading root or parent traversal from the URL.',
+          });
         }
         if (!value.startsWith('#'))
           references.push({ value, range: rangeOfValue(source, element, attr.name, value) });
@@ -271,18 +254,16 @@ export function parseHtmlAuthoring(source: string, sourcePath: string): HtmlAuth
       inputWithoutLabel = element;
   });
   if (inputWithoutLabel && !source.includes('<label')) {
-    diagnostics.push(
-      diagnostic({
-        code: 'missing-accessible-label',
-        severity: 'warning',
-        sourcePath,
-        sourceRange: locationFor(source, inputWithoutLabel),
-        rule: 'html-accessible-label',
-        expected: 'label, aria-label, or aria-labelledby',
-        actual: inputWithoutLabel.tagName,
-        hint: 'Associate the control with an accessible label.',
-      }),
-    );
+    diagnostics.push({
+      code: 'missing-accessible-label',
+      severity: 'warning',
+      sourcePath,
+      sourceRange: locationFor(source, inputWithoutLabel),
+      rule: 'html-accessible-label',
+      expected: 'label, aria-label, or aria-labelledby',
+      actual: inputWithoutLabel.tagName,
+      hint: 'Associate the control with an accessible label.',
+    });
   }
   return { sourcePath, source, category, diagnostics, references };
 }

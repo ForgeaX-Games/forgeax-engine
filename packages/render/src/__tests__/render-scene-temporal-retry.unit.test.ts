@@ -80,6 +80,32 @@ function submit(scene: RenderScene, entityKey: number): void {
 }
 
 describe('RenderScene temporal retry boundary', () => {
+  it.each([
+    ['displacementTexture', 1, false, true],
+    ['baseColorTexture', 1, false, false],
+    ['displacementTexture', 0, false, false],
+    ['displacementTexture', 1, true, true],
+  ] as const)('qualifies mutable %s scale %s video %s geometry evidence', (field, scale, video, reactive) => {
+    const scene = new RenderScene();
+    scene.setTemporalTracking(true);
+    const initial = snapshot(7, 1);
+    const dynamicMaterial = {
+      ...(video
+        ? { videoTextureFields: new Set([field]) }
+        : { textureSources: new Map([[field, {}]]) }),
+      paramSnapshot: { displacementScale: scale },
+    } as unknown as MaterialSnapshot;
+    const source = { ...initial, material: dynamicMaterial, materials: [dynamicMaterial] };
+    scene.apply([updateSnapshot(source)]);
+    submit(scene, 7);
+    // The source/material identities stay stable when callers write texture
+    // content. A retained matrix alone proves no prior displaced geometry.
+    scene.apply([{ kind: 'update', worldId: 0, entityKey: 7, world: world(9) }]);
+    const temporal = scene.temporalSnapshotBySlot(0);
+    expect(temporal?.motionValid).toBe(!reactive);
+    expect(temporal?.reactiveReasons).toEqual(reactive ? ['displacement-source'] : []);
+  });
+
   it('keeps the last committed root transform across a failed root-only frame and retry', () => {
     const scene = new RenderScene();
     scene.setTemporalTracking(true);

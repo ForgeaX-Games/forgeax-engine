@@ -8,13 +8,7 @@ declare const sessionIdBrand: unique symbol;
 /** Authority-issued application identity; it is distinct from transport PeerId. */
 export type SessionId = number & { readonly [sessionIdBrand]: true };
 
-export type NetSessionStateKind =
-  | 'connecting'
-  | 'resyncing'
-  | 'active'
-  | 'recovering'
-  | 'failed'
-  | 'retired';
+export type NetSessionStateKind = NetSessionState['kind'];
 
 export type NetSessionFailure = NetError | EndpointError;
 
@@ -168,6 +162,11 @@ const LEGAL_TRANSITIONS: Readonly<Record<NetSessionStateKind, readonly NetSessio
   failed: ['retired'],
   retired: ['retired'],
 };
+
+/** `failed` and `retired` own no further transport work; only retirement may follow. */
+export function isTerminalNetSessionState(state: Pick<NetSessionState, 'kind'>): boolean {
+  return state.kind === 'failed' || state.kind === 'retired';
+}
 
 export function isLegalNetSessionTransition(
   from: NetSessionStateKind,

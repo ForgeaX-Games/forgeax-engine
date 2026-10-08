@@ -26,6 +26,38 @@ function deferred<T>() {
 }
 
 describe('HostAudioConsumer', () => {
+  it('retains the latest seek during decode and stop fences the pending position', async () => {
+    const engine = new WebAudioEngine();
+    const pending = deferred<AudioBuffer>();
+    const decode = vi.spyOn(engine, 'decode').mockReturnValue(pending.promise);
+    const play = vi.spyOn(engine, 'play').mockImplementation(() => {});
+    const seek = vi.spyOn(engine, 'seek').mockImplementation(() => {});
+    const consumer = createHostAudioConsumer(engine);
+    for (const entityId of [1, 2]) {
+      consumer.consume({
+        kind: 'play',
+        entityId,
+        sourceKey: 'seek',
+        bytes: Uint8Array.of(1),
+        options: { ...PLAY_OPTIONS, fromPosition: 1, paused: true },
+      });
+      consumer.consume({ kind: 'seek', entityId, position: 2 });
+      consumer.consume({ kind: 'seek', entityId, position: 3 });
+      for (const position of [-1, NaN, Infinity])
+        consumer.consume({ kind: 'seek', entityId, position });
+    }
+    consumer.consume({ kind: 'stop', entityId: 2 });
+    pending.resolve({} as AudioBuffer);
+    await flushDecode();
+    expect(decode).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledExactlyOnceWith(1, expect.anything(), {
+      ...PLAY_OPTIONS,
+      fromPosition: 3,
+      paused: true,
+    });
+    expect(seek).toHaveBeenCalledTimes(4);
+    consumer.dispose();
+  });
   it('decodes the complete bytes payload without using mediaType as a decoder selector', async () => {
     const engine = new WebAudioEngine();
     const buffer = {} as AudioBuffer;

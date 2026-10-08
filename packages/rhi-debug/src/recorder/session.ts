@@ -9,6 +9,11 @@ export interface CaptureFrameOptions {
   readonly snapshotTimeoutMs?: number;
   readonly byteBudget?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Seed scope. Resources whose snapshot payload exceeds `maxResourceBytes`
+   * are created unseeded on replay and marked `seed: 'omitted'` in the tape.
+   */
+  readonly seed?: { readonly maxResourceBytes?: number };
 }
 
 export interface RecorderOptions {
@@ -19,6 +24,11 @@ export interface RecorderOptions {
 export interface RecorderAttachment {
   readonly backend: RecorderBackend;
   captureFrame(options?: CaptureFrameOptions): Promise<Result<EncodedTape, RhiDebugError>>;
+  /** Capture 1–8 consecutive frames on the same recorder and seed boundary. */
+  captureFrames?(
+    frames: number,
+    options?: CaptureFrameOptions,
+  ): Promise<Result<EncodedTape, RhiDebugError>>;
   frameBoundary(): Promise<Result<void, RhiDebugError>>;
   deviceLost(): void;
   dispose(): Promise<Result<void, RhiDebugError>>;
@@ -37,6 +47,7 @@ export function attachRecorder(
   let active:
     | {
         readonly generation: number;
+        readonly frames: number;
         readonly options: CaptureFrameOptions;
         readonly resolve: (result: Result<EncodedTape, RhiDebugError>) => void;
         readonly signal?: AbortSignal;
@@ -65,36 +76,48 @@ export function attachRecorder(
     settle(fail('capture-unavailable', 'capture request was aborted'));
   };
 
+  const capture = (
+    frames: number,
+    captureOptions: CaptureFrameOptions = {},
+  ): Promise<Result<EncodedTape, RhiDebugError>> => {
+    if (!Number.isInteger(frames) || frames < 1 || frames > 8)
+      return Promise.resolve(
+        fail('capture-unavailable', 'capture frames must be an integer from 1 to 8'),
+      );
+    if (phase === 'disposed')
+      return Promise.resolve(fail('capture-unavailable', 'recorder is disposed'));
+    if (active !== undefined)
+      return Promise.resolve(fail('capture-busy', 'another capture is active'));
+    const signal = captureOptions.signal;
+    if (signal?.aborted)
+      return Promise.resolve(fail('capture-unavailable', 'capture request was aborted'));
+    phase = 'armed';
+    generation += 1;
+    return new Promise<Result<EncodedTape, RhiDebugError>>((resolve) => {
+      const request = {
+        generation,
+        frames,
+        options: captureOptions,
+        resolve,
+        ...(signal === undefined ? {} : { signal }),
+      } as {
+        readonly generation: number;
+        readonly frames: number;
+        readonly options: CaptureFrameOptions;
+        readonly resolve: (result: Result<EncodedTape, RhiDebugError>) => void;
+        readonly signal?: AbortSignal;
+        abortListener?: () => void;
+      };
+      request.abortListener = abort;
+      active = request;
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+  };
+
   const attachment: RecorderAttachment = {
     backend: proxy.backend,
-    captureFrame(captureOptions = {}) {
-      if (phase === 'disposed')
-        return Promise.resolve(fail('capture-unavailable', 'recorder is disposed'));
-      if (active !== undefined)
-        return Promise.resolve(fail('capture-busy', 'another capture is active'));
-      const signal = captureOptions.signal;
-      if (signal?.aborted)
-        return Promise.resolve(fail('capture-unavailable', 'capture request was aborted'));
-      phase = 'armed';
-      generation += 1;
-      return new Promise<Result<EncodedTape, RhiDebugError>>((resolve) => {
-        const request = {
-          generation,
-          options: captureOptions,
-          resolve,
-          ...(signal === undefined ? {} : { signal }),
-        } as {
-          readonly generation: number;
-          readonly options: CaptureFrameOptions;
-          readonly resolve: (result: Result<EncodedTape, RhiDebugError>) => void;
-          readonly signal?: AbortSignal;
-          abortListener?: () => void;
-        };
-        request.abortListener = abort;
-        active = request;
-        signal?.addEventListener('abort', abort, { once: true });
-      });
-    },
+    captureFrame: (captureOptions) => capture(1, captureOptions),
+    captureFrames: capture,
     async frameBoundary() {
       if (phase === 'disposed' || active === undefined) return ok(undefined);
       const request = active;
@@ -102,7 +125,7 @@ export function attachRecorder(
       if (phase === 'armed') {
         // Requests may arrive between frames. Start recording only at this
         // snapshot boundary; work preceding it belongs to the previous frame.
-        const arm = proxy.recorder.arm(1);
+        const arm = proxy.recorder.arm(request.frames);
         if (!arm.ok) {
           const error = createRhiDebugError('capture-busy', {
             stage: 'capture',
@@ -116,6 +139,7 @@ export function attachRecorder(
           snapshotTimeoutMs:
             request.options.snapshotTimeoutMs ?? options.snapshotTimeoutMs ?? 30_000,
           byteBudget: request.options.byteBudget ?? options.byteBudget ?? Number.MAX_SAFE_INTEGER,
+          maxResourceBytes: request.options.seed?.maxResourceBytes ?? Number.POSITIVE_INFINITY,
         });
         // Abort/disposal/device loss may have settled this request while GPU
         // readback was pending. Its completion cannot alter a newer capture.
@@ -132,6 +156,7 @@ export function attachRecorder(
       proxy.recorder.onFrameEnd();
       if (proxy.recorder.getState() !== 'idle') return ok(undefined);
       const result = assembleTape(proxy.recorder);
+      proxy.recorder.releaseTape();
       settle(result);
       return result.ok ? ok(undefined) : err(result.error);
     },
@@ -160,5 +185,5 @@ export function attachRecorder(
 }
 
 export type { CreateShaderModuleFn, CreateShaderModuleImmediateFn } from '../recorder';
-export type { EncodedTape } from './assemble';
+export { type EncodedTape, type TapeArtifact, tapeArtifact } from './assemble';
 export type { RecordableBackend, RecorderBackend } from './proxy';

@@ -1,5 +1,6 @@
 import { type BindGroup, type Buffer, RhiError, type RhiQueue } from '@forgeax/engine-rhi';
 import { ok, type Result } from '@forgeax/engine-types';
+import { LIGHTING_CHANNELS_DEFAULT } from '../components/lighting-channels';
 import type { DispatchEntry } from '../render-system-extract';
 import {
   TRANSPARENT_SORT_MODE_LAYER_Y,
@@ -17,8 +18,8 @@ import { type ValidatedRenderable, worldEntityKey } from './frame-snapshot';
  */
 export const MESH_PER_ENTITY_STRIDE = 256;
 
-// current mat4 + previous mat4 + temporal vec4. See common.wgsl::Mesh.
-export const MESH_SSBO_BYTES = 144;
+// current mat4 + previous mat4 + temporal vec4 + surface u32 row. See common.wgsl::Mesh.
+export const MESH_SSBO_BYTES = 160;
 
 /** `Mesh.temporal.y` bit set: 1 = previous transform valid, 2 = shadow sampling off. */
 export function meshSurfaceFlags(source: {
@@ -29,7 +30,7 @@ export function meshSurfaceFlags(source: {
     (source.temporal?.motionValid === false ? 0 : 1) | (source.shadowReceiver === false ? 2 : 0)
   );
 }
-export const MESH_UBO_FULL_ARRAY_BYTES = 64 * 128;
+export const MESH_UBO_FULL_ARRAY_BYTES = 80 * 128;
 
 // bug-20260723-webgl2-instancing-uniform-range: the WebGL2 fallback shader
 // declares `array<InstanceData, 128>` in the instances bind group. Even when
@@ -454,6 +455,7 @@ function meshSsboMirror(buffer: Buffer, slotCount: number): MeshSsboMirror {
 
 function writeMeshSlotCandidate(entry: ValidatedRenderable, foldHead: boolean): void {
   candidate.fill(0);
+  candidateBits[38] = entry.source.lightingChannels ?? LIGHTING_CHANNELS_DEFAULT;
   if (foldHead) {
     candidate[0] = 1;
     candidate[5] = 1;
@@ -548,6 +550,7 @@ export function uploadMeshSsboBatch(
   foldDispatchPlan: FoldDispatchPlan | null,
   shadow: readonly ValidatedRenderable[] = [],
   visibleSurfaceBases?: ReadonlyMap<number, number>,
+  storageBuffer = true,
 ): number {
   const slotCount = main.length + shadow.length;
   if (slotCount === 0) return 0;
@@ -573,6 +576,8 @@ export function uploadMeshSsboBatch(
         candidateBits[37] = entry.source.instances?.instanceCount ?? 1;
       }
     }
+    if (!storageBuffer)
+      candidateBits[18] = entry?.source.lightingChannels ?? LIGHTING_CHANNELS_DEFAULT;
     if (!stageMeshSlot(mirror, slot)) continue;
     if (runFirst >= 0 && slot - runEnd <= MESH_DIRTY_MERGE_GAP_SLOTS) {
       runEnd = slot + 1;

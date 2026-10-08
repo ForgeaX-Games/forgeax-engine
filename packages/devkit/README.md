@@ -48,7 +48,8 @@ explicit host Pack; stop it before changing the selection. The selected path is
 reported by `backend status`. It does not launch a browser, create a project
 session, initialize graphics or execute game Entries. A directory without
 `forge.json` can host the Engine APIs with no project plugins. The returned
-status exposes no transport credentials. Stop releases this backend's resources;
+status exposes no transport credentials. Stop detaches its authenticated connections
+and releases their native sockets without waiting for a browser close handshake;
 independent runs keep their own `engine run stop` lifecycle.
 
 Native host plugins inject `devkitBackend`, `engineWorkspace` and `toolApi`.
@@ -68,13 +69,22 @@ observation target. Its optional Shell mounts before rendering, so a renderer
 failure does not remove the interface. The embedding `devKitWorkspacePlugin`
 contract remains available for applications that already own a Host.
 
-A destroyed workspace page remains terminal even when its URL is reloaded.
-Presentation clients may request a guarded replacement through Engine's
+A healthy browser refresh retains the project, session, target, Vite server and
+accepted Catalog. The workspace reports `starting` while the old browser's
+resource previews and presented Play retire through their existing owners. The
+replacement becomes `running` only after actual cleanup and its authenticated
+ready handshake; `browserGeneration` advances once per accepted browser realm.
+Commands already sent to the old realm fail and are never replayed. New commands
+and cancellation use the exact authenticated browser connection, so an old
+connection cannot execute a replacement's writes.
+
+A known terminal failure remains terminal. Presentation clients may request a
+guarded replacement through Engine's
 `project.open({ root, expectedTargetId, expectedTargetState: 'lost' })` contract.
-The session projects its existing terminal failure; no asset query or parallel
-health monitor decides whether replacement is allowed. DevKit
-continues to fence old page messages and does not revive a target or replay
-execution. Picking uses the existing `target.pick` request/result path, including
+The session projects its existing failure; no asset query or parallel health
+monitor decides whether replacement is allowed. Cleanup failure retains the
+original structured error and presented Play owner instead of admitting a new
+browser or reporting successful native cleanup. Picking uses the existing `target.pick` request/result path, including
 its authentication and exact target/preview-owner checks. The provider neither
 interprets clicks nor forwards a dedicated selection or pick-error topic;
 presentation clients decide how query results affect their selection.
@@ -94,6 +104,10 @@ presentation clients decide how query results affect their selection.
 
 ## CLI and catalog
 
+`ToolCatalogEntry` derives its identity and evidence fields from `ToolDescriptor`.
+The catalog requires a normalized command path and keeps schemas as serialized
+strings; descriptor parser objects remain with the runtime contribution.
+
 The normal project commands remain available through the `forgeax` CLI:
 
 ```text
@@ -111,6 +125,8 @@ forgeax project package [--format web-zip|single-html] [--output release/game-we
 forgeax help --tree --json
 forgeax debug rhi summary --artifact .forgeax-debug/{runId}/frame.rhitape --json
 forgeax debug rhi inspect --artifact .forgeax-debug/{runId}/frame.rhitape --work-index {workIndex} --json
+forgeax debug rhi read --artifact .forgeax-debug/{runId}/frame.rhitape --reads '[{"resourceId":"buffer:7","workIndex":{workIndex}}]' --json
+forgeax debug rhi timing --artifact .forgeax-debug/{runId}/frame.rhitape --json
 
 # Pack authoring identity and recovery
 forgeax asset resolve --package-id {packageId} --source-key {sourceKey} --require identity --json
@@ -123,6 +139,16 @@ forgeax asset resolve {assetGuid} --require ready --json
 > `mode`, `serves`, and the current `rhi.capture` capability. Neither command
 > silently invents a live capture attachment.
 
+Static preview prepares gzip level-1 representations of BIN files from the
+verified dist manifest before listening. It rechecks those original bytes while
+preparing, leaves dist files and SHA-256 unchanged, and uses the same Node HTTP
+artifact owner as dev. Vite retains its static HEAD, Range, and conditional-request
+handling and its existing text compression. The server owns these prepared
+representations until close; an external HTTPS deployment controls its own HTTP
+compression policy.
+For matched BIN URLs, HEAD, Range, and conditional requests require acceptable
+identity bytes; an explicit rejection of identity returns 406 before delegation.
+
 ### Persistent live control
 
 Run commands from a game project root, or pass `--root`. The live owner keeps
@@ -133,6 +159,11 @@ its project Vite child uses an OS-assigned loopback port rather than the
 default strict `5173`. The ready result and `dev status` expose the actual
 project URL, so another process may already own `5173` without changing the
 owner PID, control endpoint, or revision contract.
+
+When the App bridge is connected, `dev status.execution` forwards its last sampled
+Host-owned `ExecutionReport`, including Engine health, frame credits and Render
+Worker completion. It samples the existing report without scheduling an eval in
+the Engine Worker, so stalled frame progress remains directly diagnosable.
 
 ```bash
 forgeax dev start --headless false --json
@@ -247,6 +278,11 @@ candidates leave the running session intact; old lazy module requests refuse
 changed source bytes. `runtimeBinding` identifies the asset scope, while plugin
 `sessionGeneration` identifies the whole executable session.
 
+Bootstrap scans retain metadata and captured source bytes; a bounded pool
+acquires each source or instance only while it builds its plugin definitions.
+Blocked cooked reads remain deferred to ordinary production. See [Pack worker
+ownership](../pack/README.md) for source evidence and lease cleanup.
+
 | Fact | DevKit rule |
 |:--|:--|
 | `producerReadiness` | Keep producer capability explicit; a missing importer or cooker is a structured failure. |
@@ -264,6 +300,10 @@ all from `@forgeax/engine/devkit/plugin-build`. The Vite root owns Engine module
 identity and program imports; each contribution's `projectRoot` owns its content
 sources and inventory. A host may serve several content projects without adding
 an Engine umbrella dependency to every content package.
+
+`executionWorkerEntries()` keeps emitted Workers in that shared graph and disables
+DOM module preloading for build output. Lazy Worker imports remain native imports
+and work without `document`; custom hosts need no separate preload override.
 
 Emitted JavaScript uses a module lexer for literal import/re-export edges;
 large generated shader payloads do not require a full TypeScript syntax tree.
@@ -339,6 +379,10 @@ This does not grant access to their unreferenced sibling files or directories.
 The delivery worker only intercepts its program URL namespace. An existing
 application Service Worker requires Host integration; it is never silently
 replaced. Program data URLs are not a fallback for failed browser delivery.
+DevKit-owned live and capture browsers permit Service Workers in their fresh
+contexts, so HTTP projects use this same native delivery route. Closing the
+browser releases its context and derived caches; launch profiles do not change
+the project's module delivery capabilities.
 The private delivery channel leaves the game's borrowed MessagePort queue untouched.
 Its name travels through existing bootstrap data; each World owns its pending
 request, rejects stale replies, and releases its listener on disposal. Missing
@@ -389,6 +433,15 @@ FORGEAX_EXECUTION_WORKERS='{"render":false}' \
 ```
 
 Source gameplay plugins can inject `world`, `assets` and `executionBootstrapHost`.
+Generated page and Worker entries share an SSR generation identity derived from
+the existing plugin source-input fence, including authored WGSL. `sourceHead`
+is the `project:<id>` namespace, not a Git HEAD. `sourceTree` hashes sorted
+relative paths and captured content revisions. `lockSha256` hashes the fenced
+root package manifest and available pnpm/Bun/npm locks; `buildSha256` hashes those
+inputs plus roots, command, base, bootstrap kind and session generation. These
+are generation input bindings, not a final bundle digest or certification of
+the entire installed Engine source/runtime. Normal compilation retains the
+same fence and rejects changed or newly added inputs before publication.
 Independent rendering places `renderer` in the child realm; a source plugin that
 requires it must be migrated to the bootstrap's renderer configuration/feature
 boundary, or explicitly co-located with `render: false`. DOM UI remains Host-owned.
@@ -428,7 +481,11 @@ component tokens and Scene state. The App package dependency closure supplies
 native scan entries, allowing Vite to discover nested third-party dependencies
 before target activation instead of later reloading the live page. Independent
 runs may snapshot dependencies
-outside the project; serving admits the resolved App output directory for its
+outside the project. The snapshot copies the complete resolved published payload,
+including dirty inputs, before admitting a run; two closure scans and per-file
+metadata checks reject concurrent input changes. Small files use bounded 64 KiB
+buffers and larger payloads stream without changing content versions, readonly
+permissions, dependency links or cancellation cleanup. Serving admits the resolved App output directory for its
 Worker constructor URLs while preserving the surrounding filesystem boundary.
 The bootstrap entry is
 `dist/assets/execution-bootstrap.js`, and the generated `index.html`
@@ -657,7 +714,10 @@ The generated game host renders structured startup failures recursively instead
 of coercing thrown objects to `[object Object]`. It preserves `name`, `message`,
 `code`, `expected`, `hint`, `reason`, and bounded nested
 `cause/detail/webgpuError/wgpuError/error` fields. Generic objects use bounded
-JSON serialization and circular objects receive an explicit diagnostic.
+JSON serialization and circular objects receive an explicit diagnostic. Traversal
+admits up to 64 distinct objects, preserving deep plugin/asset cause chains and
+reporting a diagnostic node limit when exhausted. Startup input capture also
+accepts events targeting `window`; only DOM Nodes are tested for overlay ownership.
 
 When the resulting evidence mentions WebGPU, adapter absence, or no usable
 backend, the host also states that ForgeaX supports browser WebGPU and a
@@ -677,10 +737,12 @@ game merely to remove an uncaught exception.
 |:--|:--|:--|
 | HTML → module | Static title, status, CSS spinner, and `noscript` text are present before the entry module is imported. | No App, GPU, WASM, or asset request is required to paint the first loading surface. |
 | Prepare | `prepare()` runs before `app.start()` and changes the status to `Preparing scene…`. Input is sampled through a closed gate and cleared. | Foreground-only slow-load accounting may show a wait/reload hint after 15 seconds; it never fails the game. |
-| Enter candidate | A matching submitted/completed frame identity, World/session identity, device generation, `presentation: 'ready'`, and successful receipt `Result` are required. A submit or ACK alone is insufficient. | A 150 ms fade keeps hit-testing over the canvas; reduced motion removes the transition. |
+| Enter candidate | A matching submitted/completed frame identity, current canvas owner, World/session identity, device generation, `presentation: 'ready'`, and successful receipt `Result` are required. A submit or ACK alone is insufficient. | A 150 ms fade keeps hit-testing over the canvas; reduced motion removes the transition. |
 | Entered | The fade completes before gameplay input and pointer-lock policy reopen. | Startup frame, visibility, input-capture, and timer listeners are removed. |
 | Failed | Entry errors, `app.onError`, resource errors, and rejected receipts render structured fatal diagnostics with `Reload`; arbitrary nested detail remains inspectable. | Loading/fade work and gameplay input are cleared; the fatal Reload listener is retained for the terminal page. |
 | Hidden/destroyed | Background tabs do not spend the slow-load budget or invent a completed frame. | `pagehide`, entered, and failed paths cancel pending timers and startup listeners. |
+
+Startup observes nonbubbling App receipts through the stable page capture path. Render Worker recovery can replace the transferred canvas; receipts from a retired or unrelated canvas cannot enter the game or reuse an old submission. Replacement during the fade restores preparation and waits for the new canvas before enabling input.
 
 ## RHI-debug operations
 
@@ -726,6 +788,8 @@ sequenceDiagram
 | `rhi.capture` | Optional abort signal | One `ArtifactRef` plus capture bytes | Host and recorder attachment |
 | `rhi.summary` | One `ArtifactRef` | Strict v7 decode and compact work/initial-content summary | Protocol decoder and frame model |
 | `rhi.inspect` | One `ArtifactRef`, one `workIndex`, optional fields | Fresh-backend `WorkInspection` | Replay session and readback matrix |
+| `rhi.read` | One `ArtifactRef`, 1-64 reads by resource or work binding | Per-read bytes digest, records, image stats and optional PNG | Replay session batch readback and image decode |
+| `rhi.timing` | One `ArtifactRef` | Replay GPU nanoseconds per render/compute pass and frame total | Replay session timestamp-query replay |
 
 ### ArtifactRef
 
@@ -779,6 +843,8 @@ contracts. `createNodePackProgramImports` rebinds recorded imports in a fresh Ho
 Generic npm imports retain a project package authority, dependency route and selected
 entry, preserving distinct installed instances even when their bytes match. Content
 identities include runtime peers; Node builtins and Cordis use their actual identities.
+Declared npm dependencies retain their installed package authority even when their
+names also identify Node builtins, such as the `punycode` package.
 Missing dependencies or changed bytes cannot satisfy the archived import contract.
 
 Browser static plugins use the existing Vite module graph in both the page and
@@ -911,6 +977,17 @@ SDK-backed installs disable pnpm's side-effects cache so the manifest-bound
 offline store remains unchanged.
 
 ## Borrowed display carrier
+
+`SoftwareBrowserOpenOptions` projects the capture fields that opening actually
+accepts from `BrowserCaptureOptions`. `BrowserHostOptions` selects its backend,
+visibility and carrier fields from that opening contract; publishing remains
+preview-owned. Server/Host/launch options and checkpoint budgets retain their
+separate lifetimes. A requested backend is not an observed GPU classification.
+
+`BrowserCarrierRequest` selects run, generation, dimensions and GPU field types
+from `BrowserCarrierTarget`. Requests retain their own `headless` and `url`;
+lease, target and surface identities belong only to the returned target. Shared
+field types do not require requested and observed dimensions to be equal.
 
 ### Product activation belongs to plugins
 
@@ -1055,11 +1132,13 @@ Scriptable Pack outputs without a disk Pack index. It returns that publication's
 asset and source path without re-evaluating authored code. The project App reads
 its current Registry payload; Mesh metadata includes geometry counts, bounds and
 material slots without transferring vertex/index buffers. For a direct
-`.pack.json` source, DevKit adds only the inspected GUID's authored payload or
+`.pack.json` source with the producer's explicit `sourceKey`, DevKit adds only the inspected GUID's authored payload or
 instance `effectiveValues` as
 `meta.properties`, retaining current Registry facts in `meta`. It requires the
 Pack output GUID to match the Catalog GUID and reports a structured source
-failure rather than showing empty properties. Direct provider calls without a
+failure rather than showing empty properties. Internal delivery containers, including
+Engine-generated builtin meshes, retain their live Registry inspection without
+inventing an authored output key or source revision from the filename. Direct provider calls without a
 session handle retain offline Pack inspection, including source identity and
 revision. ScriptablePack inspection does not re-evaluate `build`. Rebuild tools
 are advertised only when the provider supplies a build owner.
@@ -1116,8 +1195,9 @@ After opening a project or refreshing its lost page, run
 `node scripts/workspace-timing-report.mjs /absolute/backend/root` from the
 Engine checkout. The report groups completed targets and shows median and range
 for project facts, Vite configuration, Vite server creation/listening, Catalog
-readiness, and browser readiness. A refresh creates a new target; compare those
-targets instead of treating the page navigation alone as Engine startup time.
+readiness, and browser readiness. A healthy refresh keeps its target and emits
+a new browser-ready event; a guarded terminal recovery creates a new target.
+Compare those lifecycle events instead of equating navigation with Engine startup.
 The timer begins when Engine opens the target and ends at its browser-ready
 event; time spent reaching View's resident entry is outside this timer.
 
@@ -1156,21 +1236,28 @@ only project metadata, target identity, operation results, and the canvas PNG
 cross the Host boundary. Abort signals publish a cancellation command and the
 page drops late results. The existing open-command ID fences browser preview
 operations and cleanup, so a queued old close cannot destroy a replacement.
-Page loss is terminal for that session and is
-never auto-replayed.
+Browser disconnect rejects in-flight commands; a healthy refresh may admit a
+new browser generation after retirement. A known terminal failure still requires
+guarded recovery. Neither path replays writes.
 
 Concurrent previews have separate Engine target identities and Apps inside the
 same browser Host. The provider retains handles and pending results; actual
 entities and component data stay in each World. The browser plugin returns
 bounded live queries, never an authored SceneAsset mirror or panel filter rules.
 A preview execution failure rejects that target's operations; a document loss
-fails all targets in that document. Both require explicit cleanup, not replay.
+retires all resource previews in that document before replacement readiness.
+A preview failure requires explicit cleanup; neither path replays operations.
 
 Editor Play starts a distinct game session from the current project root on the
 same BackendHost. Its authenticated connection receives a game projection
 without the parent workspace frontend root. The original editing World remains
 intact. Stop releases the game session; a new Play reads the current project
 files. Independent CLI runs retain their separate fixed-input snapshots.
+The workspace retains the presented Play owner until its cleanup acknowledgment
+succeeds. A failed close retains the same identity, and public stop shares the
+existing mutation queue with start and project replacement. A real disconnect
+rejects pending close waits even after an earlier target failure; the retired
+session reports unconfirmed cleanup instead of completed native cleanup.
 The initiating request's AbortSignal cancels preparation before a Play target exists.
 Workspace and Play servers materialize an OS-assigned loopback port when no
 port is specified (or `0` is requested), then bind it strictly. Vite's default
@@ -1281,3 +1368,36 @@ and an external frontend root are rejected together. Resident host source change
 require backend restart before dependent browser candidates can replace sessions.
 
 The existing `debug rhi inspect` command accepts `--buffer` JSON with a resource ID, record layout, first record and count. It returns typed post-work `bufferRecords` with replay provenance through the same `rhi.inspect` operation; see [RHI Debug buffer inspection](../rhi-debug/README.md#structured-compute-and-ray-query-buffers).
+
+`debug rhi read` (`rhi.read`) takes `--reads`, a JSON array of 1 to 64 reads, and replays them together. Each read names `resourceId` or `binding` plus `workIndex`, and optionally `subresource`, `records` (layout, first, count) and `image` (format/extent/offset/bytesPerRow, atlas `tile`, display `exposure`/`range`/`tonemap`, and a `png` output path). Each result is a per-read `CommandResult` with provenance, byte length, digest, records and image statistics; a failed read stays in its slot. See [RHI Debug images and atlases](../rhi-debug/README.md#images-atlases-and-hdr-texels).
+
+`debug rhi timing` (`rhi.timing`) replays the artifact once with replay-owned pass timestamps and returns `timing.passes` (pass index, kind, label, work indices, `gpuNanoseconds`) plus `totalGpuNanoseconds`. It needs a replay device with `timestamp-query` and otherwise fails with `replay-capability-mismatch`; times rank passes on the replay device. See [RHI Debug per-pass timing](../rhi-debug/README.md#per-pass-gpu-timing).
+
+## Selected tool sources and SDK runtime
+
+A package-owned Host frontend that declares `@forgeax/engine` is admitted against the Host's Engine graph. Generic presentation packages need not depend on Engine. Frontend aliases
+select that graph across all physical Engine packages. An explicitly bound game graph
+must resolve to the same package roots or equal runtime bytes; equal version labels alone
+do not admit conflicting code. The failure is `host-assembly-invalid` before target boot.
+
+SDK manifest 1.9.0 distinguishes runtime/tool packages and records `viewCommit`. The existing
+launcher and `project init` use `.forgeax/cli-runtime`, with dedicated `toolchain/cli-runtime`
+inputs. Readiness requires matching input bytes plus the Engine CLI and exported View Host
+Pack. Game template manifests do not install View. SDK init receipt 2.0.0 includes the
+tool input digest; old or partial installations require initialization again.
+
+`sdk install` downloads the exact npm carrier into a private sibling of its
+target, checks the carrier version, then moves its extracted entries through
+private staging. This avoids a second complete SDK copy and preserves hard
+links and relative symbolic links. The target must be absent or empty; temporary
+download and staging directories are removed after success or failure.
+
+A headed target samples the native `devkitWorkspaceFrontend` lease when the
+project opens. Retirement of that service marks its frontend target lost; the
+existing guarded recovery replaces the exact identity without replaying writes.
+Independent game sessions do not borrow that presentation lease.
+
+The existing development `__forgeaxGameInspection.renderer()` projection includes the
+App-owned `lastError` alongside renderer state and execution receipts. A healthy World
+and an alive renderer do not imply that the latest draw succeeded; this structured
+failure identifies the actual owner when an ordinary frame cannot submit.

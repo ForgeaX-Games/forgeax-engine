@@ -19,6 +19,7 @@ export {
   createMemoryEndpointPair,
   createMemoryEndpointPairWithController,
 } from './endpoint/memory';
+export type { ReplicationVisibility } from './replication/authority';
 export { AuthorityCoordinator, createAuthorityCoordinator } from './replication/authority';
 export { decodeReplicationPacket, encodeReplicationPacket } from './replication/codec';
 export {
@@ -64,6 +65,7 @@ export type {
   NetSessionConfig,
   PeerSnapshot,
   RawMessage,
+  ReplicationPeerSnapshot,
   SessionSnapshot,
 } from './session/net-session';
 // Session (requirements AC-04)
@@ -81,6 +83,7 @@ export {
   createSessionId,
   DEFAULT_NET_RECOVERY_POLICY,
   isLegalNetSessionTransition,
+  isTerminalNetSessionState,
   RECOVERY_ERROR_CODES,
   resolveNetRecoveryPolicy,
   transitionNetSessionState,

@@ -1,3 +1,4 @@
+import { cookMeshCollision } from '@forgeax/engine-import';
 // gltf-importer.ts - the build-time gltfImporter (feat-20260603-asset-import-loader-injection M2 / w19,
 // extended in feat-20260608 M3 w14 with the texture pipeline: three image
 // source paths funnelled through the ImportContext decodeImage seam).
@@ -67,10 +68,16 @@ import {
 import { gltfErr } from './errors.js';
 import { extractImageBytes } from './extract-image-bytes.js';
 import { deriveTextureColorSpace } from './image-color-space.js';
+import { GLTF_MATERIAL_TEXTURE_SLOTS, materialTextureBinding } from './material/parse-material.js';
 import { cookGltfMeshCards } from './mesh-cards';
-import type { GltfBufferViewDecodeCapability } from './meshopt-decode.js';
-import type { GltfDoc, GltfMaterialIr, GltfTextureInfoIr } from './parse-gltf.js';
-import { parseGlbForImporter, parseGltfForImporter } from './parse-gltf.js';
+import { cookGltfMeshDistanceField } from './mesh-distance-field';
+import type { GltfDoc, GltfMaterialIr, GltfParseOptions } from './parse-gltf.js';
+import {
+  GLTF_UV_SET_COUNT,
+  gltfMeshUvSet,
+  parseGlbForImporter,
+  parseGltfForImporter,
+} from './parse-gltf.js';
 import { deriveGltfShadowCapsules } from './shadow-capsules';
 
 type ParseDocResult =
@@ -251,14 +258,14 @@ async function parseDoc(
   source: string,
   bytes: Uint8Array,
   ctx: ImportContext,
-  meshopt?: GltfBufferViewDecodeCapability,
+  options: GltfParseOptions = {},
 ): Promise<ParseDocResult> {
   const ab = bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
   if (isGlbBytes(source)) {
-    const res = await parseGlbForImporter(ab, source, meshopt === undefined ? {} : { meshopt });
+    const res = await parseGlbForImporter(ab, source, options);
     if (!res.ok) {
       if (res.error instanceof ImportError) return { ok: false, error: res.error };
       throw new Error(parseFailureMessage('parseGlb failed', res.error));
@@ -283,12 +290,7 @@ async function parseDoc(
       sib.value.byteOffset + sib.value.byteLength,
     ) as ArrayBuffer;
   };
-  const res = await parseGltfForImporter(
-    json,
-    externalLoader,
-    source,
-    meshopt === undefined ? {} : { meshopt },
-  );
+  const res = await parseGltfForImporter(json, externalLoader, source, options);
   if (!res.ok) {
     if (res.error instanceof ImportError) return { ok: false, error: res.error };
     throw new Error(parseFailureMessage('parseGltf failed', res.error));
@@ -402,10 +404,6 @@ function buildHandleMaps(
   };
 }
 
-function textureInfo(info: GltfTextureInfoIr | number | undefined): GltfTextureInfoIr | undefined {
-  return info === undefined ? undefined : typeof info === 'number' ? { texture: info } : info;
-}
-
 /** Collect texture and sampler GUID refs for one material (AC-11 cross-edge). */
 export function materialRefsForPack(
   mat: GltfMaterialIr,
@@ -415,16 +413,16 @@ export function materialRefsForPack(
 ): readonly AssetRef[] {
   const refs: AssetRef[] = [];
   const textures = doc.textures ?? [];
-  function pushRefsForSlot(info: GltfTextureInfoIr | number | undefined, fieldName: string): void {
-    const binding = textureInfo(info);
-    if (binding === undefined) return;
+  for (const slot of GLTF_MATERIAL_TEXTURE_SLOTS) {
+    const binding = materialTextureBinding(mat[slot]);
+    if (binding === undefined) continue;
     const tex = textures[binding.texture];
-    if (tex === undefined) return;
+    if (tex === undefined) continue;
     const guid = textureGuidByIndex.get(tex.source);
     if (guid !== undefined) {
       refs.push({
         guid,
-        sourceField: { componentName: '<material>', fieldName },
+        sourceField: { componentName: '<material>', fieldName: slot },
       });
     }
     if (binding.sampler !== undefined) {
@@ -432,38 +430,18 @@ export function materialRefsForPack(
       if (samplerGuid !== undefined) {
         refs.push({
           guid: samplerGuid,
-          sourceField: { componentName: '<material>', fieldName: `${fieldName}.sampler` },
+          sourceField: { componentName: '<material>', fieldName: `${slot}.sampler` },
         });
       }
     }
   }
-  pushRefsForSlot(mat.baseColorTexture, 'baseColorTexture');
-  pushRefsForSlot(mat.metallicRoughnessTexture, 'metallicRoughnessTexture');
-  pushRefsForSlot(mat.normalTexture, 'normalTexture');
-  pushRefsForSlot(mat.occlusionTexture, 'occlusionTexture');
-  pushRefsForSlot(mat.emissiveTexture, 'emissiveTexture');
-  pushRefsForSlot(mat.transmissionTexture, 'transmissionTexture');
-  pushRefsForSlot(mat.thicknessTexture, 'thicknessTexture');
-  pushRefsForSlot(mat.clearcoatTexture, 'clearcoatTexture');
-  pushRefsForSlot(mat.clearcoatRoughnessTexture, 'clearcoatRoughnessTexture');
-  pushRefsForSlot(mat.clearcoatNormalTexture, 'clearcoatNormalTexture');
-  pushRefsForSlot(mat.anisotropyTexture, 'anisotropyTexture');
-  pushRefsForSlot(mat.sheenColorTexture, 'sheenColorTexture');
-  pushRefsForSlot(mat.sheenRoughnessTexture, 'sheenRoughnessTexture');
-  pushRefsForSlot(mat.iridescenceTexture, 'iridescenceTexture');
-  pushRefsForSlot(mat.iridescenceThicknessTexture, 'iridescenceThicknessTexture');
-  pushRefsForSlot(mat.specularTexture, 'specularTexture');
-  pushRefsForSlot(mat.specularColorTexture, 'specularColorTexture');
-  pushRefsForSlot(mat.diffuseTransmissionTexture, 'diffuseTransmissionTexture');
-  pushRefsForSlot(mat.diffuseTransmissionColorTexture, 'diffuseTransmissionColorTexture');
   return refs;
 }
 
 function availableUvSets(mesh: GltfDoc['meshes'][number]): readonly number[] {
   const sets: number[] = [];
-  for (let set = 0; set <= 7; set++) {
-    const field = `texcoord${set}` as keyof typeof mesh;
-    if (mesh[field] !== undefined) sets.push(set);
+  for (let set = 0; set < GLTF_UV_SET_COUNT; set++) {
+    if (gltfMeshUvSet(mesh, set) !== undefined) sets.push(set);
   }
   return sets;
 }
@@ -476,53 +454,9 @@ function rewriteMaterialAssetRefs(
 ): ReturnType<typeof toMaterialAsset> {
   const values = { ...(matAsset.values ?? {}) } as Record<string, MaterialValue | null>;
   const textures = doc.textures ?? [];
-  const slots: readonly [
-    (
-      | 'baseColorTexture'
-      | 'metallicRoughnessTexture'
-      | 'normalTexture'
-      | 'occlusionTexture'
-      | 'emissiveTexture'
-      | 'transmissionTexture'
-      | 'thicknessTexture'
-      | 'clearcoatTexture'
-      | 'clearcoatRoughnessTexture'
-      | 'clearcoatNormalTexture'
-      | 'anisotropyTexture'
-      | 'sheenColorTexture'
-      | 'sheenRoughnessTexture'
-      | 'iridescenceTexture'
-      | 'iridescenceThicknessTexture'
-      | 'specularTexture'
-      | 'specularColorTexture'
-      | 'diffuseTransmissionTexture'
-      | 'diffuseTransmissionColorTexture'
-    ),
-    GltfTextureInfoIr | number | undefined,
-  ][] = [
-    ['baseColorTexture', mat.baseColorTexture],
-    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
-    ['normalTexture', mat.normalTexture],
-    ['occlusionTexture', mat.occlusionTexture],
-    ['emissiveTexture', mat.emissiveTexture],
-    ['transmissionTexture', mat.transmissionTexture],
-    ['thicknessTexture', mat.thicknessTexture],
-    ['clearcoatTexture', mat.clearcoatTexture],
-    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
-    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
-    ['anisotropyTexture', mat.anisotropyTexture],
-    ['sheenColorTexture', mat.sheenColorTexture],
-    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
-    ['iridescenceTexture', mat.iridescenceTexture],
-    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
-    ['specularTexture', mat.specularTexture],
-    ['specularColorTexture', mat.specularColorTexture],
-    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
-    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
-  ];
   let cursor = 0;
-  for (const [slot, rawBinding] of slots) {
-    const binding = textureInfo(rawBinding);
+  for (const slot of GLTF_MATERIAL_TEXTURE_SLOTS) {
+    const binding = materialTextureBinding(mat[slot]);
     if (binding === undefined) continue;
     const texture = textures[binding.texture];
     const textureGuid =
@@ -551,15 +485,15 @@ function rewriteMaterialAssetRefs(
 
 async function importGltf(
   ctx: ImportContext,
-  meshopt?: GltfBufferViewDecodeCapability,
-): Promise<ImportResult> {
+  options: GltfParseOptions = {},
+): Promise<ImportResult<unknown>> {
   const read = await ctx.readSource();
   if (!read.ok) {
     throw new Error(
       `gltfImporter: readSource failed: ${read.error instanceof Error ? read.error.message : String(read.error)}`,
     );
   }
-  const parsed = await parseDoc(ctx.source, read.value, ctx, meshopt);
+  const parsed = await parseDoc(ctx.source, read.value, ctx, options);
   if (!parsed.ok) return parsed;
   const doc = deriveGltfShadowCapsules(
     deriveGltfAnimatedBounds(applyImportSettingsBounds(parsed.value, ctx.importSettings)),
@@ -615,7 +549,7 @@ async function importGltf(
     if (sub.kind === 'skin') skinGuidBySourceIndex.set(sub.sourceIndex, sub.guid);
   }
 
-  const out: ImportedAsset[] = [];
+  const out: ImportedAsset<unknown>[] = [];
   const isMultiAsset = ctx.subAssets.length > 1;
   for (const sub of ctx.subAssets) {
     if (sub.kind === 'mesh') {
@@ -676,6 +610,26 @@ async function importGltf(
           }),
         };
       const stabilizedMesh = stabilizeMeshMaterialSlots(cards.value, ctx, sub.guid, sub.sourceKey);
+      const distanceField = await cookGltfMeshDistanceField(
+        cards.value,
+        sub.guid,
+        prims,
+        doc.materials,
+        ctx.importSettings.meshDistanceField,
+      );
+      if (!distanceField.ok)
+        return {
+          ok: false,
+          error: new ImportError({
+            code: 'import-internal-error',
+            expected: distanceField.error.expected,
+            hint: distanceField.error.hint,
+            detail: {
+              reason: `mesh ${sub.sourceIndex}: ${JSON.stringify(distanceField.error.detail)}`,
+            },
+          }),
+        };
+
       const lodGroup =
         doc.lod?.groups?.find(
           (group) => doc.nodes[group.rootNode]?.meshIndex === sub.sourceIndex,
@@ -740,13 +694,17 @@ async function importGltf(
                 : [];
             })
           : [];
-      const meshPayload: MeshAsset =
+      const sourceMeshPayload: MeshAsset =
         lodLevels.length === 0
           ? stabilizedMesh
           : {
               ...stabilizedMesh,
               lods: lodLevels.map(({ mesh, screenCoverage }) => ({ mesh, screenCoverage })),
             };
+      const meshPayload = cookMeshCollision(
+        sourceMeshPayload,
+        ctx.importSettings.meshCollision,
+      ).unwrap();
       const materialRefs: AssetRef[] = [];
       const seenMaterialGuids = new Set<string>();
       for (let slotIndex = 0; slotIndex < meshPayload.materialSlots.length; slotIndex++) {
@@ -774,9 +732,15 @@ async function importGltf(
         guid: sub.guid,
         kind: 'mesh',
         ...(meshName !== undefined ? { name: meshName } : {}),
-        payload: meshPayload,
+        payload: {
+          ...meshPayload,
+          ...(distanceField.value === undefined
+            ? {}
+            : { distanceField: distanceField.value.payload }),
+        },
         refs: materialRefs,
         artifacts: {
+          ...distanceField.value?.artifacts,
           body: {
             mediaType: 'application/x-forgeax-mesh',
             assetCodec: { name: 'mesh-binary', version: '5' },
@@ -1140,10 +1104,10 @@ async function importGltf(
  * importers.register(gltfImporter);
  * ```
  */
-export function createGltfImporter(meshopt?: GltfBufferViewDecodeCapability): Importer {
+export function createGltfImporter(options: GltfParseOptions = {}): Importer {
   return {
     key: 'gltf',
-    import: (ctx) => importGltf(ctx, meshopt),
+    import: (ctx) => importGltf(ctx, options),
     capabilities: { catalog: { publish: publishesCatalogProduct } },
   };
 }

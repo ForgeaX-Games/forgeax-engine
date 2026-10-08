@@ -28,5 +28,6 @@ export {
   type HostAudioConsumer,
   type HostAudioConsumerOptions,
 } from './host-audio-consumer';
+export type { AudioStreamState } from './pcm-stream-player';
 export { webAudioPlugin } from './plugin';
 export { WebAudioEngine } from './web-audio-engine';

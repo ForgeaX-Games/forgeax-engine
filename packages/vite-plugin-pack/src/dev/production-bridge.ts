@@ -11,7 +11,7 @@ import {
   metaPathForGuid,
   STANDARD_SCRIPTABLE_PACK_SCAN_OPTIONS,
 } from '@forgeax/engine-pack/build';
-import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
+import { declaredSourceGuids } from '@forgeax/engine-pack/scanner';
 import type { PackIndexEntry, RuntimeAssetBinding } from '@forgeax/engine-types';
 import { createPluginPackFailure } from '../errors.js';
 import {
@@ -67,23 +67,7 @@ function declarationsForInventory(inventory: CatalogInventory): readonly Product
       return [];
     }
     const sourceKey = relative(process.cwd(), sourceDeclaration.sourcePath).replace(/\\/g, '/');
-    const guids =
-      sourceDeclaration.format === 'meta.json'
-        ? sourceDeclaration.value.subAssets.map((asset) => asset.guid)
-        : sourceDeclaration.format === 'pack.ts'
-          ? []
-          : sourceDeclaration.format === 'pack.json' &&
-              sourceDeclaration.value.schemaVersion === '3.0.0'
-            ? (() => {
-                const parsed = parsePackSourceJson(sourceDeclaration.value);
-                if (!parsed.ok || parsed.value.format !== 'direct') return [];
-                const projected = projectDirectPackJson(parsed.value);
-                return projected.ok ? projected.value.assets.map((asset) => asset.guid) : [];
-              })()
-            : sourceDeclaration.format === 'pack.json' &&
-                sourceDeclaration.value.schemaVersion !== '3.0.0'
-              ? sourceDeclaration.value.assets.map((asset) => asset.guid)
-              : [];
+    const guids = declaredSourceGuids(sourceDeclaration);
     return [
       {
         sourceKey,
@@ -299,13 +283,6 @@ export function createProductionBridge(context: ProductionBridgeContext): Produc
         await callbacks.commitGeneration(candidate, signal);
         if (signal.aborted) return;
         Object.assign(state, candidate);
-        state.catalogProjection = {
-          ...candidate.catalogProjection,
-          entries:
-            candidate.catalogProjection.authority === 'authoritative'
-              ? [...candidate.catalogProjection.entries]
-              : [],
-        };
       },
       discard: async ({ state: generationState }) => {
         const candidate = generationState.candidate;

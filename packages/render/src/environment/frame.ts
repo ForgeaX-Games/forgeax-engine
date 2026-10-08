@@ -7,7 +7,11 @@ import type {
   FogCandidate,
   FogFrame,
 } from '../extract/environment';
-import { validateAtmosphereParameters, validateFogParameters } from '../extract/environment';
+import {
+  freezeAtmosphere,
+  validateAtmosphereParameters,
+  validateFogParameters,
+} from '../extract/environment';
 import { environmentFactSignatures } from './signature';
 
 export type { EnvironmentCandidate, EnvironmentFrame, EnvironmentSource, FogCandidate, FogFrame };
@@ -146,7 +150,7 @@ export function selectEnvironment(
             kind: 'atmosphere',
             entityKey: selected.entityKey,
             sourceKey: selected.sourceKey,
-            atmosphere: Object.freeze({ ...selected.atmosphere }),
+            atmosphere: freezeAtmosphere(selected.atmosphere),
           }
         : {
             kind: 'image',

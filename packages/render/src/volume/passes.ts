@@ -35,47 +35,6 @@ import {
   VOLUME_RESOLVED_FORMAT,
   VOLUMETRIC_FOG_PARAMS_BYTES,
 } from './resources';
-import type { VolumeProjectorTuple } from './temporal';
-
-export const VOLUMETRIC_FOG_PASS_ORDER = [
-  'volume-inject',
-  'volume-integrate',
-  'volume-temporal',
-  'volume-composite',
-] as const;
-export interface VolumetricFogTopology {
-  readonly passes: readonly string[];
-  readonly resources: readonly string[];
-  readonly colorInput: 'linear-hdr';
-  readonly depthInput: 'scene-depth';
-  readonly lightKind?: 'directional' | 'point' | 'spot';
-  readonly lightEntity?: number;
-  readonly lightRevision?: number;
-  readonly projector?: Pick<VolumeProjectorTuple, 'guid' | 'generation' | 'revision'>;
-}
-export function volumetricFogTopology(
-  enabled: boolean,
-  selectedLight?: {
-    readonly lightKind: 'directional' | 'point' | 'spot';
-    readonly lightEntity: number;
-    readonly lightRevision: number;
-  },
-): VolumetricFogTopology {
-  return enabled
-    ? {
-        passes: [...VOLUMETRIC_FOG_PASS_ORDER],
-        resources: [
-          'volume-froxel',
-          'volume-resolved-current',
-          'volume-history',
-          'volume-temporal',
-        ],
-        colorInput: 'linear-hdr',
-        depthInput: 'scene-depth',
-        ...(selectedLight ?? {}),
-      }
-    : { passes: [], resources: [], colorInput: 'linear-hdr', depthInput: 'scene-depth' };
-}
 export interface VolumetricFogPassInputs {
   readonly resources: VolumetricFogResources;
   readonly linearHdr: RenderPipelineTarget;
@@ -90,6 +49,7 @@ export interface VolumetricFogPassInputs {
   readonly lightData: GraphBuffer;
   /** The Cluster uniform carries the admitted light count for slot guards. */
   readonly clusterUniform: GraphBuffer;
+  readonly atmosphereTransmittance?: GraphTextureView | undefined;
   readonly selectedLightKind: 'directional' | 'point' | 'spot';
   readonly projector?: GraphTextureView;
   /** Stable world-space cloud shadow map sampled at each volume point. */
@@ -327,6 +287,7 @@ export function addAuthoredVolumetricFogPasses(
   spotShadow: GraphTextureView,
   clusterBuffers: StandardClusterGraphBuffers | null,
   cloudShadow?: GraphTextureView,
+  atmosphereTransmittance?: GraphTextureView,
 ): Result<void, RenderGraphError> {
   // A paired Point+Spot volume stores the Spot shadow lane as well. The
   // topology's primary light remains PointLight for radiance selection, but
@@ -355,7 +316,11 @@ export function addAuthoredVolumetricFogPasses(
     topology.volumetricFog?.resolvedExtent,
   );
   if (!resources.ok) return resources;
-  return addVolumetricFogPasses(graph, { ...imported.value, resources: resources.value });
+  return addVolumetricFogPasses(graph, {
+    ...imported.value,
+    atmosphereTransmittance,
+    resources: resources.value,
+  });
 }
 export function addVolumetricFogPasses(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
@@ -449,6 +414,9 @@ export function addVolumetricFogPasses(
   if (!injected.ok) return injected;
   const integratePass = graph.addComputePass('volume-integrate', {
     accesses: [
+      ...(inputs.atmosphereTransmittance === undefined
+        ? []
+        : [{ resource: inputs.atmosphereTransmittance, usage: 'sampled-read' as const }]),
       { resource: inputs.resources.froxelView, usage: 'sampled-read' },
       { resource: inputs.sceneDepth, usage: 'sampled-read' },
       { resource: inputs.density, usage: 'sampled-read' },
@@ -512,6 +480,8 @@ export function addVolumetricFogPasses(
         { binding: 13, visibility: 4, sampler: { type: 'filtering' } },
         { binding: 16, visibility: 4, texture: { sampleType: 'float', viewDimension: '2d' } },
         { binding: 17, visibility: 4, sampler: { type: 'filtering' } },
+        { binding: 25, visibility: 4, texture: { sampleType: 'float', viewDimension: '2d' } },
+        { binding: 26, visibility: 4, sampler: { type: 'filtering' } },
         ...Array.from({ length: MAX_VOLUMETRIC_FOG_OWNERS - 1 }, (_, index) => ({
           binding: 18 + index,
           visibility: 4,
@@ -558,6 +528,17 @@ export function addVolumetricFogPasses(
       });
       if (!densitySampler.ok) throw densitySampler.error;
       const bindings = volumeBindGroup(frame, integrate.layout, [
+        {
+          binding: 25,
+          resource: {
+            kind: 'textureView',
+            value:
+              inputs.atmosphereTransmittance === undefined
+                ? frame.pipelineState.defaultWhiteTextureView
+                : resources.textureView(inputs.atmosphereTransmittance).unwrap(),
+          },
+        },
+        { binding: 26, resource: { kind: 'sampler', value: frame.pipelineState.defaultSampler } },
         { binding: 0, resource: { kind: 'textureView', value: froxel.value as never } },
         { binding: 1, resource: { kind: 'textureView', value: depth.value as never } },
         { binding: 2, resource: { kind: 'textureView', value: resolved.value as never } },

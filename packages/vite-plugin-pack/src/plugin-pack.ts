@@ -6,11 +6,12 @@ import { createAcceptedPublicationStore, DdcLifecycle, resolveDdcRoot } from '@f
 import {
   canonicalScriptableSourcePath,
   commitImportPublication,
-  discardImportPublication,
   ImporterRegistry,
   type ImportRunnerFs,
   type RunImportMeta,
   restoreImportPublication,
+  type StagedImportPublication,
+  stageImportPublication,
 } from '@forgeax/engine-import';
 import type { CatalogBuildResult } from '@forgeax/engine-pack/build';
 import {
@@ -19,8 +20,8 @@ import {
   metaPathForGuid,
 } from '@forgeax/engine-pack/build';
 import { validatePluginAsset } from '@forgeax/engine-pack/runtime';
-import type { ScanSourceDeclaration } from '@forgeax/engine-pack/scanner';
-import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
+import { declaredPackAssets, type ScanSourceDeclaration } from '@forgeax/engine-pack/scanner';
+import { projectDirectPackJson } from '@forgeax/engine-pack/source';
 import {
   type PackIndexEntry,
   RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
@@ -43,6 +44,7 @@ import {
 } from './dev/plugin-server.js';
 import { sourceDeclarationForCatalogPath } from './dev/source-path.js';
 import { scopedEntry } from './dev/transport-routes.js';
+import { HttpArtifactCompression } from './http-artifact.js';
 import type {
   AssetHostRefreshPolicy,
   PluginPack,
@@ -129,6 +131,7 @@ export function createPluginPackInternal(
     sourceDeclarations: new Map(),
   });
   const state: PluginServerState = {
+    artifactCompression: new HttpArtifactCompression(),
     catalogProjection: emptyCatalogProjection(),
     importedGuids: new Set(),
     metaPackBodies: new Map(),
@@ -233,42 +236,12 @@ export function createPluginPackInternal(
         : [{ guid: entry.guid, sourceKey: entry.sourceKey, kind: entry.kind }],
     );
     const scenes = [...catalogProjection.sourceDeclarations.values()].flatMap((source) => {
-      const rows =
-        source.format !== 'pack.json'
-          ? []
-          : source.value.schemaVersion === '3.0.0'
-            ? (() => {
-                const parsed = parsePackSourceJson(source.value);
-                if (!parsed.ok || parsed.value.format !== 'direct') return [];
-                const projected = projectDirectPackJson(parsed.value);
-                return projected.ok
-                  ? projected.value.assets.flatMap((asset) =>
-                      asset.kind === 'scene'
-                        ? [
-                            {
-                              sourceKey: asset.sourceKey,
-                              entityKeys: extractSceneEntityKeys(asset.payload),
-                            },
-                          ]
-                        : [],
-                    )
-                  : [];
-              })()
-            : source.value.assets.flatMap((asset) =>
-                asset.kind === 'scene' && asset.sourceKey !== undefined
-                  ? [
-                      {
-                        sourceKey: asset.sourceKey,
-                        entityKeys: extractSceneEntityKeys(asset.payload),
-                      },
-                    ]
-                  : [],
-              );
-      return rows.flatMap((row) =>
-        'entityKeys' in row && row.entityKeys.length > 0
-          ? [{ sourceKey: row.sourceKey, entityKeys: row.entityKeys }]
-          : [],
-      );
+      if (source.format !== 'pack.json') return [];
+      return declaredPackAssets(source.value).flatMap((asset) => {
+        if (asset.kind !== 'scene' || asset.sourceKey === undefined) return [];
+        const entityKeys = extractSceneEntityKeys(asset.payload);
+        return entityKeys.length > 0 ? [{ sourceKey: asset.sourceKey, entityKeys }] : [];
+      });
     });
     return { assets, scenes };
   }
@@ -555,8 +528,8 @@ export function createPluginPackInternal(
       const refreshed = state.metaPackBodies.get(url);
       if (refreshed !== undefined) return refreshed;
       if (declaration.declaration.value.schemaVersion === '3.0.0') {
-        const parsed = parsePackSourceJson(declaration.declaration.value);
-        if (!parsed.ok || parsed.value.format !== 'direct') {
+        const parsed = declaration.declaration.value;
+        if (parsed.format !== 'direct') {
           throw structuredPluginError({
             code: 'pack-source-output-invalid',
             expected: 'a direct v3 Pack document for a materialized development route',
@@ -564,8 +537,7 @@ export function createPluginPackInternal(
             detail: { stage: 'route', sourcePath: authoredSourcePath },
           });
         }
-        const projected = projectDirectPackJson(parsed.value);
-        if (!projected.ok) throw structuredPluginError(projected.error);
+        const projected = projectDirectPackJson(parsed);
         throw structuredPluginError({
           code: 'pack-source-output-invalid',
           expected: 'the accepted direct Pack publication to stage a Pack v2 body and artifacts',
@@ -573,7 +545,7 @@ export function createPluginPackInternal(
           detail: {
             stage: 'route',
             sourcePath: authoredSourcePath,
-            packageId: projected.value.packageId,
+            packageId: projected.packageId,
           },
         });
       }
@@ -678,6 +650,7 @@ export function createPluginPackInternal(
       publishAuthoredDevPacks,
       ensureMetaImport: ensureVersionedMetaImport,
       commitGeneration: async (candidate, signal) => {
+        const committedImports: StagedImportPublication[] = [];
         const publicationSnapshots = new Map<string, ScriptablePackPublicationSnapshot>();
         for (const sourcePath of candidate.publicationCandidates.keys()) {
           publicationSnapshots.set(sourcePath, publicationStore.observe(sourcePath));
@@ -685,9 +658,7 @@ export function createPluginPackInternal(
         const rollback = async (): Promise<void> => {
           try {
             await Promise.all(
-              [...candidate.pendingImportPublications.values()].map((publication) =>
-                restoreImportPublication(publication),
-              ),
+              committedImports.map((publication) => restoreImportPublication(publication)),
             );
             for (const [sourcePath, publication] of candidate.publicationCandidates) {
               publicationStore.discard(sourcePath, publication);
@@ -713,8 +684,21 @@ export function createPluginPackInternal(
         };
         try {
           assertOpen();
-          for (const [subject, publication] of candidate.pendingImportPublications) {
+          await state.artifactCompression?.prepare(candidate.devArtifactBodies.values());
+          assertOpen();
+          for (const [subject, input] of candidate.pendingImportPublications) {
             assertOpen();
+            const staged = await stageImportPublication(input);
+            if (!staged.ok)
+              throw structuredPluginError({
+                code: 'commit-failed',
+                expected: 'DDC to stage the completed Meta import publication',
+                hint: staged.error.hint,
+                detail: { stage: 'commit', subject },
+                cause: staged.error,
+              });
+            const publication = staged.candidate;
+            committedImports.push(publication);
             const result = await commitImportPublication(publication);
             if (!result.ok) {
               // A newer generation may have superseded this lease while the
@@ -730,6 +714,20 @@ export function createPluginPackInternal(
                 cause: result.error,
               });
             }
+            // DDC owns the accepted revision. Install its rows into the private
+            // complete generation, retaining later sources' prepared outputs.
+            const publishedGuids = new Set(input.publishedGuids.map((guid) => guid.toLowerCase()));
+            const acceptedRows = new Map(
+              result.catalog
+                .filter((row) => publishedGuids.has(row.guid.toLowerCase()))
+                .map((row) => [row.guid.toLowerCase(), row]),
+            );
+            candidate.catalogProjection = {
+              ...candidate.catalogProjection,
+              entries: candidate.catalogProjection.entries.map(
+                (row) => acceptedRows.get(row.guid.toLowerCase()) ?? row,
+              ),
+            };
             if (!result.transportPersisted) {
               for (const guid of publication.input.publishedGuids) {
                 candidate.importedGuids.delete(guid.toLowerCase());
@@ -773,9 +771,7 @@ export function createPluginPackInternal(
         }
       },
       discardImportPublications: async (candidates) => {
-        await Promise.all(
-          [...candidates.values()].map((candidate) => discardImportPublication(candidate)),
-        );
+        candidates.clear();
       },
       ensureMetaPackBody,
       setCatalogDeltaPublisher: (publisher) => {
@@ -894,7 +890,10 @@ export function createPluginPackInternal(
       if (config.command !== undefined) buildLifecycle.configResolved({ command: config.command });
       if (explicitTransportBase === undefined) transportBase = config.base;
     },
-    ready: serverLifecycle.ready,
+    ready: async () => {
+      await serverLifecycle.ready();
+      await state.artifactCompression?.prepare(state.devArtifactBodies.values());
+    },
     rebind: serverLifecycle.rebind,
     rebuildCatalogInPlace: serverLifecycle.rebuildCatalogInPlace,
     runtimeBinding: serverLifecycle.runtimeBinding,

@@ -71,14 +71,6 @@ describe('hello-lod-occlusion performance evidence contract', () => {
     ]);
   });
 
-  it('derives a bounded slow-runner calibration window from the visibility budget', async () => {
-    const { deriveOccluderCalibrationMaxFrames } = await import(SCRIPT);
-    expect(deriveOccluderCalibrationMaxFrames(98)).toBe(106);
-    expect(deriveOccluderCalibrationMaxFrames(1)).toBe(32);
-    expect(deriveOccluderCalibrationMaxFrames(200_000)).toBe(128);
-    expect(deriveOccluderCalibrationMaxFrames(undefined)).toBe(32);
-  });
-
   const identity = {
     build: 'build-a',
     scene: 'lod-scene',
@@ -123,15 +115,14 @@ describe('hello-lod-occlusion performance evidence contract', () => {
     ['forced-lod0', 'lod-selection-policy', ['geometry', 'occlusion', 'view']],
     ['all-visible', 'occluder-absence', ['geometry', 'lod', 'view']],
     ['occlusion-off-on', 'occluder-presence', ['geometry', 'lod', 'view']],
-    ['page-exhaustion', 'query-page-capacity', ['geometry', 'lod', 'view']],
-    ['delayed-map', 'map-delay', ['geometry', 'lod', 'occlusion', 'view']],
+    ['gpu-occlusion-off', 'gpu-occlusion-config', ['geometry', 'lod', 'occluder', 'view']],
     ['world-reorder', 'world-array-order', ['geometry', 'primitive', 'view']],
   ].map(([caseName, intervention, held]) => ({
     case: caseName,
     verdict: 'pass',
     evidence: {
       protocol: { intervention, held },
-      ...(caseName === 'occlusion-off-on'
+      ...(caseName === 'occlusion-off-on' || caseName === 'gpu-occlusion-off'
         ? {
             off: {
               count: { candidates: 128, visible: 128, occluded: 0 },
@@ -139,7 +130,7 @@ describe('hello-lod-occlusion performance evidence contract', () => {
             on: {
               count: { candidates: 128, visible: 16, occluded: 112 },
             },
-            settleFrames: 98,
+            settleFrames: 16,
           }
         : {}),
       ...(caseName === 'world-reorder'
@@ -178,7 +169,6 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       visible: 128,
       occluded: 0,
       lodHistogram: [{ level: 0, count: 128 }],
-      pagePressure: { used: 128, capacity: 12_288 },
       lodCoverage: 0,
       submittedInstanceRatio: 1,
       geometryWorkReduction: 0,
@@ -186,9 +176,6 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       indirectDrawCount: 1,
       cpuP50Us: 100,
       cpuP95Us: 120,
-      queryP50Us: 10,
-      queryP95Us: 20,
-      queryMemoryBytes: 196_608,
     },
     treatment: {
       frames: 128,
@@ -196,7 +183,6 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       visible: 16,
       occluded: 112,
       lodHistogram: [{ level: 1, count: 128 }],
-      pagePressure: { used: 128, capacity: 12_288 },
       lodCoverage: 1,
       submittedInstanceRatio: 0.125,
       geometryWorkReduction: 0.8,
@@ -204,9 +190,6 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       indirectDrawCount: 16,
       cpuP50Us: 90,
       cpuP95Us: 110,
-      queryP50Us: 10,
-      queryP95Us: 20,
-      queryMemoryBytes: 196_608,
     },
   };
   const groups = {
@@ -241,20 +224,13 @@ describe('hello-lod-occlusion performance evidence contract', () => {
     retainedSamples: 128,
     metrics: {
       timestampAvailable: true,
-      configuredQueryBudget: 2048,
-      effectiveQueryBudget: 2048,
-      settleSubmits: 98,
-      retestSubmits: 44,
-      expirySubmits: 88,
+      settleSubmits: 16,
       lodCoverage: 1,
       submittedInstanceRatio: 0.125,
       geometryWorkReduction: 0.8,
       cpuP50Us: 90,
       cpuP95Us: 110,
       cpuP95Regression: -0.08333333333333333,
-      queryP50Us: 10,
-      queryP95Us: 20,
-      queryMemoryBytes: 196_608,
       workload: { candidates: 128, visible: 16, occluded: 112 },
       inspection,
       groups: { ...groups },
@@ -300,20 +276,13 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       retainedSamples: 128,
       metrics: {
         timestampAvailable: true,
-        configuredQueryBudget: 2048,
-        effectiveQueryBudget: 2048,
-        settleSubmits: 98,
-        retestSubmits: 44,
-        expirySubmits: 88,
+        settleSubmits: 16,
         lodCoverage: 1,
         submittedInstanceRatio: 0.125,
         geometryWorkReduction: 0.2,
         cpuP50Us: 100,
         cpuP95Us: 120,
         cpuP95Regression: -0.08333333333333333,
-        queryP50Us: 10,
-        queryP95Us: 20,
-        queryMemoryBytes: 196_608,
         workload: { candidates: 128, visible: 16, occluded: 112 },
         inspection,
         groups,
@@ -336,20 +305,13 @@ describe('hello-lod-occlusion performance evidence contract', () => {
       retainedSamples: 128,
       metrics: {
         timestampAvailable: true,
-        configuredQueryBudget: 2048,
-        effectiveQueryBudget: 2048,
-        settleSubmits: 98,
-        retestSubmits: 44,
-        expirySubmits: 88,
+        settleSubmits: 16,
         lodCoverage: 1,
         submittedInstanceRatio: 0.125,
         geometryWorkReduction: 0.8,
         cpuP50Us: 90,
         cpuP95Us: 110,
         cpuP95Regression: -0.08333333333333333,
-        queryP50Us: 10,
-        queryP95Us: 20,
-        queryMemoryBytes: 196_608,
         workload: { candidates: 128, visible: 16, occluded: 112 },
         inspection,
         groups,
@@ -390,6 +352,25 @@ describe('hello-lod-occlusion performance evidence contract', () => {
     noisyTailEvidence.metrics.cpuP95Regression = 2;
     const result = validatePerformanceEvidence(noisyTailEvidence);
     expect(result.verdict).toBe('production-ready');
+  });
+
+  it('holds occlusion cost constant for CPU median admission and rejects incremental LOD regression', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const evidence = structuredClone(admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA));
+    evidence.metrics.inspection.baseline.cpuP50Us = 40;
+    evidence.metrics.groups.control.cpuP50Us = 40;
+    // The no-occluder GPU control is cheaper, but the same-HZB CPU control
+    // proves that adding LOD stays inside the existing 20% CPU limit.
+    expect(validatePerformanceEvidence(evidence).verdict).toBe('production-ready');
+    evidence.metrics.groups.occlusionOnly.cpuP50Us = 70;
+    expect(validatePerformanceEvidence(evidence).verdict).toBe('not-production-ready');
+  });
+
+  it('rejects a cold short CPU control instead of admitting against its inflated cost', async () => {
+    const { validatePerformanceEvidence, GPU_FRAME_SAMPLES_SCHEMA } = await import(SCRIPT);
+    const evidence = structuredClone(admittingEvidence(GPU_FRAME_SAMPLES_SCHEMA));
+    evidence.metrics.groups.occlusionOnly.frames = 16;
+    expect(() => validatePerformanceEvidence(evidence)).toThrow('same warm-up and retained frame windows');
   });
 
   it('admits the machine-stable GPU median floor while retaining the p95 gate', async () => {
@@ -607,20 +588,13 @@ describe('hello-lod-occlusion performance evidence contract', () => {
         retainedSamples: 128,
         metrics: {
           timestampAvailable: true,
-          configuredQueryBudget: 2048,
-          effectiveQueryBudget: 2048,
-          settleSubmits: 98,
-          retestSubmits: 44,
-          expirySubmits: 88,
+          settleSubmits: 16,
           lodCoverage: 0.9,
           submittedInstanceRatio: 0.9,
           geometryWorkReduction: 0.1,
           cpuP50Us: 100,
           cpuP95Us: 120,
           cpuP95Regression: 0,
-          queryP50Us: 10,
-          queryP95Us: 20,
-          queryMemoryBytes: 196_608,
           gpuMedianImprovement: 0.9,
           gpuP95Regression: 0,
         },

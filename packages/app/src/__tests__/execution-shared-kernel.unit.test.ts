@@ -84,6 +84,79 @@ function workerFactory(run: (job: TestJob) => void, preloadStatus = 1): () => Wo
 }
 
 describe('shared kernel pool', () => {
+  it('honors the startup budget without extending the running kernel deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const terminate = vi.fn();
+    const options = {
+      lanes: 1,
+      timeoutMs: 5,
+      startupTimeoutMs: 50,
+      workerFactory: () => {
+        const lane = workerFactory(() => {})();
+        return {
+          postMessage(message: TestMessage) {
+            if (message.kind !== 'kernel-job')
+              setTimeout(() => lane.postMessage(message), message.kind === 'kernel-init' ? 10 : 15);
+          },
+          terminate,
+        } as unknown as Worker;
+      },
+    };
+    const pool = createKernelPool(options);
+    const ready = pool.ready().then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    try {
+      pool.warmup?.(kernel);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await ready).toBeNull();
+      const { spans } = sharedDispatchSpans();
+      const result = pool.execute(kernel, spans);
+      expect(result).toMatchObject({ dispatched: 1, completed: 0, partialWrite: true });
+      if (!('cause' in result)) throw new Error('stalled dispatch was accepted');
+      expect(String(result.cause)).toContain('deadline exceeded after 5ms');
+      expect(terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      pool.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares one startup deadline across initialization and module preflight', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const terminate = vi.fn();
+    const options = {
+      lanes: 1,
+      timeoutMs: 5,
+      startupTimeoutMs: 50,
+      workerFactory: () => {
+        const lane = workerFactory(() => {})();
+        return {
+          postMessage(message: TestMessage) {
+            if (message.kind === 'kernel-init') setTimeout(() => lane.postMessage(message), 40);
+          },
+          terminate,
+        } as unknown as Worker;
+      },
+    };
+    const pool = createKernelPool(options);
+    const ready = pool.ready().then(
+      () => null,
+      (cause: unknown) => cause,
+    );
+    try {
+      pool.warmup?.(kernel);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(String(await ready)).toContain('SharedKernel module preflight');
+      expect(String(await ready)).toContain('within 50ms');
+      expect(terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      pool.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('joins a lane that completes between the counter observation and the wait', () => {
     const { spans } = sharedDispatchSpans();
     let control: Int32Array | undefined;

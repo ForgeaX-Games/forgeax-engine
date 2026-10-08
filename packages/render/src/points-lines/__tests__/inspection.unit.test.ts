@@ -7,11 +7,7 @@ import {
   PointsLinesStyleUnsupportedError,
   PointsLinesTopologyMismatchError,
 } from '../../errors/render';
-import {
-  inspectPointsLines,
-  type PointsLinesInspection,
-  pointsLinesInspectionToJson,
-} from '../inspection';
+import { inspectPointsLines, type PointsLinesInspection } from '../inspection';
 import { createPointsLinesSnapshot } from '../snapshot';
 
 function baseInput(): Parameters<typeof inspectPointsLines>[0] {
@@ -24,7 +20,7 @@ function baseInput(): Parameters<typeof inspectPointsLines>[0] {
       meshGeneration: 3,
       materialHandle: 7,
       materialGeneration: 4,
-      style: { kind: 'lines', widthPx: 2 },
+      style: { kind: 'lines', width: 2 },
       layer: 1,
       visible: true,
       sourceBounds: new Float32Array([0, 0, 0, 1, 1, 0]),
@@ -56,7 +52,7 @@ describe('bounded Points/Lines inspection', () => {
       meshGeneration: 3,
       materialHandle: 7,
       materialGeneration: 4,
-      style: { kind: 'lines', widthPx: 2 },
+      style: { kind: 'lines', width: 2 },
       topology: 'line-list',
       lane: 'pending',
       pointCount: 0,
@@ -68,7 +64,7 @@ describe('bounded Points/Lines inspection', () => {
       uploadBytes: 48,
       lastKnownGood: true,
     });
-    expect(JSON.parse(pointsLinesInspectionToJson(inspection))).toEqual(inspection);
+    expect(JSON.parse(JSON.stringify(inspection))).toEqual(inspection);
   });
 
   it('keeps refusal and recovery provenance bounded and typed', () => {
@@ -100,7 +96,7 @@ describe('bounded Points/Lines inspection', () => {
     expect(refusal.refusal?.code).toBe('points-lines-prepare-failed');
     expect(refusal.drawCount).toBe(0);
     expect(recovery.cache).toEqual({ hit: true, rebuilds: 2, evictions: 1 });
-    expect(pointsLinesInspectionToJson(refusal)).not.toContain('RHI');
+    expect(JSON.stringify(refusal)).not.toContain('RHI');
   });
 
   it('preserves source detail for all six Points/Lines refusal paths', () => {
@@ -108,9 +104,9 @@ describe('bounded Points/Lines inspection', () => {
       new PointsLinesInvalidStyleError({
         entity: 15,
         component: 'Lines',
-        field: 'widthPx',
+        field: 'width',
         value: 0,
-        expected: 'widthPx > 0',
+        expected: 'width > 0',
       }),
       new PointsLinesTopologyMismatchError({
         entity: 15,
@@ -165,9 +161,7 @@ describe('bounded Points/Lines inspection', () => {
         hint: error.hint,
         detail: error.detail,
       });
-      expect(JSON.parse(pointsLinesInspectionToJson(inspection)).refusal.detail).toEqual(
-        error.detail,
-      );
+      expect(JSON.parse(JSON.stringify(inspection)).refusal.detail).toEqual(error.detail);
     }
   });
 });

@@ -14,6 +14,10 @@ SKILL_TEXT_EXTENSIONS = DEFAULT_CODE_EXTENSIONS | {
 
 
 def main():
+    # This gate reports the rejected characters themselves. Windows console
+    # encodings must not turn a valid violation into an encoding failure.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()

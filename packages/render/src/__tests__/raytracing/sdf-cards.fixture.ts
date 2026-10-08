@@ -31,7 +31,11 @@ export async function verifySdfCards(fixture: SdfCardsFixture) {
   const raw = webgpu._internal_getRawDevice(device),
     errors: string[] = [];
   raw?.addEventListener('uncapturederror', (event) => errors.push(event.error.message));
-  const field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
+  const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  };
   const ray = (
     origin: ReferenceRay['origin'],
     direction: ReferenceRay['direction'],

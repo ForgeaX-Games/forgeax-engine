@@ -1,7 +1,8 @@
 // @perf-budget-skip: real Vite build and development publication.
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { AssetGuid, PackageId } from '@forgeax/engine-pack/guid';
 import { createStandaloneRuntimeAssetBinding, type PackIndexEntry } from '@forgeax/engine-types';
 import { build, createServer } from 'vite';
@@ -12,7 +13,7 @@ it.each([
   'build',
   'serve',
 ] as const)('keeps imported and cloned same-name Packs independent during %s', async (command) => {
-  const root = await mkdtemp(join(tmpdir(), 'forgeax-nested-packs-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'forgeax-nested-packs-')));
   let server: Awaited<ReturnType<typeof createServer>> | undefined;
   try {
     await writeFile(join(root, 'package.json'), '{"name":"nested-packs","type":"module"}');
@@ -49,7 +50,9 @@ export default definePack({ schemaVersion: '2.0.0', packageId: definePackageId('
     let rows: readonly PackIndexEntry[];
     if (command === 'build') {
       await build(config);
-      rows = JSON.parse(await readFile(join(root, 'dist/pack-index.json'), 'utf8'));
+      rows = decodeCatalogWire(
+        JSON.parse(await readFile(join(root, 'dist/pack-index.json'), 'utf8')),
+      ).unwrap();
     } else {
       server = await createServer({ ...config, server: { host: '127.0.0.1', port: 0 } });
       await plugin.ready();

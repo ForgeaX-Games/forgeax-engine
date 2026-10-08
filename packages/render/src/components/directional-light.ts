@@ -32,6 +32,7 @@
 
 import { defineComponent } from '@forgeax/engine-ecs';
 import { DirectionalShadowFilterValue } from './directional-shadow-filter';
+import { LIGHTING_CHANNELS_DEFAULT } from './lighting-channels';
 
 export {
   type DirectionalShadowFilterLabel,
@@ -79,6 +80,13 @@ export {
  *   shadowAngularRadius ∈ [0.0001, 0.05] radians — PCSS angular light radius (default 0.00465)
  *   maxPenumbraTexels ∈ [1, 64], finite integer — PCSS search/filter cap (default 32)
  *
+ * staggerCascades (bool, default false) opts into CPU shadow cadence: cascade 0
+ * refreshes on every content miss, cascade c > 0 every 2^c submitted frames.
+ * An unchanged far projection may retain dynamic casters for at most 2^c - 1
+ * frames. Projection or source/resource invalidation refreshes immediately;
+ * settled stale layers flush on the next clean frame. GPU view pools and
+ * unproven lease-less recording keep their existing cache policy.
+ *
  * contactShadowLength (meters, finite, >= 0, default 0 = off) enables
  * screen-space contact shadows for this light: a short depth-buffer ray march
  * toward the light that darkens small-scale occlusion the shadow map cannot
@@ -118,6 +126,8 @@ export {
  *   renderer.draw(world); // standard material renders black; switch to an unlit shader (Materials.unlit(...)) for an unlit display
  */
 export const DirectionalLight = defineComponent('DirectionalLight', {
+  // f64 preserves invalid author inputs until render validation (no u32 wrapping).
+  lightingChannels: { type: 'f64', default: LIGHTING_CHANNELS_DEFAULT },
   // direction is the ONLY field with no default (D-5): omitting it lands the
   // array layer-3 all-zero [0,0,0], which the renderer owner rejects -- there is no
   // universal default direction, so "default is illegal" forces an explicit
@@ -147,5 +157,6 @@ export const DirectionalLight = defineComponent('DirectionalLight', {
   },
   shadowAngularRadius: { type: 'f32', default: 0.00465 },
   maxPenumbraTexels: { type: 'f32', default: 32 },
+  staggerCascades: { type: 'bool', default: false },
   contactShadowLength: { type: 'f32', default: 0 },
 });

@@ -35,6 +35,7 @@ export function audioPlugin(): Plugin {
         world
           .addSystem(Update, {
             name: AUDIO_TICK_SYSTEM_NAME,
+            after: [PROPAGATE_TRANSFORMS_SYSTEM],
             queries: [],
             fn: () => audioTickSystem(world, backend),
           })

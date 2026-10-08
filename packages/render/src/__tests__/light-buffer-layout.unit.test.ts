@@ -88,9 +88,9 @@ describe('direct light snapshot buffer layout', () => {
 });
 
 describe('DirectLightSlot ABI', () => {
-  it('locks the five-row 80-byte host contract and closed kind values', () => {
-    expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(80);
-    expect(DIRECT_LIGHT_SLOT_LAYOUT.rowByteOffsets).toEqual([0, 16, 32, 48, 64]);
+  it('locks the six-row 96-byte host contract and closed kind values', () => {
+    expect(DIRECT_LIGHT_SLOT_LAYOUT.byteSize).toBe(96);
+    expect(DIRECT_LIGHT_SLOT_LAYOUT.rowByteOffsets).toEqual([0, 16, 32, 48, 64, 80]);
     expect(DIRECT_LIGHT_SLOT_LAYOUT.metadataByteOffset).toBe(64);
     expect(DIRECT_LIGHT_SLOT_LAYOUT.kindByteOffset).toBe(64);
     expect(DIRECT_LIGHT_SLOT_LAYOUT.shadowByteOffset).toBe(68);
@@ -101,14 +101,14 @@ describe('DirectLightSlot ABI', () => {
     expect(DirectLightSlotKind).toEqual({ POINT: 0, SPOT: 1, RECT_AREA: 2 });
   });
 
-  it('packs Point, Spot, and Rect fields into the same five rows', () => {
+  it('packs Point, Spot, and Rect fields into the same six rows', () => {
     const packedPoint = packDirectLightSlot(point as never);
     const packedSpot = packDirectLightSlot(spot as never);
     const packedRect = packDirectLightSlot(rect as never);
 
     for (const packed of [packedPoint, packedSpot, packedRect]) {
       expect(packed).toBeInstanceOf(Float32Array);
-      expect(packed.byteLength).toBe(80);
+      expect(packed.byteLength).toBe(96);
     }
 
     expect([...packedPoint.slice(0, 4)]).toEqual([1, 2, 3, 0.25]);

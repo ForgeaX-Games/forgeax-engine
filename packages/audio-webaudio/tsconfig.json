@@ -7,15 +7,36 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ]
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*"
+  ],
   "references": [
-    { "path": "../types" },
-    { "path": "../ecs" },
-    { "path": "../math" },
-    { "path": "../audio" },
-    { "path": "../plugin" },
-    { "path": "../import" }
+    {
+      "path": "../types"
+    },
+    {
+      "path": "../ecs"
+    },
+    {
+      "path": "../math"
+    },
+    {
+      "path": "../audio"
+    },
+    {
+      "path": "../plugin"
+    },
+    {
+      "path": "../import"
+    },
+    {
+      "path": "../assets-runtime"
+    }
   ]
 }

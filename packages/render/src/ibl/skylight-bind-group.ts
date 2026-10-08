@@ -12,13 +12,8 @@ import { STANDARD_PHYSICAL_BINDING_START } from '@forgeax/engine-shader';
 // untouched (it uses its own material BGL).
 //
 // Surface (M2 round-4 / t40 amend):
-//   - mergeSkylightIntoMaterialBgl(materialBglEntries): given the existing
-//     7 PBR material BindGroupLayout entries (binding 0..6), returns the
-//     merged 13-entry array with Skylight resources at binding 7..12
-//     [irrTex, irrSampler, prefTex, prefSampler, brdfTex,
-//     uniform { intensity: f32 }]. The merge is a pure function -- caller
-//     (createRenderer) is responsible for passing the result to
-//     `device.createBindGroupLayout`.
+//   - The matching BindGroupLayout entries are owned by
+//     `appendInjection(entries, 'ibl')` in `pbr-pipeline.ts`.
 //   - assembleMaterialWithSkylightEntries(materialEntries, skylightResources):
 //     given the existing material BindGroupEntry values + a skylight
 //     resource bundle (active or fallback), returns the merged material
@@ -50,26 +45,62 @@ import type {
   TextureView,
   TextureViewDescriptor,
 } from '@forgeax/engine-rhi';
-import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
   GPU_TEXTURE_USAGE_TEXTURE_BINDING,
 } from '../gpu-texture-usage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from '../gpu-usage';
 
-// The rhi shim enforces bytesPerRow % 256 === 0 uniformly (see
-// fallback-white texture upload in createRenderer.ts). Pad each 1x1 face
-// upload to a 256-byte row stride.
+// The rhi shim enforces bytesPerRow % 256 === 0 uniformly, even for one row.
+// Every 1x1 fallback upload pads its texel to this row stride per layer.
 export const FALLBACK_BYTES_PER_ROW = 256;
 
-// Local alias for the @webgpu/types BindGroupLayoutEntry shape. Used at
-// object-literal push sites below to dodge the AC-08 (j) `as GPU<Type>`
-// grep gate (charter proposition 5 red line for shim leaks); the underlying
-// type is identical to GPUBindGroupLayoutEntry, so byte-level behavior is
-// unchanged. engine-rhi does not yet re-export a BindGroupLayoutEntry alias
-// (the public surface is BindGroupLayoutDescriptor which Picks `entries`);
-// once it does this alias collapses into a direct import.
-type BglEntry = GPUBindGroupLayoutEntry;
+export type TexelFallbackDescriptor = TextureDescriptor & {
+  readonly size: { readonly width: 1; readonly height: 1; readonly depthOrArrayLayers: number };
+};
+
+/**
+ * Descriptor for a sampled 1x1 constant-texel fallback. Cube fallbacks carry
+ * six layers; array fallbacks name their layer count.
+ */
+export function texelFallbackDescriptor(
+  label: string,
+  format: GPUTextureFormat,
+  viewDimension: '2d' | '2d-array' | 'cube' | '3d' = '2d',
+  layers = viewDimension === 'cube' ? 6 : 1,
+): TexelFallbackDescriptor {
+  return {
+    label,
+    size: { width: 1, height: 1, depthOrArrayLayers: layers },
+    mipLevelCount: 1,
+    sampleCount: 1,
+    dimension: viewDimension === '3d' ? '3d' : '2d',
+    format,
+    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
+    viewFormats: [],
+    textureBindingViewDimension:
+      viewDimension === 'cube' || viewDimension === '2d-array' ? viewDimension : undefined,
+  };
+}
+
+/** Upload `texel` (one texel's bytes) to every layer of a {@link texelFallbackDescriptor} texture. */
+export function writeTexelFallback(
+  queue: Pick<SkylightQueue, 'writeTexture'>,
+  texture: Texture,
+  descriptor: TexelFallbackDescriptor,
+  texel: Uint8Array | Uint16Array,
+): Result<void, RhiError> {
+  const layers = descriptor.size.depthOrArrayLayers;
+  const bytes = new Uint8Array(texel.buffer, texel.byteOffset, texel.byteLength);
+  const data = new Uint8Array(FALLBACK_BYTES_PER_ROW * layers);
+  for (let layer = 0; layer < layers; layer += 1) data.set(bytes, layer * FALLBACK_BYTES_PER_ROW);
+  return queue.writeTexture(
+    { texture, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } },
+    data,
+    { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
+    { width: 1, height: 1, depthOrArrayLayers: layers },
+  );
+}
 
 // ─── Device shim shapes ──────────────────────────────────────────────────────
 //
@@ -108,7 +139,7 @@ export interface SkylightQueue {
     data: ArrayBufferView,
     dataLayout: { offset: number; bytesPerRow: number; rowsPerImage: number },
     size: { width: number; height: number; depthOrArrayLayers: number },
-  ): Result<void, RhiError> | unknown;
+  ): Result<void, RhiError>;
   writeBuffer(
     buffer: Buffer,
     bufferOffset: number,
@@ -157,65 +188,23 @@ export interface SkylightFallback {
   readonly intensityBuffer: Buffer;
 }
 
-// ─── Pure merger: BindGroupLayout entries (D-5 round-4) ─────────────────────
-
 /**
- * Append the 6 Skylight BindGroupLayout entries after the existing PBR
- * user-region entries. Pure function -- the
- * caller passes the result to `device.createBindGroupLayout`. Charter P4
- * consistent abstraction: one BGL holds material + Skylight together,
- * no second `@group(4)` allocated.
- *
- * Throws if the input is too short to contain the material UBO plus one
- * sampler/texture pair (defensive guard; mirrors charter P3 explicit failure).
+ * Project the fallback bundle into material Skylight bindings. Active IBL
+ * views replace the three views; the linear-clamp sampler and the per-frame
+ * intensity uniform always come from the fallback bundle.
  */
-export function mergeSkylightIntoMaterialBgl(
-  materialBglEntries: readonly GPUBindGroupLayoutEntry[],
-): GPUBindGroupLayoutEntry[] {
-  if (materialBglEntries.length < 7) {
-    throw new Error(
-      `mergeSkylightIntoMaterialBgl: expected at least 7 material BGL entries (PBR layout), got ${materialBglEntries.length}`,
-    );
-  }
-  const merged: GPUBindGroupLayoutEntry[] = [...materialBglEntries];
-  const skylightBindingStart = materialBglEntries.length;
-  // binding 7: irradianceMap (texture_cube)
-  merged.push({
-    binding: skylightBindingStart,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    texture: { sampleType: 'float', viewDimension: 'cube' },
-  } as BglEntry);
-  // binding 8: irradianceSampler
-  merged.push({
-    binding: skylightBindingStart + 1,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    sampler: { type: 'filtering' },
-  } as BglEntry);
-  // binding 9: prefilterMap (texture_cube)
-  merged.push({
-    binding: skylightBindingStart + 2,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    texture: { sampleType: 'float', viewDimension: 'cube' },
-  } as BglEntry);
-  // binding 10: prefilterSampler
-  merged.push({
-    binding: skylightBindingStart + 3,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    sampler: { type: 'filtering' },
-  } as BglEntry);
-  // binding 11: brdfLut (texture_2d)
-  merged.push({
-    binding: skylightBindingStart + 4,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    texture: { sampleType: 'float', viewDimension: '2d' },
-  } as BglEntry);
-  // binding 12: uniform { intensity: f32 }
-  merged.push({
-    binding: skylightBindingStart + 5,
-    visibility: GPU_SHADER_STAGE_FRAGMENT,
-    buffer: { type: 'uniform' },
-  } as BglEntry);
-  return merged;
+export function skylightBindGroupResources(
+  fallback: SkylightFallback,
+  views?: { readonly irr: TextureView; readonly pref: TextureView; readonly brdf: TextureView },
+): SkylightBindGroupResources {
+  return {
+    irradianceView: views?.irr ?? fallback.irradianceView,
+    irradianceSampler: fallback.sampler,
+    prefilterView: views?.pref ?? fallback.prefilterView,
+    prefilterSampler: fallback.sampler,
+    brdfLutView: views?.brdf ?? fallback.brdfLutView,
+    intensityBuffer: fallback.intensityBuffer,
+  };
 }
 
 // ─── Pure merger: BindGroupEntry values (assembly site) ─────────────────────
@@ -436,109 +425,32 @@ export function createSkylightFallback(
   if (!samplerResult.ok) throw samplerResult.error;
   const sampler = samplerResult.value;
 
-  // 1x1 all-zero rgba16float cube (irradiance fallback). depthOrArrayLayers=6
-  // gives the texture cube semantics (D-5 fallback shape; testable via
-  // createTexture descriptor capture in unit tests).
-  const irradianceTexResult = device.createTexture({
-    label: 'skylight-fallback-irradiance-cube',
-    size: { width: 1, height: 1, depthOrArrayLayers: 6 },
-    mipLevelCount: 1,
-    sampleCount: 1,
-    dimension: '2d',
-    format: 'rgba16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-    viewFormats: [],
-    textureBindingViewDimension: 'cube',
-  });
-  if (!irradianceTexResult.ok) throw irradianceTexResult.error;
-  const irradianceTexture = irradianceTexResult.value;
-
-  // 1x1 white rgba16float cube (prefilter fallback). A Skylight without an
-  // equirect is still a white environment, so its specular input must not be
-  // black just because the full prefilter bake is unavailable.
-  const prefilterTexResult = device.createTexture({
-    label: 'skylight-fallback-prefilter-cube',
-    size: { width: 1, height: 1, depthOrArrayLayers: 6 },
-    mipLevelCount: 1,
-    sampleCount: 1,
-    dimension: '2d',
-    format: 'rgba16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-    viewFormats: [],
-    textureBindingViewDimension: 'cube',
-  });
-  if (!prefilterTexResult.ok) throw prefilterTexResult.error;
-  const prefilterTexture = prefilterTexResult.value;
-
-  // 1x1 rg16float BRDF approximation (A=1, B=0). This keeps the split-sum
-  // specular response non-zero for the white-environment fallback; a real IBL
-  // bake replaces it with the roughness/NdotV-dependent LUT.
-  const brdfLutTexResult = device.createTexture({
-    label: 'skylight-fallback-brdf-lut',
-    size: { width: 1, height: 1, depthOrArrayLayers: 1 },
-    mipLevelCount: 1,
-    sampleCount: 1,
-    dimension: '2d',
-    format: 'rg16float',
-    usage: GPU_TEXTURE_USAGE_TEXTURE_BINDING | GPU_TEXTURE_USAGE_COPY_DST,
-    viewFormats: [],
-    textureBindingViewDimension: undefined,
-  });
-  if (!brdfLutTexResult.ok) throw brdfLutTexResult.error;
-  const brdfLutTexture = brdfLutTexResult.value;
-
-  // 1x1 rgba16float = 8 bytes per pixel; 1x1 rg16float = 4 bytes per pixel.
-  // The shim requires bytesPerRow % 256 === 0, so we pad each row to 256 bytes
-  // (matches the fallback-white pattern in createRenderer.ts). Destination
-  // stays 1x1; only the row stride is padded.
-  //
-  // A Skylight with no cubemap represents a flat white environment. Both
-  // irradiance and prefilter are therefore white (half-float 1.0 = 0x3c00),
-  // while the BRDF fallback approximates `A=1, B=0`. Crucially this does NOT
-  // light scenes that lack a Skylight: the per-frame Skylight uniform writes
-  // intensity 0 when no Skylight entity exists (render-system-record).
-  const whitePixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-  {
-    const dv = new DataView(whitePixel.buffer);
-    // RGBA half-float 1.0 = 0x3c00 (little-endian) at byte offsets 0,2,4,6.
-    dv.setUint16(0, 0x3c00, true);
-    dv.setUint16(2, 0x3c00, true);
-    dv.setUint16(4, 0x3c00, true);
-    dv.setUint16(6, 0x3c00, true);
-  }
-  const brdfApproxPixel = new Uint8Array(FALLBACK_BYTES_PER_ROW);
-  new DataView(brdfApproxPixel.buffer).setUint16(0, 0x3c00, true);
-  for (const face of [0, 1, 2, 3, 4, 5]) {
-    queue.writeTexture(
-      {
-        texture: irradianceTexture,
-        mipLevel: 0,
-        origin: { x: 0, y: 0, z: face },
-      },
-      whitePixel,
-      { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-      { width: 1, height: 1, depthOrArrayLayers: 1 },
-    );
-    queue.writeTexture(
-      {
-        texture: prefilterTexture,
-        mipLevel: 0,
-        origin: { x: 0, y: 0, z: face },
-      },
-      whitePixel,
-      { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-      { width: 1, height: 1, depthOrArrayLayers: 1 },
-    );
-  }
-  queue.writeTexture(
-    {
-      texture: brdfLutTexture,
-      mipLevel: 0,
-      origin: { x: 0, y: 0, z: 0 },
-    },
-    brdfApproxPixel,
-    { offset: 0, bytesPerRow: FALLBACK_BYTES_PER_ROW, rowsPerImage: 1 },
-    { width: 1, height: 1, depthOrArrayLayers: 1 },
+  // A Skylight with no cubemap represents a flat white environment, so both
+  // irradiance and prefilter cubes are white (half-float 1.0 = 0x3c00); the
+  // specular input must not be black just because the prefilter bake is
+  // unavailable. The 1x1 rg16float BRDF approximates the split-sum `A=1, B=0`
+  // until a real IBL bake replaces it. This does NOT light scenes that lack a
+  // Skylight: the per-frame Skylight uniform writes intensity 0 when no
+  // Skylight entity exists (render-system-record).
+  const createFallback = (descriptor: TexelFallbackDescriptor, texel: Uint16Array): Texture => {
+    const texture = device.createTexture(descriptor);
+    if (!texture.ok) throw texture.error;
+    const written = writeTexelFallback(queue, texture.value, descriptor, texel);
+    if (!written.ok) throw written.error;
+    return texture.value;
+  };
+  const white = new Uint16Array([0x3c00, 0x3c00, 0x3c00, 0x3c00]);
+  const irradianceTexture = createFallback(
+    texelFallbackDescriptor('skylight-fallback-irradiance-cube', 'rgba16float', 'cube'),
+    white,
+  );
+  const prefilterTexture = createFallback(
+    texelFallbackDescriptor('skylight-fallback-prefilter-cube', 'rgba16float', 'cube'),
+    white,
+  );
+  const brdfLutTexture = createFallback(
+    texelFallbackDescriptor('skylight-fallback-brdf-lut', 'rg16float'),
+    new Uint16Array([0x3c00, 0]),
   );
 
   // Cube views over the depthOrArrayLayers=6 textures so the @group(1)

@@ -9,7 +9,8 @@ import { AssetError, err, ImportError, ok } from '@forgeax/engine-types';
 import {
   type ProducerSemanticIdentityInput,
   producerRelativeDdcKey,
-} from './evidence/source-inventory.js';
+} from './evidence/producer-identity.js';
+import { PackageId } from './guid.js';
 import {
   type AnyScriptablePackDefinition,
   type PackAuthoringError,
@@ -22,6 +23,8 @@ import {
   createScriptablePackSourceSnapshot,
   type ScriptablePackSourceSnapshot,
 } from './scriptable-pack-source-snapshot.js';
+
+import { projectFailure, type StructuredFailure } from './scriptable-pack-wire.js';
 
 export {
   createScriptablePackSourceSnapshot,
@@ -98,30 +101,10 @@ export async function inventoryScriptablePackSource(
   return snapshot.inventory(sourcePath, initialSourceText, resolveImport);
 }
 
-interface StructuredFailure {
-  readonly name?: unknown;
-  readonly code?: unknown;
-  readonly expected?: unknown;
-  readonly actual?: unknown;
-  readonly hint?: unknown;
-  readonly detail?: unknown;
-  readonly message?: unknown;
-}
-
 function serializeFailure(value: unknown): StructuredFailure {
-  if (value !== null && typeof value === 'object') {
-    const failure = value as Record<string, unknown>;
-    return {
-      name: failure.name,
-      code: failure.code,
-      expected: failure.expected,
-      actual: failure.actual,
-      hint: failure.hint,
-      detail: failure.detail,
-      message: failure.message,
-    };
-  }
-  return { message: String(value) };
+  return value !== null && typeof value === 'object'
+    ? projectFailure(value)
+    : { message: String(value) };
 }
 
 function hydrateFailure(value: unknown): unknown {
@@ -423,7 +406,7 @@ class ReusableWorkerScriptablePackExecutor
       return activeDisposal;
     }
     this.rejectActive(new Error(`ScriptablePack task disposed during ${reason}`));
-    this.disposal = (async () => {
+    this.disposal = Promise.resolve().then(async () => {
       const compileRoot = this.compileRoot ?? (await this.compileRootReady);
       const reusable =
         reason === 'complete' &&
@@ -439,7 +422,7 @@ class ReusableWorkerScriptablePackExecutor
       this.released = true;
       this.disposal = undefined;
       this.release(this, reusable);
-    })();
+    });
     return this.disposal;
   }
 
@@ -618,6 +601,75 @@ export interface LoadScriptablePackOptions {
   readonly executor?: ScriptablePackModuleExecutor;
   readonly metadataOnly?: boolean;
   readonly sourceSnapshot?: ScriptablePackSourceSnapshot;
+}
+
+/** Metadata owns no worker; each execution owns one bounded, recyclable lease. */
+export function createLazyScriptablePackDefinition(input: {
+  readonly sourcePath: string;
+  readonly definition: AnyScriptablePackDefinition;
+  readonly sourceClosure: readonly ScriptablePackSourceClosureEntry[];
+  readonly executors: ScriptablePackModuleExecutorPool;
+  readonly sourceSnapshot: ScriptablePackSourceSnapshot;
+}): AnyScriptablePackDefinition {
+  const expected = new Map(input.sourceClosure.map((entry) => [entry.path, entry.digest]));
+  return {
+    ...input.definition,
+    async build(context: PackBuildContextWithoutParameters) {
+      let closure: readonly ScriptablePackSourceClosureEntry[];
+      try {
+        closure = await input.sourceSnapshot.inventory(input.sourcePath);
+      } catch (cause) {
+        return err({
+          code: 'pack-source-revision-conflict',
+          expected:
+            'the inventoried ScriptablePack source closure to remain readable until production',
+          hint: 'discard this candidate and rebuild from the current source generation',
+          detail: {
+            sourcePath: input.sourcePath,
+            reason:
+              cause instanceof Error ? cause.message : 'source closure changed before execution',
+          },
+        } satisfies PackAuthoringError);
+      }
+      if (
+        closure.length !== expected.size ||
+        closure.some((entry) => expected.get(entry.path) !== entry.digest)
+      ) {
+        return err({
+          code: 'pack-source-revision-conflict',
+          expected:
+            'the inventoried ScriptablePack source closure to remain fixed until production',
+          hint: 'discard this candidate and rebuild from the current source generation',
+          detail: {
+            sourcePath: input.sourcePath,
+            reason: 'source closure changed before execution',
+          },
+        } satisfies PackAuthoringError);
+      }
+      const executor = await input.executors.acquire();
+      const loaded = await loadScriptablePack(input.sourcePath, {
+        executor,
+        sourceSnapshot: input.sourceSnapshot,
+      });
+      if (!loaded.ok) return loaded;
+      if (
+        PackageId.format(loaded.value.packageId) !== PackageId.format(input.definition.packageId)
+      ) {
+        await executor.dispose?.('failure');
+        return err({
+          code: 'pack-source-revision-conflict',
+          expected: 'the ScriptablePack source packageId to remain fixed during production',
+          hint: 'retry after source writes settle and rebuild the current generation',
+          detail: {
+            sourcePath: input.sourcePath,
+            scannedPackageId: PackageId.format(input.definition.packageId),
+            loadedPackageId: PackageId.format(loaded.value.packageId),
+          },
+        } satisfies PackAuthoringError);
+      }
+      return loaded.value.build(context as never);
+    },
+  };
 }
 
 function scriptablePackLoadFailure(

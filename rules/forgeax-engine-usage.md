@@ -24,7 +24,7 @@ adding a new package surface.
 | multiplayer Snake consumer / reconnect browser journey / visual falsifier evidence | `forgeax-visual` + `apps/multiplayer-snake/README.md` |
 | 场景身份 / hierarchy / Transform propagation / `scenePlugin` | `@forgeax/engine-scene`（见 `packages/scene/README.md`） |
 | Skin / joint binding / skeletal errors | `@forgeax/engine-skinning`（见 `packages/skinning/README.md`） |
-| Animation graph / player / clip lookup / playback | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |
+| Animation graph / player / property tracks / IK / skeletal retargeting | `@forgeax/engine-animation`（见 `packages/animation/README.md`） |
 | Render vocabulary / frame stages / Renderer construction | `@forgeax/engine/render` + `forgeax-engine-app`（物理 owner 为 `packages/render/`，见 `packages/render/README.md`） |
 | 让东西可见：MeshFilter + MeshRenderer + Material + 灯光（含 `forgeax::sprite-lit` per-light forward） | `forgeax-engine-material` |
 | 写自定义 WGSL + cooked MaterialAsset module | `forgeax-engine-shader` |
@@ -34,9 +34,12 @@ adding a new package surface.
 | authored package → cook/catalog → loadByGuid（glTF .glb/.gltf / FBX .fbx）| `forgeax-engine-assets` |
 | Code-first GPU VFX source / WGSL hooks and imports / Pack v2 cook and GUID load / `ParticleEffectPlayer` / persistent GPU billboard or mesh output | `forgeax-engine-vfx`; add `forgeax-engine-assets` when changing shared Pack/catalog transport and `forgeax-engine-render-pipeline` when changing the generic RenderFeature graph seam |
 | inspector (JSON-RPC WS) / kubectl 式 CLI 子命令 | `forgeax-engine-cli` |
+| Saved Catmull-Rom paths / world-distance motion / camera rails / patrols / physics desired poses | `forgeax-engine-ecs` → `packages/path/README.md`; use `forgeax-engine-assets` for Pack/GUID delivery |
+| Graph/grid routes / static NavMesh baking and projection / local avoidance / physical character following | `forgeax-engine-navigation` |
 | RigidBody / Collider / PhysicsWorld (rapier 2D/3D) | `forgeax-engine-physics` |
 | AudioSource / AudioListener / bus 拓扑 | `forgeax-engine-audio` |
 | immediate-mode 调试可视化：line / sphere / aabb / frustum / arrow / axes | `forgeax-engine-debug-draw` |
+| 物体平移 / 旋转 / 缩放操纵器：约束拖拽、吸附、取消与实体呈现 | `@forgeax/engine/interaction`（见 `packages/interaction/README.md`） |
 | 拾取 ray/pick：屏幕→实体 `pick` / 顶点级 `pickVertex` / tile-cell `pickTile` / `PickError` | `@forgeax/engine-picking`（无独立 skill,见 `packages/picking/README.md`) |
 | 纯逻辑图形附属：字形布局/烘焙 `layoutGlyphText`/`bakeGlyphMesh` / 图块位编解码 `encodeTileBits`/`decodeTileBits` / 视频 `VideoPlayer`/`VideoElementProvider`/`videoLoader`/`probeVideoHighPerfUpload` | `@forgeax/engine-graphics-extras`（无独立 skill,见 `packages/graphics-extras/README.md`；系统入口 `tilemapChunkExtractSystem`/`glyphTextLayoutSystem` 仍在 runtime） |
 | 状态机 / defineState / setNextState / 状态 scoped 实体 / OnEnter/OnExit | `forgeax-engine-state` |

@@ -61,7 +61,6 @@ export type {
 } from './webgpu-renderer';
 export {
   allowsUnlitPreparedFallback,
-  assembleMaterialProjection,
   createMeshSsboGrowController,
   deriveStorageBufferCeiling,
   exposeRenderer,
@@ -92,7 +91,8 @@ const GPU_ENVIRONMENT_ERROR_CODES = new Set([
   'oom',
 ]);
 
-function classifyEnvErrorReason(
+/** Keep GPU wording only for GPU-class inner failures; name the inner owner otherwise. */
+export function classifyEnvErrorReason(
   base: string,
   primary: { code?: unknown; name?: unknown } | undefined,
 ): string {

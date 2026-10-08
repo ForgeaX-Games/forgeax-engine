@@ -4,6 +4,8 @@ import {
   type VertexLayoutProjection,
 } from '@forgeax/engine-geometry';
 import type { MaterialRenderState, PassKind, PrimitiveTopology } from '@forgeax/engine-types';
+import { isTriangleTopology } from '@forgeax/engine-types';
+import { standardTransmissionAdmission } from '../assembly/device-feature-admission';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import {
   isStandardPbrMaterialShader,
@@ -22,7 +24,7 @@ import {
   standardTopologyVariantSet,
   variantSetFromVertexLayoutProjection,
 } from '../pipeline-spec';
-import { POINTS_LINES_MATERIAL_SHADER_ID } from '../points-lines/record';
+import { POINTS_LINES_MATERIAL_SHADER_ID, pointsLinesFragmentEntry } from '../points-lines/record';
 import type { CameraSnapshot } from '../render-contract';
 import type { DispatchEntry, MaterialSnapshot } from '../render-system-extract';
 import type { ValidatedRenderable } from './frame-snapshot';
@@ -31,7 +33,6 @@ import { geometryRenderStateForTopology } from './main-pass-material';
 import type {
   MaterialShaderPipelineEntry,
   PipelineState,
-  RecoveryColdWorkGuard,
   RenderSystemInternals,
 } from './render-context';
 
@@ -40,59 +41,6 @@ export interface RecoveryPipelineReadiness {
   /** Re-resolve every candidate request and assert a stable cache hit. */
   readonly assertPreparedCache: () => void;
   readonly assertFirstRecoveryFrame: () => void;
-}
-
-/**
- * Create the one-shot assertion used by the first frame after publication.
- * Recording a miss is a failure at the owner seam; the draw path never gets a
- * chance to submit a frame that hides a shader/pipeline or static-residency
- * cold build behind an apparently successful receipt.
- */
-export function createRecoveryColdWorkGuard(): RecoveryColdWorkGuard {
-  let armed = false;
-  let recording = false;
-  let finished = false;
-  let pipelineColdWork = 0;
-  let uploadColdWork = 0;
-  const fail = (kind: 'pipeline' | 'upload'): never => {
-    if (kind === 'pipeline') pipelineColdWork += 1;
-    else uploadColdWork += 1;
-    throw new Error(
-      `recovery first frame performed cold ${kind} work ` +
-        `(pipeline=${pipelineColdWork}, upload=${uploadColdWork})`,
-    );
-  };
-  return {
-    arm(): void {
-      armed = true;
-      finished = false;
-      pipelineColdWork = 0;
-      uploadColdWork = 0;
-    },
-    beginFrame(): void {
-      recording = true;
-    },
-    endFrame(): void {
-      recording = false;
-    },
-    notePipelineColdWork(): void {
-      if (armed && recording && !finished) fail('pipeline');
-    },
-    noteUploadColdWork(): void {
-      if (armed && recording && !finished) fail('upload');
-    },
-    finish(): void {
-      if (!armed || finished) return;
-      finished = true;
-      armed = false;
-      if (pipelineColdWork !== 0 || uploadColdWork !== 0) {
-        throw new Error(
-          `recovery first frame cold-work assertion failed ` +
-            `(pipeline=${pipelineColdWork}, upload=${uploadColdWork})`,
-        );
-      }
-    },
-  };
 }
 
 interface RecoveryPipelineRequest {
@@ -116,6 +64,12 @@ function optionalColorFormat(
   format: GPUTextureFormat | undefined,
 ): { readonly colorFormatOverride: GPUTextureFormat } | Record<string, never> {
   return format === undefined ? {} : { colorFormatOverride: format };
+}
+
+function optionalFragmentEntry(
+  entry: string | undefined,
+): { readonly fragmentEntry: string } | Record<string, never> {
+  return entry === undefined ? {} : { fragmentEntry: entry };
 }
 
 function projectionVariant(
@@ -299,6 +253,7 @@ function addStandardMaterialRequests(input: {
         sampleCount: input.sampleCount,
         ...optionalColorFormat(input.colorFormatOverride),
         vertexLayoutProjection: pointsLinesProjection,
+        ...optionalFragmentEntry(pointsLinesFragmentEntry(entry.source.pointsLines.style)),
       });
       continue;
     }
@@ -385,9 +340,21 @@ function addStandardMaterialRequests(input: {
       }
       const isSprite =
         materialShaderId === 'forgeax::sprite' || materialShaderId === 'forgeax::sprite-lit';
-      const materialCapabilityVariantSet = isStandardPbrMaterialShader(materialShaderId)
+      const topologyVariantSet = isStandardPbrMaterialShader(materialShaderId)
         ? standardPbrCapabilityVariantSet
         : capabilityVariantSet;
+      // Candidate requests must select the same admitted transmission module
+      // as live recording; recovery only prewarms modules used by the old generation.
+      const transmission = standardTransmissionAdmission(
+        material,
+        input.internals.device.limits.maxSampledTexturesPerShaderStage,
+      );
+      const materialCapabilityVariantSet =
+        transmission !== undefined &&
+        transmission.kind !== 'exceeded' &&
+        !topologyVariantSet.includes('TRANSMISSION_AVAILABLE=')
+          ? `${topologyVariantSet}+TRANSMISSION_AVAILABLE=true`
+          : topologyVariantSet;
       const surfaceLayoutKind =
         material.surfaceModel === 'single-layer-medium'
           ? input.standardLighting?.kind === 'clustered' &&
@@ -575,7 +542,7 @@ function addShadowRequests(input: {
   }
   for (const entry of input.validated) {
     for (const submesh of entry.mesh.submeshes) {
-      if (submesh.topology !== 'triangle-list' && submesh.topology !== 'triangle-strip') continue;
+      if (!isTriangleTopology(submesh.topology)) continue;
       const material = entry.source.materials[submesh.materialSlot] ?? entry.source.material;
       const shadowDispatches =
         dispatches.get(entry.renderableIndex)?.get(material.materialHandle ?? 0) ?? [];

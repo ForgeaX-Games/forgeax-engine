@@ -19,15 +19,27 @@ describe('Standard Surface pass evaluation', () => {
       // ShadowCaster is a shared `shadow_caster.wgsl` material entry, while
       // each Standard material template owns the forward and deferred entries.
       for (const entry of ['fs_main', 'fs_gbuffer']) {
-        // The rigid template shares its forward body between fs_main and the
-        // OIT accumulation entries through `standardForward`.
-        const delegated = entry === 'fs_main' && shader.includes('fn standardForward(');
-        if (delegated) {
-          expect(entryBody(shader, 'fs_main(')).toContain(
-            'return standardForward(in, frontFacing);',
+        // Both templates share one lit forward body between fs_main, fs_opaque
+        // and (rigid only) the OIT accumulation entries. The skinned template
+        // shares its G-buffer body between fs_gbuffer and the visible-surface
+        // `fs_gbuffer_uncovered` entry through `skinGBuffer`.
+        const skinGBuffer = entry === 'fs_gbuffer' && shader.includes('fn skinGBuffer(');
+        if (skinGBuffer) {
+          expect(entryBody(shader, 'fs_gbuffer(')).toContain(
+            'return skinGBuffer(in, frontFacing);',
+          );
+          expect(entryBody(shader, 'fs_gbuffer_uncovered(')).toContain(
+            'skinGBuffer(in, frontFacing)',
           );
         }
-        const owner = delegated ? 'standardForward' : entry;
+        const owner =
+          entry === 'fs_gbuffer'
+            ? skinGBuffer
+              ? 'skinGBuffer'
+              : entry
+            : name === 'default-standard-pbr.wgsl'
+              ? 'standardForwardLit'
+              : 'standardSkinForwardLit';
         const body = entryBody(shader, owner);
         expect(body, `${name}:${owner} must exist`).toContain(`fn ${owner}`);
         expect(

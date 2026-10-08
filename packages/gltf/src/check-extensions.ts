@@ -18,7 +18,7 @@
 // material). A stderr warn for those would be a false positive, so the
 // diagnostics list is the single channel (no `console.error`).
 //
-// Future expansion (KHR_materials_unlit, ...) extends
+// Future supported extensions extend
 // `EXTENSION_ALLOWLIST` in place; each addition lands under its own feat-*
 // loop with breaking-change registry entry.
 
@@ -28,8 +28,11 @@ import { err, type GltfError, gltfErr, ok, type Result } from './errors.js';
 export const EXTENSION_ALLOWLIST: readonly string[] = [
   'EXT_mesh_gpu_instancing',
   'EXT_meshopt_compression',
+  'KHR_draco_mesh_compression',
   'KHR_lights_punctual',
   'KHR_texture_transform',
+  'KHR_materials_unlit',
+  'KHR_materials_emissive_strength',
   'KHR_materials_transmission',
   'KHR_materials_ior',
   'KHR_materials_volume',

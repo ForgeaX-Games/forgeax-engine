@@ -22,7 +22,7 @@ import {
   type SubmissionPlan,
 } from './batch-topology';
 import { materialBindingKey } from './material-bindings';
-import { lodCrossfadeCapable } from './production-raster-lod';
+import { lodCrossfadeCapable, prepareLodProjectionPlan } from './production-raster-lod';
 import { type ShadowClaimTable, sourceDrawForCandidate } from './shadow-claims';
 
 export interface PreparedBatch {
@@ -305,19 +305,9 @@ export function assemblePreparedPlan(
   const eligibleCandidates = new Set<string>();
   const drawKeys = new Set<string>();
   const rows: PreparedProductionCandidate[] = [];
-  const lodCandidates: {
-    readonly source: GpuDrivenBatch;
-    readonly candidate: GpuDrivenCandidate;
-  }[] = [];
-  const lodPrimitives = new Set<number>();
   for (const [index, batch] of source.batches.entries()) {
     const prepared = batchRows[index] as PreparedBatchRows;
-    const isLod = (batch.lod?.coverages.length ?? 0) > 1;
     for (const candidate of batch.candidates) {
-      if (isLod) {
-        lodCandidates.push({ source: batch, candidate });
-        lodPrimitives.add(candidate.primitiveIndex);
-      }
       const candidates = candidatesByPrimitive.get(candidate.primitiveIndex);
       if (candidates === undefined)
         candidatesByPrimitive.set(candidate.primitiveIndex, [candidate]);
@@ -351,8 +341,7 @@ export function assemblePreparedPlan(
     rows,
     drawKeys,
     ownership,
-    lodCandidates,
-    lodPrimitives: Object.freeze([...lodPrimitives]),
+    lodPlan: prepareLodProjectionPlan(source),
   };
 }
 

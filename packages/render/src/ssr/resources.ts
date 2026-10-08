@@ -38,7 +38,7 @@ export interface SsrSpatialMemoryEstimate {
   readonly height: number;
   readonly halfWidth: number;
   readonly halfHeight: number;
-  /** The view's shared depth pyramid, counted here while SSR is its only consumer. */
+  /** The view's shared depth pyramid, counted in SSR admission while SSR is its only closest-depth reader. */
   readonly depthPyramidBytes: number;
   readonly traceBytes: number;
   readonly hitReactivityBytes: number;

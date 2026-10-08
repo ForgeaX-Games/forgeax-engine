@@ -56,8 +56,19 @@ try {
     const inspection = (await replay.inspectWork(work.workIndex, ['pipeline', 'bindings', 'pixels'])).unwrap();
     const attachment = inspection.attachment;
     assert.ok(attachment, 'AO attachment readback is required');
-    assert.equal(attachment.format, 'r8unorm');
-    const bytes = attachment.bytes;
+    // Visibility is .r in both; the raw target also carries the octahedral
+    // center normal (.gb) the filter weights taps with.
+    const packed = work === calc;
+    assert.equal(attachment.format, packed ? 'rgba8unorm' : 'r8unorm');
+    const stride = packed ? 4 : 1;
+    const bytes = attachment.bytes.filter((_, i) => i % stride === 0);
+    if (packed) {
+      const normals = new Set();
+      for (let i = 0; i < attachment.bytes.length; i += 4) {
+        normals.add((attachment.bytes[i + 1] << 8) | attachment.bytes[i + 2]);
+      }
+      assert.ok(normals.size >= 2, 'Raw normal channels must distinguish floor and cube faces');
+    }
     const min = bytes.reduce((a, b) => Math.min(a, b), 255);
     const max = bytes.reduce((a, b) => Math.max(a, b), 0);
     console.log(JSON.stringify({ workIndex: work.workIndex, min, max }));

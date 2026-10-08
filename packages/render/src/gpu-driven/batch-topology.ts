@@ -4,7 +4,6 @@ import type { BatchTopologyInspection } from '../inspection-types';
 import { renderStateHash } from '../pipeline-spec';
 import type { CameraSnapshot } from '../render-contract';
 import type { RenderSceneApplyResult, RenderSceneSlot } from '../scene/render-scene-types';
-import { type GpuLodRow, selectGpuLod } from '../scene/visibility/gpu-lod';
 import { projectedHeight as measureProjectedHeight } from '../scene/visibility/lod-selector';
 import type { PreparedGpuDrivenDraw } from './prepared-draw';
 
@@ -161,32 +160,6 @@ export function inspectResourceClassSplits(
     resourceClassSplits: Object.freeze(resourceClassSplits),
     resourceClassSplitReasons: Object.freeze(resourceClassSplitReasons),
   });
-}
-
-export interface GpuLodCandidateInput {
-  readonly candidate: GpuDrivenCandidate;
-  readonly rows: readonly GpuLodRow[];
-  readonly projectedHeight: number;
-  readonly previousLevel: number;
-  readonly historyValid: boolean;
-}
-
-export interface GpuLodCompactCandidate {
-  readonly candidate: GpuDrivenCandidate;
-  readonly level: number;
-  readonly confidence: number;
-}
-
-/** Selects one level per stable topology candidate without mutating membership. */
-export function compactGpuLodCandidates(
-  inputs: readonly GpuLodCandidateInput[],
-): readonly GpuLodCompactCandidate[] {
-  return Object.freeze(
-    inputs.map((input) => {
-      const selection = selectGpuLod(input.rows, input);
-      return Object.freeze({ candidate: input.candidate, ...selection });
-    }),
-  );
 }
 
 export interface SubmissionCandidateMembershipEntry {

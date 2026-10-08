@@ -28,17 +28,36 @@ describe('shared device feature admission', () => {
     const admitted = deriveDeviceFeatureAdmission(adapter(['primitive-index'], limits));
     expect(admitted.requiredFeatures).toContain('primitive-index');
     expect(admitted.requiredLimits?.maxColorAttachmentBytesPerSample).toBe(48);
-    // The six-target opt-in must not lower WebGPU's ordinary eight-target default.
+    // The seven-target opt-in must not lower WebGPU's ordinary eight-target default.
     expect(admitted.requiredLimits).toEqual({ maxColorAttachmentBytesPerSample: 48 });
     for (const [features, supported] of [
       [[], limits],
       [['primitive-index'], { ...limits, maxColorAttachmentBytesPerSample: 32 }],
-      [['primitive-index'], { ...limits, maxColorAttachments: 5 }],
+      [['primitive-index'], { ...limits, maxColorAttachments: 6 }],
     ] as const) {
       expect(
         deriveDeviceFeatureAdmission(adapter([...features], supported)).requiredFeatures,
       ).not.toContain('primitive-index');
     }
+  });
+  it.each([
+    [[], 32, undefined],
+    [[], 36, undefined],
+    [[], 40, 40],
+    [[], 64, 40],
+    [['primitive-index'], 48, 48],
+    [['primitive-index'], 52, 52],
+    [['primitive-index'], 56, 56],
+    [['primitive-index'], 64, 56],
+  ] as const)('requests supported temporal MRT capacity for %j / %i bytes', (features, bytes, requested) => {
+    const admitted = deriveDeviceFeatureAdmission(
+      adapter([...features], {
+        maxColorAttachments: 8,
+        maxColorAttachmentBytesPerSample: bytes,
+      }),
+    );
+    expect(admitted.requiredLimits?.maxColorAttachmentBytesPerSample).toBe(requested);
+    expect(admitted.requiredLimits ?? {}).not.toHaveProperty('maxColorAttachments');
   });
   it('admits supported timestamps for a late DRS component and omits unsupported features', () => {
     const supported = adapter(['timestamp-query', 'texture-compression-bc']);
@@ -69,7 +88,9 @@ describe('shared device feature admission', () => {
   });
 
   it.each([
-    [48, 26],
+    [48, 31],
+    [31, 31],
+    [30, 26],
     [26, 26],
     [25, 24],
     [24, 24],

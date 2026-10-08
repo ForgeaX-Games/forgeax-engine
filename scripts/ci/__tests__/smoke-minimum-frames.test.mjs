@@ -211,12 +211,44 @@ test('aggregate admits only the external budget with complete exact-HEAD owner c
   }
 });
 
-test('full fleet conserves 92 gates: 88 frame owners and 4 semantic owners', () => {
+test('full fleet conserves 99 gates: 93 frame owners and 6 semantic owners', () => {
   const resolved = smoke.resolveRunnableEntries({ roster: smoke.readRoster() });
   const entries = smoke.selectSmokeEntries(resolved, 'full');
-  assert.equal(smoke.selectSmokeEntries(resolved).length, 30);
-  assert.equal(entries.length, 92);
-  assert.equal(entries.filter((e) => e.oracle.kind === 'frameReceipt').length, 88);
+  assert.equal(smoke.selectSmokeEntries(resolved).length, 34);
+  assert.equal(entries.length, 99);
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.package === '@forgeax/hello-terrain')
+      .map((entry) => [entry.gateId, entry.commandId, entry.oracle.kind, entry.executionClass]),
+    [['hello-terrain/smoke', 'smoke', 'frameReceipt', 'independent']],
+  );
+  assert.deepEqual(
+    entries
+      .filter((e) => e.package === '@forgeax/hello-transform-gizmo')
+      .map((e) => e.gateId)
+      .sort(),
+    ['hello-transform-gizmo/browser', 'hello-transform-gizmo/smoke'],
+  );
+  assert.deepEqual(
+    entries
+      .filter((e) => e.package === '@forgeax/app-learn-render-6-pbr-4-transmission-refraction')
+      .map((e) => [e.gateId, e.commandId, e.oracle.kind])
+      .sort(),
+    [
+      [
+        'app-learn-render-6-pbr-4-transmission-refraction/features-a',
+        'smoke:features-a',
+        'assertion',
+      ],
+      [
+        'app-learn-render-6-pbr-4-transmission-refraction/features-b',
+        'smoke:features-b',
+        'assertion',
+      ],
+      ['app-learn-render-6-pbr-4-transmission-refraction/frames', 'smoke:frames', 'frameReceipt'],
+    ],
+  );
+  assert.equal(entries.filter((e) => e.oracle.kind === 'frameReceipt').length, 93);
   const reports = [0, 1, 2, 3].map((shardIndex) => {
     const assigned = smoke.partitionRunnableEntries(entries, { shardIndex });
     const results = assigned.map((e) => ({
@@ -254,10 +286,10 @@ test('full fleet conserves 92 gates: 88 frame owners and 4 semantic owners', () 
     frames: 300,
     scope: 'full',
   };
-  assert.equal(smoke.aggregateReports(request).runnableResults.length, 92);
+  assert.equal(smoke.aggregateReports(request).runnableResults.length, 99);
   assert.equal(
     reports.flatMap((r) => r.runnableEntries).filter((e) => e.receipt === null).length,
-    4,
+    6,
   );
   assert.throws(() => smoke.aggregateReports({ ...request, scope: 'sharded' }), /scope/);
   assert.throws(() => smoke.aggregateReports({ ...request, allowBlocked: true }), /blocked/);
@@ -441,4 +473,49 @@ test('a receipt cannot mask an explicit skipped gate', () => {
     }),
     false,
   );
+});
+
+test('CI lightweight routing reaches only the TransformGizmo browser child', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'forgeax-gizmo-routing-'));
+  const previous = Object.fromEntries(
+    ['CI', 'FORGEAX_BROWSER_CI_LIGHTWEIGHT'].map((key) => [key, process.env[key]]),
+  );
+  const probe = join(directory, 'probe.mjs');
+  writeFileSync(
+    probe,
+    "console.log('lightweight=' + (process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT ?? 'unset')); console.log('[forgeax-smoke-receipt] ' + JSON.stringify({schemaVersion:1, gateId:process.argv[2], commandId:'smoke', framesObserved:Number(process.env.SMOKE_MIN_FRAMES), completed:true}));",
+  );
+  try {
+    delete process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT;
+    for (const [ci, gateId, expected] of [
+      ['true', 'hello-transform-gizmo/browser', '1'],
+      ['true', 'hello-transform-gizmo/smoke', 'unset'],
+      ['true', 'hello-other/browser', 'unset'],
+      ['false', 'hello-transform-gizmo/browser', 'unset'],
+    ]) {
+      process.env.CI = ci;
+      const result = await smoke.runEntry({
+        entry: {
+          ...entry,
+          gateId,
+          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(probe)} ${JSON.stringify(gateId)}`,
+        },
+        shardIndex: 0,
+        reportPath: join(directory, 'shard.json'),
+        timeoutMs: 10000,
+      });
+      assert.equal(result.status, 'pass');
+      assert.match(
+        readFileSync(join(directory, result.logPath), 'utf8'),
+        new RegExp(`lightweight=${expected}`),
+      );
+      assert.equal(result.framesObserved, 60);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

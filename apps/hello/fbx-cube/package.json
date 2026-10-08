@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "feat-20260615-fbx-importer-via-sdk M3 convergence app — cube.fbx via FBX SDK native binding. End-to-end proof of the fbxImporter pipeline: declare+import+loadByGuid<SceneAsset>+instantiate.",
+  "description": "feat-20260615-fbx-importer-via-sdk M3 convergence app \u2014 cube.fbx via FBX SDK native binding. End-to-end proof of the fbxImporter pipeline: declare+import+loadByGuid<SceneAsset>+instantiate.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -56,8 +56,8 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

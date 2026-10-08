@@ -45,14 +45,14 @@ export function prepareRenderSystemRecoveryRoots(
   const graphCandidate = runtime.graphCandidate;
   if (graphCandidate !== undefined) {
     const releaseGraphCandidate = (): void => graphCandidate.release();
-    const compiledGraph = graphCandidate.frameState.compiledFrameGraph;
+    const compiledGraph = graphCandidate.frameState.compiledFrameGraph?.graph ?? null;
     if (compiledGraph !== null) {
       roots.push({
         kind: 'pipeline',
         create: () => {
           if (!runtime.scope.isAlive())
             throw new Error('Recovery graph candidate scope is not active.');
-          if (graphCandidate.frameState.compiledFrameGraph !== compiledGraph) {
+          if (graphCandidate.frameState.compiledFrameGraph?.graph !== compiledGraph) {
             throw new Error('Recovery graph candidate was changed before aggregate assembly.');
           }
           return compiledGraph;

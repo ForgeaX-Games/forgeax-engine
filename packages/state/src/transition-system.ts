@@ -24,13 +24,13 @@ import type { Component, EntityHandle, World } from '@forgeax/engine-ecs';
 import { worldDespawnScene } from '@forgeax/engine-scene';
 import { getRegisteredTokens } from './define-state';
 import { getCallbacks, OnEnter, OnExit } from './on-enter-on-exit';
-import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
+import {
+  type NextStatePayload,
+  nextStateResourceKey,
+  previousStateResourceKey,
+  stateResourceKey,
+} from './resources';
 import { SCOPED_MODE_VALUE } from './scoped-component';
-
-interface NextStatePayload {
-  value: number;
-  force: boolean;
-}
 
 /**
  * Collect entities whose ScopedTo component matches a given mode and value,

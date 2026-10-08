@@ -8,14 +8,15 @@ import type {
 } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError, type RhiDebugError } from '../errors';
-import type { RhiCallEvent, Tape } from '../protocol/types';
+import type { RhiCallEvent, Tape, TapeBlob } from '../protocol/types';
 import type { ReplayExecutionContext } from './execute';
 import type { ReplayResource } from './resources';
 
 type ReplayPass = RhiRenderPassEncoder & RhiComputePassEncoder;
 
+/** Decoded tape events are immutable replay input, so entries borrow them uncopied. */
 export function eventRecord(event: RhiCallEvent): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(event));
+  return event as unknown as Record<string, unknown>;
 }
 
 export function eventFailure(
@@ -34,13 +35,25 @@ export function eventFailure(
   );
 }
 
+const blobIndexes = new WeakMap<Tape, ReadonlyMap<string, TapeBlob>>();
+
+/** Hash lookup derived once per decoded tape; replays resolve thousands of blobs. */
+export function tapeBlob(tape: Tape, hash: string): TapeBlob | undefined {
+  let index = blobIndexes.get(tape);
+  if (index === undefined) {
+    index = new Map(tape.blobs.map((candidate) => [candidate.hash, candidate]));
+    blobIndexes.set(tape, index);
+  }
+  return index.get(hash);
+}
+
 export function blob(
   tape: Tape,
   hash: string,
   event: RhiCallEvent,
   eventIndex: number,
 ): Result<Uint8Array, RhiDebugError> {
-  const found = tape.blobs.find((candidate) => candidate.hash === hash);
+  const found = tapeBlob(tape, hash);
   return found === undefined
     ? eventFailure(eventIndex, event, 'lookup', `blob ${hash} is missing`)
     : ok(found.bytes);
@@ -156,20 +169,8 @@ export function requireResource<T>(
   eventKind: RhiCallEvent['kind'],
   role?: string,
 ): Result<T, RhiDebugError> {
-  const entry = context.table.get(resourceId);
-  if (
-    entry === undefined ||
-    entry.resource.kind !== kind ||
-    (role !== undefined && entry.resource.role !== role)
-  ) {
-    return missingResource(
-      eventIndex,
-      { kind: eventKind } as RhiCallEvent,
-      resourceId,
-      `${kind}${role === undefined ? '' : `/${role}`}`,
-    );
-  }
-  return ok(entry.resource.value as T);
+  const resource = requireReplayResource(context, resourceId, kind, eventIndex, eventKind, role);
+  return resource.ok ? ok(resource.value.value as T) : resource;
 }
 
 export function requireReplayResource(

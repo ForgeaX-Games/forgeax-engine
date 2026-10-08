@@ -72,7 +72,7 @@ it.each([
     const instance = new Float32Array(18);
     instance.set([0, 0, 0.25, 0.5, 0, 0, 0, 0.5, 0, 0, 0, 1]);
     const instances = makeBuffer(instance, GPUBufferUsage.VERTEX);
-    const view = new Float32Array(1168 / 4);
+    const view = new Float32Array(1280 / 4);
     // The existing View ABI keeps A separate from B/C/D around inverseViewProj.
     for (const [index, offset] of [112, 240, 304, 368].entries()) {
       view.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, (index + 1) * 0.2, 0, 0, 0, 0, 1], offset / 4);

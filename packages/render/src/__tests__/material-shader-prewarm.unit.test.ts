@@ -24,6 +24,11 @@ describe('material module prewarm and lazy pipeline agreement', () => {
             identifier: 'game::surface',
             variants: [
               { defines: { STYLE: true }, definesKey: 'STYLE=true', composedWgsl: variantSource },
+              ...[true, false].map((atmosphere) => ({
+                defines: { ATMOSPHERE_AVAILABLE: atmosphere },
+                definesKey: `ATMOSPHERE_AVAILABLE=${atmosphere}`,
+                composedWgsl: `// atmosphere ${atmosphere}\n${source}`,
+              })),
               {
                 defines: { VISIBLE_SURFACE_AVAILABLE: true },
                 definesKey: 'VISIBLE_SURFACE_AVAILABLE=true',
@@ -38,7 +43,10 @@ describe('material module prewarm and lazy pipeline agreement', () => {
           },
         ][Symbol.iterator](),
     } as unknown as ShaderCatalog;
-    const device = { limits: { maxSampledTexturesPerShaderStage: limit } } as RhiDevice;
+    const device = {
+      caps: { storageBuffer: true, backendKind: 'webgpu' },
+      limits: { maxSampledTexturesPerShaderStage: limit },
+    } as RhiDevice;
     const compiled = new Map<ShaderModule, string>();
     const seeded = new Map<string, ShaderModule>();
     const compile = vi.fn(async (_device: RhiDevice, descriptor: { code: string }) => {
@@ -66,8 +74,12 @@ describe('material module prewarm and lazy pipeline agreement', () => {
         prepareLowLimitMaterialShaderEntry({ source: authored, paramSchema: [] }, limit).source,
       );
     }
-    expect(compile).toBeCalledTimes(2);
-    expect([...seeded.keys()]).toEqual(['module-game::surface', 'module-game::surface#STYLE=true']);
+    expect(compile).toBeCalledTimes(3);
+    expect([...seeded.keys()]).toEqual([
+      'module-game::surface',
+      'module-game::surface#STYLE=true',
+      `module-game::surface#ATMOSPHERE_AVAILABLE=${limit >= 31}`,
+    ]);
     expect(entry.source).toBe(source);
   });
 });

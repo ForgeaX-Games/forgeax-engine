@@ -324,6 +324,36 @@ it('preserves unknown remote business codes across the real WebSocket boundary',
   }
 });
 
+it.each([2, 3])('does not send while socket state=%s precedes the close event', async (state) => {
+  let readyState = 1;
+  const socket = {
+    get readyState() {
+      return readyState;
+    },
+    send: vi.fn(),
+    close: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  const client = await createHostWebSocketClient(socket);
+  try {
+    readyState = state;
+    // No close event has arrived: connected retains its existing event semantics.
+    expect(client.connected).toBe(true);
+    const request = client.request('echo', { closed: true });
+    void request.catch(() => undefined);
+    const unsubscribe = client.subscribe('closed.topic', () => {});
+    unsubscribe();
+    unsubscribe();
+    expect(socket.send).not.toHaveBeenCalled();
+    await expect(request).rejects.toMatchObject({ code: 'host-transport-failure' });
+    expect(client.connected).toBe(true);
+  } finally {
+    client.close();
+  }
+  expect(client.connected).toBe(false);
+});
+
 it('exercises the WebSocket host boundary with request, cancellation, and close', async () => {
   const server = new WebSocketServer({ port: 0 });
   await once(server, 'listening');
@@ -369,6 +399,29 @@ it('exercises the WebSocket host boundary with request, cancellation, and close'
   unsubscribe();
   expect(sendAfterClose).not.toHaveBeenCalled();
   sendAfterClose.mockRestore();
+  const closingSocket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  const closingClient = await createHostWebSocketClient(closingSocket);
+  const closingController = new AbortController();
+  const pendingDuringClose = closingClient.request('pending', undefined, {
+    signal: closingController.signal,
+  });
+  const sendDuringClose = vi.spyOn(closingSocket, 'send');
+  closingSocket.close();
+  expect(closingSocket.readyState).toBe(WebSocket.CLOSING);
+  const requestDuringClose = expect(closingClient.request('echo', undefined)).rejects.toMatchObject(
+    {
+      code: 'host-transport-failure',
+    },
+  );
+  const unsubscribeDuringClose = closingClient.subscribe('closing.topic', () => {});
+  unsubscribeDuringClose();
+  closingController.abort();
+  await expect(pendingDuringClose).rejects.toMatchObject({
+    code: 'host-assembly-request-aborted',
+  });
+  await requestDuringClose;
+  expect(sendDuringClose).not.toHaveBeenCalled();
+  sendDuringClose.mockRestore();
   const closeClient = await createHostWebSocketClient(
     new WebSocket(`ws://127.0.0.1:${address.port}`),
   );

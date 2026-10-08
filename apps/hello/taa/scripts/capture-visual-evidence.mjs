@@ -253,7 +253,7 @@ const record = {
   frames,
   frameIdentity,
   stages: ['linear-HDR', 'linear-LDR', 'final-sRGB'].map((domain, index) => ({
-    id: ['linear-hdr', 'linear-ldr', 'final-srgb'][index],
+    id: ['linear-hdr', 'linear-ldr', 'final-display'][index],
     domain,
     readback: { rawHash: stageCaptures[index]?.sha256 ?? sha256(`missing-${domain}`), frame: frameIdentity.last },
   })),

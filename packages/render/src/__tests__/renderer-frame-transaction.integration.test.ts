@@ -9,16 +9,20 @@ import {
   disposeObservationCaptureSet,
   exposeRenderer,
 } from '../assembly/factory';
-import { executeRendererFrameTransaction } from '../assembly/renderer-frame-transaction';
+import {
+  executeRendererFrameTransaction,
+  observeFrameCompletionStages,
+} from '../assembly/renderer-frame-transaction';
 import { DeviceScope } from '../device/device-scope';
 import { selectEnvironment } from '../environment/frame';
 import { EnvironmentLifecycle } from '../environment/lifecycle';
-import type { RendererContractFailureError } from '../errors/render';
+import { type RendererContractFailureError, RendererOperationError } from '../errors/render';
 import { GPU_TEXTURE_USAGE_COPY_SRC } from '../gpu-texture-usage';
 import { RhiErrorListenerRegistry } from '../lifecycle';
 import type {
   GraphTargetPassReplayPrefixReceipt,
   GraphTargetPassReplayReceipt,
+  InstalledFrameGraph,
   RenderFrameState,
 } from '../record/frame-snapshot';
 import { executeCompiledFrameGraph } from '../record/typed-frame-graph';
@@ -32,6 +36,20 @@ import {
 } from '../temporal/gpu';
 import { createTemporalView } from '../temporal/view';
 import { addTypedTemporalResolvePass } from '../typed-render-graph-primitives';
+
+function installedGraph(graph: unknown, topologyKey: string): InstalledFrameGraph {
+  const noTarget = (): undefined => undefined;
+  return {
+    graph: graph as InstalledFrameGraph['graph'],
+    topologyKey,
+    targets: {
+      getColorTargetDescriptor: noTarget,
+      getColorTargetView: noTarget,
+      getColorTargetTexture: noTarget,
+      graphGeneration: 0,
+    },
+  };
+}
 
 type Stage = 'build' | 'execute' | 'finish' | 'submit';
 
@@ -258,8 +276,24 @@ function executeReplayCapture(
     },
   };
   const frameState = {
-    compiledFrameGraph: graph,
-    compiledFrameGraphTopologyKey: 'synthetic-capture',
+    temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
+    compiledFrameGraph: {
+      graph,
+      topologyKey: 'synthetic-capture',
+      targets: {
+        graphGeneration: 7,
+        getColorTargetView: () =>
+          callbackMode === 'missing-target' ? undefined : (targetView as never),
+        getColorTargetTexture: () =>
+          callbackMode === 'missing-target' ? undefined : (targetTexture as never),
+        getColorTargetDescriptor: () => ({
+          format: 'rgba16float' as const,
+          size: { width: 4, height: 2 },
+          usage: GPU_TEXTURE_USAGE_COPY_SRC,
+          texture: targetTexture,
+        }),
+      },
+    },
     frameNumber: 13,
     graphTargetCapture:
       captureKind === 'pass-replay'
@@ -301,19 +335,6 @@ function executeReplayCapture(
               usage: GPU_TEXTURE_USAGE_COPY_SRC,
             },
           },
-    perFrameGraph: {
-      graphGeneration: 7,
-      getColorTargetView: () =>
-        callbackMode === 'missing-target' ? undefined : (targetView as never),
-      getColorTargetTexture: () =>
-        callbackMode === 'missing-target' ? undefined : (targetTexture as never),
-      getColorTargetDescriptor: () => ({
-        format: 'rgba16float' as const,
-        size: { width: 4, height: 2 },
-        usage: GPU_TEXTURE_USAGE_COPY_SRC,
-        texture: targetTexture,
-      }),
-    },
   } as never;
   const encoder = {
     copyTextureToBuffer: () => {
@@ -349,18 +370,29 @@ function executeReplayCapture(
       },
     },
   } as never;
-  const result = executeCompiledFrameGraph(
-    internals,
-    frameState,
-    {} as never,
-    encoder,
-    undefined,
-    () => {
-      commits += 1;
-    },
-  );
+  let rejection: RendererOperationError<'frame-submit-rejected'> | undefined;
+  const result = (() => {
+    try {
+      return executeCompiledFrameGraph(
+        internals,
+        frameState,
+        {} as never,
+        encoder,
+        undefined,
+        () => {
+          commits += 1;
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof RendererOperationError) || error.code !== 'frame-submit-rejected')
+        throw error;
+      rejection = error;
+      return false;
+    }
+  })();
   return {
     result,
+    rejection,
     errors,
     encodedPasses,
     callbackReceipts,
@@ -412,7 +444,57 @@ describe('renderer successful-submit transaction', () => {
       readbackCount: 0,
       liveByteLength: 0,
     });
+    const pending = renderer.inspect().frame;
+    expect(pending.pendingCompletionCount).toBe(1);
+    expect(pending.pendingCompletions).toEqual([
+      expect.objectContaining({
+        frameId: frame.value.frameId,
+        deviceGeneration: frame.value.deviceGeneration,
+        presentation: frame.value.presentation,
+        queue: 'pending',
+      }),
+    ]);
+    expect(Object.isFrozen(pending.pendingCompletions)).toBe(true);
+    expect(Object.isFrozen(pending.pendingCompletions?.[0])).toBe(true);
     await frame.value.completed;
+    expect(renderer.inspect().frame.pendingCompletionCount).toBe(0);
+    expect(renderer.inspect().frame.pendingCompletions).toEqual([]);
+    expect(pending.pendingCompletionCount).toBe(1);
+    expect(pending.pendingCompletions?.[0]?.queue).toBe('pending');
+    await renderer.dispose();
+  });
+
+  it('bounds pending receipt snapshots without releasing any original continuation', async () => {
+    const host = await constructRenderer(
+      { width: 64, height: 64, getContext: () => null },
+      { rhi },
+      {
+        shaderManifestUrl: `data:application/json,${encodeURIComponent(
+          JSON.stringify({ schemaVersion: '1.0.0', entries: [] }),
+        )}`,
+      },
+    );
+    expect((await host.initialization).ok).toBe(true);
+    const renderer = exposeRenderer(host);
+    const attached = renderer.attach(new World()).unwrap();
+    const receipts = Array.from({ length: 10 }, () =>
+      renderer
+        .draw({
+          leases: [attached],
+          camera: { lease: attached },
+          environment: { lease: attached },
+        })
+        .unwrap(),
+    );
+    const snapshot = renderer.inspect().frame;
+    expect(snapshot.pendingCompletionCount).toBe(10);
+    expect(snapshot.pendingCompletions?.map(({ frameId }) => frameId)).toEqual(
+      receipts.slice(-8).map(({ frameId }) => frameId),
+    );
+    await Promise.all(receipts.map(({ completed }) => completed));
+    expect(renderer.inspect().frame.pendingCompletionCount).toBe(0);
+    expect(renderer.inspect().frame.pendingCompletions).toEqual([]);
+    expect(snapshot.pendingCompletions).toHaveLength(8);
     await renderer.dispose();
   });
 
@@ -459,12 +541,12 @@ describe('renderer successful-submit transaction', () => {
     if (!domainsAndTimings.ok)
       expect(domainsAndTimings.error.code).toBe('renderer-contract-failed');
     const observed = await renderer.observe(frame.value, {
-      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['linear-hdr', 'linear-ldr', 'final-display'],
     });
     expect(observed.ok).toBe(false);
     if (!observed.ok) expect(observed.error.code).toBe('renderer-contract-failed');
     const duplicate = await renderer.observe(frame.value, {
-      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['linear-hdr', 'linear-ldr', 'final-display'],
     });
     expect(duplicate.ok).toBe(false);
     if (!duplicate.ok) expect(duplicate.error.code).toBe('renderer-contract-failed');
@@ -613,10 +695,10 @@ describe('renderer successful-submit transaction', () => {
     expect(second.ok, second.ok ? '' : JSON.stringify(second.error)).toBe(true);
     if (!first.ok || !second.ok || first.value === undefined || second.value === undefined) return;
     const firstPending = renderer.observe(first.value, {
-      include: ['timings', 'linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['timings', 'linear-hdr', 'linear-ldr', 'final-display'],
     });
     const secondResult = await renderer.observe(second.value, {
-      include: ['linear-hdr', 'linear-ldr', 'final-srgb'],
+      include: ['linear-hdr', 'linear-ldr', 'final-display'],
     });
     const firstResult = await firstPending;
     expect(firstResult.ok).toBe(false);
@@ -1011,6 +1093,7 @@ describe('renderer successful-submit transaction', () => {
     expect(replay.result).toBe(false);
     expect(replay.commits).toBe(0);
     expect(replay.submits).toBe(failureStage === 'submit' ? 1 : 0);
+    if (failureStage === 'submit') expect(replay.rejection?.code).toBe('frame-submit-rejected');
   });
 
   it.each([
@@ -1101,6 +1184,7 @@ describe('renderer successful-submit transaction', () => {
     const device = (await new RhiNullAdapter().requestDevice()).unwrap();
     const scope = DeviceScope.create(91, 'renderer');
     const frameState = {
+      temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
       temporalGpuState: undefined,
       activeTemporalGpuState: undefined,
       retiringTemporalGpuStates: new Set(),
@@ -1123,8 +1207,7 @@ describe('renderer successful-submit transaction', () => {
     });
     expect(compiled.ok).toBe(true);
     if (!compiled.ok) return;
-    frameState.compiledFrameGraph = compiled.value;
-    frameState.compiledFrameGraphTopologyKey = 'temporal-readiness-probe';
+    frameState.compiledFrameGraph = installedGraph(compiled.value, 'temporal-readiness-probe');
     const submits = vi.spyOn(device.queue, 'submit');
     const errors = new RhiErrorListenerRegistry();
     const result = executeCompiledFrameGraph(
@@ -1166,6 +1249,7 @@ describe('renderer successful-submit transaction', () => {
       sampleTimeSeconds: 1,
     });
     const frameState = {
+      temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
       temporalGpuState: undefined,
       activeTemporalGpuState: undefined,
       retiringTemporalGpuStates: new Set(),
@@ -1197,8 +1281,7 @@ describe('renderer successful-submit transaction', () => {
     getTemporalBindGroupResources(candidate);
     getTemporalParamsBuffer(candidate);
     const graph = await buildTemporalResolveGraph(device);
-    frameState.compiledFrameGraph = graph;
-    frameState.compiledFrameGraphTopologyKey = 'temporal-resolve';
+    frameState.compiledFrameGraph = installedGraph(graph, 'temporal-resolve');
 
     const failure = new RhiError({
       code: 'webgpu-runtime-error',
@@ -1307,6 +1390,7 @@ describe('renderer successful-submit transaction', () => {
 
 import { executeAutoExposureFrameTransaction } from '../assembly/renderer-frame-transaction';
 import { createAutoExposureState } from '../pipeline/standard-output/auto-exposure/state';
+import { createTemporalFrameTransaction } from '../temporal/frame';
 
 describe('renderer frame transaction ownership', () => {
   it('does not publish a LUT generation when submit fails', () => {
@@ -1341,5 +1425,47 @@ describe('renderer frame transaction ownership', () => {
     expect(result.state).toBe(initial.value);
     expect(result.state.targetGeneration).toBe(7);
     expect(result.state.receipt.committed).toBe(false);
+  });
+});
+
+describe('frame completion stage inspection', () => {
+  it('keeps independent fences pending and snapshots detached until their producers settle', async () => {
+    let finishQueue!: () => void;
+    let finishReflection!: () => void;
+    const queue = new Promise<void>((resolve) => {
+      finishQueue = resolve;
+    });
+    const reflection = new Promise<void>((resolve) => {
+      finishReflection = resolve;
+    });
+    const inspect = observeFrameCompletionStages(queue, reflection);
+    const original = Promise.all([queue, reflection]);
+    let completed = false;
+    void original.then(() => {
+      completed = true;
+    });
+    const pending = inspect();
+    expect(pending).toEqual({ queue: 'pending', reflection: 'pending' });
+    expect(Object.isFrozen(pending)).toBe(true);
+    finishQueue();
+    await queue;
+    expect(inspect()).toEqual({ queue: 'fulfilled', reflection: 'pending' });
+    expect(completed).toBe(false);
+    finishReflection();
+    await original;
+    expect(inspect()).toEqual({ queue: 'fulfilled', reflection: 'fulfilled' });
+    expect(pending).toEqual({ queue: 'pending', reflection: 'pending' });
+  });
+
+  it('handles diagnostic rejection while preserving the original producer failure', async () => {
+    const error = new Error('original queue failure');
+    const queue = Promise.reject(error);
+    const inspect = observeFrameCompletionStages(queue, undefined);
+    await expect(queue).rejects.toBe(error);
+    expect(inspect()).toEqual({ queue: 'rejected', reflection: 'not-required' });
+    const reflection = Promise.reject(error);
+    const withReflection = observeFrameCompletionStages(Promise.resolve(), reflection);
+    await expect(reflection).rejects.toBe(error);
+    expect(withReflection()).toEqual({ queue: 'fulfilled', reflection: 'rejected' });
   });
 });

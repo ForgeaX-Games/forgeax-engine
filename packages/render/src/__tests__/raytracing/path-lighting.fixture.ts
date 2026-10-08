@@ -70,7 +70,7 @@ export async function verifyPathLighting(fixture: RayPathFixture) {
     const sun: LightSnapshot = {
       kind: 'directional',
       contactShadowLength: 0,
-      color: vec3.create(1, 1, 1),
+      color: vec3.create(Math.PI, Math.PI, Math.PI),
       direction: vec3.create(-1, 0, -1),
       intensity: Math.PI,
     };
@@ -212,7 +212,7 @@ export async function renderPathGallery(fixture: RayPathFixture) {
       lights: [
         {
           kind: 'point',
-          color: vec3.create(1, 1, 1),
+          color: vec3.create(12, 12, 12),
           position: vec3.create(0, 3.5, 0),
           intensity: 12,
           invRangeSquared: 0,

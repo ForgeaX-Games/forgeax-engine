@@ -38,6 +38,45 @@ function product(overrides: Partial<PackageProduct> = {}): PackageProduct {
 }
 
 describe('engine-pack terminal product and finalizer contract', () => {
+  it('retains exact revision identity for transported arrays and native binary facts', () => {
+    const scalar = [0, -0, 1.5, null, undefined, NaN, Infinity];
+    scalar.length = 8;
+    const value = {
+      10: 'ten',
+      2: 'two',
+      z: undefined,
+      a: scalar,
+      nested: {
+        b: Uint8Array.of(115, 104, 97, 100, 101, 114),
+        a: [115, 104, 97, 100, 101, 114],
+      },
+    };
+    // Recorded from the original finalizer, including integer-key ordering,
+    // sparse/non-finite scalars and the distinct native-byte digest contract.
+    expect(packageTransportRevision(value)).toBe(
+      'e10e79abf5aba4281e6f060beaf05d544621ef21825c4d91d58ef66888782b4a',
+    );
+    value.nested.a[0] = 114;
+    expect(packageTransportRevision(value)).toBe(
+      '20b07b3dbd89397ef4484fe988b5fde2313d174bc3b4d7d06bca26f9489c9be0',
+    );
+  });
+
+  it('retains streaming delivery and includes it in publication identity', async () => {
+    const input = product();
+    const asset = input.assets[0];
+    const body = asset?.artifacts.source;
+    if (!asset || !body) throw new Error('missing artifact fixture');
+    const streamed = product({
+      assets: [{ ...asset, artifacts: { source: { ...body, delivery: 'stream' } } }],
+    });
+    const policy = { base: '/', packagePath: 'audio.pack.json', artifactPath: () => 'audio.wav' };
+    const buffered = await finalizePackageTransportSource(input, policy);
+    const result = await finalizePackageTransportSource(streamed, policy);
+    expect(result.pack.assets[0]?.artifacts.source?.delivery).toBe('stream');
+    expect(result.digest).not.toBe(buffered.digest);
+    expect(result.sourceRevision).not.toBe(buffered.sourceRevision);
+  });
   it('shares artifact integrity with transport revision within one finalization', async () => {
     const input = product();
     const body = input.assets[0]?.artifacts.source?.bytes;

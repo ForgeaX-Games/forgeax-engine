@@ -370,15 +370,6 @@ export function isSchemaVocabKeyword(s: string): s is SchemaVocabKeyword {
 }
 
 /**
- * JS value-shape per managed-array element type. `entity` maps to `Entity`
- * (branded number), every scalar maps to `number` (bool is stored as a 0/1
- * byte and read back as 0 or 1).
- */
-export type ManagedArrayElementValue<T extends ManagedArrayElementType> = T extends 'entity'
-  ? EntityHandle
-  : number;
-
-/**
  * Maps each field-type keyword to the JS value type read/written by it.
  *
  * Tier-1 (legacy scalars) widens to `boolean | number`; tier-2 (schema-vocab)
@@ -1216,8 +1207,6 @@ export class ComponentNameConflictError extends Error {
     this.detail = { componentName };
   }
 }
-
-export type ComponentCatalogError = ComponentInUseError | ComponentNameConflictError;
 
 export interface ComponentLease {
   readonly component: Component;

@@ -11,7 +11,7 @@
 //
 // Main entry surface (browser-safe):
 //   - decodeImageInBrowser           -- browser-mode createImageBitmap path
-//   - toAssetPack(decoded, meta)     -- POD -> external-asset-package envelope
+//   - toAssetPack(meta)     -- POD -> external-asset-package envelope
 //   - subAssetKey / subAssetKeyEqual -- gltf-aligned sub-asset matching
 //   - reimportReuseMeta              -- two-phase GUID preservation
 //   - imageError / ImageErrorImpl    -- structured 4-field error class

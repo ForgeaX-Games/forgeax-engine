@@ -579,16 +579,10 @@ export interface DeviceGenerationAcquisitionFailure {
   readonly error: RhiError;
 }
 
-export interface RecoveryStepTimeout {
-  readonly phase: RecoveryPhase;
-  readonly elapsedMs: number;
-  readonly cause: RhiError;
-}
-
 export type RecoveryStepOutcome<T, E> =
   | { readonly kind: 'value'; readonly value: T }
   | { readonly kind: 'error'; readonly error: E }
-  | { readonly kind: 'timeout'; readonly timeout: RecoveryStepTimeout };
+  | { readonly kind: 'timeout'; readonly error: RhiError };
 
 export async function runRecoveryStep<T, E>(
   operation: (continuation?: RecoveryContinuation) => Promise<Result<T, E>>,
@@ -597,16 +591,28 @@ export async function runRecoveryStep<T, E>(
   now: () => number = () => Date.now(),
   continuation?: RecoveryContinuation,
 ): Promise<RecoveryStepOutcome<T, E>> {
-  if (deadline === undefined) {
-    try {
-      const result = await operation(continuation);
-      return result.ok
-        ? { kind: 'value', value: result.value }
-        : { kind: 'error', error: result.error };
-    } catch (cause) {
-      return { kind: 'error', error: structuredStepError(cause, phase) as E };
-    }
-  }
+  const settle = (): Promise<RecoveryStepOutcome<T, E>> =>
+    Promise.resolve()
+      .then(() => operation(continuation))
+      .then(
+        (result): RecoveryStepOutcome<T, E> =>
+          result.ok
+            ? { kind: 'value', value: result.value }
+            : { kind: 'error', error: result.error },
+      )
+      .catch(
+        (cause): RecoveryStepOutcome<T, E> => ({
+          kind: 'error',
+          error: structuredStepError(cause, phase) as E,
+        }),
+      );
+  if (deadline === undefined) return settle();
+  const timedOut = (): RecoveryStepOutcome<T, E> => {
+    const elapsedMs = deadline.elapsed(now());
+    continuation?.abandon(now());
+    continuation?.cleanupOnce();
+    return { kind: 'timeout', error: timeoutError(phase, elapsedMs) };
+  };
   const remaining = Math.max(0, deadline.deadlineAt - now());
   const phaseLimit =
     phase === 'acquire-adapter'
@@ -615,54 +621,16 @@ export async function runRecoveryStep<T, E>(
         ? RECOVERY_DEVICE_DEADLINE_MS
         : remaining;
   const timeoutMs = Math.min(remaining, phaseLimit);
-  if (timeoutMs <= 0 || !deadline.isValid(phase, now())) {
-    const elapsedMs = deadline.elapsed(now());
-    continuation?.abandon(now());
-    continuation?.cleanupOnce();
-    return {
-      kind: 'timeout',
-      timeout: { phase, elapsedMs, cause: timeoutError(phase, elapsedMs) },
-    };
-  }
+  if (timeoutMs <= 0 || !deadline.isValid(phase, now())) return timedOut();
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const operationResult = Promise.resolve()
-    .then(() => operation(continuation))
-    .then((result) =>
-      result.ok
-        ? ({ kind: 'value' as const, value: result.value } satisfies RecoveryStepOutcome<T, E>)
-        : ({ kind: 'error' as const, error: result.error } satisfies RecoveryStepOutcome<T, E>),
-    )
-    .catch(
-      (cause) =>
-        ({
-          kind: 'error' as const,
-          error: structuredStepError(cause, phase) as E,
-        }) satisfies RecoveryStepOutcome<T, E>,
-    );
   const outcome = await Promise.race([
-    operationResult,
+    settle(),
     new Promise<RecoveryStepOutcome<T, E>>((resolve) => {
-      timeoutHandle = setTimeout(() => {
-        const elapsedMs = deadline.elapsed(now());
-        continuation?.abandon(now());
-        continuation?.cleanupOnce();
-        resolve({
-          kind: 'timeout',
-          timeout: { phase, elapsedMs, cause: timeoutError(phase, elapsedMs) },
-        });
-      }, timeoutMs);
+      timeoutHandle = setTimeout(() => resolve(timedOut()), timeoutMs);
     }),
   ]);
   if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-  if (continuation !== undefined && !continuation.isValid(phase, now())) {
-    const elapsedMs = deadline.elapsed(now());
-    continuation.abandon(now());
-    continuation.cleanupOnce();
-    return {
-      kind: 'timeout',
-      timeout: { phase, elapsedMs, cause: timeoutError(phase, elapsedMs) },
-    };
-  }
+  if (continuation !== undefined && !continuation.isValid(phase, now())) return timedOut();
   return outcome;
 }
 
@@ -702,14 +670,9 @@ export async function acquireDeviceGeneration(
     undefined,
     continuation,
   );
-  if (adapterOutcome.kind === 'timeout') {
-    return err({
-      stage: 'adapter',
-      error: timeoutError('acquire-adapter', adapterOutcome.timeout.elapsedMs),
-    });
-  }
-  if (adapterOutcome.kind === 'error')
+  if (adapterOutcome.kind !== 'value') {
     return err({ stage: 'adapter', error: adapterOutcome.error });
+  }
   const adapter = adapterOutcome.value;
 
   deadline?.beginDeviceAcquisition(Date.now());
@@ -729,13 +692,9 @@ export async function acquireDeviceGeneration(
       undefined,
       continuation,
     );
-    if (deviceOutcome.kind === 'timeout') {
-      return err({
-        stage: 'device',
-        error: timeoutError('acquire-device', deviceOutcome.timeout.elapsedMs),
-      });
+    if (deviceOutcome.kind !== 'value') {
+      return err({ stage: 'device', error: deviceOutcome.error });
     }
-    if (deviceOutcome.kind === 'error') return err({ stage: 'device', error: deviceOutcome.error });
     deviceResult = ok(deviceOutcome.value);
   } catch (cause) {
     return err({

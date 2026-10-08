@@ -39,6 +39,14 @@ The import contract is [`schemas/asset-authority.schema.json`](../../schemas/ass
 
 The Importer owns neither DDC lifecycle nor Editor authoring writes. Editor writes go through its asset-authoring gateway, and runtime consumes the validated projection.
 
+CookProduct digests use the same typed-array-to-JSON-array normalization as Pack
+publication. A native view and its transported array therefore retain one output
+digest; changed values or artifact bytes still change that digest. Normalization
+does not alter source sampling, GUIDs, material programs or the emitted Pack format.
+Source-package production and Vite development request product-only import;
+their shared transport finalizer owns Pack projection, so import does not build
+an additional Pack that those callers discard.
+
 Imported materials use the host's registered material cooker before the complete
 source package is published. `produceSourcePackage` accepts the same `cookers`
 as Pack production; Vite forwards its existing registration in dev and build.
@@ -53,6 +61,8 @@ Without a registered material cooker, an importer remains responsible for its
 published payload; uncooked output is not evidence of ray-program readiness.
 
 ### ScriptablePack build generation
+
+A `terrain` ScriptablePack output supplies a validated `TerrainSource`. The terrain producer derives subsection meshes, height/control mips and Standard material arrays as one GUID-linked closure; the existing Pack cook, Catalog and runtime loader own publication. See [the terrain contract](../terrain/README.md) for bounds and layer semantics.
 
 `buildScriptablePack()` accepts a ScriptablePack definition, resolves the
 default/inherited values, and executes `build()` once for the current subject
@@ -75,6 +85,14 @@ with no progress returns `pack-content-dependency-stalled`. Once all subjects
 settle, the bridge validates references and incoming-reference deletions before
 publication. A GUID written into a payload is only a reference dependency;
 only `readByGuid()` creates a content dependency.
+
+Development and build hosts use `createDeclaredPackAssetSnapshotSource()` to
+materialize external Pack or Meta content on the first actual read. One
+inventory invocation retains private snapshots only for the owners read in that
+invocation, using the existing staged-owner concurrency and retry rules.
+Unknown GUIDs remain worklist misses; known producer failures retain their
+structured errors. Final Catalog publication still prepares and validates all
+declared assets, including those never read by a ScriptablePack.
 
 `produceScriptablePackProducts()` and
 `materializePreparedScriptablePack()` adapt that result to the
@@ -107,6 +125,8 @@ the engine's import/load split.
 > Filesystem import, DDC and native cooking remain build-time work. The browser
 > entry exposes the shared data-production kernel and opt-in runtime Pack
 > producer without filesystem, DDC, TypeScript or shader compiler dependencies.
+> Portable mesh distance-field product cooking and encoding share this entry,
+> so browser glTF consumers use the same opt-in producer without Node adapters.
 
 ### Runtime Pack production and durable content
 
@@ -223,7 +243,8 @@ and delivery qualification are separate from these producer contracts.
 ### Source-package failure propagation
 
 `produceSourcePackage` preserves the original `ImportError` for module loading,
-source reads and conversion failures. GUID closure errors describe an actual
+source reads, source validation and conversion failures. External Pack staging
+propagates the same error, including source-located `detail.diagnostics`. GUID closure errors describe an actual
 missing, extra or duplicate output; they must not replace a failed importer with
 an empty output list. The build adapter carries `code`, `expected`, `hint` and
 `detail` into both the thrown error and its printable diagnostic. In particular,
@@ -520,14 +541,41 @@ indexed positions and one explicit recipe: geometric `resolution`/`twoSided`, or
 `policy: 'sampled-visibility'` with source-unit `voxelSize` and one
 `triangleSidedness` flag per triangle. The draft keeps that GUID and one
 `distance-field.bin` artifact; its fingerprint includes geometry, settings and
-producer version. There is no second authored SDF asset or registry.
+producer version. The current recipe fingerprints version 5 and publishes the
+Geometry version-4 brick artifact; older dense artifacts require a producer
+rebuild. There is no second authored SDF asset or registry.
 
-The build owner invokes the usual transaction/publication path and owns the
-artifact alongside its source mesh. Failed generation/publication retains the
-previous draft through `lastKnownGood`; retry commits a new generation. Consumers
-use Geometry's checked decoder with the expected mesh digest. This milestone
-provides the adapter, not automatic Catalog publication, streaming or Renderer
-subscription; registering it does not change ordinary mesh imports.
+`cookMeshDistanceFieldProduct(mesh, guid, voxelSize, sectionSidedness)` enriches
+an ordinary Mesh publication with this artifact. The glTF producer invokes it
+only for `importSettings.meshDistanceField`; generated or previously loaded Mesh
+assets use the existing Mesh output producers, including the JSON data producer.
+No runtime path invokes the field builder.
+
+| Product fact | Authority |
+|:--|:--|
+| Geometry and GUID | Ordinary mesh body or JSON payload and existing Catalog row |
+| Source material sidedness | Small `distanceField.sectionSidedness` publication payload |
+| Field samples and geometry/source digests | Asset-local `distance-field.bin`, using Geometry's checked codec |
+| Builder revision | Existing artifact `assetCodec.profile`, derived from Geometry's generation revision |
+
+The complete producer strips decoded field data before calling geometry-only
+`packMeshBin`; direct binary encoding of a Mesh with `distanceField` fails
+explicitly. The JSON route retains its geometry even when it also has a field
+artifact. Publication and RuntimePack save/restore preserve the same descriptor
+and artifact; there is no separate field GUID, registry, or runtime cooking.
+Re-export removes loaded `distanceField.artifact` provenance before encoding pure
+field data and derives the new descriptor from actual encoded bytes. An unchanged
+loaded field therefore reproduces the same artifact bytes and digest.
+Atomic publication retains its existing last-known-good behavior, and supported
+Catalog invalidation reloads replacement geometry and field bytes together.
+
+Omitted settings produce no field data or artifact. Build-time changes to geometry,
+source sidedness, voxel size or builder revision change the completed product
+identity. Warm DDC publication reuse is distinct from field cooking: this slice
+does not add a per-field cook cache or Renderer subscription.
+Codec profiles version ordinary published artifacts. Externally authored decoded
+POD remains caller-owned data: re-export checks structure, current geometry and
+sidedness, but does not authenticate which builder produced external samples.
 
 
 ## Optional mesh card layout cooking
@@ -540,3 +588,218 @@ fingerprint. Material capture and its texture revision remain separate from
 this geometry layout. Rejected builds or publication preserve the existing
 transaction's lastKnownGood generation; retry uses the same GUID. There is no
 new authored asset kind or automatic per-frame construction.
+
+## Static mesh interchange producers
+
+`obj`, `stl`, and `svg` are Engine-owned standard importer keys whose canonical
+`mesh` outputs are admitted by the same Catalog policy as glTF/FBX. Their source
+admission, bounded conversion and mesh-bin artifacts belong to
+[`packages/mesh-io`](../mesh-io/README.md). DevKit registers all three by default;
+custom hosts inject those producers through the existing importer registry.
+Source plus Meta retains GUID/sourceKey authority; these adapters add neither
+runtime source parsing nor a second Catalog.
+
+## Automatic Mesh LOD production
+
+`generateMeshLods(mesh, options)` from `@forgeax/engine/import/mesh-lod-generator`
+is an explicit source-production operation. It uses meshoptimizer 1.1.1 before
+publication; neither the runtime loader nor Renderer imports the simplifier.
+The input is the canonical `MeshAsset` produced by glTF, FBX, mesh-io, or a
+geometry factory. An existing authored LOD chain is rejected rather than replaced.
+
+```ts
+import { generateMeshLods } from '@forgeax/engine/import/mesh-lod-generator';
+
+const generated = (await generateMeshLods(sourceMesh, {
+  maxError: 0.02,
+  levels: [
+    { mesh: lod1Guid, triangleRatio: 0.5, screenCoverage: 0.5 },
+    { mesh: lod2Guid, triangleRatio: 0.25, screenCoverage: 0.2 },
+  ],
+})).unwrap();
+// Publish generated.root under the original GUID and generated.meshes[i]
+// under levels[i].mesh with the ordinary Mesh output producer.
+```
+
+The caller supplies stable GUIDs through the existing source-key identity route.
+Publish the root and all generated siblings atomically through the ordinary
+Pack production path. The Mesh producer emits the root's lower-level refs and
+mesh-binary v5 artifacts; Catalog and `loadByGuid` consume them unchanged.
+For ScriptablePack, declare the same output keys and return the root and siblings
+from `build`. Generation never allocates GUIDs, writes source, or changes the input.
+
+| Contract | Behavior |
+|:--|:--|
+| Levels | One to seven, strictly decreasing triangle ratios and screen coverage |
+| Error | `maxError` in `[0, 1]`, relative to source extent, including weighted attributes; each level simplifies the original independently |
+| Sections | Triangle lists with a complete ordered partition; original material slots and section identities survive |
+| Appearance | Attribute-aware normals/tangents (weight 0.5), all UV sets and color (weight 1), topology-preserving seams |
+| Open edges | Locked by default; `lockBorder: false` permits boundary simplification |
+| Deformation | Edges whose skin or morph streams differ are locked; surviving streams are copied byte for byte, including tangent W |
+| Storage | Unused vertices are removed across every attribute/morph stream; the source index width is retained across the chain and bounds are regenerated; a nonindexed source is indexed once |
+| Derived geometry | Lower meshes omit source cards/distance fields; regenerate those products for the new geometry if needed |
+| Unreachable target | Overall mesh triangle ratio determines `reports[i].targetReached`; if false, the error budget and protected topology remain intact, and a level may retain the original triangle count |
+| Failures | Closed `MeshLodGenerationError` codes carry expected/hint/detail; repair source/options or the WASM build host |
+
+> [!IMPORTANT]
+> Deformation protection is conservative. Highly varying skin weights or morph
+> deltas can prevent reduction. The error value is the simplifier's metric, not
+> a proof of pixel equivalence or animation quality; validate the produced asset
+> at its intended viewing distances. General animated-mesh simplification with
+> a pose-sampled error metric is outside this operation's contract.
+
+Reproduce production cost with `node scripts/bench/mesh-lod-generation.mjs` after
+`pnpm build:engine`. Real HTTP/Catalog, Standard rendering, lower-level selection,
+foreground pixel error, and fresh RHI Debug replay are exercised by
+`packages/runtime/src/__tests__/generated-lod.{browser,dawn}.test.ts`.
+
+Set `MESH_LOD_PERF=1` for `generated-lod-performance.dawn.test.ts`: 64 instances,
+ABBA windows with 60 warmup and 60 measured frames, without a recorder. The
+report retains GPU interval sum, union, overlap, and envelope separately.
+
+## G6 production and validation evidence
+
+The `render-27` gap is addressed by the explicit build-time
+[`generateMeshLods`](src/mesh-lod-generator.ts) operation.
+It produces ordinary Mesh assets and links them through the existing authored
+LOD contract. The loader and Renderer do not acquire a simplifier dependency.
+The [Import contract](#automatic-mesh-lod-production)
+defines options, error protection, publication and reproduction commands.
+
+```mermaid
+flowchart LR
+  S["Canonical MeshAsset"] --> G["Error-budgeted generation"]
+  G --> P["Ordinary Mesh output producer"]
+  P --> C["HTTP and Catalog"]
+  C --> R["Existing Renderer LOD selection"]
+  R --> D["RHI Debug capture and fresh-device replay"]
+```
+
+### Source comparison
+
+| Reference | Applied decision |
+|:--|:--|
+| [Godot `ImporterMesh::generate_lods`, audit pin](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/scene/resources/3d/importer_mesh.cpp#L570) | Attribute-aware meshoptimizer simplification per triangle section; lock geometric boundaries by default. Each requested level starts from the original mesh under its own error budget. |
+| [Three.js `SimplifyModifier`, local reference pin](https://github.com/mrdoob/three.js/blob/d3b629c0c2097cec664ad16369bb6eae3b10e335/examples/jsm/modifiers/SimplifyModifier.js) | Keep source production separate from rendering. Preserve all canonical streams during compaction rather than projecting only a modifier's supported attributes. |
+| [Unreal `ReduceMeshDescription`, audit pin](https://github.com/Forgeax/UnrealEngine/blob/71fe36aac5a8df5ccd66c763ffc902b29b6a9c43/Engine/Source/Developer/MeshSimplifier/Private/QuadricMeshReduction.cpp#L94) | Make reduction targets and error constraints explicit, preserve material sections, and report an unreachable target. |
+| [meshoptimizer JavaScript API](https://github.com/zeux/meshoptimizer/blob/v1.1/js/README.md) | Pin 1.1.1; use `simplifyWithAttributes` and `compactMesh` at source-production time. |
+
+### Quality and regression evidence
+
+The fixture publishes source and generated meshes through the real MeshBinary
+v5 producer, Pack/Catalog HTTP transport and GUID loading. It also cooks and
+publishes the actual Standard material. Source, two generated levels and
+automatic GPU-driven selection each complete 60 frames. Foreground comparison
+requires more than 100 non-background pixels; the limits remain 0.05 for visual
+error and 0.005 for fresh-device replay.
+
+| Observation | Browser WebGPU | Dawn / Metal |
+|:--|--:|--:|
+| Source / generated triangles | 3,968 / 1,984 / 992 | 3,968 / 1,984 / 992 |
+| First level mean foreground error | 0.000645 | 0.000592 |
+| Second level mean foreground error | 0.002103 | 0.002139 |
+| Fresh replay error, all four captures | 0 | 0 |
+| Native replay validation errors | 0 | 0 |
+| Automatic selection | Level 2 | Level 2 |
+
+The deeper native inspection reads the indirect commands at color work 17:
+level 2 submits **2,976 indices for one instance**; source and intermediate
+commands submit zero instances. Pipeline, binding and index-buffer facts are
+inspected on a fresh replay device. Every fresh device is explicitly destroyed.
+The ordinary Browser configuration also passed the additional indirect assertion:
+363.90 seconds in the case and 483.40 seconds for Vitest including startup.
+
+The real automatic-selection reproducer exposed the chain's shared index-format
+invariant: compacting a Uint32 source into Uint16 siblings made residency fail.
+Generation now retains the source index format across every level. A nonindexed
+source is indexed once. Unit regression covers both widths and nonindexed input.
+Import's complete local suite passed **35 files / 210 tests**, including material
+partitions, UV seams, open borders, byte-preserved skin/morph streams and blocked
+reduction under a zero error budget.
+The single-triangle regression first failed, then passed after reporting the
+requested ratio rather than the minimum valid triangle count as the target.
+A second red regression confirms that target achievement derives from the whole
+mesh count, even when one tiny material section retains its source triangle.
+
+> [!IMPORTANT]
+> Varying skin weights or morph deltas lock candidate edge endpoints. This is
+> conservative protection, not a pose-sampled animated simplifier. Such inputs
+> may retain their source triangle count and report `targetReached: false`.
+
+### Measured production and rendering cost
+
+Production uses one warmup and 20 samples on an Apple M4 Pro / Node 26.4.0.
+These CPU measurements were taken on a machine running other work.
+
+| Source triangles | Median production | p95 | Coarsest triangles | Coarsest geometry bytes / source |
+|--:|--:|--:|--:|--:|
+| 3,968 | 8.98 ms | 57.08 ms | 992 | 43,152 / 150,576 |
+| 16,128 | 53.41 ms | 192.21 ms | 4,032 | 160,272 / 596,016 |
+| 65,024 | 298.12 ms | 523.57 ms | 16,256 | 615,696 / 2,371,632 |
+
+All requested ratios were reached within `maxError: 0.02`. Coarsest reported
+errors were 0.005390, 0.001241 and 0.000311 respectively.
+
+The final native rendering measurement held an exclusive physical GPU lease.
+It uses 64 instances at 128 x 128, ABBA order, 60 warmup and 60 measured frames
+per window, with no recorder. GPU interval sum, union, overlap and envelope are
+retained separately; the table reports the envelope, not summed nested passes.
+
+| Window | Submitted triangles | GPU median / p95 | CPU draw median |
+|:--|--:|--:|--:|
+| A: source | 253,952 | 0.590 / 0.655 ms | 2.073 ms |
+| B: coarse | 63,488 | 0.328 / 0.393 ms | 1.855 ms |
+| B: coarse | 63,488 | 0.328 / 0.393 ms | 1.816 ms |
+| A: source | 253,952 | 0.590 / 0.655 ms | 1.778 ms |
+
+This scene has a lower GPU interval envelope; CPU windows do not show a stable
+gain. Timestamp results are quantized on this adapter. These are scene-specific
+measurements, not a general FPS guarantee or exclusive geometry-pass cost.
+
+### Delivery checks
+
+- [x] Source build, runtime dependency closure, Import unit suite and strict types.
+- [x] Browser and Dawn capture/replay, native indirect-command inspection.
+- [x] Production benchmark and final exclusive native ABBA measurement.
+- [x] AC-08 exact fixture admission and browser scheduling contracts (68 tests).
+- [ ] Final complete Browser, Dawn and 60-frame hello / learn-render smoke fleet.
+
+Local full-gate failures are retained: Preview Pack preparation encountered
+`ENOSPC`; an inherited production environment made the framebuffers development
+page request the absent `/pack-index.json`; Browser HDR startup and Dawn clipping planes exceeded their
+existing deadlines. Preview and entity visibility subsequently passed. Full
+gates remain required; these partial results do not establish full acceptance.
+An additional Node 22 Browser run reached its original 630-second process
+deadline. The ordinary Node 26 Browser and native G6 runs above passed; this
+extra timeout remains negative evidence pending complete CI on the final commit.
+
+## Static navigation production
+
+The Node-only `@forgeax/engine/import/navigation-bake` subpath exposes
+`bakeNavigationMesh`: selected indexed MeshAsset/world placement plus finite agent
+settings produce portable `navigation-mesh` POD. Return that result from the
+ordinary Pack build; source closure/parameters govern input freshness, while the
+asset digest includes transformed geometry, settings and cooker version.
+
+The pinned MIT Recast 0.43.1 implementation and its 338,824-byte WASM payload
+remain on this production route. Player queries use the
+[Navigation contract](../navigation/README.md#static-navigation-assets-and-physical-characters).
+
+## Streamed audio import
+
+Audio Meta `importSettings.playback` selects `buffer` (default) or `stream`. The audio producer owns the PCM16 index and codec admission. `ImportedArtifactBody.delivery` is retained in the product descriptor and package finalizer, so Cook/Catalog/GUID loading can defer the complete artifact body. Authored Pack audio keeps its artifact-owned bytes; a runtime HTTP locator cannot be serialized as authored source. See [the format and delivery contract](../audio-webaudio/README.md#long-audio-through-source-meta-and-guid).
+
+## Mesh collision cooking
+
+`cookMeshCollision(mesh, setting)` is the format-neutral opt-in producer.
+`undefined` or `false` leaves geometry unchanged; `true` attaches Geometry's
+validated, seam-welded collision triangles; every other value fails with the
+existing structured `AssetError`. glTF and FBX use
+`importSettings.meshCollision` before mesh-bin encoding, retaining the original
+mesh GUID and dependency closure. Scriptable Packs can invoke this kernel or
+`buildMeshCollision` directly and publish the same MeshAsset contract.
+
+> [!IMPORTANT]
+> Source skinning/morphs and non-triangle topology are rejected. This produces
+> static mesh facts; native convex hull construction belongs to the physics
+> backend. It does not perform convex decomposition or invent another asset GUID.

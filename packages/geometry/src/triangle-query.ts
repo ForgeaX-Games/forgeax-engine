@@ -1,4 +1,4 @@
-import type { FieldVec3 } from './distance-field';
+import type { FieldVec3 } from '@forgeax/engine-types';
 
 export type QueryTriangle = readonly [FieldVec3, FieldVec3, FieldVec3];
 export interface TriangleRayHit {

@@ -1,11 +1,12 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { createRhiDebugError } from '../errors';
-import { eventKinds } from './event-semantics';
-import { type ResourceKind, type RhiCallEvent, TAPE_FORMAT_VERSION, type Tape } from './types';
+import { EVENT_SEMANTICS, eventKinds } from './event-semantics';
+import { type ResourceKind, TAPE_FORMAT_VERSION, type TapeStructure } from './types';
 
 type TapeValidation = ReturnType<typeof createRhiDebugError<'tape-invalid'>>;
 
-export function validateTape(tape: Tape): Result<Tape, TapeValidation> {
+/** Structural validation; blob payload bytes are not read, so a streamed index validates too. */
+export function validateTape<T extends TapeStructure>(tape: T): Result<T, TapeValidation> {
   if (tape.header.formatVersion !== TAPE_FORMAT_VERSION)
     return err(
       createRhiDebugError('tape-invalid', { stage: 'validate', cause: 'format version is not 7' }),
@@ -33,6 +34,16 @@ export function validateTape(tape: Tape): Result<Tape, TapeValidation> {
           cause: `unknown resource kind ${resource.kind}`,
         }),
       );
+    if (
+      resource.seed !== undefined &&
+      (resource.seed !== 'omitted' || resource.initialData.length > 0)
+    )
+      return err(
+        createRhiDebugError('tape-invalid', {
+          stage: 'validate',
+          cause: `bootstrap ${resource.handleId} seed must be 'omitted' with no initialData`,
+        }),
+      );
     declared.add(resource.handleId);
   }
   const hashes = new Set<string>();
@@ -55,8 +66,8 @@ export function validateTape(tape: Tape): Result<Tape, TapeValidation> {
           cause: `unknown event kind at ${eventIndex}`,
         }),
       );
-    const semantics = eventResources(event);
-    for (const created of semantics.created) {
+    const semantics = EVENT_SEMANTICS[event.kind];
+    for (const created of semantics.created(event)) {
       if (declared.has(created))
         return err(
           createRhiDebugError('tape-invalid', {
@@ -66,7 +77,7 @@ export function validateTape(tape: Tape): Result<Tape, TapeValidation> {
         );
       declared.add(created);
     }
-    for (const read of semantics.reads) {
+    for (const read of semantics.read(event)) {
       if (!declared.has(read))
         return err(
           createRhiDebugError('tape-invalid', {
@@ -75,7 +86,7 @@ export function validateTape(tape: Tape): Result<Tape, TapeValidation> {
           }),
         );
     }
-    for (const destroyed of semantics.destroyed) {
+    for (const destroyed of semantics.destroyed(event)) {
       if (!declared.has(destroyed))
         return err(
           createRhiDebugError('tape-invalid', {
@@ -94,6 +105,7 @@ function isResourceKind(value: string): value is ResourceKind {
     'buffer',
     'texture',
     'query-set',
+    'acceleration-structure',
     'texture-view',
     'sampler',
     'shader-module',
@@ -101,110 +113,4 @@ function isResourceKind(value: string): value is ResourceKind {
     'binding',
     'encoder',
   ].includes(value);
-}
-
-interface EventResources {
-  readonly created: readonly string[];
-  readonly reads: readonly string[];
-  readonly destroyed: readonly string[];
-}
-
-function eventResources(event: RhiCallEvent): EventResources {
-  switch (event.kind) {
-    case 'createBuffer':
-    case 'createTexture':
-    case 'createQuerySet':
-    case 'createSampler':
-    case 'createBindGroupLayout':
-    case 'getBindGroupLayout':
-    case 'createBindGroup':
-    case 'createPipelineLayout':
-    case 'createRenderPipeline':
-    case 'createComputePipeline':
-    case 'createShaderModule':
-      return {
-        created: [event.handleId],
-        reads: handleRefs(event, [
-          'layoutHandleId',
-          'pipelineHandleId',
-          'vertexShaderModuleHandleId',
-          'fragmentShaderModuleHandleId',
-          'computeShaderModuleHandleId',
-        ]),
-        destroyed: [],
-      };
-    case 'createTextureView':
-      return { created: [event.resultHandleId], reads: [event.sourceHandleId], destroyed: [] };
-    case 'createCommandEncoder':
-      return { created: [event.cmdHandleId], reads: [], destroyed: [] };
-    case 'destroyBuffer':
-    case 'destroyTexture':
-    case 'destroyQuerySet':
-      return { created: [], reads: [event.handleId], destroyed: [event.handleId] };
-    case 'writeBuffer':
-    case 'writeTexture':
-      return { created: [], reads: handleRefs(event, ['handleId', 'destination']), destroyed: [] };
-    case 'copyBufferToBuffer':
-    case 'copyBufferToTexture':
-    case 'copyTextureToBuffer':
-    case 'copyTextureToTexture':
-    case 'clearBuffer':
-      return {
-        created: [],
-        reads: handleRefs(event, [
-          'source',
-          'destination',
-          'sourceHandleId',
-          'destinationHandleId',
-          'bufferHandleId',
-          'textureHandleId',
-        ]),
-        destroyed: [],
-      };
-    case 'resolveQuerySet':
-      return {
-        created: [],
-        reads: handleRefs(event, ['cmdHandleId', 'querySetHandleId', 'destinationHandleId']),
-        destroyed: [],
-      };
-    case 'beginRenderPass':
-      return {
-        created: [event.passHandleId],
-        reads: handleRefs(event, [
-          'cmdHandleId',
-          'occlusionQuerySetHandleId',
-          'timestampQuerySetHandleId',
-          'colorAttachmentViewHandleIds',
-          'colorAttachmentResolveTargetHandleIds',
-          'depthStencilViewHandleId',
-        ]),
-        destroyed: [],
-      };
-    case 'beginComputePass':
-      return {
-        created: [event.passHandleId],
-        reads: handleRefs(event, ['cmdHandleId', 'timestampQuerySetHandleId']),
-        destroyed: [],
-      };
-    case 'endRenderPass':
-    case 'endComputePass':
-      return { created: [], reads: [event.passHandleId], destroyed: [event.passHandleId] };
-    case 'resetRenderState':
-    case 'beginOcclusionQuery':
-    case 'endOcclusionQuery':
-      return { created: [], reads: handleRefs(event, ['passHandleId']), destroyed: [] };
-    default:
-      return { created: [], reads: [], destroyed: [] };
-  }
-}
-
-function handleRefs(event: object, keys: readonly string[]): string[] {
-  const refs: string[] = [];
-  for (const key of keys) {
-    const value = (event as Record<string, unknown>)[key];
-    if (typeof value === 'string') refs.push(value);
-    if (Array.isArray(value))
-      refs.push(...value.filter((item): item is string => typeof item === 'string'));
-  }
-  return refs;
 }

@@ -19,7 +19,7 @@ describe('mesh distance-field derived representation', () => {
     const field = (await buildMeshDistanceField(source, indices, { resolution: 16 })).unwrap();
     source[0] = 99;
     expect(field.bounds.min).toEqual([-1, -1, -1]);
-    expect(field.values.byteLength).toBe(field.dimensions.reduce((a, b) => a * b) * 4);
+    expect(field.values.byteLength + field.bricks.byteLength).toBeLessThan(32 * 1024 * 1024);
     for (let i = 0; i < 300; i++) {
       const p = [
         Math.sin(i * 1.23) * 1.08,

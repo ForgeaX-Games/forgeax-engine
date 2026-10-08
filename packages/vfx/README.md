@@ -253,6 +253,11 @@ Camera culling and editor preview masking are independent runtime axes:
 
 ## Structured recovery
 
+Source validation visits each emitter's identity and simulation facts, then its
+renderers, channels and events; cross-emitter references are checked after the
+complete emitter roster. When multiple fields are invalid, `detail.path` names
+the first failure in that order. Repair it and validate again.
+
 | Code | Repair |
 |:--|:--|
 | `vfx-source-version-unsupported` | Migrate behavior to WGSL and cold-cook the supported schema |

@@ -10,9 +10,12 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+// Publish this demo's complete asset closure, without unrelated sibling sources.
 const assetRoots = [
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'objects'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/objects/planet/mars.png.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/objects/planet/planet.gltf.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/objects/rock/rock.gltf.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/objects/rock/rock.png.meta.json'),
 ];
 
 export default defineConfig({

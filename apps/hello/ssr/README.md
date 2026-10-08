@@ -81,7 +81,7 @@ For a storage-bounded display comparison, run from this app directory:
 
 ```bash
 VITE_REFLECTION_PROBE_EVIDENCE=1 SSR_FIXTURE=tiles SSR_ANTIALIAS=taa \
-SMOKE_MIN_FRAMES=1200 SMOKE_WIDTH=1024 SMOKE_HEIGHT=1024 \
+SMOKE_MIN_FRAMES=60 SMOKE_WIDTH=1024 SMOKE_HEIGHT=1024 \
 SMOKE_DISPLAY_DIR=.forgeax-debug/tiles-display \
 node scripts/smoke-dawn.mjs
 ```
@@ -156,6 +156,42 @@ gate or independent visual acceptance.
 > journey; use `SMOKE_DISPLAY_TAPE_FRAME` for one selected display frame. It does not
 > replace the paired Browser/Dawn, motion-recovery, or performance gates.
 
+### Recovery and static quality gates
+
+`check-motion-recovery.mjs <frames.json>` compares the fixed 3496-pixel old
+reflection ROI against a settled frame at the same terminal pose and jitter
+phase. At eight held frames it requires mean <= 2, p95 <= 4, maximum <= 24
+RGB code difference and <= 5% of pixels above four. This matches the prior
+32-frame recovery; it is a convergence reference rather than physical truth.
+`check-static-quality.mjs <baseline-cycle.json> <candidate-cycle.json>` additionally
+checks local peaks, counts and persistent ranges from `measure-display-cycle.mjs`.
+A recovery pass cannot excuse degraded static detail or flashing thin edges.
+
+`smoke-motion-browser.mjs` uses the real development Pack route, App pause/step
+controls and raw canvas pixels. Set `SSR_MOTION_BROWSER_URL` to the SSR dev server
+and `SSR_MOTION_BROWSER_DIR` to an isolated output directory. Keep
+`VITE_REFLECTION_PROBE_EVIDENCE=1` for this browser fixture; `0` selects the
+separate lightweight bootstrap and does not open the SSR showcase.
+`SSR_ANTIALIAS=none|taa|taau|taa-dynamic` selects an independent motion run.
+Every mode requires stable admitted SSR history and one completed submission
+per step; modes with TAA additionally require its advancing frame and valid
+history. SSR-only runs use completed submissions for warmup because TAA's
+disabled history counter is not a rendered-frame counter.
+`SMOKE_DISPLAY_TAPE_RECOVERY=1 FORGEAX_ENGINE_RHI_DEBUG=1` captures the actual eighth
+Dawn recovery frame; `inspect-motion-recovery.mjs <tape> <display.png>` replays it
+on a fresh device, checks trace/temporal/mask/TAA lineage and exact final pixels.
+Use `SMOKE_DISPLAY_TAPE_FRAME=7` for the settled reference at the same eight-phase
+jitter as recovery frame eight.
+
+For paired cost measurements, `tiles` supplies textured mixed-roughness receivers
+and emissive wall tiles; `objects` supports `SMOKE_ANIMATE_RECEIVER=1` with bounded
+`SMOKE_ANIMATION_AMPLITUDE` (default 0.4, range 0..3) and
+`SMOKE_ANIMATION_SPEED` (default 0.04, range >0..1 radians per frame).
+The `no-hit` fixture keeps a reflective receiver and the normal SSR trace budget,
+without reflected scene objects or a local probe. Its lack of hits must be
+verified from captured trace confidence. `SSR_ANTIALIAS=taau` fixes internal scale
+at 0.67; `taa-dynamic` exercises GPU-driven scale changes over 0.5..1.
+
 ### Acceptance artifacts
 
 The static contracts are kept beside this carrier:
@@ -172,10 +208,41 @@ screen source, fallback, edge/roughness confidence, Hi-Z thickness, history
 rejection, transaction visibility, forward exclusions, and cube-face commit;
 every mutation must fail closed and remains `manifestEligible=false`.
 
-The performance lane derives the 1920x1080 descriptor independently and checks
-it against Render's `estimateSsrSpatialMemory` result. It records raw CPU frame
-samples and receipt-bound GPU pass timestamps; unavailable timestamps are a
-failed gate, never a synthetic zero.
+The performance lane derives the 1920x1080 active logical descriptor independently
+and checks it against Render's `estimateSsrSpatialMemory`. Four off/on/on/off
+runs each complete 180 frames: 120 warmup, then 60 sampled frames. Raw pass ticks,
+sum, union and envelope remain distinct. Only the ABBA shift of full-graph
+envelopes enters the unchanged 3/5 ms GPU budget; the p95 shift compares per-run
+p95 values, while ordinal paired deltas are diagnostic. No value represents
+exclusive SSR cost or FPS. Portable RHI has no enclosing native timestamp query.
+
+Callback submission CPU excludes receipt wait. The report separately records
+completion wait and callback-to-completion time. `measurement.status` requires
+complete samples and matching adapter, host and shader identities;
+`budget.status` additionally requires a physical adapter. Missing timestamps,
+fallback/software adapters and incomplete samples cannot pass a hardware budget.
+The 0.25 ms CPU submission and 45,088,768-byte active descriptor gates are
+unchanged. Logical descriptor bytes do not bound allocation peaks.
+
+For independent Chrome evidence, start this app with `VITE_SSR_EVIDENCE=1`
+and `VITE_REFLECTION_PROBE_EVIDENCE=1`, then run
+`SSR_PERF_BROWSER_URL=http://127.0.0.1:4419/ SSR_PERF_BROWSER_DIR=<absolute-output-dir> node scripts/smoke-performance-browser.mjs`.
+The carrier owns a fresh Chrome process and captures 1920×1080 tile-fixture
+off/on/on/off samples and unscaled canvas PNGs. Every paused App step must
+submit and complete exactly one frame. It reuses Renderer receipt observations
+and the existing interval aggregation. Its CPU domain is the synchronous
+Host App callback, excluding completion and readback; it remains separate
+from the native submission gate. Browser evidence does not correct or replace
+a failed native budget.
+
+Set `SMOKE_RESOURCE_LIFECYCLE=1`, `SMOKE_CAPTURE_FILE=<path>` and
+`FORGEAX_ENGINE_RHI_DEBUG=1` on the Dawn carrier to capture stable SSR,
+explicit camera cut/restoration, disablement and readmission through the
+existing RHI Debug owner. The camera cut must advance SSR's reset count. With
+`SSR_ANTIALIAS=taa`, TAA disablement/readmission is captured as well. A 75%
+backing-surface resize and restoration exercise graph/history replacement and
+fence retirement on the ordinary Renderer path. These captures run outside the performance window. Live and peak bytes cover the
+captured resource closure; retirement and driver allocation remain unavailable.
 
 ## Dynamic probe regression
 

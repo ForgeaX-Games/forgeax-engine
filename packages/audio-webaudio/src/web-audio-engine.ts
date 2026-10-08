@@ -1,71 +1,65 @@
-// web-audio-engine.ts -- M2 (w16) WebAudioEngine AudioBackend implementation
-//
-// Implements AudioBackend for Web Audio API:
-//   1. Lazy AudioContext creation (D-3) -- ensureContext() on first play()
-//   2. Gesture listener resume (D-3) -- register bounded 'click'/'keydown'/'touchstart'
-//      listeners that call ctx.resume(), re-arming them after a refusal
-//   3. Fixed two-bus topology (D-5): masterGain <= sfxGain + musicGain
-//   4. Per-source GainNode for individual volume control
-//   5. Active source Map<entityId, { node, sourceGain, bus }>
-//   6. Health check: getState() / getActiveSourceCount()
-//   7. destroy(): stop all, disconnect, close ctx
-//
-// Decision anchors:
-// - plan-strategy D-3 (lazy-create + one-shot gesture listener resume)
-// - plan-strategy D-5 (fixed two-bus topology: SFX + Music -> Master)
-// - plan-strategy section 3.1 (WebAudioEngine owner of AudioContext + bus GainNodes)
-// - requirements S-1 (AudioContext lifecycle), S-5 (dual bus), S-9 (World Resource)
-// - requirements AC-01 (lazy creation), AC-02 (auto resume), AC-10 (bus volume/mute)
-//
-// charter awareness:
-// - P3 explicit failure: getState() returns real AudioContext.state, never a stale cache
-// - P4 consistent abstraction: implements AudioBackend interface, parallel to InputBackend
+// Host-owned native audio: one Context, accepted bus graph, bounded sources and generation fencing.
 
 import {
   AUDIO_ERROR_HINTS,
+  type AudioBus,
   AudioError,
   type AudioListenerPose,
   type AudioPlayOptions,
+  type AudioSourcePose,
   type AudioState,
   type BusName,
+  DEFAULT_AUDIO_BUSES,
+  validAudioStream,
 } from '@forgeax/engine-audio';
-import type { AudioClipAsset } from '@forgeax/engine-types';
+import { type AudioClipAsset, err, ok, type Result } from '@forgeax/engine-types';
+import { BusGraph } from './bus-graph';
+import { type AudioStreamState, PcmStreamPlayer, StreamBudget } from './pcm-stream-player';
 
 interface ActiveSource {
-  node: AudioBufferSourceNode;
+  sourceKey: string | undefined;
+  bus: string;
+  node: AudioBufferSourceNode | undefined;
+  buffer: AudioBuffer | undefined;
+  stream: PcmStreamPlayer | undefined;
+  loop: boolean;
+  playbackRate: number;
+  volume: number;
+  offset: number;
+  startedAt: number;
+  filters: readonly AudioNode[];
+  analyser: AnalyserNode | undefined;
   sourceGain: GainNode;
   panner: PannerNode | undefined;
-  bus: BusName;
 }
 
 const GESTURE_EVENTS = ['click', 'keydown', 'touchstart'] as const;
 const GAIN_TRANSITION_SECONDS = 0.01;
 
+function clipPosition(position: number, loop: boolean, duration: number): number {
+  return loop && duration > 0 ? position % duration : Math.min(position, duration);
+}
+
 export class WebAudioEngine {
-  private ctx: AudioContext | undefined;
+  private ctx: BaseAudioContext | undefined;
+  private readonly ownsContext: boolean;
   private closed = false;
-  private masterGain: GainNode | undefined;
-  private sfxGain: GainNode | undefined;
-  private musicGain: GainNode | undefined;
-
+  private readonly streamBudget = new StreamBudget();
+  private readonly graph = new BusGraph(DEFAULT_AUDIO_BUSES);
+  private readonly pendingClips = new Map<
+    number,
+    { sourceKey: string; options: AudioPlayOptions }
+  >();
   private readonly sources = new Map<number, ActiveSource>();
-
   private gestureListening = false;
   private resumeInFlight: Promise<void> | undefined;
   private readonly gestureResumeHandler: () => void;
   private lastError: AudioError | null = null;
+  private decodeErrorKey: string | undefined;
 
-  // Per-bus previous-volume cache for mute/unmute restore (D-5).
-  private readonly busVolumes = new Map<BusName, number>([
-    ['sfx', 1],
-    ['music', 1],
-  ]);
-  private readonly busMuted = new Map<BusName, boolean>([
-    ['sfx', false],
-    ['music', false],
-  ]);
-
-  constructor() {
+  constructor(options: { readonly context?: BaseAudioContext } = {}) {
+    this.ctx = options.context;
+    this.ownsContext = options.context === undefined;
     // Lazy: AudioContext is NOT created here (D-3 / AC-01).
     // The gesture resume handler is a bound arrow so we can pass it
     // to addEventListener/removeEventListener with the same identity.
@@ -100,31 +94,10 @@ export class WebAudioEngine {
   // ensureContext -- lazy AudioContext + bus topology creation
   // -----------------------------------------------------------------------
 
-  private ensureContext(): AudioContext {
-    if (this.ctx) {
-      this.registerGestureListener(this.ctx);
-      return this.ctx;
-    }
-
-    const ctx = new AudioContext();
-
-    // Build bus topology: masterGain <= sfxGain + musicGain
-    const master = ctx.createGain();
-    master.gain.value = 1;
-    master.connect(ctx.destination);
-
-    const sfx = ctx.createGain();
-    sfx.gain.value = this.busMuted.get('sfx') ? 0 : (this.busVolumes.get('sfx') ?? 1);
-    sfx.connect(master);
-
-    const music = ctx.createGain();
-    music.gain.value = this.busMuted.get('music') ? 0 : (this.busVolumes.get('music') ?? 1);
-    music.connect(master);
-
+  private ensureContext(): BaseAudioContext {
+    const ctx = this.ctx ?? new AudioContext();
+    this.graph.attach(ctx);
     this.ctx = ctx;
-    this.masterGain = master;
-    this.sfxGain = sfx;
-    this.musicGain = music;
 
     // Register the bounded gesture listener set if ctx is suspended (autoplay gate).
     this.registerGestureListener(ctx);
@@ -136,8 +109,8 @@ export class WebAudioEngine {
   // Gesture listener -- D-3 bounded resume retry on user gesture
   // -----------------------------------------------------------------------
 
-  private registerGestureListener(ctx: AudioContext): void {
-    if (ctx.state !== 'suspended') {
+  private registerGestureListener(ctx: BaseAudioContext): void {
+    if (!this.ownsContext || ctx.state !== 'suspended') {
       return;
     }
     if (this.gestureListening) {
@@ -162,12 +135,12 @@ export class WebAudioEngine {
 
   private async tryResume(): Promise<void> {
     const ctx = this.ctx;
-    if (!ctx || this.closed || ctx.state !== 'suspended') return;
+    if (!ctx || !this.ownsContext || this.closed || ctx.state !== 'suspended') return;
     if (this.resumeInFlight !== undefined) return this.resumeInFlight;
 
     const attempt = (async () => {
       try {
-        await ctx.resume();
+        await (ctx as AudioContext).resume();
       } catch {
         // Inspect the real context state below so refusal remains recoverable.
       } finally {
@@ -199,6 +172,7 @@ export class WebAudioEngine {
   }
 
   private recordDecodeFailure(sourceKey: string, cause: unknown): void {
+    this.decodeErrorKey = sourceKey;
     this.lastError = new AudioError({
       code: 'decode-failed',
       expected: `browser-decodable audio bytes for sourceKey ${sourceKey}`,
@@ -210,7 +184,7 @@ export class WebAudioEngine {
     });
   }
 
-  private rearmGestureListener(ctx: AudioContext): void {
+  private rearmGestureListener(ctx: BaseAudioContext): void {
     this.removeGestureListener();
     this.registerGestureListener(ctx);
   }
@@ -224,19 +198,66 @@ export class WebAudioEngine {
   }
 
   play(entityId: number, clip: AudioBuffer | AudioClipAsset, opts: AudioPlayOptions): void {
-    if ('kind' in clip) {
+    if (this.closed) return;
+    if (
+      opts.spatialBlend > 0 &&
+      ((opts.sourcePose !== undefined && !this.validSourcePose(opts.sourcePose)) ||
+        ![opts.coneInnerAngle ?? 360, opts.coneOuterAngle ?? 360].every(
+          (angle) => Number.isFinite(angle) && angle >= 0 && angle <= 360,
+        ) ||
+        !Number.isFinite(opts.coneOuterGain ?? 0) ||
+        (opts.coneOuterGain ?? 0) < 0 ||
+        (opts.coneOuterGain ?? 0) > 1)
+    ) {
+      this.recordSpatialFailure();
+      return;
+    }
+    const playbackRate = opts.playbackRate ?? 1;
+    if (!Number.isFinite(playbackRate) || playbackRate <= 0) return;
+    const fromPosition = opts.fromPosition ?? 0;
+    if (!Number.isFinite(fromPosition) || fromPosition < 0) return;
+    if ('kind' in clip && clip.bytes !== undefined) {
+      this.stop(entityId);
+      const pending = { sourceKey: clip.sourceKey, options: { ...opts } };
+      this.pendingClips.set(entityId, pending);
       void this.decode(clip.bytes).then(
         (buffer) => {
-          if (this.lastError?.code === 'decode-failed') {
-            this.lastError = null;
+          if (!this.closed && this.pendingClips.get(entityId) === pending) {
+            if (this.decodeErrorKey === clip.sourceKey) {
+              this.decodeErrorKey = undefined;
+              this.lastError = null;
+            }
+            this.pendingClips.delete(entityId);
+            this.play(entityId, buffer, pending.options);
           }
-          this.play(entityId, buffer, opts);
         },
-        (cause) => this.recordDecodeFailure(clip.sourceKey, cause),
+        (cause) => {
+          if (!this.closed && this.pendingClips.get(entityId) === pending) {
+            this.pendingClips.delete(entityId);
+            this.recordDecodeFailure(clip.sourceKey, cause);
+          }
+        },
       );
       return;
     }
-    const clipBuffer = clip;
+    const streamClip = 'kind' in clip ? clip : undefined;
+    if (
+      streamClip &&
+      (!validAudioStream(streamClip.stream) || !/^https?:\/\//.test(streamClip.stream.url))
+    ) {
+      this.lastError = new AudioError({
+        code: 'stream-failed',
+        expected: 'a bounded PCM16 manifest with an HTTP locator',
+        hint: 'recook the source through the audio importer',
+        detail: {
+          code: 'stream-failed',
+          reason: 'unsupported-format',
+          message: 'invalid audio stream declaration',
+        },
+      });
+      return;
+    }
+    const clipBuffer = 'kind' in clip ? undefined : clip;
     // If this entity is already playing, stop it first (replace).
     if (this.sources.has(entityId)) {
       this.stop(entityId);
@@ -246,18 +267,32 @@ export class WebAudioEngine {
 
     // Per-source GainNode for volume control
     const sourceGain = ctx.createGain();
-    sourceGain.gain.value = opts.volume;
+    sourceGain.gain.value = opts.paused ? 0 : opts.volume;
 
     // PannerNode for 3D spatialization (D-2 equalpower default)
     let panner: PannerNode | undefined;
     if (opts.spatialBlend > 0) {
       panner = ctx.createPanner();
       panner.panningModel = 'equalpower';
+      panner.orientationX.value = 0;
+      panner.orientationZ.value = -1;
+      panner.coneInnerAngle = opts.coneInnerAngle ?? 360;
+      panner.coneOuterAngle = opts.coneOuterAngle ?? 360;
+      panner.coneOuterGain = opts.coneOuterGain ?? 0;
+      if (opts.sourcePose !== undefined) this.writeSourcePose(panner, opts.sourcePose);
     }
 
     // Route to the appropriate bus (gain nodes guaranteed by ensureContext above)
-    const busGain = this.busGainFor(opts.bus);
-    if (!busGain) return;
+    const busGain = this.graph.input(opts.bus);
+    if (!busGain) {
+      this.lastError = new AudioError({
+        code: 'bus-not-found',
+        expected: 'an accepted bus ID',
+        hint: 'configure the bus before playback',
+        detail: { code: 'bus-not-found', attemptedBus: opts.bus },
+      });
+      return;
+    }
 
     if (panner) {
       sourceGain.connect(panner);
@@ -266,62 +301,423 @@ export class WebAudioEngine {
       sourceGain.connect(busGain);
     }
 
-    // Create AudioBufferSourceNode for one-shot playback
+    const source: ActiveSource = {
+      sourceKey: streamClip?.sourceKey,
+      bus: opts.bus,
+      node: undefined,
+      buffer: clipBuffer,
+      stream: undefined,
+      loop: opts.loop,
+      playbackRate,
+      volume: opts.volume,
+      offset: clipPosition(
+        fromPosition,
+        opts.loop,
+        clipBuffer !== undefined
+          ? (clipBuffer.duration ?? 0)
+          : streamClip?.stream
+            ? streamClip.stream.frames / streamClip.stream.sampleRate
+            : 0,
+      ),
+      startedAt: ctx.currentTime,
+      filters: [],
+      analyser: undefined,
+      sourceGain,
+      panner,
+    };
+    this.sources.set(entityId, source);
+    if (streamClip?.stream) {
+      source.stream = new PcmStreamPlayer(
+        streamClip as Extract<AudioClipAsset, { stream: unknown }>,
+        ctx,
+        this.streamBudget,
+        {
+          position: fromPosition,
+          paused: opts.paused ?? false,
+          rate: playbackRate,
+          loop: opts.loop,
+        },
+        () => source.filters[0] ?? source.sourceGain,
+        () => {},
+      );
+    } else if (clipBuffer && !source.loop && source.offset >= clipBuffer.duration)
+      this.stop(entityId);
+    else if (!opts.paused) this.startSource(entityId, source);
+  }
+
+  private startSource(entityId: number, source: ActiveSource): void {
+    const ctx = this.ensureContext();
+    if (!source.buffer) return;
+    if (!source.loop && source.offset >= source.buffer.duration) {
+      this.stop(entityId);
+      return;
+    }
     const node = ctx.createBufferSource();
-    node.buffer = clipBuffer;
-    node.loop = opts.loop;
-    node.connect(sourceGain);
-    node.start();
-
-    // Bookkeeping
-    this.sources.set(entityId, { node, sourceGain, panner, bus: opts.bus });
-
-    // F24: attach onended for non-loop sources with identity guard (D-5).
-    // Loop sources never naturally end — no onended needed.
-    if (!opts.loop) {
+    node.buffer = source.buffer;
+    node.loop = source.loop;
+    node.playbackRate.value = source.playbackRate;
+    node.connect(source.filters[0] ?? source.sourceGain);
+    source.node = node;
+    source.startedAt = ctx.currentTime;
+    if (!source.loop) {
       node.onended = () => {
-        const current = this.sources.get(entityId);
-        if (current?.node === node) {
-          this.stop(entityId);
-        }
+        if (this.sources.get(entityId)?.node === node) this.stop(entityId);
       };
     }
+    node.start(0, source.offset);
+  }
+
+  private advance(source: ActiveSource): void {
+    if (!source.node || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    source.offset += Math.max(0, now - source.startedAt) * source.playbackRate;
+    if (source.loop && source.buffer && source.buffer.duration > 0)
+      source.offset %= source.buffer.duration;
+    source.startedAt = now;
+  }
+
+  private disconnectNode(source: ActiveSource): void {
+    const node = source.node;
+    if (!node) return;
+    // Clear identity before stop; a queued ended callback cannot delete a resumed source.
+    source.node = undefined;
+    node.onended = null;
+    try {
+      node.stop();
+    } catch {
+      /* Already ended. */
+    }
+    node.disconnect();
   }
 
   stop(entityId: number): void {
+    this.pendingClips.delete(entityId);
     const source = this.sources.get(entityId);
     if (!source) return;
-
-    try {
-      source.node.stop();
-    } catch {
-      // Already stopped -- ignore InvalidStateError from doubly-stopped nodes.
-    }
-    source.node.disconnect();
+    source.stream?.dispose();
+    this.disconnectNode(source);
     source.sourceGain.disconnect();
     source.panner?.disconnect();
+    for (const filter of source.filters) filter.disconnect();
+    source.analyser?.disconnect();
     this.sources.delete(entityId);
   }
 
-  setVolume(entityId: number, volume: number): void {
+  setPlaybackRate(entityId: number, playbackRate: number): void {
+    if (!Number.isFinite(playbackRate) || playbackRate <= 0) return;
+    this.patchPending(entityId, { playbackRate });
     const source = this.sources.get(entityId);
     if (!source) return;
-    this.scheduleGainTransition(source.sourceGain, volume);
+    source.stream?.setRate(playbackRate);
+    this.advance(source);
+    source.playbackRate = playbackRate;
+    if (source.node)
+      source.node.playbackRate.setValueAtTime(playbackRate, this.ctx?.currentTime ?? 0);
+  }
+
+  setPaused(entityId: number, paused: boolean): void {
+    this.patchPending(entityId, { paused });
+    const source = this.sources.get(entityId);
+    if (!source) return;
+    if (source.stream) {
+      source.stream.setPaused(paused);
+      this.scheduleGainTransition(source.sourceGain, paused ? 0 : source.volume);
+      return;
+    }
+    if (paused) {
+      if (!source.node) return;
+      this.advance(source);
+      this.disconnectNode(source);
+      this.scheduleGainTransition(source.sourceGain, 0);
+    } else if (!source.node) {
+      this.scheduleGainTransition(source.sourceGain, source.volume);
+      this.startSource(entityId, source);
+    }
+  }
+
+  /** Progress in decoded clip seconds, independent of wall time while paused. */
+  getPlaybackPosition(entityId: number): number | undefined {
+    const source = this.sources.get(entityId);
+    if (!source) return undefined;
+    if (source.stream) return source.stream.state().position;
+    this.advance(source);
+    return source.offset;
+  }
+
+  /** Replaces only the one-shot source, retaining pause, rate and native graph. */
+  seek(entityId: number, position: number): void {
+    if (!Number.isFinite(position) || position < 0) return;
+    this.patchPending(entityId, { fromPosition: position });
+    const source = this.sources.get(entityId);
+    if (!source) return;
+    const playing = source.node !== undefined;
+    this.disconnectNode(source);
+    if (source.stream) {
+      source.stream.seek(position);
+      return;
+    }
+    if (!source.buffer) return;
+    source.offset = clipPosition(position, source.loop, source.buffer.duration);
+    if (!source.loop && source.offset >= source.buffer.duration) this.stop(entityId);
+    else if (playing) this.startSource(entityId, source);
+  }
+
+  /** Host-only: transfers exclusive outgoing graph ownership of the returned nodes. */
+  setFilters(
+    entityId: number,
+    build: (context: BaseAudioContext) => readonly AudioNode[],
+  ): Result<void, AudioError> {
+    const source = this.sources.get(entityId);
+    if (!source || !this.ctx)
+      return this.controlFailure('source is not retained; wait for decoding to complete');
+    let filters: readonly AudioNode[];
+    try {
+      filters = [...build(this.ctx)];
+      if (
+        filters.length > 32 ||
+        new Set(filters).size !== filters.length ||
+        filters.some(
+          (node) =>
+            node.context !== this.ctx ||
+            node.numberOfInputs < 1 ||
+            node.numberOfOutputs < 1 ||
+            node === source.sourceGain ||
+            node === source.panner ||
+            node === source.node ||
+            node === source.analyser ||
+            this.graph.owns(node) ||
+            [...this.sources.values()].some(
+              (other) =>
+                other !== source &&
+                (other.filters.includes(node) ||
+                  node === other.node ||
+                  node === other.sourceGain ||
+                  node === other.panner ||
+                  node === other.analyser),
+            ),
+        )
+      )
+        return this.controlFailure(
+          'use at most 32 distinct input/output nodes from the supplied context',
+        );
+    } catch (cause) {
+      return this.controlFailure(String(cause));
+    }
+    const previous = source.filters;
+    source.node?.disconnect();
+    for (const node of source.stream?.nodes ?? []) node.disconnect();
+    for (const filter of previous) filter.disconnect();
+    const connect = (chain: readonly AudioNode[]) => {
+      for (let i = 0; i < chain.length; i++) chain[i]?.connect(chain[i + 1] ?? source.sourceGain);
+      source.node?.connect(chain[0] ?? source.sourceGain);
+      for (const node of source.stream?.nodes ?? []) node.connect(chain[0] ?? source.sourceGain);
+    };
+    try {
+      connect(filters);
+      source.filters = filters;
+      return ok(undefined);
+    } catch (cause) {
+      for (const filter of filters) filter.disconnect();
+      try {
+        connect(previous);
+      } catch (rollback) {
+        this.stop(entityId);
+        return this.controlFailure(
+          `${String(cause)}; restoring the previous graph failed: ${String(rollback)}`,
+        );
+      }
+      return this.controlFailure(String(cause));
+    }
+  }
+
+  /** Opt-in post-filter/post-volume tap, before panning and bus gain. Reuses its node. */
+  createAnalyser(entityId: number, fftSize = 2048): Result<AnalyserNode, AudioError> {
+    const source = this.sources.get(entityId);
+    if (!source || !this.ctx)
+      return this.controlFailure('source is not retained; wait for decoding to complete');
+    if (
+      !Number.isInteger(fftSize) ||
+      fftSize < 32 ||
+      fftSize > 32768 ||
+      (fftSize & (fftSize - 1)) !== 0
+    )
+      return this.controlFailure('fftSize must be a power of two from 32 through 32768');
+    const analyser = source.analyser ?? this.ctx.createAnalyser();
+    analyser.fftSize = fftSize;
+    if (!source.analyser) source.sourceGain.connect(analyser);
+    source.analyser = analyser;
+    return ok(analyser);
+  }
+
+  /** Writes dB bins into caller storage; paused sources report silence, not stale native FFT data. */
+  readFrequencyData(entityId: number, output: Float32Array<ArrayBuffer>): Result<void, AudioError> {
+    const source = this.sources.get(entityId);
+    if (!source?.analyser)
+      return this.controlFailure('create an analyser for the retained source first');
+    if (output.length !== source.analyser.frequencyBinCount)
+      return this.controlFailure('output length must equal analyser.frequencyBinCount');
+    if (source.node || source.stream?.active) source.analyser.getFloatFrequencyData(output);
+    else output.fill(-Infinity);
+    return ok(undefined);
+  }
+
+  removeAnalyser(entityId: number): void {
+    const source = this.sources.get(entityId);
+    if (!source?.analyser) return;
+    source.sourceGain.disconnect(source.analyser);
+    source.analyser.disconnect();
+    source.analyser = undefined;
+  }
+
+  private controlFailure<T>(reason: string): Result<T, AudioError> {
+    return err(
+      new AudioError({
+        code: 'control-failed',
+        expected: 'a retained source and valid Host audio graph controls',
+        hint: AUDIO_ERROR_HINTS['control-failed'],
+        detail: { code: 'control-failed', reason },
+      }),
+    );
+  }
+
+  /** Updates the retained panner, including while the source is paused. */
+  setSourcePose(entityId: number, pose: AudioSourcePose): void {
+    this.patchPending(entityId, { sourcePose: pose });
+    const panner = this.sources.get(entityId)?.panner;
+    if (panner === undefined) return;
+    if (!this.validSourcePose(pose)) {
+      this.recordSpatialFailure();
+      return;
+    }
+    this.writeSourcePose(panner, pose);
+  }
+
+  private validSourcePose(pose: AudioSourcePose): boolean {
+    return (
+      Number.isFinite(pose.positionX) &&
+      Number.isFinite(pose.positionY) &&
+      Number.isFinite(pose.positionZ) &&
+      Number.isFinite(pose.forwardX) &&
+      Number.isFinite(pose.forwardY) &&
+      Number.isFinite(pose.forwardZ) &&
+      Math.hypot(pose.forwardX, pose.forwardY, pose.forwardZ) > 0
+    );
+  }
+
+  private recordSpatialFailure(): void {
+    this.lastError = new AudioError({
+      code: 'control-failed',
+      expected:
+        'finite source position, nonzero forward, cone angles in 0..360 and outer gain in 0..1',
+      hint: AUDIO_ERROR_HINTS['control-failed'],
+      detail: { code: 'control-failed', reason: 'invalid spatial source pose or cone' },
+    });
+  }
+
+  private writeSourcePose(panner: PannerNode, pose: AudioSourcePose): void {
+    panner.positionX.value = pose.positionX;
+    panner.positionY.value = pose.positionY;
+    panner.positionZ.value = pose.positionZ;
+    panner.orientationX.value = pose.forwardX;
+    panner.orientationY.value = pose.forwardY;
+    panner.orientationZ.value = pose.forwardZ;
+  }
+
+  setVolume(entityId: number, volume: number): void {
+    if (Number.isFinite(volume) && volume >= 0) this.patchPending(entityId, { volume });
+    const source = this.sources.get(entityId);
+    if (!source || !Number.isFinite(volume) || volume < 0) return;
+    source.volume = volume;
+    if (source.node || (source.stream && source.stream.state().status !== 'paused'))
+      this.scheduleGainTransition(source.sourceGain, volume);
+  }
+
+  private reconnectBuses = (input: (id: string) => GainNode | undefined): void => {
+    for (const source of this.sources.values()) {
+      const output = source.panner ?? source.sourceGain;
+      // Preserve the optional analyser tap on sourceGain.
+      output.disconnect();
+      if (!source.panner && source.analyser) output.connect(source.analyser);
+      const target = input(source.bus);
+      if (!target) throw new Error('retained source bus missing from candidate');
+      output.connect(target);
+    }
+  };
+
+  configureBuses(buses: readonly AudioBus[]): Result<void, AudioError> {
+    const result = this.graph.replace(
+      buses,
+      [...this.sources.values()].map((source) => source.bus),
+      this.reconnectBuses,
+    );
+    if (!result.ok) this.lastError = result.error;
+    return result;
+  }
+
+  setBusEffects(
+    bus: string,
+    build: (ctx: BaseAudioContext) => readonly AudioNode[],
+    wet = 1,
+  ): Result<void, AudioError> {
+    const result = this.graph.effects(
+      bus,
+      (ctx) => {
+        const nodes = build(ctx);
+        if (
+          nodes.some((node) =>
+            [...this.sources.values()].some(
+              (source) =>
+                node === source.sourceGain ||
+                node === source.panner ||
+                node === source.node ||
+                node === source.analyser ||
+                source.filters.includes(node) ||
+                source.stream?.nodes.includes(node as AudioBufferSourceNode),
+            ),
+          )
+        )
+          throw new Error('bus effects cannot borrow retained source nodes');
+        return nodes;
+      },
+      wet,
+      [...this.sources.values()].map((source) => source.bus),
+      this.reconnectBuses,
+    );
+    if (!result.ok) this.lastError = result.error;
+    return result;
+  }
+
+  setBus(entityId: number, bus: string): void {
+    this.patchPending(entityId, { bus });
+    const source = this.sources.get(entityId);
+    if (!source || bus === source.bus) return;
+    const next = this.graph.input(bus);
+    if (!next) {
+      this.lastError = new AudioError({
+        code: 'bus-not-found',
+        expected: 'an accepted bus ID',
+        hint: 'configure the target bus before rerouting',
+        detail: { code: 'bus-not-found', attemptedBus: bus },
+      });
+      return;
+    }
+    const output = source.panner ?? source.sourceGain;
+    const previous = this.graph.input(source.bus);
+    if (previous) output.disconnect(previous);
+    output.connect(next);
+    source.bus = bus;
   }
 
   setBusVolume(busName: BusName, volume: number): void {
-    if (this.closed || !Number.isFinite(volume) || volume < 0) return;
-    this.busVolumes.set(busName, volume);
-    this.busMuted.set(busName, false);
-    const gain = this.busGainFor(busName);
-    if (gain) this.scheduleGainTransition(gain, volume);
+    if (this.closed) return;
+    const result = this.graph.volume(busName, volume);
+    if (!result.ok) this.lastError = result.error;
   }
 
   setBusMute(busName: BusName, muted: boolean): void {
     if (this.closed) return;
-    this.busMuted.set(busName, muted);
-    const gain = this.busGainFor(busName);
-    if (gain) this.scheduleGainTransition(gain, muted ? 0 : (this.busVolumes.get(busName) ?? 1));
+    const result = this.graph.mute(busName, muted);
+    if (!result.ok) this.lastError = result.error;
   }
 
   getState(): AudioState {
@@ -336,44 +732,71 @@ export class WebAudioEngine {
           : 'suspended';
     return {
       contextState,
-      activeSourceCount: this.sources.size,
-      lastError: this.lastError,
+      activeSourceCount: this.getActiveSourceCount(),
+      lastError:
+        this.lastError ??
+        [...this.sources.values()].find((source) => source.stream?.state().error)?.stream?.state()
+          .error ??
+        null,
+      streaming: {
+        encodedBytes: this.streamBudget.encodedBytes,
+        pcmBytes: this.streamBudget.pcmBytes,
+        pendingBytes: this.streamBudget.pendingBytes,
+        pendingReads: this.streamBudget.pendingReads,
+        underruns: [...this.sources.values()].reduce(
+          (sum, source) => sum + (source.stream?.state().underruns ?? 0),
+          0,
+        ),
+      },
     };
   }
 
+  private patchPending(entity: number, patch: Partial<AudioPlayOptions>): void {
+    const pending = this.pendingClips.get(entity);
+    if (pending) pending.options = { ...pending.options, ...patch };
+  }
+  invalidateAudioPublication(sourceKey: string): void {
+    for (const [entity, source] of this.sources)
+      if (source.sourceKey === sourceKey) this.stop(entity);
+  }
+
+  setStreamBudget(maxBytes: number, retained: () => number): void {
+    this.streamBudget.maxBytes = maxBytes;
+    this.streamBudget.retained = retained;
+  }
+  get streamingBytes(): number {
+    return (
+      this.streamBudget.encodedBytes + this.streamBudget.pcmBytes + this.streamBudget.pendingBytes
+    );
+  }
+  getStreamState(entityId: number): AudioStreamState | undefined {
+    return this.sources.get(entityId)?.stream?.state();
+  }
+
   getActiveSourceCount(): number {
-    return this.sources.size;
+    let count = 0;
+    for (const source of this.sources.values()) if (source.node || source.stream?.active) count++;
+    return count;
   }
 
   destroy(): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingClips.clear();
 
     // Stop all active sources
     for (const entityId of this.sources.keys()) {
       this.stop(entityId);
     }
 
-    // Disconnect bus topology
-    if (this.sfxGain) {
-      this.sfxGain.disconnect();
-      this.sfxGain = undefined;
-    }
-    if (this.musicGain) {
-      this.musicGain.disconnect();
-      this.musicGain = undefined;
-    }
-    if (this.masterGain) {
-      this.masterGain.disconnect();
-      this.masterGain = undefined;
-    }
+    this.graph.dispose();
 
     // Remove gesture listener
     this.removeGestureListener();
 
     // Close AudioContext (irreversible per R-4)
     if (this.ctx) {
-      void this.ctx.close();
+      if (this.ownsContext) void (this.ctx as AudioContext).close();
       this.ctx = undefined;
     }
   }
@@ -391,14 +814,5 @@ export class WebAudioEngine {
     param.setValueAtTime(param.value, now);
     param.linearRampToValueAtTime(target, now + GAIN_TRANSITION_SECONDS);
     return true;
-  }
-
-  private busGainFor(busName: BusName): GainNode | undefined {
-    switch (busName) {
-      case 'sfx':
-        return this.sfxGain;
-      case 'music':
-        return this.musicGain;
-    }
   }
 }

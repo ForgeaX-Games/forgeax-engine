@@ -213,7 +213,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
     it('both registered, pos pressed, neg not → strength(pos) - strength(neg)', () => {
       const sample = sampleForVector({ downKeys: ['d'] });
       const states = deriveActionStates(sample, map);
-      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      const v = getAxis(states, 'moveLeft', 'moveRight');
       // pos (moveRight) strength=1.0, neg (moveLeft) strength=0 → 1.0
       expect(v).toBeCloseTo(1.0);
     });
@@ -221,7 +221,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
     it('both registered, neg pressed, pos not → strength(pos) - strength(neg)', () => {
       const sample = sampleForVector({ downKeys: ['a'] });
       const states = deriveActionStates(sample, map);
-      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      const v = getAxis(states, 'moveLeft', 'moveRight');
       // pos (moveRight) strength=0, neg (moveLeft) strength=1.0 → -1.0
       expect(v).toBeCloseTo(-1.0);
     });
@@ -229,7 +229,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
     it('neither pressed → 0', () => {
       const sample = sampleForVector({ downKeys: [] });
       const states = deriveActionStates(sample, map);
-      const v = getAxis(map, states, 'moveLeft', 'moveRight');
+      const v = getAxis(states, 'moveLeft', 'moveRight');
       expect(v).toBe(0);
     });
 
@@ -241,7 +241,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const sample = sampleForVector({ downKeys: ['a'] });
       const states = deriveActionStates(sample, partialMap);
       // pos='moveRight' is unregistered → strength=0, neg='moveLeft' strength=1.0 → -1.0
-      const v = getAxis(partialMap, states, 'moveLeft', 'moveRight');
+      const v = getAxis(states, 'moveLeft', 'moveRight');
       expect(v).toBeCloseTo(-1.0);
     });
 
@@ -249,7 +249,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const emptyMap: ActionConfig[] = [];
       const sample = sampleForVector({ downKeys: ['a', 'd'] });
       const states = deriveActionStates(sample, emptyMap);
-      const v = getAxis(emptyMap, states, 'moveLeft', 'moveRight');
+      const v = getAxis(states, 'moveLeft', 'moveRight');
       expect(v).toBe(0);
     });
 
@@ -260,7 +260,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const sample = sampleForVector({ downKeys: ['d'] });
       const states = deriveActionStates(sample, mapSame);
       // Both neg and pos are 'move' — strength('move')=1.0, difference = 0
-      const v = getAxis(mapSame, states, 'move', 'move');
+      const v = getAxis(states, 'move', 'move');
       expect(v).toBe(0);
     });
 
@@ -274,7 +274,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         gamepads: [buildGamepadSlot(0, { axes: [1, 0, 0, 0] })],
       });
       const states = deriveActionStates(sample, mapExt);
-      const v = getAxis(mapExt, states, 'neg', 'pos');
+      const v = getAxis(states, 'neg', 'pos');
       expect(v).toBeCloseTo(1.0);
       // Can never exceed 1.0 since strength is in [0,1]
       expect(v).toBeLessThanOrEqual(1.0);
@@ -287,7 +287,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map = wasdMap();
       const sample = sampleForVector({ downKeys: ['w', 'd'] }); // up + right → diagonal
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       // With raw=1.0 for both w and d keys, vector = (1, -1) (Y neg=moveDown at 0, Y pos=moveUp at 1)
       // Wait: negY='moveDown', posY='moveUp'. With w pressed: posY raw=1.0.
       // negX='moveLeft', posX='moveRight'. With d pressed: posX raw=1.0.
@@ -303,7 +303,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map = wasdMap();
       const sample = sampleForVector({ downKeys: ['d'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBeCloseTo(1.0);
       expect(v.y).toBeCloseTo(0);
     });
@@ -312,7 +312,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map = wasdMap();
       const sample = sampleForVector({ downKeys: ['w'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBeCloseTo(0);
       expect(v.y).toBeCloseTo(1.0);
     });
@@ -321,7 +321,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map = wasdMap();
       const sample = sampleForVector({ downKeys: ['a'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBeCloseTo(-1.0);
       expect(v.y).toBeCloseTo(0);
     });
@@ -340,7 +340,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         gamepads: [buildGamepadSlot(0, { axes: [0.1, 0.1, 0, 0] })],
       });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBe(0);
       expect(v.y).toBe(0);
     });
@@ -350,7 +350,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       // Both 'd' and 'w' pressed → raw (1,1), length=√2>1 → (0.707, 0.707)
       const sample = sampleForVector({ downKeys: ['d', 'w'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       const mag = Math.sqrt(v.x * v.x + v.y * v.y);
       expect(mag).toBeCloseTo(1.0, 3);
     });
@@ -371,7 +371,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         gamepads: [buildGamepadSlot(0, { axes: [0.6, 0, 0, 0] })],
       });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBeCloseTo(0.5, 3);
       expect(v.y).toBeCloseTo(0);
     });
@@ -382,7 +382,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       // With override deadzone=2.0: length=1 <= 2.0 → (0,0)
       const sample = sampleForVector({ downKeys: ['d'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp', { deadzone: 2.0 });
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp', { deadzone: 2.0 });
       expect(v.x).toBe(0);
       expect(v.y).toBe(0);
     });
@@ -400,7 +400,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         gamepads: [buildGamepadSlot(0, { axes: [0.24, 0, 0, 0] })],
       });
       const states = deriveActionStates(sample, mapCustom);
-      const v = getVector(mapCustom, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBe(0);
       expect(v.y).toBe(0);
     });
@@ -427,7 +427,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map = wasdMap();
       const sample = sampleForVector({ downKeys: ['w', 'd'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       const mag = Math.sqrt(v.x * v.x + v.y * v.y);
       // With per-axis deadzone, magnitude would be ~1.414 (sqrt(2)).
       // The correct radial deadzone clamps to the unit circle.
@@ -460,7 +460,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       // Only 'd' pressed → right only
       const sample = sampleForVector({ downKeys: ['d'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       // Both raw and strength give 1.0 for digital keys, so result is the same (1, 0)
       // But verify the magnitude is exactly 1, not softened by some phantom deadzone
       const mag = Math.sqrt(v.x * v.x + v.y * v.y);
@@ -483,7 +483,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       // getAxis for unregistered = strength(registered) - 0 if unregistered pos = 0
       // Actually getAxis(pos) for 'moveUp' with unregistered → strength=0.
       // So y = 0-0 = 0, x = 1-0 = 1. Length=1, no clamp → (1,0)
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBeCloseTo(1.0);
       expect(v.y).toBeCloseTo(0);
     });
@@ -492,7 +492,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
       const map: ActionConfig[] = [];
       const sample = sampleForVector({ downKeys: ['w', 'd'] });
       const states = deriveActionStates(sample, map);
-      const v = getVector(map, states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
+      const v = getVector(states, 'moveLeft', 'moveRight', 'moveDown', 'moveUp');
       expect(v.x).toBe(0);
       expect(v.y).toBe(0);
     });

@@ -1,5 +1,5 @@
 import type { Profiler } from './profiler.js';
-import type { RecorderSession } from './recorder.js';
+import type { ProfileDetail, RecorderSession } from './recorder.js';
 import type { ProfileCapture, ProfilePhaseStart, ProfileSource } from './types.js';
 
 /** The small browser API surface used by the opt-in User Timing adapter. */
@@ -17,7 +17,6 @@ export interface UserTimingProfilerOptions {
 
 type DiagnosticGlobal = Record<string, unknown>;
 type PhaseCatalog = ProfileCapture['phaseCatalog'];
-type BrowserProfileDetail = 'owner' | 'passes' | 'nested';
 
 function partialCapture(captureId: string, phaseCatalog: PhaseCatalog): ProfileCapture {
   return {
@@ -46,7 +45,7 @@ function diagnosticsEnabled(key: string): boolean {
   );
 }
 
-function diagnosticsDetail(key: string): BrowserProfileDetail {
+function diagnosticsDetail(key: string): ProfileDetail {
   const value = (globalThis as unknown as DiagnosticGlobal)[key];
   if (typeof value !== 'object' || value === null) return 'owner';
   const detail = (value as { readonly detail?: unknown }).detail;

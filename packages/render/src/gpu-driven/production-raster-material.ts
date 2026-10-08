@@ -28,6 +28,7 @@ import { materialColorTarget, materialDepthStencil } from '../material-render-st
 import { isCanonicalStandardPbrMaterialShader } from '../pbr-pipeline';
 import { packInstanceStorageBuffer } from '../record/mesh-ssbo';
 import type { PipelineState, RenderSystemInternals } from '../record/render-context';
+import { STANDARD_OPAQUE_FRAGMENT_ENTRY } from '../record/standard-opaque-entry';
 import { PROBE_BLEND_RECORD_BYTE_SIZE } from '../scene/probe-blend-record';
 import type {
   DynamicInputRange,
@@ -357,7 +358,7 @@ export class MaterialAbiRasterAdapter {
     if (
       receipt.reflection.layoutIdentity !== input.artifact.layoutIdentity ||
       receipt.directEntry.length === 0 ||
-      receipt.sceneIndexEntry.length === 0 ||
+      !receipt.sceneIndexEntry ||
       receipt.resourceSlots.some((slot) => slot.group !== 1)
     ) {
       return err(
@@ -1438,6 +1439,14 @@ export class MaterialAbiRasterAdapter {
     const key = `${format}:${additionalColorFormats.join(',')}|${sampleCount}|${vertexLayout.arrayStride}|${topology}|${stripIndexFormat ?? ''}|${JSON.stringify(renderState ?? null)}|${selectedArtifact.material}|${selectedArtifact.layoutIdentity}|${receipt.receiptIdentity}|${receipt.generation}|${selectedArtifact.variantSet ?? ''}|${materialArtifactProgramIdentity(selectedArtifact)}|${selectedArtifact.vertexEntry ?? receipt.sceneIndexEntry}|${selectedArtifact.fragmentEntry ?? ''}|${layoutProjection.digest}|uv${pipelineUvSetCount}|textures=${standardTextureMask ?? ''}`;
     const sceneEntry =
       selectedArtifact.fragmentEntry === 'fs_temporal' ? 'vs_temporal' : receipt.sceneIndexEntry;
+    if (sceneEntry === undefined)
+      return err(
+        new RhiError({
+          code: 'rhi-descriptor-invalid',
+          expected: 'a published scene-index vertex entry',
+          hint: 'keep this material on the direct lane',
+        }),
+      );
     const cached = this.pipelines.get(key);
     if (cached !== undefined) return ok(cached);
     if (this.pipelineFactory !== undefined) {
@@ -1526,7 +1535,7 @@ export class MaterialAbiRasterAdapter {
       layout: this.pipelineLayout,
       vertex: {
         module: program.module,
-        entryPoint: selectedArtifact.vertexEntry ?? receipt.sceneIndexEntry,
+        entryPoint: selectedArtifact.vertexEntry ?? sceneEntry,
         ...(constants === undefined ? {} : { constants }),
         buffers: [
           {
@@ -1542,7 +1551,12 @@ export class MaterialAbiRasterAdapter {
       },
       fragment: {
         module: program.module,
-        entryPoint: selectedArtifact.fragmentEntry ?? 'fs_main',
+        // The fixed legacy module predates fs_opaque; fs_main is output-equivalent.
+        entryPoint:
+          selectedArtifact.fragmentEntry === undefined ||
+          selectedArtifact.fragmentEntry === STANDARD_OPAQUE_FRAGMENT_ENTRY
+            ? 'fs_main'
+            : selectedArtifact.fragmentEntry,
         ...(constants === undefined ? {} : { constants }),
         targets: [format, ...additionalColorFormats].map((targetFormat, index) =>
           materialColorTarget(targetFormat, renderState, index),

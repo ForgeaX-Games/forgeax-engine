@@ -1,5 +1,5 @@
 import { err, ok, type Result } from '@forgeax/engine-types';
-import type { GpuPassTimingMeasuredEntry } from './contract.js';
+import type { GpuPassTimingEntry, GpuPassTimingMeasuredEntry } from './contract.js';
 import type { GpuPassTimingReason } from './errors.js';
 
 export interface GpuPassTimingTickInput {
@@ -93,5 +93,70 @@ export function parseGpuPassTimingTicks(
     endTick: input.endTick,
     durationNanoseconds,
     ...(delta === 0n ? { timerResolution: 'equal-ticks' as const } : {}),
+  });
+}
+
+export interface GpuPassTimingIntervalSummary {
+  readonly measuredPassCount: number;
+  readonly unmeasuredPassCount: number;
+  /** Sum of intervals, including repeated coverage. Never frame latency. */
+  readonly sumNanoseconds: number;
+  /** Coverage of the selected intervals, including copy marker envelopes. */
+  readonly unionNanoseconds: number;
+  /** First beginning to last end, including gaps. Not a native outer query. */
+  readonly envelopeNanoseconds: number;
+  readonly overlapNanoseconds: number;
+}
+
+/** Derive coverage from raw ticks; neither coverage nor a pass is exclusive cost. */
+export function summarizeGpuPassTimingIntervals(
+  passes: readonly GpuPassTimingEntry[],
+  timestampPeriodNanoseconds: number,
+): Result<GpuPassTimingIntervalSummary, GpuPassTimingReason> {
+  const ranges: { begin: bigint; end: bigint }[] = [];
+  let sum = 0n;
+  for (const pass of passes) {
+    if (pass.status !== 'measured') continue;
+    const parsed = parseGpuPassTimingTicks({ ...pass, timestampPeriodNanoseconds });
+    if (!parsed.ok) return parsed;
+    const begin = BigInt(pass.beginningTick);
+    const end = BigInt(pass.endTick);
+    ranges.push({ begin, end });
+    sum += end - begin;
+  }
+  ranges.sort((left, right) => (left.begin < right.begin ? -1 : left.begin > right.begin ? 1 : 0));
+  let union = 0n;
+  let envelope = 0n;
+  const first = ranges[0];
+  if (first !== undefined) {
+    let begin = first.begin;
+    let end = first.end;
+    for (const range of ranges.slice(1)) {
+      if (range.begin > end) {
+        union += end - begin;
+        begin = range.begin;
+      }
+      if (range.end > end) end = range.end;
+    }
+    union += end - begin;
+    envelope = end - first.begin;
+  }
+  const durations: [number, number, number, number] = [0, 0, 0, 0];
+  for (const [index, ticks] of [sum, union, envelope, sum - union].entries()) {
+    const parsed = parseGpuPassTimingTicks({
+      beginningTick: '0',
+      endTick: ticks.toString(),
+      timestampPeriodNanoseconds,
+    });
+    if (!parsed.ok) return parsed;
+    durations[index] = parsed.value.durationNanoseconds;
+  }
+  return ok({
+    measuredPassCount: ranges.length,
+    unmeasuredPassCount: passes.length - ranges.length,
+    sumNanoseconds: durations[0],
+    unionNanoseconds: durations[1],
+    envelopeNanoseconds: durations[2],
+    overlapNanoseconds: durations[3],
   });
 }

@@ -11,7 +11,11 @@ import {
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ExecutionSelection, ExecutionWorkersOptions } from '@forgeax/engine-app';
+import type {
+  ExecutionReport,
+  ExecutionSelection,
+  ExecutionWorkersOptions,
+} from '@forgeax/engine-app';
 import { WebSocket, WebSocketServer } from 'ws';
 import { environmentExecutionWorkers } from './execution-workers.js';
 import { readLiveProjectInputs } from './live-project-inputs.js';
@@ -48,6 +52,7 @@ export interface LiveDevStatus {
   readonly frameId: number | undefined;
   readonly worldIdentity: string | undefined;
   readonly workers: ExecutionSelection | undefined;
+  readonly execution?: ExecutionReport | undefined;
   readonly backendRequested: LiveDevBackend;
   readonly backend: 'hardware' | 'software' | 'unknown';
   readonly fallbackReason: string | undefined;
@@ -298,15 +303,11 @@ function rhiCaptureScript(runId: string): string {
     // but align it with the route's 120 s bridge deadline rather than failing
     // a valid capture midway through readback.
     const captured = await rhiCapture.captureFrame({ snapshotTimeoutMs: 120_000 });
-    if (!captured.ok) return captured;
-    const response = await fetch('/__forgeax-debug/tape?runId=${encodeURIComponent(runId)}', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-forgeax-rhitape' },
-      body: new Blob([captured.value.bytes]),
-    });
-    const body = await response.json();
-    if (!response.ok) return { ok: false, error: body };
-    return { ok: true, value: { ...body, source: 'live', runId: ${JSON.stringify(runId)} } };
+    if (!captured.ok) return { ok: false, error: captured.error };
+    // Resumable chunked upload: renderer memory stays bounded to a few chunks.
+    const uploaded = await rhiCapture.upload(captured.value, { runId: ${JSON.stringify(runId)} });
+    if (!uploaded.ok) return { ok: false, error: uploaded.error };
+    return { ok: true, value: { ...uploaded.value, source: 'live', runId: ${JSON.stringify(runId)} } };
   })();`;
 }
 
@@ -540,6 +541,7 @@ async function refreshBridgeStatus(state: LiveDevDaemonState): Promise<boolean> 
     phase: state.status.phase,
     worldIdentity: record.worldIdentity,
     workers: record.workers as ExecutionSelection | undefined,
+    execution: record.execution as ExecutionReport | undefined,
     bridgeConnected: true,
   };
   if (
@@ -720,6 +722,7 @@ async function openSession(state: LiveDevDaemonState): Promise<void> {
     worldIdentity: undefined,
     frameId: undefined,
     workers: undefined,
+    execution: undefined,
     backend: 'unknown',
     fallbackReason: undefined,
     carrier: 'private-browser',

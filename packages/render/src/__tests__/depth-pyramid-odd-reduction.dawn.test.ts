@@ -30,12 +30,9 @@ async function createDevice() {
   return (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
 }
 
-function createReducerPipeline(device: Awaited<ReturnType<typeof createDevice>>) {
+async function createReducerPipeline(device: Awaited<ReturnType<typeof createDevice>>) {
   const module = createShaderModuleImmediate(device, {
-    // The raw production source has one build-only import-path directive. The
-    // reducer has no imports, so removing only that directive keeps this Dawn
-    // test on the same shader body used by the build producer.
-    code: readShader('depth-pyramid-reduce').replace(/^#define_import_path.*$/m, ''),
+    code: await compileShader('depth-pyramid-reduce', 'forgeax_depth_pyramid::odd-reduce'),
   }).unwrap();
   const layout = device
     .createBindGroupLayout({
@@ -64,7 +61,7 @@ function createReducerPipeline(device: Awaited<ReturnType<typeof createDevice>>)
 
 it('retains an odd normalized boundary source texel in both reducer cells', async () => {
   const device = await createDevice();
-  const hiz = device
+  const pyramid = device
     .createTexture({
       // The physical mip is 2x1. With the normalized overlap contract, source
       // x=2 belongs to destination x=0 and x=1 (5 -> 2).
@@ -90,19 +87,19 @@ it('retains an odd normalized boundary source texel in both reducer cells', asyn
     source[2] = 7;
     device.queue
       .writeTexture(
-        { texture: hiz, mipLevel: 0 },
+        { texture: pyramid, mipLevel: 0 },
         source,
         { bytesPerRow: 5 * 4, rowsPerImage: 2 },
         { width: 5, height: 2, depthOrArrayLayers: 1 },
       )
       .unwrap();
 
-    const { layout, pipeline } = createReducerPipeline(device);
+    const { layout, pipeline } = await createReducerPipeline(device);
     const sourceView = device
-      .createTextureView(hiz, { baseMipLevel: 0, mipLevelCount: 1 })
+      .createTextureView(pyramid, { baseMipLevel: 0, mipLevelCount: 1 })
       .unwrap();
     const outputView = device
-      .createTextureView(hiz, { baseMipLevel: 1, mipLevelCount: 1 })
+      .createTextureView(pyramid, { baseMipLevel: 1, mipLevelCount: 1 })
       .unwrap();
     const group = device
       .createBindGroup({
@@ -120,7 +117,7 @@ it('retains an odd normalized boundary source texel in both reducer cells', asyn
     pass.dispatchWorkgroups(1);
     pass.end();
     encoder.copyTextureToBuffer(
-      { texture: hiz, mipLevel: 1 },
+      { texture: pyramid, mipLevel: 1 },
       { buffer: readback, offset: 0, bytesPerRow: 256, rowsPerImage: 1 },
       { width: 2, height: 1, depthOrArrayLayers: 1 },
     );
@@ -132,7 +129,7 @@ it('retains an odd normalized boundary source texel in both reducer cells', asyn
     expect(values[0]).toBeCloseTo(7, 5);
     expect(values[1]).toBeCloseTo(7, 5);
   } finally {
-    device.destroyTexture(hiz).unwrap();
+    device.destroyTexture(pyramid).unwrap();
     device.destroyBuffer(readback).unwrap();
   }
 });
@@ -165,6 +162,7 @@ async function compileShader(name: string, id: string): Promise<string> {
     imports: {
       'forgeax_view::common': readShader('common'),
       'forgeax_pbr::gbuffer': readShader('standard-gbuffer'),
+      'forgeax_depth_pyramid::sample': readShader('depth-pyramid-sample'),
     },
   });
   if (!result.ok || !result.value) throw new Error(JSON.stringify(result.error));
@@ -226,7 +224,7 @@ function createTraceProbeCode(fullSize: DepthPyramidExtent, probes: readonly Pro
   const calls = probes
     .map(
       (probe, index) => `
-  let candidate${index} = locateSsrHiZCandidate(
+  let candidate${index} = locateSsrPyramidCandidate(
     vec2<f32>(${probe.uv[0]}, ${probe.uv[1]}), ${probe.coarseMip}u, fullSize,
     vec2<f32>(${probe.start[0]}, ${probe.start[1]}),
     vec2<f32>(${probe.delta[0]}, ${probe.delta[1]}), 0.0, 1.0);
@@ -294,11 +292,11 @@ async function runSeedReduceProbe(input: {
   const seedCode = await compileShader('depth-pyramid-seed', 'forgeax_depth_pyramid::odd-seed');
   const traceCode = await compileShader(
     'ssr-trace',
-    `forgeax_ssr::hiz-odd-trace-${input.fullSize.width}x${input.fullSize.height}`,
+    `forgeax_ssr::pyramid-odd-trace-${input.fullSize.width}x${input.fullSize.height}`,
   );
   const device = await createDevice();
   const extents = seedExtents(input.fullSize);
-  const hiz = device
+  const pyramid = device
     .createTexture({
       size: {
         width: extents[0]?.width ?? 1,
@@ -356,7 +354,7 @@ async function runSeedReduceProbe(input: {
 
     const depthPipeline = createDepthSeedPipeline(device, input.validPixel);
     const { layout: seedLayout, pipeline: seedPipeline } = createSeedPipeline(device, seedCode);
-    const { layout: reduceLayout, pipeline: reducePipeline } = createReducerPipeline(device);
+    const { layout: reduceLayout, pipeline: reducePipeline } = await createReducerPipeline(device);
     const {
       inputLayout,
       outputLayout,
@@ -367,8 +365,10 @@ async function runSeedReduceProbe(input: {
     );
 
     const depthView = device.createTextureView(depth, {}).unwrap();
-    const seedView = device.createTextureView(hiz, { baseMipLevel: 0, mipLevelCount: 1 }).unwrap();
-    const fullHizView = device.createTextureView(hiz, {}).unwrap();
+    const seedView = device
+      .createTextureView(pyramid, { baseMipLevel: 0, mipLevelCount: 1 })
+      .unwrap();
+    const fullPyramidView = device.createTextureView(pyramid, {}).unwrap();
     const seedGroup = device
       .createBindGroup({
         layout: seedLayout,
@@ -381,10 +381,10 @@ async function runSeedReduceProbe(input: {
       .unwrap();
     const reduceGroups = extents.slice(0, -1).map((_, level) => {
       const sourceView = device
-        .createTextureView(hiz, { baseMipLevel: level, mipLevelCount: 1 })
+        .createTextureView(pyramid, { baseMipLevel: level, mipLevelCount: 1 })
         .unwrap();
       const outputView = device
-        .createTextureView(hiz, { baseMipLevel: level + 1, mipLevelCount: 1 })
+        .createTextureView(pyramid, { baseMipLevel: level + 1, mipLevelCount: 1 })
         .unwrap();
       return device
         .createBindGroup({
@@ -401,7 +401,7 @@ async function runSeedReduceProbe(input: {
         layout: inputLayout,
         entries: [
           { binding: 0, resource: { kind: 'textureView', value: depthView } },
-          { binding: 3, resource: { kind: 'textureView', value: fullHizView } },
+          { binding: 3, resource: { kind: 'textureView', value: fullPyramidView } },
           { binding: 5, resource: { kind: 'buffer', value: { buffer: view } } },
         ],
       })
@@ -452,7 +452,7 @@ async function runSeedReduceProbe(input: {
     tracePass.end();
     for (const [level, extent] of extents.entries()) {
       encoder.copyTextureToBuffer(
-        { texture: hiz, mipLevel: level },
+        { texture: pyramid, mipLevel: level },
         {
           buffer: readback,
           offset: levelOffsets[level] ?? 0,
@@ -484,7 +484,7 @@ async function runSeedReduceProbe(input: {
     return { levels, rescue };
   } finally {
     device.destroyTexture(depth).unwrap();
-    device.destroyTexture(hiz).unwrap();
+    device.destroyTexture(pyramid).unwrap();
     for (const buffer of [view, traceOutput, readback]) device.destroyBuffer(buffer).unwrap();
   }
 }

@@ -427,15 +427,10 @@ function largestScc(graph) {
 
 function staticMatches(sources) {
   const matches = [];
-  const rootIndex = resolve(ROOT, 'packages/render/src/index.ts');
   for (const [path, rawSource] of sources) {
     const source = stripComments(rawSource);
     const lines = source.split(/\r?\n/u);
     for (const pattern of STATIC_FORBIDDEN_PATTERNS) {
-      // The current builtin morph symbol is an implementation owner, not a
-      // forbidden production identifier. Its only forbidden occurrence is a
-      // root re-export, so scope this falsifier to the public declaration.
-      if (pattern === 'createBuiltinMorphFeature' && path !== rootIndex) continue;
       const needle =
         pattern === 'format: string'
           ? /format\s*:\s*string/u

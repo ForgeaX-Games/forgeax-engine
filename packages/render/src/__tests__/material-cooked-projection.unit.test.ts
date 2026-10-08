@@ -1,8 +1,7 @@
 import { DEFAULT_STANDARD_PBR_PARAM_SCHEMA } from '@forgeax/engine-shader';
 import type { MaterialParameter, MaterialPass } from '@forgeax/engine-types';
-import { derive } from '@forgeax/engine-types';
+import { derive, deriveStandardLayerPlan } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { projectStandardLayerPlan } from '../assembly/material/standard-layer-projection.js';
 
 describe('cooked material render projection', () => {
   it('uses one schema for reflection, uniform layout, and resource bindings', () => {
@@ -33,7 +32,7 @@ describe('cooked material render projection', () => {
       { name: 'deferred', program: { module: 'forgeax_material::standard' } },
       { name: 'shadow-caster', program: { module: 'forgeax_material::standard' } },
     ];
-    const plan = projectStandardLayerPlan(parameters, passes);
+    const plan = deriveStandardLayerPlan(parameters, passes);
     expect(plan.mode).toBe('base-only');
     expect(plan.passFamily).toEqual(['forward', 'deferred', 'shadow']);
   });

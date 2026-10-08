@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 1.7 camera — first-person WASD + mouse yaw/pitch via @forgeax/engine-input (M11 milestone fills index.ts + smoke).",
+  "description": "learn-render LearnOpenGL section 1.7 camera \u2014 first-person WASD + mouse yaw/pitch via @forgeax/engine-input (M11 milestone fills index.ts + smoke).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -56,8 +56,8 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

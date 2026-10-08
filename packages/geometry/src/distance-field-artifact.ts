@@ -2,10 +2,10 @@ import { ok, type Result } from '@forgeax/engine-types';
 import {
   type DistanceFieldError,
   distanceFieldFailure,
-  MAX_DISTANCE_FIELD_SAMPLES,
   MAX_VISIBILITY_DISTANCE_FIELD_AXIS,
   type MeshDistanceField,
 } from './distance-field';
+import { fieldBrickNegativeSamples, MAX_DISTANCE_FIELD_BYTES } from './distance-field-bricks';
 
 /** Structural admission is shared by decoded artifacts and direct query snapshots. */
 export function validateMeshDistanceField(
@@ -25,10 +25,6 @@ export function validateMeshDistanceField(
       (v) =>
         !Number.isInteger(v) || v < 3 || v > (visibility ? MAX_VISIBILITY_DISTANCE_FIELD_AXIS : 68),
     ) ||
-    !(field.values instanceof Float32Array) ||
-    field.values.length !== field.dimensions.reduce((a, b) => a * b) ||
-    field.values.length > MAX_DISTANCE_FIELD_SAMPLES ||
-    !field.values.every(Number.isFinite) ||
     !Number.isFinite(field.spacing) ||
     field.spacing <= 0 ||
     ![...field.origin, ...field.bounds.min, ...field.bounds.max].every((v) =>
@@ -47,13 +43,16 @@ export function validateMeshDistanceField(
     field.quality.negativeSamples < 0 ||
     (policy.kind === 'two-sided' && field.quality.negativeSamples !== 0) ||
     (policy.kind === 'signed-solid' && field.quality.negativeSamples < 1) ||
-    field.values.filter((v) => v < 0).length !== field.quality.negativeSamples ||
     !Number.isInteger(field.quality.testedTriangles) ||
     field.quality.testedTriangles < (policy.kind === 'signed-solid' ? 4 : 1) ||
     field.quality.testedTriangles >
       (visibility ? 1_048_576 : policy.kind === 'two-sided' ? 65536 : 1024)
   )
     return distanceFieldFailure('invalid, incomplete or inconsistent distance-field payload');
+  if (fieldBrickNegativeSamples(field) !== field.quality.negativeSamples)
+    return distanceFieldFailure(
+      'invalid brick addresses, padding, storage budget or negative count',
+    );
   if (policy.kind !== 'sampled-visibility') {
     if (
       !Number.isFinite(policy.errorBound) ||
@@ -106,33 +105,36 @@ async function digest(bytes: Uint8Array): Promise<string> {
     (b) => b.toString(16).padStart(2, '0'),
   ).join('');
 }
-/** Little-endian f32 samples plus a small versioned metadata header; no authored asset identity. */
+/** Version 4 stores one brick address table and exact little-endian f32 payloads. */
 export async function encodeMeshDistanceField(
   field: MeshDistanceField,
 ): Promise<Result<Uint8Array, DistanceFieldError>> {
   const valid = validateMeshDistanceField(field);
   if (!valid.ok) return valid;
-  const values = new Uint8Array(field.values.length * 4),
-    v = new DataView(values.buffer);
-  field.values.forEach((sample, i) => {
-    v.setFloat32(i * 4, sample, true);
+  const samples = new Uint8Array(field.bricks.byteLength + field.values.byteLength),
+    view = new DataView(samples.buffer);
+  field.bricks.forEach((offset, i) => {
+    view.setUint32(i * 4, offset, true);
   });
-  const { values: _, ...metadata } = field;
-  const header = new TextEncoder().encode(JSON.stringify({ version: 3, ...metadata }));
-  const bytes = new Uint8Array(4 + header.length + values.length + 64);
+  field.values.forEach((value, i) => {
+    view.setFloat32(field.bricks.byteLength + i * 4, value, true);
+  });
+  const { values: _, bricks: __, ...metadata } = field;
+  const header = new TextEncoder().encode(JSON.stringify({ version: 4, ...metadata }));
+  const bytes = new Uint8Array(4 + header.length + samples.length + 64);
   new DataView(bytes.buffer).setUint32(0, header.length, true);
   bytes.set(header, 4);
-  bytes.set(values, 4 + header.length);
+  bytes.set(samples, 4 + header.length);
   bytes.set(new TextEncoder().encode(await digest(bytes.subarray(0, -64))), bytes.length - 64);
   return ok(bytes);
 }
-/** Rejects stale geometry, missing/truncated samples and corrupt metadata or samples before GPU upload. */
+/** Stale dense artifacts require a producer rebuild; no second runtime representation. */
 export async function decodeMeshDistanceField(
   bytes: Uint8Array,
   expectedMeshDigest: string,
 ): Promise<Result<MeshDistanceField, DistanceFieldError>> {
   try {
-    if (bytes.byteLength < 68 || bytes.byteLength > 4 + 4096 + MAX_DISTANCE_FIELD_SAMPLES * 4 + 64)
+    if (bytes.byteLength < 68 || bytes.byteLength > 4 + 4096 + MAX_DISTANCE_FIELD_BYTES + 64)
       return distanceFieldFailure('invalid artifact byte length');
     if ((await digest(bytes.subarray(0, -64))) !== new TextDecoder().decode(bytes.subarray(-64)))
       return distanceFieldFailure('distance-field artifact digest mismatch');
@@ -145,15 +147,30 @@ export async function decodeMeshDistanceField(
     const header = JSON.parse(
       new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(4, 4 + headerLength)),
     );
-    if (header.version !== 3 || header.meshDigest !== expectedMeshDigest)
-      return distanceFieldFailure('unsupported or stale distance-field artifact');
+    if (header.version !== 4 || header.meshDigest !== expectedMeshDigest)
+      return distanceFieldFailure(
+        'unsupported or stale distance-field artifact; rebuild its producer',
+      );
+    if (
+      !Array.isArray(header.dimensions) ||
+      header.dimensions.length !== 3 ||
+      header.dimensions.some(
+        (n: number) => !Number.isInteger(n) || n < 3 || n > MAX_VISIBILITY_DISTANCE_FIELD_AXIS,
+      )
+    )
+      return distanceFieldFailure('invalid artifact dimensions');
+    const brickCount = header.dimensions.reduce((n: number, d: number) => n * Math.ceil(d / 4), 1);
     const samples = bytes.subarray(4 + headerLength, -64);
-    if (samples.length % 4 !== 0) return distanceFieldFailure('truncated distance-field samples');
+    if (samples.length % 4 !== 0 || samples.length < brickCount * 4 + 256)
+      return distanceFieldFailure('truncated distance-field samples');
     const view = new DataView(samples.buffer, samples.byteOffset, samples.byteLength),
-      values = new Float32Array(samples.length / 4);
-    for (let i = 0; i < values.length; i++) values[i] = view.getFloat32(i * 4, true);
+      bricks = new Uint32Array(brickCount),
+      values = new Float32Array(samples.length / 4 - brickCount);
+    for (let i = 0; i < bricks.length; i++) bricks[i] = view.getUint32(i * 4, true);
+    for (let i = 0; i < values.length; i++)
+      values[i] = view.getFloat32(bricks.byteLength + i * 4, true);
     const { version: _, ...metadata } = header;
-    const field: MeshDistanceField = { ...metadata, values };
+    const field: MeshDistanceField = { ...metadata, bricks, values };
     const valid = validateMeshDistanceField(field);
     return valid.ok ? ok(field) : valid;
   } catch {

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
+import { teardownDawnInstance } from '../lib/dawn-teardown.mjs';
 import browserLaunch from './browser-launch.json' with { type: 'json' };
 
 // This function also runs in the browser realm; keep its inputs POD and WebGPU.
-async function renderProbe(gpu, canvas) {
+async function renderProbe(gpu, canvas, teardown) {
   let stage = 'adapter';
   let device;
   try {
@@ -86,7 +87,8 @@ async function renderProbe(gpu, canvas) {
   } catch (error) {
     return { status: 'failed', stage, message: error.message };
   } finally {
-    device?.destroy();
+    if (teardown) await teardown(device);
+    else device?.destroy();
   }
 }
 
@@ -96,9 +98,14 @@ let server;
 try {
   let result;
   if (backend === 'dawn') {
-    const { create, globals } = await import('webgpu');
+    const { create, globals } = await import('@forgeax/engine-dawn-node');
     Object.assign(globalThis, globals);
-    result = await renderProbe(create([]));
+    let gpu = create([]);
+    result = await renderProbe(gpu, undefined, (device) =>
+      teardownDawnInstance(device ? [device] : [], () => {
+        gpu = undefined;
+      }),
+    );
   } else if (backend === 'browser') {
     const { chromium } = await import('playwright');
     server = createServer((_request, response) => {

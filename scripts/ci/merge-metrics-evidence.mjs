@@ -25,7 +25,6 @@ const PRODUCER_PATHS = Object.freeze({
     'report/pixel-parity-standard-lanes.json',
   ]),
   runtime: Object.freeze([
-    'packages/runtime/bench-result.json',
     'report/hello-triangle/fps.json',
     'apps/dual-impl-spike/report/texture-4x4.json',
     'apps/hello/lod-occlusion/evidence/gpu-frame-samples.json',

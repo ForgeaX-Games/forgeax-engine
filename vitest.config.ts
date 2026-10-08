@@ -92,6 +92,16 @@ export default defineConfig({
       'apps/hello/triangle',
       {
         test: {
+          name: '@forgeax/hello-lod-occlusion',
+          include: [
+            'apps/hello/lod-occlusion/src/__tests__/lod-occlusion-performance.integration.test.ts',
+          ],
+          environment: 'node',
+          typecheck: { enabled: false },
+        },
+      },
+      {
+        test: {
           name: '@forgeax/hello-boss-lightning',
           include: [
             'apps/hello/boss-lightning/src/__tests__/*.unit.test.ts',

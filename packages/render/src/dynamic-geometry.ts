@@ -325,6 +325,25 @@ export function createDynamicGeometryLifecycle(
       return undefined;
     return record;
   };
+  // The reservation (record + mesh bytes) ends here. A deferred release must
+  // not drop a newer record that reused the id after its fence was scheduled.
+  const release = (id: string, record: CandidateRecord): void => {
+    if (records.get(id) !== record) return;
+    records.delete(id);
+    meshBytes = Math.max(0, meshBytes - record.candidate.meshBytes);
+  };
+  const cancelRecord = (
+    id: string,
+    record: CandidateRecord,
+    completion: Promise<unknown> | undefined,
+  ): void => {
+    record.candidate = Object.freeze({ ...record.candidate, state: 'cancelled' as const });
+    if (completion === undefined) release(id, record);
+    else {
+      const settle = (): void => release(id, record);
+      void completion.then(settle, settle);
+    }
+  };
 
   return {
     prepare(input, generation) {
@@ -554,14 +573,7 @@ export function createDynamicGeometryLifecycle(
           'retire published geometry or await the existing terminal cleanup',
         );
       }
-      record.candidate = Object.freeze({ ...record.candidate, state: 'cancelled' as const });
-      const release = (): void => {
-        if (records.get(candidate.candidateId) !== record) return;
-        records.delete(candidate.candidateId);
-        meshBytes = Math.max(0, meshBytes - record.candidate.meshBytes);
-      };
-      if (completion === undefined) release();
-      else void completion.then(release, release);
+      cancelRecord(candidate.candidateId, record, completion);
       return ok(undefined);
     },
     retire(candidate) {
@@ -618,8 +630,7 @@ export function createDynamicGeometryLifecycle(
           'retire the published candidate before finalizing its receipt-bound cleanup',
           { candidateId: candidate.candidateId },
         );
-      records.delete(candidate.candidateId);
-      meshBytes = Math.max(0, meshBytes - record.candidate.meshBytes);
+      release(candidate.candidateId, record);
       return ok(undefined);
     },
     publishFrame(frame, worlds, fixedStep, canPublish, recordStageLane) {
@@ -684,14 +695,7 @@ export function createDynamicGeometryLifecycle(
         if (record.candidate.state === 'cancelled' || record.candidate.state === 'retired')
           continue;
         publishedReceipts.delete(id);
-        record.candidate = Object.freeze({ ...record.candidate, state: 'cancelled' as const });
-        const release = (): void => {
-          if (records.get(id) !== record) return;
-          records.delete(id);
-          meshBytes = Math.max(0, meshBytes - record.candidate.meshBytes);
-        };
-        if (completion === undefined) release();
-        else void completion.then(release, release);
+        cancelRecord(id, record, completion);
         invalidated += 1;
       }
       latestRevisionByWorld.delete(world);
@@ -703,9 +707,8 @@ export function createDynamicGeometryLifecycle(
       const invalidatedWorlds = new Set<object>();
       for (const [id, record] of records) {
         if (record.candidate.generation !== generation) {
-          records.delete(id);
+          release(id, record);
           publishedReceipts.delete(id);
-          meshBytes = Math.max(0, meshBytes - record.candidate.meshBytes);
           invalidatedWorlds.add(record.world);
           invalidated += 1;
         }

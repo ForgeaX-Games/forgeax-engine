@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5208",
     "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:deferred-low": "PERF_QUERY='renderPath=deferred&camera=low' node scripts/smoke-dawn.mjs",
     "motion-matrix": "node scripts/motion-matrix.mjs",
     "test": "vitest run src/__tests__/workload.test.ts"
   },
@@ -53,9 +54,9 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
     "vitest": "4.1.11",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

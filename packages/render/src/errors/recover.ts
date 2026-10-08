@@ -9,7 +9,6 @@
 import type { RecoveryGuidance, RecoveryPhase } from '../assembly/renderer-lifecycle';
 import type { DeviceResourceKind, DeviceScopeReceipt } from '../device/resource-types';
 import type { ReflectionFallbackRecoveryAction } from '../inspection-types';
-import type { SsrAdmissionError, SsrOwnerRecoveryAction } from '../ssr/errors';
 
 export type { RecoveryGuidance, RecoveryPhase } from '../assembly/renderer-lifecycle';
 export { RECOVERY_PHASES } from '../assembly/renderer-lifecycle';
@@ -22,25 +21,6 @@ export function reflectionFallbackRecoveryAction(
   if (source === 'probe' && hasLastKnownGood) return 'use-LKG';
   if (source === 'skylight') return 'use-Skylight';
   return 'use-neutral';
-}
-
-/**
- * Maps a detached admission failure to the owning producer action. This is
- * an instruction projection only; SSR never performs the recovery itself.
- */
-export function ssrAdmissionRecoveryAction(error: SsrAdmissionError): SsrOwnerRecoveryAction {
-  switch (error.code) {
-    case 'ssr-not-requested':
-    case 'ssr-receipt-stale':
-      return 'retry';
-    case 'ssr-reflection-fallback-unavailable':
-      return error.detail.action;
-    case 'ssr-format-unavailable':
-    case 'ssr-temporal-unavailable':
-      return error.detail.action;
-    case 'ssr-receipt-identity-mismatch':
-      return 'rebuild';
-  }
 }
 
 /** Closed outcome vocabulary shared by recovery inspection and errors. */

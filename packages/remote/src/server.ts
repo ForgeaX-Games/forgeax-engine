@@ -18,9 +18,9 @@ import { REMOTE_ERROR_CODE_TO_JSONRPC, RemoteError } from './errors';
 import { type ExecuteContext, executeScript } from './execute';
 import {
   buildIntrospectDoc,
-  type ComponentIntrospectionDescriptor,
   isExecutionRoot,
   isProfilerRoot,
+  type RemoteRootValues,
 } from './introspect';
 
 export type { ComponentIntrospectionDescriptor } from './introspect';
@@ -34,31 +34,13 @@ export type ConsoleHandle = {
   readonly close: () => Promise<void>;
 };
 
-export type StartServerOptions = {
-  readonly port: number;
-  readonly host?: string;
-  readonly world: unknown;
-  readonly renderer?: unknown;
-  readonly assets?: unknown;
-  /** Resolve modules in the owning Host realm, using the existing eval seam. */
-  readonly importModule?: ExecuteContext['importModule'];
-  /** JSON-safe host reflection; the remote package does not know component owners. */
-  readonly introspection?: readonly ComponentIntrospectionDescriptor[];
-  /** Explicit CPU profiler capability; omitted unless the host opts in. */
-  readonly profiler?: unknown;
-  /** Structural report provider; remote never imports the App owner. */
-  readonly execution?: unknown;
-  /** Host-owned simulation operations and realm Context; Remote owns neither. */
-  readonly simulation?: unknown;
-  /** Read-only DevKit plugin projection; Remote never owns plugin state. */
-  readonly plugins?: unknown;
-  /**
-   * Host-owned RHI capture capability for eval-scope injection (plan-strategy D-4).
-   * It is exposed as the single `rhiCapture` eval root.
-   * Undefined when FORGEAX_ENGINE_RHI_DEBUG !== '1'.
-   */
-  readonly rhiCapture?: unknown;
-};
+export type StartServerOptions = Omit<RemoteRootValues, 'renderer' | 'assets'> &
+  Pick<ExecuteContext, 'importModule'> & {
+    readonly port: number;
+    readonly host?: string;
+    readonly renderer?: unknown;
+    readonly assets?: unknown;
+  };
 
 type JsonRpcRequest = {
   jsonrpc?: unknown;
@@ -118,18 +100,10 @@ function isValidId(v: unknown): v is number | string | null {
 async function handleEnvelope(
   raw: string,
   ctx: {
-    world: unknown;
-    renderer: unknown;
-    assets: unknown;
-    importModule: ExecuteContext['importModule'];
-    rhiCapture: unknown | undefined;
-    introspection: readonly ComponentIntrospectionDescriptor[];
-    profiler: unknown | undefined;
-    execution: unknown | undefined;
-    simulation: unknown | undefined;
-    plugins: unknown | undefined;
-    host: string;
-    port: number;
+    readonly roots: RemoteRootValues;
+    readonly importModule: ExecuteContext['importModule'];
+    readonly host: string;
+    readonly port: number;
   },
 ): Promise<JsonRpcResponse | null> {
   let parsed: JsonRpcRequest;
@@ -147,20 +121,7 @@ async function handleEnvelope(
 
   let response: JsonRpcResponse;
   if (parsed.method === 'introspect') {
-    response = respondOk(
-      id,
-      buildIntrospectDoc(ctx.host, ctx.port, {
-        world: ctx.world,
-        renderer: ctx.renderer,
-        assets: ctx.assets,
-        ...(ctx.rhiCapture !== undefined ? { rhiCapture: ctx.rhiCapture } : {}),
-        ...(ctx.profiler !== undefined ? { profiler: ctx.profiler } : {}),
-        ...(ctx.execution !== undefined ? { execution: ctx.execution } : {}),
-        ...(ctx.simulation !== undefined ? { simulation: ctx.simulation } : {}),
-        ...(ctx.plugins !== undefined ? { plugins: ctx.plugins } : {}),
-        ...(ctx.introspection.length > 0 ? { introspection: ctx.introspection } : {}),
-      }),
-    );
+    response = respondOk(id, buildIntrospectDoc(ctx.host, ctx.port, ctx.roots));
   } else if (parsed.method === 'eval') {
     const params = parsed.params as { script?: unknown } | undefined;
     const script = params?.script;
@@ -168,15 +129,8 @@ async function handleEnvelope(
       response = respondError(id, -32602, 'Invalid params: eval requires { script: string }');
     } else {
       const result = await executeScript(script, {
-        world: ctx.world,
-        renderer: ctx.renderer,
-        assets: ctx.assets,
+        ...ctx.roots,
         ...(ctx.importModule === undefined ? {} : { importModule: ctx.importModule }),
-        rhiCapture: ctx.rhiCapture,
-        profiler: ctx.profiler,
-        execution: ctx.execution,
-        simulation: ctx.simulation,
-        plugins: ctx.plugins,
       });
       if (result.ok) {
         response = respondOk(id, result.value);
@@ -210,15 +164,19 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
       perMessageDeflate: false,
     });
 
-    const world = opts.world;
-    const renderer = opts.renderer ?? {};
-    const assets = opts.assets ?? {};
-    const rhiCapture = opts.rhiCapture;
-    const introspection = opts.introspection ?? [];
-    const profiler = isProfilerRoot(opts.profiler) ? opts.profiler : undefined;
-    const execution = isExecutionRoot(opts.execution) ? opts.execution : undefined;
-    const simulation = opts.simulation;
-    const plugins = opts.plugins;
+    const roots: RemoteRootValues = {
+      world: opts.world,
+      renderer: opts.renderer ?? {},
+      assets: opts.assets ?? {},
+      ...(opts.rhiCapture === undefined ? {} : { rhiCapture: opts.rhiCapture }),
+      ...(isProfilerRoot(opts.profiler) ? { profiler: opts.profiler } : {}),
+      ...(isExecutionRoot(opts.execution) ? { execution: opts.execution } : {}),
+      ...(opts.simulation === undefined ? {} : { simulation: opts.simulation }),
+      ...(opts.plugins === undefined ? {} : { plugins: opts.plugins }),
+      ...(opts.introspection === undefined || opts.introspection.length === 0
+        ? {}
+        : { introspection: opts.introspection }),
+    };
     let settled = false;
     let boundPort = opts.port;
 
@@ -246,20 +204,7 @@ export function startServer(opts: StartServerOptions): Promise<Result<ConsoleHan
     wss.on('connection', (ws: WebSocket) => {
       ws.on('message', (raw) => {
         const text = typeof raw === 'string' ? raw : raw.toString();
-        handleEnvelope(text, {
-          world,
-          renderer,
-          assets,
-          importModule: opts.importModule,
-          rhiCapture,
-          introspection,
-          profiler,
-          execution,
-          simulation,
-          plugins,
-          host,
-          port: boundPort,
-        })
+        handleEnvelope(text, { roots, importModule: opts.importModule, host, port: boundPort })
           .then((response) => {
             if (response !== null && ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify(response));

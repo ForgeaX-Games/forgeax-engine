@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "ownSourceHead": "97fad6d1cbc31af5b22cba9b9d9ac8c677236d33",
+  "integrationBase": "321edc5929dee4d08996b462fd2133fc438d0bae",
+  "concurrency": {
+    "packages": 1,
+    "shader": 1,
+    "cargo": 1,
+    "typecheck": 1
+  },
+  "node": "v22.23.2",
+  "completedLocalGates": {
+    "packages": {
+      "exit": 0,
+      "built": 69,
+      "skipped": 0
+    },
+    "processCache": {
+      "exit": 0,
+      "passed": 27,
+      "skipped": 0
+    },
+    "rosterSdk": {
+      "exit": 0,
+      "passed": 96,
+      "skipped": 0
+    },
+    "typecheck": {
+      "exit": 0,
+      "workspaceScope": 236,
+      "tscNoEmitInvocations": 225
+    },
+    "layout": {
+      "exit": 0,
+      "validTestLikeFiles": 3606
+    },
+    "englishSource": {
+      "exit": 0,
+      "note": "existing optional tests directory absent"
+    },
+    "englishAgentDocs": {
+      "exit": 0
+    },
+    "devkit": {
+      "firstAttemptExit": 1,
+      "firstAttemptPassed": 21,
+      "firstAttemptFailed": 2,
+      "cause": "Playwright1.60.0 headless shell1223 missing; cold-case cleanup ENOTEMPTY masked its launch result, no independent cause established.",
+      "preparedWorkerExit": 0,
+      "preparedWorkerPassed": 4,
+      "preparedWorkerSkipped": 0,
+      "uniqueSelectedCasesWithPassEvidence": 23,
+      "namedShaderDeadlinesMs": 120000,
+      "workerDeadlinesMs": 60000,
+      "namedShaderDurationsMs": [7153, 17560],
+      "workerBrowserDurationsMs": [32794, 31044],
+      "limit": "Framework PASS and process exit0 are not native Chromium healthy-shutdown proof."
+    },
+    "lint": {
+      "exit": 0,
+      "existingWarnings": 10,
+      "checkedFiles": 6076
+    }
+  },
+  "sharedShader": {
+    "state": "qualified",
+    "receipt": "next-epoch-shared-inputs-qualified.json",
+    "localStrictReuse": true,
+    "transferredStrictReuse": true,
+    "initialProducerCount": 1,
+    "repeatProducerCount": 0
+  },
+  "screenshot": {
+    "gateRedExit": 1,
+    "originalSourceHead": "e4065eac6cb3be0e88bce4009139f34715f487ad",
+    "artifactUrl": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37580668228/artifacts/11465485991",
+    "artifactMember": "view-registry/runtime-js/live/failure.png",
+    "artifactExpiredAtCheck": false,
+    "artifactExpiresAt": "2026-10-10T06:39:36Z",
+    "copies": [
+      {
+        "path": "/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-validation-infrastructure/scripts/ci/evidence/roi-validation-infrastructure-2026-10-07/ci-first-sdk-restored-preview.png",
+        "bytes": 322245,
+        "sha256": "d81d7b612a79b3a211049813396a29fde24562514f8e3eca5d600ca48f071cbd"
+      },
+      {
+        "path": "/private/tmp/roi-validation-infrastructure-20261007/sdk-npm-first-artifact/view-registry/runtime-js/live/failure.png",
+        "bytes": 322245,
+        "sha256": "d81d7b612a79b3a211049813396a29fde24562514f8e3eca5d600ca48f071cbd"
+      }
+    ],
+    "sourceRemoval": "Engine tracking removed after current source/consumer gates naturally ended; both PNG copies remain unchanged on disk.",
+    "gateGreenExit": 0
+  },
+  "delivery": "own final exact-head complete Main and four SDK consumers pending",
+  "limits": [
+    "No matched host speedup or sub-30-minute full-CI proof.",
+    "Historical Linux Host assertions do not qualify Mac native Chromium shutdown.",
+    "Common changes delivered independently in PR3680; own changes remain unpublished after rebase."
+  ],
+  "rawFiles": [
+    {
+      "path": "next-epoch-packages-build.log",
+      "bytes": 46927,
+      "sha256": "700005990ae093421e2823634e8955deebee6cac529fbf7b2fdb03e527bb3b42"
+    },
+    {
+      "path": "next-epoch-typecheck.log",
+      "bytes": 3616,
+      "sha256": "218d55c4b960dc8cae92e16bbe078c2ee59d3531630b31cfb518207e08cedc9a"
+    },
+    {
+      "path": "next-epoch-process-cache-regressions.log",
+      "bytes": 42325,
+      "sha256": "19c99b52475e5219de5ed2223a0e4d5e50c04878711d5cbfb9ad8ebd44c6912e"
+    },
+    {
+      "path": "next-epoch-roster-sdk-contracts.log",
+      "bytes": 25307,
+      "sha256": "d8a43f8b24c406e3cb6e7c2513d1712c25eb0409450697abc6b3256ce5b19b60"
+    },
+    {
+      "path": "next-epoch-shared-inputs-producer.log",
+      "bytes": 851,
+      "sha256": "bd7dca2a941a3f93a092ee45e26afa93440018500520ef107d450e5c30058638"
+    },
+    {
+      "path": "next-epoch-shared-inputs-reuse.log",
+      "bytes": 61,
+      "sha256": "794ac0336af729283ea364967a643aaeb3cf2171e1126fdd3300ae90e78d4282"
+    },
+    {
+      "path": "next-epoch-devkit-consumers.log",
+      "bytes": 4454,
+      "sha256": "a4b8528f5731fc73bde1827307ef207d6324e571d6712d8556eb90eb1c9c871f"
+    },
+    {
+      "path": "next-epoch-devkit-browser-preparation.log",
+      "bytes": 2346,
+      "sha256": "a59a6b7a17af8c9b2b5022d357c8ffefca9c89f03d6c75dacafa3979f92364e5"
+    },
+    {
+      "path": "next-epoch-worker-prepared.log",
+      "bytes": 685,
+      "sha256": "725ef283e8d035e494bee792ba5d0b11b73cffc15ee5144a0be0badd76bab0c3"
+    },
+    {
+      "path": "next-epoch-binary-gate-red.log",
+      "bytes": 816,
+      "sha256": "7889e8e80977fca70f09d76031183c65fe56315389d6201a48e297c5c374db9f"
+    },
+    {
+      "path": "next-epoch-test-layout.log",
+      "bytes": 79,
+      "sha256": "12cfa1a9e75a642843d1573098c073d9c147e9042603ffe6a4d84a4ab7a5e3f0"
+    },
+    {
+      "path": "next-epoch-english-source.log",
+      "bytes": 46,
+      "sha256": "3a3b422983e355a6d7c9c0ad5771171b330a2dcc617acc0ffc80c5ede36f578e"
+    },
+    {
+      "path": "next-epoch-english-agent-docs.log",
+      "bytes": 57,
+      "sha256": "0ffe884204b28547f753e55162f78562413b54fe8956a48c6f42b4271342e64f"
+    },
+    {
+      "path": "next-epoch-wasm-fetch.log",
+      "bytes": 682,
+      "sha256": "f746db3d48ab8424503653b3b39b78c8450b5b2f8509561d3c69048247397c20"
+    },
+    {
+      "path": "next-epoch-wasm-verify.log",
+      "bytes": 64,
+      "sha256": "36c7d79cf231ed0d5f1e52b942e4f5080cf1e6ab9168b650607089d1ed70b517"
+    },
+    {
+      "path": "next-epoch-shared-inputs-qualified.json",
+      "bytes": 2261,
+      "sha256": "4d7aaf583a6fdd4e7a2b185003d84d99fa608ffb476d5f01d2e104831d33bbf3",
+      "retainedRawPath": "/private/tmp/roi-validation-infrastructure-20261007/next-epoch-shared-inputs-qualified.json",
+      "retainedRawSha256": "8ba460b30de12a607145dab2b160d5fa7f4347e7f2cbba02d8f62cccd453e48b",
+      "note": "Committed JSON formatting only; raw original retained externally."
+    },
+    {
+      "path": "next-epoch-post-consumer-admission.json",
+      "bytes": 209,
+      "sha256": "119596adf648fd37128b57739d454f6d227ab6acb16fd93752da20b37a5a2ab7"
+    },
+    {
+      "path": "next-epoch-wasm-provenance.json",
+      "bytes": 734,
+      "sha256": "5fc24aa740ce783cb7f16606e083b65c83506089da6cd93be201943ce0b25599"
+    },
+    {
+      "path": "next-epoch-screenshot-preservation.json",
+      "bytes": 556,
+      "sha256": "29e2dec06e1b0e6ce8d1e6663164d1641c85e038b68a64653fd9f71935c936fd"
+    },
+    {
+      "path": "next-epoch-screenshot-artifact.json",
+      "bytes": 830,
+      "sha256": "44cf203af509181ef7420736b50186ebd2b3425f81ffc14e58394d07abba49a5",
+      "retainedRawPath": "/private/tmp/roi-validation-infrastructure-20261007/next-epoch-screenshot-artifact.json",
+      "retainedRawSha256": "088669a6133432d0ca931a6227a576954afff067c7114611ea32e8e64a0bd2ab",
+      "note": "Committed JSON formatting only; raw original retained externally."
+    },
+    {
+      "path": "next-epoch-lint-final.log",
+      "bytes": 4476,
+      "sha256": "bd5bcdfef73ef7b5fd0522ceadb5dcd4f9fcbdd8c32237cc6b92a2c604406495"
+    }
+  ]
+}

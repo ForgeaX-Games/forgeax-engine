@@ -47,24 +47,6 @@ function blackbodyWhitePoint(temperature: number): [number, number, number] {
   return [x / y, 1, (1 - x - y) / y];
 }
 
-export function luminanceHistogram(
-  pixels: readonly (readonly [number, number, number, number])[],
-  bins = AUTO_EXPOSURE_PRESET_V1.histogramBins,
-): Uint32Array {
-  const histogram = new Uint32Array(bins);
-  const min = AUTO_EXPOSURE_PRESET_V1.logLuminanceMin;
-  const max = AUTO_EXPOSURE_PRESET_V1.logLuminanceMax;
-  for (const pixel of pixels) {
-    const luminance = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
-    if (!Number.isFinite(luminance) || luminance <= 0) continue;
-    const normalized = (Math.log2(luminance) - min) / (max - min);
-    const index = Math.min(bins - 1, Math.max(0, Math.floor(normalized * bins)));
-    const bucket = histogram[index];
-    if (bucket !== undefined) histogram[index] = bucket + 1;
-  }
-  return histogram;
-}
-
 /**
  * Mirror the fixed shader-side center weighting for deterministic tests. The
  * sample list is row-major over the metering grid (one sample per 4x4 block),
@@ -160,24 +142,6 @@ export function autoExposureTarget(
   return Number.isFinite(target) && target > 0 ? target : fallback;
 }
 
-export function histogramPercentile(histogram: Uint32Array, percentile: number): number {
-  const total = histogram.reduce((sum, value) => sum + value, 0);
-  if (total === 0) return 0;
-  const target = Math.min(total - 1, Math.max(0, Math.floor(percentile * total)));
-  let accumulated = 0;
-  for (let index = 0; index < histogram.length; index += 1) {
-    accumulated += histogram[index] ?? 0;
-    if (accumulated > target) {
-      return (
-        AUTO_EXPOSURE_PRESET_V1.logLuminanceMin +
-        ((index + 0.5) / histogram.length) *
-          (AUTO_EXPOSURE_PRESET_V1.logLuminanceMax - AUTO_EXPOSURE_PRESET_V1.logLuminanceMin)
-      );
-    }
-  }
-  return AUTO_EXPOSURE_PRESET_V1.logLuminanceMax;
-}
-
 export function adaptExposure(
   current: number,
   target: number,
@@ -212,80 +176,4 @@ export function bradfordAdaptD65(
     adaptedLms[2] * scale[2],
   ]);
   return [adaptedXyz[0] / 0.95047, adaptedXyz[1], adaptedXyz[2] / 1.08883];
-}
-
-function labPivot(value: number): number {
-  const epsilon = (6 / 29) ** 3;
-  const kappa = (29 / 3) ** 3;
-  return value > epsilon ? Math.cbrt(value) : value * kappa + 4 / 29;
-}
-
-export function linearRgbToLab(rgb: readonly [number, number, number]): [number, number, number] {
-  const xyz = multiply3(RGB_TO_XYZ_D65, rgb);
-  const x = labPivot(xyz[0] / D65_XYZ[0]);
-  const y = labPivot(xyz[1] / D65_XYZ[1]);
-  const z = labPivot(xyz[2] / D65_XYZ[2]);
-  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
-}
-
-export function ciede2000(
-  first: readonly [number, number, number],
-  second: readonly [number, number, number],
-): number {
-  const [l1, a1, b1] = first;
-  const [l2, a2, b2] = second;
-  const c1 = Math.hypot(a1, b1);
-  const c2 = Math.hypot(a2, b2);
-  const cBar = (c1 + c2) / 2;
-  const g = 0.5 * (1 - Math.sqrt(cBar ** 7 / (cBar ** 7 + 25 ** 7)));
-  const a1Prime = (1 + g) * a1;
-  const a2Prime = (1 + g) * a2;
-  const c1Prime = Math.hypot(a1Prime, b1);
-  const c2Prime = Math.hypot(a2Prime, b2);
-  const h1 = hueAngle(a1Prime, b1);
-  const h2 = hueAngle(a2Prime, b2);
-  const deltaL = l2 - l1;
-  const deltaC = c2Prime - c1Prime;
-  const deltaH = hueDelta(h1, h2, c1Prime * c2Prime);
-  const deltaBigH = 2 * Math.sqrt(c1Prime * c2Prime) * Math.sin(deltaH / 2);
-  const lBar = (l1 + l2) / 2;
-  const cBarPrime = (c1Prime + c2Prime) / 2;
-  const hBar = hueMean(h1, h2);
-  const t =
-    1 -
-    0.17 * Math.cos(hBar - Math.PI / 6) +
-    0.24 * Math.cos(2 * hBar) +
-    0.32 * Math.cos(3 * hBar + Math.PI / 30) -
-    0.2 * Math.cos(4 * hBar - (21 * Math.PI) / 60);
-  const deltaTheta =
-    ((30 * Math.PI) / 180) * Math.exp(-((((hBar * 180) / Math.PI - 275) / 25) ** 2));
-  const rc = 2 * Math.sqrt(cBarPrime ** 7 / (cBarPrime ** 7 + 25 ** 7));
-  const sl = 1 + (0.015 * (lBar - 50) ** 2) / Math.sqrt(20 + (lBar - 50) ** 2);
-  const sc = 1 + 0.045 * cBarPrime;
-  const sh = 1 + 0.015 * cBarPrime * t;
-  const rt = -Math.sin(2 * deltaTheta) * rc;
-  return Math.sqrt(
-    (deltaL / sl) ** 2 +
-      (deltaC / sc) ** 2 +
-      (deltaBigH / sh) ** 2 +
-      rt * (deltaC / sc) * (deltaBigH / sh),
-  );
-}
-
-function hueAngle(a: number, b: number): number {
-  if (a === 0 && b === 0) return 0;
-  const angle = Math.atan2(b, a);
-  return angle >= 0 ? angle : angle + 2 * Math.PI;
-}
-
-function hueDelta(first: number, second: number, chromaProduct: number): number {
-  if (chromaProduct === 0) return 0;
-  const delta = second - first;
-  if (Math.abs(delta) <= Math.PI) return delta;
-  return delta > 0 ? delta - 2 * Math.PI : delta + 2 * Math.PI;
-}
-
-function hueMean(first: number, second: number): number {
-  if (Math.abs(first - second) <= Math.PI) return (first + second) / 2;
-  return (first + second + (first + second < 2 * Math.PI ? 2 * Math.PI : -2 * Math.PI)) / 2;
 }

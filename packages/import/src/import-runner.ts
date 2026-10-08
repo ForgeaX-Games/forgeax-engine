@@ -49,6 +49,9 @@ import {
 import { cookImportedMaterials } from './imported-material-cook.js';
 import type { ImporterRegistry } from './importer-registry.js';
 import { validateMeshLodContract } from './mesh-lod.js';
+import { normaliseForPack } from './pack-value.js';
+
+export { normaliseForPack } from './pack-value.js';
 
 /** Reserved `meta.importer` key consumed by vite-plugin-shader, not the import runner. */
 export const SHADER_RESERVED_IMPORTER_KEY = 'shader';
@@ -87,42 +90,6 @@ function declarationsSourceKey(
   guid: string,
 ): string | undefined {
   return declarations.find((declaration) => declaration.guid === guid)?.sourceKey;
-}
-
-/**
- * bug-20260610-pack-typed-array-roundtrip: normalise a value tree so every
- * typed-array becomes a plain `number[]`. The DDC pack is serialised via
- * `JSON.stringify`; left as-is, a `Float32Array` round-trips to an indexed
- * object (`{ "0": v0, ... }`) and the runtime mesh / animation-clip loaders
- * reject it with `asset-parse-failed`. Walking the tree once at the importer
- * boundary keeps every downstream consumer (build emitFile, dev startMetaImport,
- * and any future pack-cache tool) aligned on the same on-disk shape.
- */
-export function normaliseForPack(value: unknown): unknown {
-  if (value === null || value === undefined) return value;
-  if (
-    value instanceof Float32Array ||
-    value instanceof Float64Array ||
-    value instanceof Uint8Array ||
-    value instanceof Uint16Array ||
-    value instanceof Uint32Array ||
-    value instanceof Int8Array ||
-    value instanceof Int16Array ||
-    value instanceof Int32Array
-  ) {
-    return Array.from(value as ArrayLike<number>);
-  }
-  if (Array.isArray(value)) {
-    return value.map(normaliseForPack);
-  }
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = normaliseForPack(v);
-    }
-    return out;
-  }
-  return value;
 }
 
 /** Result envelope returned by {@link runImport} (mirrors the engine `Result<T,E>` shape). */

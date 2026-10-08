@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, realpath, rm, stat, symlink } from 'node:fs/promises';
+import { type BigIntStats, createReadStream, createWriteStream } from 'node:fs';
+import {
+  chmod,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, type PlatformPath, relative, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
@@ -69,8 +79,7 @@ export function snapshotDirectoryInsideProject(
   return !relativeDirectory.startsWith(`..${pathApi.sep}`) && relativeDirectory !== '..';
 }
 
-async function stamp(path: string): Promise<{ stamp: string; mode: number; size: number }> {
-  const info = await stat(path, { bigint: true });
+function stamp(info: BigIntStats): { stamp: string; mode: number; size: number } {
   return {
     stamp: [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs, info.mode].join(':'),
     mode: Number(info.mode),
@@ -112,9 +121,9 @@ async function planSnapshot(projectRoot: string, signal?: AbortSignal): Promise<
   ): Promise<void> {
     signal?.throwIfAborted();
     const canonical = await realpath(source);
-    const info = await stat(canonical);
+    const info = await stat(canonical, { bigint: true });
     if (info.isFile()) {
-      files.push({ source: canonical, target, ...(await stamp(canonical)) });
+      files.push({ source: canonical, target, ...stamp(info) });
       return;
     }
     if (!info.isDirectory() || ancestors.has(canonical))
@@ -190,18 +199,25 @@ async function createRunSnapshotAttempt(
       const target = join(directory, file.target);
       await mkdir(dirname(target), { recursive: true });
       digest.update(JSON.stringify([file.target, file.mode & 0o111, file.size]));
-      await pipeline(
-        createReadStream(file.source),
-        new Transform({
-          transform(chunk, _encoding, callback) {
-            digest.update(chunk);
-            callback(null, chunk);
-          },
-        }),
-        createWriteStream(target),
-        { signal },
-      );
-      if ((await stamp(file.source)).stamp !== file.stamp)
+      // Most installed files are tiny. Avoid constructing three streams per file;
+      // bound the buffer and retain streaming for larger payloads such as WASM.
+      if (file.size <= 64 * 1024) {
+        const bytes = await readFile(file.source, { signal });
+        digest.update(bytes);
+        await writeFile(target, bytes, { signal });
+      } else
+        await pipeline(
+          createReadStream(file.source),
+          new Transform({
+            transform(chunk, _encoding, callback) {
+              digest.update(chunk);
+              callback(null, chunk);
+            },
+          }),
+          createWriteStream(target),
+          { signal },
+        );
+      if (stamp(await stat(file.source, { bigint: true })).stamp !== file.stamp)
         throw new SnapshotChangedError(`Input changed while snapshotting: ${file.source}`);
       await chmod(target, file.mode & 0o111 ? 0o555 : 0o444);
     }

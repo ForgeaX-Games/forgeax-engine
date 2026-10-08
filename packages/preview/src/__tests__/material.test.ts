@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { executeMaterialPreview, materialSampledTextureBudgetFacts } from '../domains/material.js';
 import {
   createMaterialPreviewContribution,
   type MaterialPreviewRequest,
@@ -84,6 +85,82 @@ describe('material.preview canonical contract', () => {
     expect(terminal).toMatchObject({
       ok: false,
       error: { code: 'preview-subject-falsified' },
+    });
+  });
+});
+
+describe('material.preview sampled-texture budget', () => {
+  const ownerFacts = {
+    subjectDigest: 'sha256:subject',
+    bindingsDigest: 'sha256:bindings',
+    closureDigest: 'sha256:closure',
+    sampledTextureLimit: 16,
+    sampledTextureRequired: 21,
+    sampledTextureTransmission: 'exceeded',
+    sampledTextureConflicts: 'metallicTexture,roughnessTexture',
+  };
+
+  it('parses owner budget facts and ignores incomplete ones', () => {
+    expect(materialSampledTextureBudgetFacts(ownerFacts)).toEqual({
+      limit: 16,
+      required: 21,
+      transmission: 'exceeded',
+      conflicts: ['metallicTexture', 'roughnessTexture'],
+    });
+    expect(
+      materialSampledTextureBudgetFacts({ ...ownerFacts, sampledTextureConflicts: '' }),
+    ).toMatchObject({ conflicts: [] });
+    expect(
+      materialSampledTextureBudgetFacts({ ...ownerFacts, sampledTextureTransmission: 'maybe' }),
+    ).toBeUndefined();
+    expect(materialSampledTextureBudgetFacts({ subjectDigest: 'sha256:subject' })).toBeUndefined();
+  });
+
+  it.each([
+    [true, true],
+    [false, true],
+    [true, false],
+  ])('checks Renderer and World readiness before the material oracle (%s, %s)', async (rendererReady, worldReady) => {
+    const guid = 'mat-001';
+    const result = await executeMaterialPreview({ guid } as never, {
+      assets: {
+        loadByGuid: async () => ({
+          ok: true,
+          value: {
+            kind: 'material',
+            passes: [{ name: 'forward', program: { module: 'forgeax::default-standard-pbr' } }],
+          },
+          ownerFacts,
+        }),
+      } as never,
+      renderer: {
+        rendererReady,
+        worldReady,
+        drawCalls: 1,
+        nonBlackPixels: 100,
+        observation: {
+          subjectDigest: 'sha256:subject',
+          program: 'forgeax::default-standard-pbr',
+          pass: 'forward',
+          bindingsDigest: 'sha256:bindings',
+          closureDigest: 'sha256:closure',
+        },
+      } as never,
+      runId: 'run-1',
+    });
+    if (!rendererReady || !worldReady) {
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'resource-preview-oracle-failed', detail: { phase: 'renderer' } },
+      });
+      return;
+    }
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        oracle: { status: 'passed' },
+        sampledTextureBudget: { limit: 16, required: 21, transmission: 'exceeded' },
+      },
     });
   });
 });

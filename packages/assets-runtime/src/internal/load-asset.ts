@@ -1,3 +1,4 @@
+import { validateArtifactPath } from '@forgeax/engine-pack/artifact-path';
 import type {
   Asset,
   AssetArtifactReader,
@@ -38,8 +39,6 @@ export interface AssetLoadOptions {
 }
 
 export type AssetRegistrySnapshot = AssetGraphSnapshot;
-
-export type AssetRegistrySnapshotCounters = AssetRegistrySnapshot['counters'];
 
 export interface AssetRegistry {
   readPluginDefinition(guid: string): Promise<Result<PluginAssetDefinition, AssetLoadError>>;
@@ -165,6 +164,14 @@ export function createAssetRegistry(options: AssetRegistryOptions): AssetRegistr
       );
       if (envelope === undefined) return err(missing(guid));
       const artifacts: AssetArtifactReader = {
+        locate: (descriptor) => {
+          const path = validateArtifactPath(descriptor.path, {
+            packageRoot: row.packageUrl,
+            guid,
+            artifactKey: descriptor.path,
+          });
+          return path.ok ? resolveArtifactUrl(row.packageUrl, path.value) : undefined;
+        },
         read: (descriptor) => {
           const integrity = descriptor.integrity;
           if (integrity === undefined)
@@ -332,7 +339,7 @@ function resolveArtifactUrl(packageUrl: string, path: string): string {
   const separator = packageUrl.lastIndexOf('/');
   const packageDirectory = separator < 0 ? '' : packageUrl.slice(0, separator + 1);
   try {
-    return new URL(path, packageDirectory).toString();
+    return new URL(path, new URL(packageDirectory, globalThis.location?.href)).toString();
   } catch {
     return `${packageDirectory}${path.replace(/^\//, '')}`;
   }

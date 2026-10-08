@@ -80,19 +80,19 @@ export default defineFeature({
     // only keeps the latest submit, so the levels that reached the screen are
     // counted from the exact receipt's display pixels: LOD0 is red, LOD1 green.
     const drawnLevels = async (name: string, expected: number, checks: CheckList) => {
-      const requested = app.renderer.requestObservation?.(['final-srgb']);
+      const requested = app.renderer.requestObservation?.(['final-display']);
       if (requested !== undefined && !requested.ok) {
         checks.ok(name, false, requested.error.code);
         return;
       }
       const observed = await app.renderer.observe(await nextReceipt(app), {
-        include: ['final-srgb'],
+        include: ['final-display'],
       });
       const frame = observed.ok
-        ? observed.value.observations?.find((entry) => entry.domain === 'final-srgb')
+        ? observed.value.observations?.find((entry) => entry.domain === 'final-display')
         : undefined;
       if (frame === undefined) {
-        checks.ok(name, false, observed.ok ? 'no final-srgb observation' : observed.error.code);
+        checks.ok(name, false, observed.ok ? 'no final-display observation' : observed.error.code);
         return;
       }
       const { width, height, bytesPerRow, format } = frame.metadata;

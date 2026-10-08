@@ -28,6 +28,7 @@ function requestedStages(input: StandardOutputRequest): StandardOutputLogicalSta
   if (input.meter) stages.push('meter');
   if (input.dof === true) stages.push('dof');
   if (input.bloom) stages.push('bloom');
+  if (input.lensFlare === true) stages.push('lens-flare');
   if (input.exposure || input.whiteBalance) stages.push('exposure-white-balance');
   stages.push('tone');
   if (input.lut) stages.push('lut');
@@ -48,6 +49,7 @@ function physicalStages(
       case 'temporal':
       case 'meter':
       case 'bloom':
+      case 'lens-flare':
       case 'dof':
       case 'exposure-white-balance':
         return { name, input: LINEAR_HDR_DOMAIN, output: LINEAR_HDR_DOMAIN };
@@ -71,11 +73,15 @@ function physicalStages(
 export function createStandardOutputPlan(input: StandardOutputRequest): StandardOutputPlan {
   const logicalStages = requestedStages(input);
   const incrementalResources = [
+    ...(input.lensFlare === true
+      ? ['standard-lens-flare-prefilter', 'standard-lens-flare-bokeh', 'standard-lens-flare']
+      : []),
     ...(input.lut ? ['standard-color-lut'] : []),
     ...(input.barrelDistortion === true ? ['standard-barrel-distortion'] : []),
     ...(input.lensEffects === true ? ['standard-lens-effects'] : []),
   ];
   const incrementalBindings =
+    (input.lensFlare === true ? 10 : 0) +
     (input.lut ? 2 : 0) +
     (input.barrelDistortion === true ? 3 : 0) +
     (input.lensEffects === true ? 3 : 0);
@@ -86,6 +92,7 @@ export function createStandardOutputPlan(input: StandardOutputRequest): Standard
       meter: input.meter,
       bloom: input.bloom,
       dof: input.dof === true,
+      lensFlare: input.lensFlare === true,
       exposure: input.exposure,
       whiteBalance: input.whiteBalance,
       lut: input.lut,

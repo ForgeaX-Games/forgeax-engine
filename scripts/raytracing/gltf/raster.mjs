@@ -250,7 +250,7 @@ try {
     await settle();
     status.textContent = 'Capturing frame resources';
     if (!renderer.requestObservation) throw new Error('Renderer observation is required');
-    const domains = ['linear-hdr', 'final-srgb', ...(visibleSurface ? ['visible-surface'] : [])];
+    const domains = ['linear-hdr', 'final-display', ...(visibleSurface ? ['visible-surface'] : [])];
     renderer.requestObservation(domains).unwrap();
     const receipts = [];
     const unsubscribe = renderer.subscribe((event) => {
@@ -288,8 +288,8 @@ try {
           }),
       metadata,
     }));
-    const final = observed.observations.find((item) => item.domain === 'final-srgb');
-    if (!final) throw new Error('Missing raw final-srgb observation');
+    const final = observed.observations.find((item) => item.domain === 'final-display');
+    if (!final) throw new Error('Missing raw final-display observation');
     const raw = new Uint8Array(canvas.width * canvas.height * 4);
     for (let y = 0; y < canvas.height; y++) {
       const row = final.bytes.subarray(

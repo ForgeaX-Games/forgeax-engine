@@ -33,7 +33,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isTuple(value: unknown): value is AssetPublicationTuple {
+export function isRuntimePublicationTuple(value: unknown): value is AssetPublicationTuple {
   return (
     isRecord(value) &&
     typeof value.scopeId === 'string' &&
@@ -70,7 +70,11 @@ export function projectRuntimePack<P = unknown>(value: unknown): Result<PackV2<P
   ) {
     return invalid('legacy or malformed pack input', 'runtime Pack v2');
   }
-  if (!isTuple(value) || !Array.isArray(value.assets) || !value.assets.every(isAsset)) {
+  if (
+    !isRuntimePublicationTuple(value) ||
+    !Array.isArray(value.assets) ||
+    !value.assets.every(isAsset)
+  ) {
     return invalid('incomplete publication tuple or asset envelope', 'verified runtime Pack v2');
   }
 

@@ -1,8 +1,11 @@
 import type {
   BindGroupDescriptor,
+  Blas,
+  BlasBuildEntry,
   Buffer,
   CommandBuffer,
   PipelineLayout,
+  QuerySet,
   RenderPassColorAttachment,
   RenderPassDepthStencilAttachment,
   RhiBindingResource,
@@ -12,10 +15,13 @@ import type {
   RhiQueue,
   RhiRenderPipelineOps,
   Texture,
+  Tlas,
+  TlasBuildEntry,
 } from '@forgeax/engine-rhi';
 import { ok, type Result } from '@forgeax/engine-types';
 import type { RhiDebugError } from '../errors';
 import type { RhiCallEvent, Tape } from '../protocol/types';
+import type { RecordedBlasBuild, RecordedTlasBuild } from '../types';
 import {
   blob,
   clearBuffer,
@@ -32,7 +38,7 @@ import {
   seedInitialData,
   unsupportedEvent,
 } from './execute-support';
-import type { ReplayResource, ResourceTable } from './resources';
+import { destroyReplayResource, type ReplayResource, type ResourceTable } from './resources';
 import { isDepthTextureFormat } from './texture-format';
 
 export { eventFailure } from './execute-support';
@@ -79,12 +85,27 @@ export async function executeEvent(
           context.device.createQuerySet(event.desc),
           { kind: 'query-set' },
         );
+      case 'createBlas':
+        return createResource(context, eventIndex, event, context.device.createBlas(event.desc), {
+          kind: 'acceleration-structure',
+          role: 'blas',
+        });
+      case 'createTlas':
+        return createResource(context, eventIndex, event, context.device.createTlas(event.desc), {
+          kind: 'acceleration-structure',
+          role: 'tlas',
+        });
+      case 'destroyBlas':
+      case 'destroyTlas':
+        return destroyAccelerationStructure(context, event, eventIndex);
+      case 'buildAccelerationStructures':
+        return buildAccelerationStructures(context, event, eventIndex);
       case 'destroyBuffer':
         return destroyResource(context, eventIndex, event, 'buffer');
       case 'destroyTexture':
         return destroyResource(context, eventIndex, event, 'texture');
       case 'destroyQuerySet':
-        return destroyQuerySet(context, event, eventIndex);
+        return destroyResource(context, eventIndex, event, 'query-set');
       case 'createTextureView': {
         const texture = requireResource<Texture>(
           context,
@@ -427,31 +448,15 @@ function createResource<T extends ReplayResource>(
 function destroyResource(
   context: ReplayExecutionContext,
   eventIndex: number,
-  event: Extract<RhiCallEvent, { kind: 'destroyBuffer' | 'destroyTexture' }>,
-  kind: 'buffer' | 'texture',
+  event: Extract<RhiCallEvent, { kind: 'destroyBuffer' | 'destroyTexture' | 'destroyQuerySet' }>,
+  kind: 'buffer' | 'texture' | 'query-set',
 ): Result<void, RhiDebugError> {
   const entry = context.table.get(event.handleId);
   if (entry === undefined || entry.resource.kind !== kind)
     return missingResource(eventIndex, event, event.handleId, kind);
-  const result =
-    kind === 'buffer'
-      ? context.device.destroyBuffer(entry.resource.value as Buffer)
-      : context.device.destroyTexture(entry.resource.value as Texture);
-  if (!result.ok) return eventFailure(eventIndex, event, 'create', result.error);
-  context.table.delete(event.handleId);
-  return ok(undefined);
-}
-
-function destroyQuerySet(
-  context: ReplayExecutionContext,
-  event: Extract<RhiCallEvent, { kind: 'destroyQuerySet' }>,
-  eventIndex: number,
-): Result<void, RhiDebugError> {
-  const entry = context.table.get(event.handleId);
-  if (entry?.resource.kind !== 'query-set')
-    return missingResource(eventIndex, event, event.handleId, 'query-set');
-  const result = context.device.destroyQuerySet(entry.resource.value);
-  if (!result.ok) return eventFailure(eventIndex, event, 'create', result.error);
+  const result = destroyReplayResource(context.device, entry.resource);
+  if (result !== undefined && !result.ok)
+    return eventFailure(eventIndex, event, 'create', result.error);
   context.table.delete(event.handleId);
   return ok(undefined);
 }
@@ -469,7 +474,7 @@ function resolveQuerySet(
     event.kind,
     'command',
   );
-  const querySet = requireResource<import('@forgeax/engine-rhi').QuerySet>(
+  const querySet = requireResource<QuerySet>(
     context,
     event.querySetHandleId,
     'query-set',
@@ -493,6 +498,119 @@ function resolveQuerySet(
     destination.value,
     event.destinationOffset,
   );
+  return result.ok ? ok(undefined) : eventFailure(eventIndex, event, 'encode', result.error);
+}
+
+function destroyAccelerationStructure(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'destroyBlas' | 'destroyTlas' }>,
+  eventIndex: number,
+): Result<void, RhiDebugError> {
+  const role = event.kind === 'destroyBlas' ? 'blas' : 'tlas';
+  const resource = requireReplayResource(
+    context,
+    event.handleId,
+    'acceleration-structure',
+    eventIndex,
+    event.kind,
+    role,
+  );
+  if (!resource.ok) return resource;
+  const result =
+    resource.value.kind === 'acceleration-structure' && resource.value.role === 'blas'
+      ? context.device.destroyBlas(resource.value.value)
+      : context.device.destroyTlas(resource.value.value as Tlas);
+  if (!result.ok) return eventFailure(eventIndex, event, 'create', result.error);
+  context.table.delete(event.handleId);
+  return ok(undefined);
+}
+
+function buildAccelerationStructures(
+  context: ReplayExecutionContext,
+  event: Extract<RhiCallEvent, { kind: 'buildAccelerationStructures' }>,
+  eventIndex: number,
+): Result<void, RhiDebugError> {
+  const encoder = requireResource<RhiCommandEncoder>(
+    context,
+    event.cmdHandleId,
+    'encoder',
+    eventIndex,
+    event.kind,
+    'command',
+  );
+  if (!encoder.ok) return encoder;
+  return encodeAccelerationStructureBuild(
+    context,
+    encoder.value,
+    event.blas,
+    event.tlas,
+    event,
+    eventIndex,
+  );
+}
+
+/**
+ * Encode recorded BLAS/TLAS builds with replay-device objects. Bootstrap
+ * acceleration structures reuse it to rebuild their capture-start state.
+ */
+export function encodeAccelerationStructureBuild(
+  context: ReplayExecutionContext,
+  encoder: RhiCommandEncoder,
+  blasBuilds: readonly RecordedBlasBuild[],
+  tlasBuilds: readonly RecordedTlasBuild[],
+  event: RhiCallEvent,
+  eventIndex: number,
+): Result<void, RhiDebugError> {
+  const lookup = <T>(id: string, kind: string, role?: string): Result<T, RhiDebugError> =>
+    requireResource<T>(context, id, kind, eventIndex, event.kind, role);
+  const blas: BlasBuildEntry[] = [];
+  for (const build of blasBuilds) {
+    const target = lookup<Blas>(build.blasHandleId, 'acceleration-structure', 'blas');
+    if (!target.ok) return target;
+    const geometries: BlasBuildEntry['geometries'][number][] = [];
+    for (const geometry of build.geometries) {
+      const vertexBuffer = lookup<Buffer>(geometry.vertexBufferHandleId, 'buffer');
+      if (!vertexBuffer.ok) return vertexBuffer;
+      let index: { buffer: Buffer; firstIndex?: number } | undefined;
+      if (geometry.index !== undefined && geometry.index !== null) {
+        const indexBuffer = lookup<Buffer>(geometry.index.bufferHandleId, 'buffer');
+        if (!indexBuffer.ok) return indexBuffer;
+        index = {
+          buffer: indexBuffer.value,
+          ...(geometry.index.firstIndex === undefined || geometry.index.firstIndex === null
+            ? {}
+            : { firstIndex: geometry.index.firstIndex }),
+        };
+      }
+      geometries.push({
+        vertexBuffer: vertexBuffer.value,
+        vertexStride: geometry.vertexStride,
+        ...(geometry.firstVertex === undefined || geometry.firstVertex === null
+          ? {}
+          : { firstVertex: geometry.firstVertex }),
+        ...(index === undefined ? {} : { index }),
+      });
+    }
+    blas.push({ blas: target.value, geometries });
+  }
+  const tlas: TlasBuildEntry[] = [];
+  for (const build of tlasBuilds) {
+    const target = lookup<Tlas>(build.tlasHandleId, 'acceleration-structure', 'tlas');
+    if (!target.ok) return target;
+    const instances: TlasBuildEntry['instances'][number][] = [];
+    for (const instance of build.instances) {
+      const instanceBlas = lookup<Blas>(instance.blasHandleId, 'acceleration-structure', 'blas');
+      if (!instanceBlas.ok) return instanceBlas;
+      instances.push({
+        blas: instanceBlas.value,
+        transform: instance.transform,
+        customIndex: instance.customIndex,
+        mask: instance.mask,
+      });
+    }
+    tlas.push({ tlas: target.value, instances });
+  }
+  const result = encoder.buildAccelerationStructures(blas, tlas);
   return result.ok ? ok(undefined) : eventFailure(eventIndex, event, 'encode', result.error);
 }
 
@@ -540,6 +658,12 @@ function createBindGroup(
       resources.push({ kind: 'sampler', value: resolved.resource.value });
     } else if (entry.resourceKind === 'textureView' && resolved.resource.kind === 'texture-view') {
       resources.push({ kind: 'textureView', value: resolved.resource.value });
+    } else if (
+      entry.resourceKind === 'accelerationStructure' &&
+      resolved.resource.kind === 'acceleration-structure' &&
+      resolved.resource.role === 'tlas'
+    ) {
+      resources.push({ kind: 'accelerationStructure', value: resolved.resource.value });
     } else {
       return missingResource(eventIndex, event, resourceId, entry.resourceKind);
     }
@@ -752,11 +876,16 @@ function submit(
 ): Result<void, RhiDebugError> {
   const commandBuffers: CommandBuffer[] = [];
   for (const id of event.cmdHandleIds) {
-    const entry = context.table.get(id);
-    if (entry?.resource.kind !== 'encoder' || entry.resource.role !== 'command-buffer') {
-      return missingResource(eventIndex, event, id, 'encoder');
-    }
-    commandBuffers.push(entry.resource.value as CommandBuffer);
+    const commandBuffer = requireResource<CommandBuffer>(
+      context,
+      id,
+      'encoder',
+      eventIndex,
+      event.kind,
+      'command-buffer',
+    );
+    if (!commandBuffer.ok) return commandBuffer;
+    commandBuffers.push(commandBuffer.value);
   }
   const result = context.queue.submit(commandBuffers);
   return result.ok ? ok(undefined) : eventFailure(eventIndex, event, 'submit', result.error);
@@ -833,13 +962,7 @@ function replayTimestampWrites(
   const handle = event.timestampQuerySetHandleId;
   if (handle === undefined)
     return missingResource(eventIndex, event, 'timestamp-query-set', 'query-set');
-  const query = requireResource<import('@forgeax/engine-rhi').QuerySet>(
-    context,
-    handle,
-    'query-set',
-    eventIndex,
-    event.kind,
-  );
+  const query = requireResource<QuerySet>(context, handle, 'query-set', eventIndex, event.kind);
   if (!query.ok) return query;
   return ok({
     ...event.desc.timestampWrites,

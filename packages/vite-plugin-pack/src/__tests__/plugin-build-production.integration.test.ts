@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { AssetGuid, PackageId } from '@forgeax/engine-pack/guid';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import type { Importer } from '@forgeax/engine-types';
@@ -43,7 +45,7 @@ describe('production Pack bundle contract', () => {
     true,
     false,
   ])('validates direct plugin references after dynamic outputs exist: %s', async (present) => {
-    const project = await mkdtemp('/tmp/forgeax-plugin-reference-build-');
+    const project = await mkdtemp(join(tmpdir(), 'forgeax-plugin-reference-build-'));
     roots.push(project);
     const assets = resolve(project, 'assets');
     await mkdir(assets);
@@ -108,11 +110,11 @@ export default definePack({
         return;
       }
       await production;
-      const catalog = JSON.parse(
-        String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
-      );
+      const catalog = decodeCatalogWire(
+        JSON.parse(String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source)),
+      ).unwrap();
       expect(catalog).toHaveLength(2);
-      expect(catalog.find((entry: { kind: string }) => entry.kind === 'plugin').refs).toEqual([
+      expect(catalog.find((entry: { kind: string }) => entry.kind === 'plugin')?.refs).toEqual([
         samplerGuid,
       ]);
     } finally {
@@ -122,7 +124,7 @@ export default definePack({
   }, 60_000);
 
   it('emits the source-package product through the hashed production sink', async () => {
-    const root = await mkdtemp('/tmp/forgeax-pack-build-');
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-build-'));
     roots.push(root);
     const assets = resolve(root, 'assets');
     await mkdir(assets);
@@ -157,15 +159,9 @@ export default definePack({
           return `assets/${referenceId}-hash`;
         },
       });
-      const catalog = JSON.parse(
-        String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
-      ) as Array<{
-        guid: string;
-        packageUrl: string;
-        publication?: {
-          outputs: Array<{ guid: string; sourceKey: string; kind: string; refs: string[] }>;
-        };
-      }>;
+      const catalog = decodeCatalogWire(
+        JSON.parse(String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source)),
+      ).unwrap();
       const row = catalog.find((entry) => entry.guid.toLowerCase() === GUID);
       expect(row?.packageUrl).toMatch(/^\/preview\/assets\/.*-hash$/);
       expect(row?.publication?.outputs).toEqual([
@@ -187,7 +183,7 @@ export default definePack({
   });
 
   it('retains the missing importer module in a failed production build', async () => {
-    const root = await mkdtemp('/tmp/forgeax-pack-missing-module-');
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-pack-missing-module-'));
     roots.push(root);
     const assets = resolve(root, 'assets');
     await mkdir(assets);
@@ -236,7 +232,7 @@ export default definePack({
   });
 
   it('resolves a logical Catalog Pack path back through a symlinked build root', async () => {
-    const project = await mkdtemp('/tmp/forgeax-pack-logical-build-');
+    const project = await mkdtemp(join(tmpdir(), 'forgeax-pack-logical-build-'));
     roots.push(project);
     const physicalAssets = resolve(project, 'game', 'assets');
     const farmAssets = resolve(project, 'host-games', 'sample', 'assets');
@@ -284,13 +280,9 @@ export default definePack({
         },
       });
 
-      const catalog = JSON.parse(
-        String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
-      ) as Array<{
-        guid: string;
-        sourcePath: string;
-        publication?: { sourcePath: string; sourceRevision: string };
-      }>;
+      const catalog = decodeCatalogWire(
+        JSON.parse(String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source)),
+      ).unwrap();
       expect(catalog).toContainEqual(
         expect.objectContaining({
           guid: GUID,
@@ -318,7 +310,7 @@ export default definePack({
   });
 
   it('emits ScriptablePack roots and v3 instances as independent production packages', async () => {
-    const project = await mkdtemp('/tmp/forgeax-scriptable-pack-build-');
+    const project = await mkdtemp(join(tmpdir(), 'forgeax-scriptable-pack-build-'));
     roots.push(project);
     const assets = resolve(project, 'assets');
     await mkdir(assets);
@@ -370,9 +362,9 @@ export default definePack({
           return `assets/${referenceId}-hash`;
         },
       });
-      const catalog = JSON.parse(
-        String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
-      ) as Array<{ packageId?: string; packageUrl: string; sourceKey?: string }>;
+      const catalog = decodeCatalogWire(
+        JSON.parse(String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source)),
+      ).unwrap();
       expect(catalog).toHaveLength(2);
       expect(catalog.map((entry) => entry.packageId).sort()).toEqual(
         [rootPackageId, instancePackageId].sort(),
@@ -396,7 +388,7 @@ export default definePack({
   });
 
   it('cooks direct producer-backed outputs before emitting the production Pack', async () => {
-    const project = await mkdtemp('/tmp/forgeax-direct-pack-build-');
+    const project = await mkdtemp(join(tmpdir(), 'forgeax-direct-pack-build-'));
     roots.push(project);
     const assets = resolve(project, 'assets');
     await mkdir(assets);
@@ -477,16 +469,9 @@ export default definePack({
           return `assets/${referenceId}-hash`;
         },
       });
-      const catalog = JSON.parse(
-        String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source),
-      ) as Array<{
-        guid: string;
-        kind: string;
-        packageId?: string;
-        sourceKey?: string;
-        execution?: string;
-        refs?: string[];
-      }>;
+      const catalog = decodeCatalogWire(
+        JSON.parse(String(emitted.find((asset) => asset.fileName === 'pack-index.json')?.source)),
+      ).unwrap();
       const particle = catalog.find((entry) => entry.guid === particleGuid);
       expect(particle).toMatchObject({
         guid: particleGuid,

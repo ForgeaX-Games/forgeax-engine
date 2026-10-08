@@ -27,6 +27,7 @@ it.each([
   let row = rows[0];
   result[0] = vec4<f32>(normalize(transformNormal(row.worldFromLocal, vec3<f32>(0.3, 0.7, -0.2))), 1.0);
   ${storage ? 'result[1] = row.previousWorldFromLocal[3]; result[2] = row.temporal;' : 'result[1] = row.worldFromLocal[3];'}
+  result[3] = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(row.surface.z));
 }`,
     {
       id: 'test::mesh-normal',
@@ -47,11 +48,11 @@ it.each([
     usage: GPUBufferUsage.COPY_DST | (storage ? GPUBufferUsage.STORAGE : GPUBufferUsage.UNIFORM),
   });
   const output = device.createBuffer({
-    size: 48,
+    size: 64,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const readback = device.createBuffer({
-    size: 48,
+    size: 64,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   try {
@@ -70,7 +71,7 @@ it.each([
     const rotated = mat4.compose(
       mat4.create(),
       vec3.create(3, 4, 5),
-      quat.fromEuler(quat.create(), 0.2, 0.6, -0.3),
+      quat.fromEuler(quat.create(), 0.2, 0.6, -0.3, 'XYZ'),
       vec3.create(1.5, 0.5, 2),
     );
     const shear = Float32Array.from([1, 0, 0, 0, 0.4, 2, 0, 0, -0.2, 0.3, -3, 0, 3, 4, 5, 1]);
@@ -84,6 +85,7 @@ it.each([
         source: {
           transform: { world },
           materials: [],
+          lightingChannels: 0x80000001,
           temporal: { previousTransform: { world: previous }, reactive: true, motionValid: false },
         },
       } as unknown as ValidatedRenderable;
@@ -105,18 +107,19 @@ it.each([
           return ok(undefined);
         },
       } as unknown as RhiQueue;
-      uploadMeshSsboBatch(queue, { buffer: {} as Buffer }, [entry], null);
+      uploadMeshSsboBatch(queue, { buffer: {} as Buffer }, [entry], null, [], undefined, storage);
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, group);
       pass.dispatchWorkgroups(1);
       pass.end();
-      encoder.copyBufferToBuffer(output, 0, readback, 0, 48);
+      encoder.copyBufferToBuffer(output, 0, readback, 0, 64);
       device.queue.submit([encoder.finish()]);
       await readback.mapAsync(GPUMapMode.READ);
       const actual = new Float32Array(readback.getMappedRange().slice(0));
       readback.unmap();
+      expect(new Uint32Array(actual.buffer)[15]).toBe(0x80000001);
       const n = mat3.normalMatrix(mat3.create(), world);
       const expected = [0, 1, 2].map(
         (i) => (n[i] as number) * 0.3 + (n[i + 3] as number) * 0.7 - (n[i + 6] as number) * 0.2,

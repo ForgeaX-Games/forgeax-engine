@@ -20,7 +20,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ImporterRegistry } from '@forgeax/engine-import';
 import type {
-  DecodedImage,
   EquirectAsset,
   ImageMeta,
   ImportContext,
@@ -41,11 +40,7 @@ import { decodeImageFromFile } from '../decode-image-from-file.js';
 import { decodeHdr } from '../hdr-decoder.js';
 import { imageImporter } from '../image-importer.js';
 import { parseImage } from '../parse-image.js';
-import {
-  type ExistingExternalAssetPackage,
-  reimportReuseMeta,
-  validateColorSpaceForHdr,
-} from '../reimport-reuse-meta.js';
+import { type ExistingExternalAssetPackage, reimportReuseMeta } from '../reimport-reuse-meta.js';
 import { subAssetKey, subAssetKeyEqual } from '../sub-asset-key.js';
 import { toAssetPack } from '../to-asset-pack.js';
 import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
@@ -154,7 +149,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
             addressMode: 'mirror-repeat',
             filterMode: 'nearest',
           });
-          expect(toAssetPack(recovered.value.decoded, recovered.value.meta)).toEqual({
+          expect(toAssetPack(recovered.value.meta)).toEqual({
             schemaVersion: '1.0.0',
             kind: 'external-asset-package',
             importer: 'image',
@@ -988,17 +983,6 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 {
   // ─── from reimport-reuse-meta.test.ts ───
 
-  function makeDecoded(): DecodedImage {
-    return {
-      bytes: new Uint8Array(4),
-      width: 1,
-      height: 1,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: true,
-    };
-  }
-
   const STABLE_GUID = '01928000-7c00-7000-8000-000000000042';
 
   function existingMeta(): ExistingExternalAssetPackage {
@@ -1026,7 +1010,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
   describe('reimport-reuse-meta.test.ts', () => {
     describe('reimportReuseMeta -- two-phase matching (kind+name+idx -> kind+idx -> fresh v7) AC-16', () => {
       it('first pass (no existing meta): emits all-fresh subAssets[]', () => {
-        const subs = reimportReuseMeta(makeDecoded(), undefined);
+        const subs = reimportReuseMeta(undefined);
         expect(subs).toHaveLength(1);
         expect(subs[0]?.kind).toBe('texture');
         expect(subs[0]?.guid).toMatch(
@@ -1035,7 +1019,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       });
 
       it('reimport with existing meta + identical sub-asset-key reuses GUID byte-for-byte (AC-16 byte-identical)', () => {
-        const subs = reimportReuseMeta(makeDecoded(), existingMeta());
+        const subs = reimportReuseMeta(existingMeta());
         expect(subs[0]?.guid).toBe(STABLE_GUID);
       });
 
@@ -1044,7 +1028,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           ...existingMeta(),
           subAssets: [{ guid: STABLE_GUID, sourceIndex: 0, kind: 'texture' }],
         };
-        const subs = reimportReuseMeta(makeDecoded(), meta);
+        const subs = reimportReuseMeta(meta);
         expect(subs[0]?.guid).toBe(STABLE_GUID);
       });
 
@@ -1053,65 +1037,15 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
           ...existingMeta(),
           subAssets: [{ guid: STABLE_GUID, sourceIndex: 0, kind: 'mesh' }],
         };
-        const subs = reimportReuseMeta(makeDecoded(), meta);
+        const subs = reimportReuseMeta(meta);
         expect(subs[0]?.guid).not.toBe(STABLE_GUID);
         expect(subs[0]?.kind).toBe('texture');
       });
 
       it('two consecutive reimports of byte-identical bytes produce byte-identical subAssets[] JSON', () => {
-        const a = JSON.stringify(reimportReuseMeta(makeDecoded(), existingMeta()));
-        const b = JSON.stringify(reimportReuseMeta(makeDecoded(), existingMeta()));
+        const a = JSON.stringify(reimportReuseMeta(existingMeta()));
+        const b = JSON.stringify(reimportReuseMeta(existingMeta()));
         expect(a).toBe(b);
-      });
-    });
-
-    describe('t3 - *.image.meta.json HDR colorSpace validation (plan-strategy D-8)', () => {
-      it('.hdr extension accepts colorSpace=linear (valid HDR sidecar round-trip)', () => {
-        const r = validateColorSpaceForHdr('.hdr', 'linear');
-        expect(r.ok).toBe(true);
-        if (r.ok) expect(r.value).toBe('linear');
-      });
-
-      it('.hdr extension rejects colorSpace=srgb with explicit expected/actual', () => {
-        const r = validateColorSpaceForHdr('.HDR', 'srgb');
-        expect(r.ok).toBe(false);
-        if (!r.ok) {
-          expect(r.expected).toContain('linear');
-          expect(r.actual).toContain('srgb');
-        }
-      });
-
-      it('.hdr extension case-insensitive accepts colorSpace=linear', () => {
-        const r = validateColorSpaceForHdr('.Hdr', 'linear');
-        expect(r.ok).toBe(true);
-      });
-
-      it('.exr extension (future HDR format) also accepts linear only', () => {
-        const r = validateColorSpaceForHdr('.exr', 'linear');
-        expect(r.ok).toBe(true);
-      });
-
-      it('.exr extension rejects srgb', () => {
-        const r = validateColorSpaceForHdr('.exr', 'srgb');
-        expect(r.ok).toBe(false);
-      });
-
-      it('.png extension passes through srgb unchanged (existing behavior preserved)', () => {
-        const r = validateColorSpaceForHdr('.png', 'srgb');
-        expect(r.ok).toBe(true);
-        if (r.ok) expect(r.value).toBe('srgb');
-      });
-
-      it('.png extension passes through linear unchanged', () => {
-        const r = validateColorSpaceForHdr('.png', 'linear');
-        expect(r.ok).toBe(true);
-        if (r.ok) expect(r.value).toBe('linear');
-      });
-
-      it('.jpg extension passes through srgb unchanged', () => {
-        const r = validateColorSpaceForHdr('.jpg', 'srgb');
-        expect(r.ok).toBe(true);
-        if (r.ok) expect(r.value).toBe('srgb');
       });
     });
   });
@@ -1194,17 +1128,6 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
 {
   // ─── from to-asset-pack.test.ts ───
 
-  function makeTAPDecoded(): DecodedImage {
-    return {
-      bytes: new Uint8Array(4),
-      width: 1,
-      height: 1,
-      mime: 'image/png',
-      colorSpace: 'srgb',
-      mipmap: true,
-    };
-  }
-
   function makeTAPMeta(): ImageMeta {
     return {
       guid: '01928000-7c00-7000-8000-000000000010',
@@ -1216,9 +1139,9 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
   }
 
   describe('to-asset-pack.test.ts', () => {
-    describe('toAssetPack -- pure function: DecodedImage + ImageMeta -> external-asset-package SubAsset list', () => {
+    describe('toAssetPack -- pure function: ImageMeta -> external-asset-package SubAsset list', () => {
       it('emits a single subAsset with kind="texture" + guid copied from meta', () => {
-        const pack = toAssetPack(makeTAPDecoded(), makeTAPMeta());
+        const pack = toAssetPack(makeTAPMeta());
         expect(pack.subAssets).toHaveLength(1);
         expect(pack.subAssets[0]?.kind).toBe('texture');
         expect(pack.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-000000000010');
@@ -1226,7 +1149,7 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       });
 
       it('emits importSettings carrying the 4 free-form fields verbatim', () => {
-        const pack = toAssetPack(makeTAPDecoded(), makeTAPMeta());
+        const pack = toAssetPack(makeTAPMeta());
         expect(pack.importSettings.colorSpace).toBe('srgb');
         expect(pack.importSettings.mipmap).toBe('auto');
         expect(pack.importSettings.addressMode).toBe('repeat');
@@ -1234,14 +1157,14 @@ import { makeCorruptPng, makeJpg, makePng } from './make-fixture.js';
       });
 
       it('byte-stable JSON round-trip: stringify(toAssetPack(...)) is idempotent (AC-16)', () => {
-        const a = JSON.stringify(toAssetPack(makeTAPDecoded(), makeTAPMeta()));
-        const b = JSON.stringify(toAssetPack(makeTAPDecoded(), makeTAPMeta()));
+        const a = JSON.stringify(toAssetPack(makeTAPMeta()));
+        const b = JSON.stringify(toAssetPack(makeTAPMeta()));
         expect(a).toBe(b);
       });
 
       // P1: toAssetPack produces subAssets[].kind === 'texture' instead of 'image'.
       it('P1: emits subAssets[].kind = "texture" (not "image")', () => {
-        const pack = toAssetPack(makeTAPDecoded(), makeTAPMeta());
+        const pack = toAssetPack(makeTAPMeta());
         expect(pack.subAssets).toHaveLength(1);
         expect(pack.subAssets[0]?.kind).toBe('texture');
         expect(pack.subAssets[0]?.guid).toBe('01928000-7c00-7000-8000-000000000010');

@@ -59,6 +59,7 @@ interface PhysicsPublicationLike {
 }
 
 interface HostCandidateRecord {
+  /** Credential plus the lifecycle state this host last issued or observed. */
   candidate: DynamicGeometryCandidate;
   readonly world: World;
   readonly entity: number;
@@ -70,8 +71,6 @@ interface HostCandidateRecord {
   meshLeaseHeld: boolean;
   /** Previous ECS MeshFilter lease retained until the candidate lifecycle ends. */
   previousMeshLeaseHeld: boolean;
-  accepted: boolean;
-  published: boolean;
 }
 
 function fixedStepOf(world: World): number | undefined {
@@ -406,7 +405,7 @@ export function createDynamicGeometryHost(options: {
         record.candidate.candidateId !== candidate.candidateId &&
         record.world === world &&
         record.entity === candidate.entity &&
-        !record.published,
+        (record.candidate.state === 'prepared' || record.candidate.state === 'accepted'),
     );
     const accepted = lifecycle.accept(candidate, ordering);
     if (!accepted.ok) return accepted;
@@ -429,7 +428,6 @@ export function createDynamicGeometryHost(options: {
       );
     }
     hostRecord.candidate = accepted.value;
-    hostRecord.accepted = true;
     if (deferredSupersession === undefined) options.onTopologyChanged?.();
     // Keep the World handle leased through the final GPU submission; its slot
     // must not be reused while a retired frame still references the old mesh.
@@ -598,19 +596,6 @@ export function createDynamicGeometryHost(options: {
       );
       if (!resident.ok) {
         lifecycle.cancel(prepared.value);
-        cleanupCandidateResidency({
-          candidate: prepared.value,
-          world,
-          entity: input.entity,
-          previousMeshHandle,
-          meshHandle,
-          residency: undefined,
-          generation,
-          accepted: false,
-          published: false,
-          meshLeaseHeld: true,
-          previousMeshLeaseHeld: true,
-        });
         const released = releaseMeshLeases({
           candidate: prepared.value,
           world,
@@ -619,8 +604,6 @@ export function createDynamicGeometryHost(options: {
           meshHandle,
           residency: undefined,
           generation,
-          accepted: false,
-          published: false,
           meshLeaseHeld: true,
           previousMeshLeaseHeld: true,
         });
@@ -660,8 +643,6 @@ export function createDynamicGeometryHost(options: {
         generation,
         meshLeaseHeld: true,
         previousMeshLeaseHeld: true,
-        accepted: false,
-        published: false,
       });
       return prepared;
     },
@@ -746,10 +727,12 @@ export function createDynamicGeometryHost(options: {
           );
         return lifecycle.cancel(candidate);
       }
+      const issued = record.candidate.state;
+      const unpublished = issued === 'prepared' || issued === 'accepted';
       if (
-        (!record.accepted && candidate.state !== 'prepared') ||
-        (record.accepted && !record.published && candidate.state !== 'accepted') ||
-        (record.published && candidate.state !== 'accepted' && candidate.state !== 'published')
+        unpublished
+          ? candidate.state !== issued
+          : candidate.state !== 'accepted' && candidate.state !== 'published'
       )
         return err(
           new DynamicGeometryError(
@@ -759,7 +742,7 @@ export function createDynamicGeometryHost(options: {
             { candidateId: candidate.candidateId },
           ),
         );
-      if (record.published)
+      if (!unpublished)
         return err(
           new DynamicGeometryError(
             'dynamic-geometry-candidate-state',
@@ -768,7 +751,7 @@ export function createDynamicGeometryHost(options: {
             { candidateId: candidate.candidateId },
           ),
         );
-      if (record.accepted) {
+      if (issued === 'accepted') {
         const currentHandle = meshHandleOf(record.world, record.entity);
         if (currentHandle !== record.meshHandle && currentHandle !== record.previousMeshHandle)
           return err(
@@ -879,7 +862,7 @@ export function createDynamicGeometryHost(options: {
               const hostRecord = candidateRecord(candidate);
               if (
                 hostRecord === undefined ||
-                !hostRecord.accepted ||
+                hostRecord.candidate.state === 'prepared' ||
                 !hasRenderableBinding(candidateWorld, candidate.entity) ||
                 meshHandleOf(candidateWorld, candidate.entity) !== candidate.meshHandle ||
                 !hasMaterialIdentity(
@@ -918,7 +901,7 @@ export function createDynamicGeometryHost(options: {
       for (const receipt of receipts) {
         const record = hostCandidates.get(receipt.candidateId);
         if (record !== undefined) {
-          record.published = true;
+          record.candidate = Object.freeze({ ...record.candidate, state: 'published' as const });
           if (receipt.frame.completed !== undefined)
             record.residency?.track(receipt.frame.completed);
         }

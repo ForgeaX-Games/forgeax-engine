@@ -1,5 +1,6 @@
 #define_import_path forgeax_pbr::lighting_rect_area
 #ifdef EXTENDED_LIGHTING_AVAILABLE
+#import forgeax_pbr::brdf::{specularF90}
 #import forgeax_view::common::{ltcLambertTexture, ltcGgxTexture, spotModifierSampler, cookieTexture}
 #endif
 
@@ -212,7 +213,7 @@ fn evalRectAreaLtcStandard(
     vec3<f32>(0.0, 1.0, 0.0),
     vec3<f32>(matrixSample.z, 0.0, matrixSample.w),
   );
-  let fresnel = F0 * fresnelSample.x + (vec3<f32>(1.0) - F0) * fresnelSample.y;
+  let fresnel = F0 * fresnelSample.x + (vec3<f32>(specularF90(F0)) - F0) * fresnelSample.y;
   let specular = ltcEvaluate(
     n, v, worldPos, mInv, lightPos, axisX, axisY, halfWidth, halfHeight,
   );

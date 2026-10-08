@@ -17,11 +17,28 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-lod-occlusion smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "fixture app; renderer package owns bundle evidence" },
-      "fps": { "enabled": false, "reason": "GPU frame timing is reported by the feature benchmark" },
-      "bench": { "enabled": true, "reportPath": "evidence/gpu-frame-samples.json", "suite": "gpu-frame-samples", "reportSchema": "gpu-frame-samples" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/hello-lod-occlusion smoke" },
-      "spike-report": { "enabled": false, "reason": "production fixture, not a spike" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "fixture app; renderer package owns bundle evidence"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "GPU frame timing is reported by the feature benchmark"
+      },
+      "bench": {
+        "enabled": true,
+        "reportPath": "evidence/gpu-frame-samples.json",
+        "suite": "gpu-frame-samples",
+        "reportSchema": "gpu-frame-samples"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-lod-occlusion smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "production fixture, not a spike"
+      }
     }
   },
   "dependencies": {
@@ -40,8 +57,8 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

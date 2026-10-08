@@ -45,7 +45,7 @@ interface FxaaEdgeEvidence {
 const COLOR_DOMAINS = [
   'linear-hdr',
   'linear-ldr',
-  'final-srgb',
+  'final-display',
 ] as const satisfies readonly ObservationDomain[];
 
 let canvas: HTMLCanvasElement | undefined;
@@ -738,7 +738,7 @@ describe('barrel distortion real output in Browser WebGPU', () => {
     }
     const enabledHdr = observationByDomain(enabled.observation, 'linear-hdr');
     const enabledLdr = observationByDomain(enabled.observation, 'linear-ldr');
-    const enabledFinal = observationByDomain(enabled.observation, 'final-srgb');
+    const enabledFinal = observationByDomain(enabled.observation, 'final-display');
     expect(enabledHdr.metadata.format).toBe('rgba16float');
     expect(enabledLdr.metadata.format).toBe('rgba16float');
     expect(['rgba8unorm', 'bgra8unorm']).toContain(enabledFinal.metadata.format);
@@ -773,7 +773,7 @@ describe('barrel distortion real output in Browser WebGPU', () => {
       expect.arrayContaining([
         'linear-hdr-observation',
         'linear-ldr-observation',
-        'final-srgb-observation',
+        'final-display-observation',
         'standard-tone',
         'standard-color-lut',
         'barrel-distortion',
@@ -790,7 +790,7 @@ describe('barrel distortion real output in Browser WebGPU', () => {
 
     world.set(camera, Camera, { colorLut: 0 as never, colorLutStrength: 0 }).unwrap();
     const disabled = await drawObservedFrame(world, COLOR_DOMAINS);
-    const disabledFinal = observationByDomain(disabled.observation, 'final-srgb');
+    const disabledFinal = observationByDomain(disabled.observation, 'final-display');
     const disabledInspection = renderer.inspect();
     expect(disabledInspection.output.graphPassNames).not.toContain('standard-color-lut');
     expect(
@@ -834,7 +834,7 @@ describe('barrel distortion real output in Browser WebGPU', () => {
     const noFxaa = await drawObservedFrame(noFxaaWorld, COLOR_DOMAINS);
     const noFxaaHdr = observationByDomain(noFxaa.observation, 'linear-hdr');
     const noFxaaLdr = observationByDomain(noFxaa.observation, 'linear-ldr');
-    const noFxaaFinal = observationByDomain(noFxaa.observation, 'final-srgb');
+    const noFxaaFinal = observationByDomain(noFxaa.observation, 'final-display');
 
     const fxaaWorld = new World();
     spawnScene(fxaaWorld, {
@@ -846,7 +846,7 @@ describe('barrel distortion real output in Browser WebGPU', () => {
     });
     const fxaa = await drawObservedFrame(fxaaWorld, COLOR_DOMAINS);
     const fxaaHdr = observationByDomain(fxaa.observation, 'linear-hdr');
-    const fxaaFinal = observationByDomain(fxaa.observation, 'final-srgb');
+    const fxaaFinal = observationByDomain(fxaa.observation, 'final-display');
     const fxaaInspection = renderer.inspect();
     expect(fxaaInspection.output.graphPassNames).toContain('fxaa');
     expect(
@@ -959,10 +959,6 @@ describe('barrel distortion real output in Browser WebGPU', () => {
       .spawn({
         component: Atmosphere,
         data: {
-          turbidity: 2,
-          rayleigh: 1,
-          mieCoefficient: 0.005,
-          mieDirectionalG: 0.8,
           sunAngularRadius: 0.004675,
         },
       })

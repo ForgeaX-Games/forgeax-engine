@@ -1,11 +1,173 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { appInputFiles, cachePath, readReceipt, writeReceipt } from '../build-task-cache.mjs';
+import {
+  appInputFiles,
+  cachePath,
+  hashFiles,
+  packageInputFiles,
+  readReceipt,
+  writeReceipt,
+} from '../build-task-cache.mjs';
+
+test('package fingerprints ignore Rust scratch output but retain source and generated WASM', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-build-task-cache-'));
+  const pkg = join(root, 'packages', 'wgpu-wasm');
+  try {
+    for (const directory of ['src', 'pkg', 'target/release/deps'])
+      mkdirSync(join(pkg, directory), { recursive: true });
+    writeFileSync(join(pkg, 'Cargo.toml'), '[package]\nname="probe"\n');
+    const source = join(pkg, 'src', 'compose.rs');
+    const payload = join(pkg, 'pkg', 'wgpu_wasm_bg.wasm');
+    const scratch = join(pkg, 'target', 'release', 'deps', 'temporary.rmeta');
+    writeFileSync(source, 'source');
+    writeFileSync(payload, 'wasm');
+    writeFileSync(scratch, 'temporary');
+    const inputs = packageInputFiles(root, pkg);
+    assert.ok(!inputs.includes(scratch), 'Rust scratch output must not be a package input');
+    const before = hashFiles(root, inputs);
+    rmSync(join(pkg, 'target'), { recursive: true });
+    assert.equal(
+      hashFiles(root, inputs),
+      before,
+      'Cargo cleanup must not invalidate or break hashing',
+    );
+    writeFileSync(source, 'changed source');
+    const changedSource = hashFiles(root, packageInputFiles(root, pkg));
+    assert.notEqual(changedSource, before);
+    writeFileSync(payload, 'changed wasm');
+    assert.notEqual(hashFiles(root, packageInputFiles(root, pkg)), changedSource);
+    // Asset roots can legitimately contain target directories; keep that path.
+    const app = join(root, 'apps', 'preview');
+    mkdirSync(join(app, 'target'), { recursive: true });
+    const asset = join(app, 'target', 'mesh.json');
+    writeFileSync(asset, '{}');
+    assert.ok(appInputFiles(root, app).includes(asset));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package fingerprints prune Dawn native scratch before reading broken toolchain links', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-native-inputs-'));
+  try {
+    const pkg = join(root, 'packages/dawn-node');
+    const recipe = join(pkg, 'scripts/prepare-native.mjs');
+    const patch = join(pkg, 'patches/native.patch');
+    mkdirSync(join(pkg, 'scripts'), { recursive: true });
+    mkdirSync(join(pkg, 'patches'), { recursive: true });
+    writeFileSync(join(pkg, 'package.json'), '{"name":"@forgeax/engine-dawn-node"}');
+    writeFileSync(recipe, 'prepare native');
+    writeFileSync(patch, 'native patch');
+    const before = hashFiles(root, packageInputFiles(root, pkg));
+    const scratch = join(pkg, '.native-build/input-key/node-webgpu/HermeticXcode');
+    mkdirSync(scratch, { recursive: true });
+    symlinkSync('missing-ranlib', join(scratch, 'ranlib'));
+    assert.equal(hashFiles(root, packageInputFiles(root, pkg)), before);
+    writeFileSync(recipe, 'changed native recipe');
+    assert.notEqual(hashFiles(root, packageInputFiles(root, pkg)), before);
+    const recipeChanged = hashFiles(root, packageInputFiles(root, pkg));
+    writeFileSync(patch, 'changed native patch');
+    assert.notEqual(hashFiles(root, packageInputFiles(root, pkg)), recipeChanged);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package fingerprints prune only root Cargo target and preserve authored target paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-rust-inputs-'));
+  try {
+    const pkg = join(root, 'packages/rust-owner');
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, 'Cargo.toml'), '[package]\nname="probe"\n');
+    const before = hashFiles(root, packageInputFiles(root, pkg));
+    mkdirSync(join(pkg, 'target/debug'), { recursive: true });
+    writeFileSync(join(pkg, 'target/debug/generated'), 'scratch output');
+    assert.equal(hashFiles(root, packageInputFiles(root, pkg)), before);
+    mkdirSync(join(pkg, 'src/target'), { recursive: true });
+    writeFileSync(join(pkg, 'src/target/authored.rs'), 'authored source');
+    assert.notEqual(hashFiles(root, packageInputFiles(root, pkg)), before);
+    assert.ok(packageInputFiles(root, pkg).includes(join(pkg, 'src/target/authored.rs')));
+    const ordinary = join(root, 'packages/ordinary');
+    mkdirSync(join(ordinary, 'target'), { recursive: true });
+    writeFileSync(join(ordinary, 'target/authored.pack.ts'), 'authored asset');
+    assert.ok(
+      packageInputFiles(root, ordinary).includes(join(ordinary, 'target/authored.pack.ts')),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package fingerprint exclusions do not hide other authored native-build paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-authored-inputs-'));
+  try {
+    for (const path of [
+      'packages/ordinary/.native-build',
+      'packages/dawn-node/src/.native-build',
+    ]) {
+      const directory = join(root, path);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'authored.pack.ts'), 'authored asset');
+      const pkg = path.startsWith('packages/ordinary')
+        ? join(root, 'packages/ordinary')
+        : join(root, 'packages/dawn-node');
+      assert.ok(packageInputFiles(root, pkg).includes(join(directory, 'authored.pack.ts')));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('package fingerprints ignore Rust scratch output but retain source and generated WASM', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-build-task-cache-'));
+  const pkg = join(root, 'packages', 'wgpu-wasm');
+  try {
+    for (const directory of ['src', 'pkg', 'target/release/deps'])
+      mkdirSync(join(pkg, directory), { recursive: true });
+    writeFileSync(join(pkg, 'Cargo.toml'), '[package]\nname=\"probe\"\n');
+    const source = join(pkg, 'src', 'compose.rs');
+    const payload = join(pkg, 'pkg', 'wgpu_wasm_bg.wasm');
+    const scratch = join(pkg, 'target', 'release', 'deps', 'temporary.rmeta');
+    writeFileSync(source, 'source');
+    writeFileSync(payload, 'wasm');
+    writeFileSync(scratch, 'temporary');
+    const inputs = packageInputFiles(root, pkg);
+    assert.ok(!inputs.includes(scratch), 'Rust scratch output must not be a package input');
+    const before = hashFiles(root, inputs);
+    rmSync(join(pkg, 'target'), { recursive: true });
+    assert.equal(
+      hashFiles(root, inputs),
+      before,
+      'Cargo cleanup must not invalidate or break hashing',
+    );
+    writeFileSync(source, 'changed source');
+    const changedSource = hashFiles(root, packageInputFiles(root, pkg));
+    assert.notEqual(changedSource, before);
+    writeFileSync(payload, 'changed wasm');
+    assert.notEqual(hashFiles(root, packageInputFiles(root, pkg)), changedSource);
+    // Asset roots can legitimately contain target directories; keep that path.
+    const app = join(root, 'apps', 'preview');
+    mkdirSync(join(app, 'target'), { recursive: true });
+    const asset = join(app, 'target', 'mesh.json');
+    writeFileSync(asset, '{}');
+    assert.ok(appInputFiles(root, app).includes(asset));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('app input fingerprints include declared external asset roots and override sources', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-build-task-cache-'));

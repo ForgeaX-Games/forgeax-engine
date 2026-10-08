@@ -1,5 +1,5 @@
 import type { RenderResourceScope } from '../publication/resource-scope';
-import { resolveSpriteInstancesBuffer } from './sprite-instance-buffer';
+import { resolveSpriteInstancesBuffer, uploadSpriteInstanceBuffer } from './sprite-instance-buffer';
 // @forgeax/engine-runtime - RenderSystem record stage: main-pass sprite draws.
 // feat-20260704 M5/w31: further-split from main-pass.ts (AC-05 <=1500 lines/file).
 // recordSpritePass + sprite entity/transparent/instance-buffer helpers, moved verbatim.
@@ -12,19 +12,17 @@ import {
   type RhiRenderPassEncoder,
 } from '@forgeax/engine-rhi';
 import type { MaterialRenderState } from '@forgeax/engine-types';
-import { GpuBuffer } from '../gpu-resource';
+import type { GpuBuffer } from '../gpu-resource';
 import {
   GPU_BUFFER_USAGE_COPY_DST,
   GPU_BUFFER_USAGE_STORAGE,
   GPU_BUFFER_USAGE_UNIFORM,
 } from '../gpu-usage';
-import type { InstanceBufferCacheEntry } from '../instance-buffer-cache';
 import { SPRITE_PREMULTIPLIED_ALPHA_BLEND } from '../materials';
 import { SPRITE_PASS_PER_INSTANCE_REGION_VARIANT_SET } from '../pbr-pipeline';
 import { buildBeginRenderPassDescriptor, standardTopologyVariantSet } from '../pipeline-spec';
 import type { DispatchEntry, MaterialSnapshot } from '../render-system-extract';
 import { resolveFoldInstanceBuffer } from './fold-instance-buffer';
-import { worldEntityKey } from './frame-snapshot';
 import { recordGeometryDraws, resolveGeometryInstancesBindGroup } from './main-pass-geometry';
 import {
   MAX_UNIFORM_INSTANCES,
@@ -414,7 +412,6 @@ function recordSpriteEntityDraws(
     runtime,
     world,
     pipelineState,
-    frameState,
     validatedOrdered,
     meshBindGroup,
     foldDispatchPlan,
@@ -436,11 +433,9 @@ function recordSpriteEntityDraws(
     // below — so skip them here. Previously the 4.3-blending window (a PBR
     // material) was drawn through here with the sprite shader; it now flows
     // through the PBR loop, which is both correct and multi-submesh-capable.
-    {
-      const sid = spriteEntry.source.material.materialShaderId;
-      const isSpriteShader = sid === 'forgeax::sprite' || sid === 'forgeax::sprite-lit';
-      if (!isSpriteShader) continue;
-    }
+    const entityShaderId = spriteEntry.source.material.materialShaderId;
+    if (entityShaderId !== 'forgeax::sprite' && entityShaderId !== 'forgeax::sprite-lit') continue;
+    const isSpriteLit = entityShaderId === 'forgeax::sprite-lit';
     // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
     // (D-1): fold-bucket non-head member — skip; the bucket head emits one
     // instanced drawIndexed covering all members.
@@ -466,15 +461,11 @@ function recordSpriteEntityDraws(
     // the material UBO. Only the base sprite path has the per-instance
     // region variant compiled; sprite-lit + non-instances entities
     // keep the PER_INSTANCE_REGION=false variant.
-    const entityShaderId = spriteEntry.source.material.materialShaderId;
-    const useRegionVariant =
-      entityShaderId !== 'forgeax::sprite-lit' && spriteEntry.source.spriteInstances !== undefined;
-    const activeSpritePH =
-      entityShaderId === 'forgeax::sprite-lit'
-        ? spriteLitPH
-        : useRegionVariant
-          ? spritePH_withRegion
-          : spritePH;
+    const activeSpritePH = isSpriteLit
+      ? spriteLitPH
+      : spriteEntry.source.spriteInstances !== undefined
+        ? spritePH_withRegion
+        : spritePH;
     if (activeSpritePH === null) {
       // Variant not yet compiled — for PER_INSTANCE_REGION=true the
       // variant cache fill is async on first use (mirrors the
@@ -484,9 +475,9 @@ function recordSpriteEntityDraws(
       // way fail-safe-skip is the closest the renderer can get to
       // "show nothing visibly wrong" without ending the sprite pass
       // (which would drop remaining sprite entities for the frame).
-      if (entityShaderId === 'forgeax::sprite') {
+      if (!isSpriteLit) {
         reportSpriteUnavailable();
-      } else if (entityShaderId === 'forgeax::sprite-lit') {
+      } else {
         runtime.errorRegistry.fire(
           new RhiError({
             code: 'shader-compile-failed',
@@ -513,13 +504,11 @@ function recordSpriteEntityDraws(
       lastSpriteIndexBuffer = indexBuffer;
     }
 
-    // Instance buffer resolution: same cap-gate logic as the geometry
-    // pass entity loop; sprites with Instances (e.g. hello-sprite-atlas
-    // 100-instance walk-cycle) require per-entity storage buffer upload.
-    // SSOT mirror of geometry pass instances block above (~line 1610):
-    // identical cap-gate sequence (storageBuffer cap → limit-exceeded →
-    // cache-lookup → createBuffer → writeBuffer); variable names carry
-    // "sprite" prefix; logic divergence would be a bug.
+    // Instance buffer resolution: sprites with Instances (e.g.
+    // hello-sprite-atlas 100-instance walk-cycle) require a per-entity
+    // buffer upload through the same sprite-path owner as SpriteInstances
+    // (uploadSpriteInstanceBuffer: cap-gate → cache-lookup → createBuffer →
+    // writeBuffer).
     //
     // feat-20260622-chunk-gpu-instancing-sprite-tilemap M1 / w4-record-swap
     // (D-1): when `foldHeadBucket !== undefined` AND the sprite entity has
@@ -536,8 +525,7 @@ function recordSpriteEntityDraws(
     let spriteInstanceBuffer: Buffer = pipelineState.identityInstanceBuffer;
     let spriteInstanceCount = 1;
     const spriteInst = spriteEntry.source.instances;
-    const useFold = foldHeadBucket !== undefined && spriteInst === undefined;
-    if (useFold && foldHeadBucket !== undefined) {
+    if (foldHeadBucket !== undefined && spriteInst === undefined) {
       const buffer = resolveFoldInstanceBuffer(c, foldHeadBucket, i);
       if (buffer === null) continue;
       spriteInstanceBuffer = buffer;
@@ -577,81 +565,25 @@ function recordSpriteEntityDraws(
         spriteBufUsage = GPU_BUFFER_USAGE_UNIFORM | GPU_BUFFER_USAGE_COPY_DST;
       }
 
-      {
-        const instancePayload = uniformFallback
-          ? spriteInst.transforms
-          : packInstanceStorageBuffer(
-              spriteInst.transforms,
-              spriteEntry.source.temporal?.previousInstances?.transforms,
-              spriteInst.generations,
-              spriteEntry.source.temporal?.previousInstances?.generations,
-            );
-        const requestedBytes = instancePayload.byteLength;
-        const cap = runtime.device.limits.maxStorageBufferBindingSize;
-        if (typeof cap === 'number' && requestedBytes > cap) {
-          runtime.errorRegistry.fire(
-            new RhiError({
-              code: 'limit-exceeded',
-              expected: `requestedBytes (${requestedBytes}) <= maxStorageBufferBindingSize (${cap})`,
-              hint: 'reduce the sprite batch to fit within device.limits.maxStorageBufferBindingSize or use a storage-capable backend',
-              detail: {
-                maxStorageBufferBindingSize: cap,
-                requestedBytes,
-              },
-            }),
+      const instancePayload = uniformFallback
+        ? spriteInst.transforms
+        : packInstanceStorageBuffer(
+            spriteInst.transforms,
+            spriteEntry.source.temporal?.previousInstances?.transforms,
+            spriteInst.generations,
+            spriteEntry.source.temporal?.previousInstances?.generations,
           );
-        } else {
-          const cachedSprite = frameState.instanceBuffers.get(
-            worldEntityKey(spriteEntry.source.worldId, spriteInst.cacheKey),
-          );
-          let activeSprite: InstanceBufferCacheEntry | null = null;
-          if (
-            cachedSprite !== undefined &&
-            cachedSprite.uploadedArchVersion === spriteInst.archVersion &&
-            cachedSprite.uploadedByteLength === requestedBytes
-          ) {
-            activeSprite = cachedSprite;
-          } else if (requestedBytes > 0) {
-            const bufRes = runtime.device.createBuffer({
-              size: requestedBytes,
-              usage: spriteBufUsage,
-              mappedAtCreation: false,
-            });
-            if (!bufRes.ok) {
-              runtime.errorRegistry.fire(bufRes.error);
-            } else {
-              // feat-20260619 M4 / F12: destroy the old cached buffer
-              // before replacing it with the new one (D-6).
-              if (cachedSprite !== undefined && !cachedSprite.buffer.isDestroyed) {
-                const r = cachedSprite.buffer.destroy();
-                if (!r.ok) runtime.errorRegistry.fire(r.error);
-              }
-              const newBuf = new GpuBuffer(runtime.device, bufRes.value);
-              activeSprite = {
-                buffer: newBuf,
-                uploadedArchVersion: spriteInst.archVersion,
-                uploadedByteLength: requestedBytes,
-              };
-              frameState.instanceBuffers.set(
-                worldEntityKey(spriteEntry.source.worldId, spriteInst.cacheKey),
-                activeSprite,
-              );
-            }
-          }
-          if (activeSprite !== null) {
-            const writeRes = runtime.device.queue.writeBuffer(
-              activeSprite.buffer.handle,
-              0,
-              instancePayload,
-            );
-            if (!writeRes.ok) {
-              runtime.errorRegistry.fire(writeRes.error);
-            } else {
-              spriteInstanceBuffer = activeSprite.buffer.handle;
-              spriteInstanceCount = Math.max(1, spriteInst.instanceCount);
-            }
-          }
-        }
+      const uploaded = uploadSpriteInstanceBuffer(
+        c,
+        spriteEntry.source.worldId,
+        spriteInst,
+        instancePayload,
+        spriteBufUsage,
+        'reduce the sprite batch to fit within device.limits.maxStorageBufferBindingSize or use a storage-capable backend',
+      );
+      if (uploaded !== null) {
+        spriteInstanceBuffer = uploaded;
+        spriteInstanceCount = Math.max(1, spriteInst.instanceCount);
       }
     }
 
@@ -679,7 +611,7 @@ function recordSpriteEntityDraws(
     // request the pipeline; binding the ordinary mesh group to the clustered
     // sprite-lit pipeline is rejected by WebGPU before the draw is recorded.
     const spriteGroup2 =
-      entityShaderId === 'forgeax::sprite-lit' && c.standardLighting?.kind === 'clustered'
+      isSpriteLit && c.standardLighting?.kind === 'clustered'
         ? c.hdrpClusterBindGroup
         : meshBindGroup;
 

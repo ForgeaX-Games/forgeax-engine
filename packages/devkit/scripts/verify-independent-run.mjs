@@ -1,27 +1,37 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { parseImage } from '@forgeax/engine-image/parse-image';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { AssetGuid } from '@forgeax/engine-pack/guid';
-import { definePackageId } from '@forgeax/engine-pack/source';
-import { runUnifiedCli } from '../dist/index.mjs';
+import { pathToFileURL } from 'node:url';
+import { sdkStage } from '../../../scripts/forgeax/sdk-stage.mjs';
 
-const engine = resolve(import.meta.dirname, '../../..');
+const engine = resolve(process.env.FORGEAX_INDEPENDENT_ENGINE_PACKAGE ?? resolve(import.meta.dirname, '../../..', 'packages/engine'));
+const engineManifest = JSON.parse(await readFile(join(engine, 'package.json'), 'utf8'));
+const engineEntry = name => {
+  const entry = engineManifest.exports[`./${name}`] ?? engineManifest.exports['./*'];
+  const target = (typeof entry === 'string' ? entry : entry.import).replaceAll('*', name);
+  return pathToFileURL(resolve(engine, target)).href;
+};
+const [{ parseImage }, { AssetGuid }, { definePackageId }, { runUnifiedCli }] = await Promise.all([
+  import(engineEntry('image/parse-image')), import(engineEntry('pack/guid')),
+  import(engineEntry('pack/source')), import(engineEntry('devkit')),
+]);
 const root = await mkdtemp(join(tmpdir(), 'forgeax-independent-run-'));
 process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST = '/missing-contributor-cache-must-not-affect-run';
 process.env.FORGEAX_RUNS_DIR = await mkdtemp(join(tmpdir(), 'forgeax-run-state-'));
 const call = async (operation, args = []) => {
-  const result = await runUnifiedCli(['engine', 'run', ...operation.split('.'), '--root', root, '--json', ...args]);
+  const result = await sdkStage(`independentRun.${operation}`, () =>
+    runUnifiedCli(['engine', 'run', ...operation.split('.'), '--root', root, '--json', ...args]),
+  );
   assert.equal(result.ok, true, JSON.stringify(result));
   return result.value;
 };
 try {
   await mkdir(join(root, 'node_modules/@forgeax'), { recursive: true });
-  await symlink(join(engine, 'packages/engine'), join(root, 'node_modules/@forgeax/engine'), 'junction');
+  await symlink(engine, join(root, 'node_modules/@forgeax/engine'), 'junction');
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'independent-run-proof', type: 'module', dependencies: { '@forgeax/engine': '*' } }));
   await mkdir(join(root, 'assets'));
   await cp(join(import.meta.dirname, 'fixtures/run-proof.pack.ts'), join(root, 'assets/proof.pack.ts'));
@@ -34,7 +44,9 @@ try {
     )),
   }));
   console.error('Starting independent snapshot run');
-  const launched = await promisify(execFile)(process.execPath, [join(engine, 'packages/engine/dist/bin/forgeax.mjs'), 'engine', 'run', 'start', '--root', root, '--headless', 'true', '--backend', 'software', '--json'], { maxBuffer: 1024 * 1024 });
+  const launched = await sdkStage('independentRun.launch', () =>
+    promisify(execFile)(process.execPath, [join(engine, 'dist/bin/forgeax.mjs'), 'engine', 'run', 'start', '--root', root, '--headless', 'true', '--backend', 'software', '--json'], { maxBuffer: 1024 * 1024 }),
+  );
   const result = JSON.parse(launched.stdout);
   assert.equal(result.ok, true, JSON.stringify(result));
   const started = result.value;

@@ -28,7 +28,7 @@ function snapshot(meshGeneration = 1, materialGeneration = 1) {
     meshGeneration,
     materialHandle: 12,
     materialGeneration,
-    style: { kind: 'lines', widthPx: 3 },
+    style: { kind: 'lines', width: 3 },
     layer: 0,
     visible: true,
     sourceBounds: new Float32Array([0, 0, 0, 1, 1, 0]),
@@ -44,7 +44,7 @@ describe('Points/Lines expansion cache and LKG recovery', () => {
     const styled = cache.getOrCreate(
       createPointsLinesSnapshot({
         ...snapshot(),
-        style: { kind: 'lines', widthPx: 9 },
+        style: { kind: 'lines', width: 9 },
       }),
       mesh(),
     );
@@ -121,7 +121,7 @@ describe('Points/Lines expansion cache and LKG recovery', () => {
     const first = preparation.prepare(snapshot(), mesh()).unwrap();
     const changedSnapshot = createPointsLinesSnapshot({
       ...snapshot(),
-      style: { kind: 'lines', widthPx: 9 },
+      style: { kind: 'lines', width: 9 },
     });
     const changed = preparation.prepare(changedSnapshot, mesh()).unwrap();
     const plan = createPointsLinesRecordPlan(
@@ -132,7 +132,7 @@ describe('Points/Lines expansion cache and LKG recovery', () => {
 
     expect(uploads).toBe(1);
     expect(changed.geometry).toBe(first.geometry);
-    expect(plan.conservativeMarginPx).toBe(18);
+    expect(plan.conservativeMargin).toBe(18);
     expect(changed.geometry.vertices).toEqual(first.geometry.vertices);
   });
 

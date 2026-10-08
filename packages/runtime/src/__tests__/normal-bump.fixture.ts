@@ -40,6 +40,7 @@ export async function verifyNormalBump(
   renderer: Renderer,
   recorder: RecorderAttachment,
   save: SaveEvidence,
+  frames = 60,
 ) {
   const world = new World();
   const errors: unknown[] = [];
@@ -160,7 +161,7 @@ export async function verifyNormalBump(
   const replayDevices: GPUDevice[] = [];
   try {
     for (const renderPath of ['forward', 'deferred'] as const) {
-      renderValue(renderer.setProfile({ ...original, renderPath, shadows: 'off', ssao: false }));
+      renderValue(renderer.setProfile({ ...original, renderPath, ssao: false }));
       for (const entry of cases) {
         const authored = Materials.standard({
           baseColor: [0.5, 0.5, 0.5, 1],
@@ -185,7 +186,7 @@ export async function verifyNormalBump(
           renderValue(await receipt.completed);
           return receipt;
         };
-        for (let frame = 0; frame < 59; frame++) await draw();
+        for (let frame = 0; frame < frames - 1; frame++) await draw();
         renderValue(
           renderer.requestObservation?.(['linear-hdr']) ?? {
             ok: false,
@@ -210,7 +211,7 @@ export async function verifyNormalBump(
         const facts: Record<string, unknown> = {
           renderPath,
           case: entry.name,
-          completedFrames: 60,
+          completedFrames: frames,
           live,
         };
         if (capture !== undefined) {
@@ -220,9 +221,10 @@ export async function verifyNormalBump(
           const tape = decodeTape(encoded.bytes).unwrap();
           const model = buildFrameModel(tape);
           const geometryWork = model.works.find((work) =>
-            work.pipeline.shaders.some(
-              (shader) =>
-                shader.entryPoint === (renderPath === 'forward' ? 'fs_main' : 'fs_gbuffer'),
+            work.pipeline.shaders.some((shader) =>
+              renderPath === 'forward'
+                ? shader.entryPoint === 'fs_main' || shader.entryPoint === 'fs_opaque'
+                : shader.entryPoint === 'fs_gbuffer',
             ),
           );
           const lightingWork =

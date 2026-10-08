@@ -5,7 +5,10 @@ import { ok } from '@forgeax/engine-types';
 import { ParticleEffectPlayer, type ParticleRendererSourceV3 } from '@forgeax/engine-vfx';
 import { cookParticleCodeEffect } from '@forgeax/engine-vfx-compiler';
 import { createVfxRuntimeHost } from '@forgeax/engine-vfx-render';
-import { buildEngineShaderManifest } from '@forgeax/engine-vite-plugin-shader';
+import {
+  buildEngineShaderManifest,
+  publishShaderManifest,
+} from '@forgeax/engine-vite-plugin-shader';
 import { expect, onTestFinished } from 'vitest';
 import { PARTICLE_MESH_VERTEX_BUFFER } from '../../../render/src/features/particle-mesh-layout';
 import { constructRuntimeRendererHost } from '../renderer-host';
@@ -72,9 +75,8 @@ struct Output { @builtin(position) position: vec4<f32>, @location(0) factor: f32
   const shaderManifestUrl = URL.createObjectURL(
     new Blob(
       [
-        JSON.stringify({
-          ...manifest,
-          materialShaders: [
+        JSON.stringify(
+          publishShaderManifest(manifest.entries, [
             ...manifest.materialShaders,
             ...(layout.writeDepth
               ? [
@@ -97,8 +99,8 @@ struct Output { @builtin(position) position: vec4<f32>, @location(0) factor: f32
               paramSchema: JSON.stringify(schema),
               variants: [],
             },
-          ],
-        }),
+          ]),
+        ),
       ],
       { type: 'application/json' },
     ),

@@ -1,15 +1,101 @@
 // @forgeax/engine-rhi-debug/src/recorder/encoder -- command encoder proxy owner.
 
 import type {
+  BlasBuildEntry,
   Buffer,
   ComputePassDescriptor,
   RenderPassDescriptor,
   RhiCommandEncoder,
+  TlasBuildEntry,
 } from '@forgeax/engine-rhi';
-import type { HandleId } from '../types';
+import type { HandleId, RecordedBlasBuild, RecordedTlasBuild } from '../types';
 import type { RecorderInternal } from './core';
 import { allocHandleId, getHandleId, pushEvent } from './core';
 import { createComputePassProxy, createRenderPassProxy } from './pass';
+
+function recordedBuilds(
+  s: RecorderInternal,
+  blas: readonly BlasBuildEntry[],
+  tlas: readonly TlasBuildEntry[],
+): { readonly blas: RecordedBlasBuild[]; readonly tlas: RecordedTlasBuild[] } {
+  return {
+    blas: blas.map((entry) => ({
+      blasHandleId: getHandleId(s, entry.blas as object, 'blas'),
+      geometries: entry.geometries.map((geometry) => ({
+        vertexBufferHandleId: getHandleId(s, geometry.vertexBuffer as object, 'buffer'),
+        vertexStride: geometry.vertexStride,
+        ...(geometry.firstVertex === undefined ? {} : { firstVertex: geometry.firstVertex }),
+        ...(geometry.index === undefined
+          ? {}
+          : {
+              index: {
+                bufferHandleId: getHandleId(s, geometry.index.buffer as object, 'buffer'),
+                ...(geometry.index.firstIndex === undefined
+                  ? {}
+                  : { firstIndex: geometry.index.firstIndex }),
+              },
+            }),
+      })),
+    })),
+    tlas: tlas.map((entry) => ({
+      tlasHandleId: getHandleId(s, entry.tlas as object, 'tlas'),
+      instances: entry.instances.map((instance) => ({
+        blasHandleId: getHandleId(s, instance.blas as object, 'blas'),
+        transform: Array.from(instance.transform),
+        customIndex: instance.customIndex,
+        mask: instance.mask,
+      })),
+    })),
+  };
+}
+
+/**
+ * An encoder created between captures stays unrecorded, but its BLAS/TLAS
+ * builds become the build state of their bootstrap create records: a later
+ * capture's replay rebuilds each acceleration structure from that state.
+ */
+export function observeIdleAccelerationStructureBuilds(
+  s: RecorderInternal,
+  realEnc: RhiCommandEncoder,
+): RhiCommandEncoder {
+  return new Proxy(realEnc, {
+    get(target, key) {
+      if (key === 'buildAccelerationStructures') {
+        return (blas: readonly BlasBuildEntry[], tlas: readonly TlasBuildEntry[]) => {
+          const result = target.buildAccelerationStructures(blas, tlas);
+          if (result.ok) {
+            flushDeferredAccelerationStructureBuilds(s);
+            recordBootstrapBuilds(s, recordedBuilds(s, blas, tlas));
+          }
+          return result;
+        };
+      }
+      const value = Reflect.get(target, key, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+export function flushDeferredAccelerationStructureBuilds(s: RecorderInternal): void {
+  for (const builds of s.deferredAccelerationStructureBuilds) recordBootstrapBuilds(s, builds);
+  s.deferredAccelerationStructureBuilds = [];
+}
+
+function recordBootstrapBuilds(
+  s: RecorderInternal,
+  builds: RecorderInternal['deferredAccelerationStructureBuilds'][number],
+): void {
+  for (const { blasHandleId, geometries } of builds.blas) {
+    const create = s.bootstrapCreates.get(blasHandleId);
+    if (create?.kind === 'createBlas')
+      s.bootstrapCreates.set(blasHandleId, { ...create, build: { geometries } });
+  }
+  for (const { tlasHandleId, instances } of builds.tlas) {
+    const create = s.bootstrapCreates.get(tlasHandleId);
+    if (create?.kind === 'createTlas')
+      s.bootstrapCreates.set(tlasHandleId, { ...create, build: { instances } });
+  }
+}
 
 export function createCommandEncoderProxy(
   s: RecorderInternal,
@@ -17,6 +103,15 @@ export function createCommandEncoderProxy(
   cmdHId: HandleId,
 ): RhiCommandEncoder {
   return {
+    buildAccelerationStructures(blas, tlas) {
+      const result = realEnc.buildAccelerationStructures(blas, tlas);
+      if (result.ok) {
+        const builds = recordedBuilds(s, blas, tlas);
+        s.deferredAccelerationStructureBuilds.push(builds);
+        pushEvent(s, { kind: 'buildAccelerationStructures', cmdHandleId: cmdHId, ...builds });
+      }
+      return result;
+    },
     beginRenderPass(desc: RenderPassDescriptor) {
       const passHId = allocHandleId('renderPass');
       // I-2 fix-up (round 1, dawn smoke): walk colorAttachments +
@@ -59,6 +154,7 @@ export function createCommandEncoderProxy(
             ? undefined
             : getHandleId(s, desc.timestampWrites.querySet as object, 'querySet'),
         desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
           colorAttachments: Array.from(desc.colorAttachments).map((attachment) =>
             attachment === null || attachment === undefined ? attachment : { ...attachment },
           ),

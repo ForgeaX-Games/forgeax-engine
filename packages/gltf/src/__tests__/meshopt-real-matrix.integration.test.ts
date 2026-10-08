@@ -178,7 +178,7 @@ describe('real EXT_meshopt_compression glTF matrix', () => {
       ],
       importSettings: {},
     };
-    const result = await createGltfImporter(decoder()).import(context);
+    const result = await createGltfImporter({ meshopt: decoder() }).import(context);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -204,7 +204,7 @@ describe('real EXT_meshopt_compression glTF matrix', () => {
       subAssets: [{ guid, sourceIndex: 0, kind: 'mesh' }],
       importSettings: {},
     };
-    const imported = await createGltfImporter(decoder()).import(context);
+    const imported = await createGltfImporter({ meshopt: decoder() }).import(context);
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;
     const mesh = imported.value.assets.find((asset: ImportedAsset) => asset.guid === guid);
@@ -303,7 +303,7 @@ describe('real EXT_meshopt_compression glTF matrix', () => {
       subAssets: [{ guid, sourceIndex: 0, kind: 'mesh' }],
       importSettings: {},
     };
-    const imported = await createGltfImporter(decoder()).import(context);
+    const imported = await createGltfImporter({ meshopt: decoder() }).import(context);
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;
     const mesh = imported.value.assets.find((asset: ImportedAsset) => asset.guid === guid);

@@ -53,6 +53,7 @@ describe('default Standard PBR transmission manifest contract', () => {
     // An independent complete Cartesian oracle prevents a new axis from
     // silently shrinking either ordinary or optional output permutations.
     const axes = [
+      'ATMOSPHERE_AVAILABLE',
       'CLUSTER_FORWARD_AVAILABLE',
       'COVERAGE_ONLY',
       'DIRECTIONAL_PCSS_AVAILABLE',
@@ -73,10 +74,12 @@ describe('default Standard PBR transmission manifest contract', () => {
       );
       if (
         (!defines.STORAGE_BUFFER_AVAILABLE &&
-          (defines.CLUSTER_FORWARD_AVAILABLE ||
+          (defines.ATMOSPHERE_AVAILABLE ||
+            defines.CLUSTER_FORWARD_AVAILABLE ||
             defines.PROBE_BLEND_AVAILABLE ||
             defines.EXTENDED_LIGHTING_AVAILABLE ||
             defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE)) ||
+        (defines.ATMOSPHERE_AVAILABLE && !defines.EXTENDED_LIGHTING_AVAILABLE) ||
         (defines.EXTENDED_LIGHTING_AVAILABLE && !defines.PROJECTOR_AVAILABLE)
       )
         continue;

@@ -122,7 +122,7 @@ async function bootstrapFocused(
     { component: Transform, data: { pos: [0, 0, -2], quat: [0, 0, 0, 1], scale: [1, 1, 1] } },
     { component: MeshFilter, data: { assetHandle: lineMeshHandle } },
     { component: MeshRenderer, data: { materials: [materialHandle] } },
-    { component: Lines, data: { widthPx: falsify === 'line-width' ? 1 : 4 } },
+    { component: Lines, data: { width: falsify === 'line-width' ? 1 : 4 } },
   ).unwrap();
   world.spawn(
     { component: Transform, data: { pos: [0, 0, 2], quat: [0, 0, 0, 1] } },

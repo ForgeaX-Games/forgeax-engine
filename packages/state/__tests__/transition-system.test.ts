@@ -500,13 +500,11 @@ describe('M41: invalid variant atomic refusal', () => {
     expect(refusedForce.ok).toBe(false);
     expect((refused.error as { code: string; detail: unknown }).code).toBe('invalid-variant');
     expect((refused.error as { code: string; detail: unknown }).detail).toEqual({
-      code: 'invalid-variant',
       name: 'M41Primary',
       got: invalid,
       valid: ['main-menu', 'tutorial'],
     });
     expect((refusedForce.error as { code: string; detail: unknown }).detail).toEqual({
-      code: 'invalid-variant',
       name: 'M41Primary',
       got: invalid,
       valid: ['main-menu', 'tutorial'],

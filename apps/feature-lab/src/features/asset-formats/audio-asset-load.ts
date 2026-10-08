@@ -81,8 +81,8 @@ export default defineFeature({
       checks.push({ name: 'mediaType audio/wav', ok: clip.mediaType === 'audio/wav' });
       checks.push({
         name: 'RIFF bytes intact',
-        ok: clip.bytes.byteLength === wav.byteLength && clip.bytes[0] === 0x52,
-        detail: `${clip.bytes.byteLength}B`,
+        ok: !clip.stream && clip.bytes.byteLength === wav.byteLength && clip.bytes[0] === 0x52,
+        detail: clip.stream ? 'unexpected streaming clip' : `${clip.bytes.byteLength}B`,
       });
       const second = await assets.loadByGuid<AudioClipAsset>(parsed.value);
       checks.push({ name: 'second load is cached', ok: second.ok && second.value === clip });

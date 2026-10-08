@@ -11,7 +11,7 @@
   "stages": [
     { "id": "linear-hdr", "domain": "linear-HDR", "readback": { "rawHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "frame": 299 } },
     { "id": "linear-ldr", "domain": "linear-LDR", "readback": { "rawHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "frame": 299 } },
-    { "id": "final-srgb", "domain": "final-sRGB", "readback": { "rawHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "frame": 299 } }
+    { "id": "final-display", "domain": "final-sRGB", "readback": { "rawHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "frame": 299 } }
   ],
   "exposure": { "mode": "manual", "ev": { "first": 0, "last": 0, "generation": 0 } },
   "lut": { "generation": 0, "strength": 0, "sourceKey": "none" },

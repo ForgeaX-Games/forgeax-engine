@@ -39,7 +39,7 @@ function resolveWorldComponent(world: World, name: string) {
 
 describe('ScopedTo component registration', () => {
   it('registers a component named __scopedTo__<token.name> for each registered StateToken', () => {
-    // registerStatesPlugin triggers registerScopedComponents
+    // registerStatesPlugin acquires the scoped component lease
     const world = makeWorld();
 
     const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
@@ -52,7 +52,7 @@ describe('ScopedTo component registration', () => {
   });
 
   it('AC-12: schema fields use enum type for value and mode', () => {
-    const world = makeWorld(); // triggers registerScopedComponents
+    const world = makeWorld(); // acquires the scoped component lease
 
     const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 
@@ -61,7 +61,7 @@ describe('ScopedTo component registration', () => {
   });
 
   it('component has exactly two fields: value and mode', () => {
-    const world = makeWorld(); // triggers registerScopedComponents
+    const world = makeWorld(); // acquires the scoped component lease
 
     const LevelScoped = resolveWorldComponent(world, '__scopedTo__LevelId');
 

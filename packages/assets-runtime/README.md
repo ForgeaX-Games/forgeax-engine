@@ -108,12 +108,14 @@ Material failure consumers branch on stable kebab-case codes:
 `material-specialization-not-cooked`, `asset-artifact-missing`,
 `asset-artifact-integrity-mismatch`, and `material-cook-record-invalid`.
 
-Ray-hit programs use the same complete publication, byte-integrity gate and
-ShaderRegistry installation. Select the authored pass with the closed
-`pipeline: ray` context to obtain its `cs_surface` entry; it has no raster
-submission ABI. Missing, corrupt or stale ray bytes reject the publication,
-and a missing ray context never resolves to a raster program. Installing this
-projection does not create a GPU module or enable GI.
+Ray-hit and Card-capture programs use the same complete publication, byte-integrity
+gate and ShaderRegistry installation. Select the authored pass with its closed
+`pipeline: ray` context: `ray-hit` selects `cs_surface`, and `card-capture` selects
+`vs_card` with the fixed `fs_card` fragment entry. Neither carries the ordinary
+raster submission ABI. Missing, corrupt or stale bytes from either published
+derivative reject the whole candidate publication; the previous accepted set stays
+intact. An omitted context does not resolve to another program. Installing the
+projection creates no GPU module and enables no GI or Card work.
 `programs[]` exposes each published program's `specializationKey`, `artifactDigest`,
 `byteLength` and `selections[]` (authored pass, exact context, entry and raster
 address when applicable). Use it to distinguish an absent ray derivative from
@@ -301,7 +303,7 @@ Full `AssetRegistry` surface + signatures: source SSOT
 `packages/assets-runtime/src/asset-registry.ts`. The load + DDC / pack-fetch
 pipeline lives in `packages/assets-runtime/src/registry/load-by-guid.ts`; the
 instantiate cluster + hook types in `registry/instantiate.ts`; material
-validation in `registry/validate-material.ts`.
+validation in `registry/validate-material.ts`. Pass and sprite-slice validation read the MaterialAsset directly: its first parameter declaration owns each name, and no ShaderRegistry or registry instance participates in these pure checks.
 
 ## Mesh binary v4 loading
 
@@ -685,7 +687,10 @@ world.despawn(content).unwrap(); // Restores the base parameter.
 
 Keep the content entity handle for updates. Input arrays are copied by managed
 storage; resolved asset payloads are read-only consumer data. Mesh projection
-rebuilds canonical attributes and bounds from the base vertex layout. Duplicate
+rebuilds canonical attributes and bounds from the base vertex layout, removing
+offline `distanceField` and `cardLayout` attachments while vertex content is
+active. Removing that content restores the original base and its attachments.
+Duplicate
 material parameters or duplicate mesh content return `asset-invalid-value`;
 invalid vertex stride returns `mesh-vertex-stride-mismatch`. Repair the same
 content entity and resolve again. Removing or rebinding content invalidates the
@@ -767,3 +772,65 @@ for missing revisions. `retainAssetPublications` fixes original transport bytes
 and publication/program evidence before decoding requested domain inputs. Retaining
 a definition never activates a PluginAsset. World handles and GPU resources remain
 owned by their respective consumers.
+
+Material program selection derives vertex-color availability from the mesh and
+uses the published ABI vertex inputs to prefer its color program. A shader that
+does not consume color can still use a colored mesh; a program requiring color
+cannot use a mesh without it. Selection remains unique per Pass, context, address
+and consumed color input.
+
+## Optional Mesh distance-field admission
+
+An ordinary Mesh publication may pair a `distanceField.sectionSidedness`
+descriptor with asset-local `distance-field.bin`. The existing artifact reader
+checks its full digest, then the Mesh loader verifies the supported codec/profile,
+current geometry digest, static triangle coverage and source sidedness digest
+before exposing `MeshAsset.distanceField`. Both mesh-bin and JSON geometry use
+this same admission path; JSON restores canonical typed attribute arrays first.
+The loaded field retains copied `artifact.integrity` and `artifact.assetCodec`
+facts, including the generation profile, through ordinary AssetReader resolution,
+native publication, JSON restore and RenderPublication copying. Generated fields
+may lack this identity before admission; runtime consumers must not treat a
+geometry digest as evidence of an admitted artifact. Re-export derives fresh
+descriptors from the encoded bytes, excluding the loaded identity from those bytes.
+
+| Load case | Result |
+|:--|:--|
+| Descriptor and artifact omitted | Ordinary Mesh, without field decode or extra request |
+| Complete valid attachment | Decoded field and verified artifact identity retained on the loaded Mesh |
+| Missing, corrupt, old-policy or mismatched attachment | Structured asset failure with recook recovery |
+| Supported Catalog replacement/invalidation | Fresh mesh and asset-local artifact generation |
+
+A bare payload loader cannot assemble an attachment; submit a complete Mesh
+product. There is no second field cache. This is asset preparation and loading,
+not Renderer field placement, streaming, GPU lifetime management or GI acceptance.
+
+## Terrain publication admission
+
+The ordinary `terrain` loader restores finite height/weight arrays from Pack JSON and validates the subsection roster and declared GUID references. A root pins one complete derived closure: canonical grid vertices/attributes/indices, author-derived height/normal and control mips, conservative bounds and section height/control material bindings. Private publication preparation validates the same closure before adoption. A partial dependency rewrite makes the old root unavailable; it cannot silently repin that object to the new bytes. See [Terrain](../terrain/README.md).
+
+`navigation-mesh` is an ordinary default-loaded POD asset. Its producer owns bake
+freshness; [Navigation](../navigation/README.md) validates topology when creating
+a realm-local query workspace. Assets Runtime owns no navigation compiler or motor.
+
+## Material loader result
+
+`MaterialReady` contains `{ status: 'Ready', record }`. The validated cooked
+record is the sole owner of material identity, generation, source closure,
+parameter contract and verified programs. These fields are required on a Ready
+record; read them through `ready.record`. Inspection continues to project the
+existing detached material lifecycle POD. Program bytes and parameter metadata
+are copied before publication, so mutation of the load input does not change
+the admitted record.
+
+## Deferred stream artifacts
+
+For `ArtifactDescriptor.delivery: 'stream'`, the GUID Pack loader passes a validated descriptor/HTTP locator in `streams`, while the decoder registry exposes `AssetArtifactReader.locate`. Neither route reads/caches the full body. The domain decoder validates its manifest and owns bounded body verification. Source publication, invalidation and GUID identity retain their ordinary Catalog authority; a locator is a runtime projection. See [audio format and hosting requirements](../audio-webaudio/README.md#long-audio-through-source-meta-and-guid).
+
+## Runtime collision attachment invalidation
+
+Managed `RuntimeMeshVertices` edits publish geometry without source-cooked
+`MeshAsset.collision`, just as other geometry-derived attachments are removed.
+Physics admission consequently rejects an uncooked edited source before
+replacing the committed collider. The producer must recook and publish a fresh
+immutable MeshAsset through the ordinary Catalog/shared-reference route.

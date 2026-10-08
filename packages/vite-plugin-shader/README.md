@@ -13,31 +13,85 @@ The ray query, transport, raster-receiver and diffuse-composite entries use this
 both standalone and Vite builds. Their traversal module and imports live in
 `packages/shader/src`; test-side string insertion is not a publication path.
 
-The standalone `buildEngineShaderManifest` builder can combine the admitted
-shared engine projection with freshly compiled `materialPackages`. Custom
-materials use the same source/import/cook path and do not trigger another
-engine-wide compile. Result arrays are independent of the base manifest.
+The standalone `buildEngineShaderManifest` builder combines the admitted shared
+or packaged engine projection with freshly compiled `materialPackages`. Authored
+base and point-shadow builds retain SSAO from the complete source-build roster.
+Custom materials use the same source/import/cook path and do not trigger another
+engine-wide compile when that projection is available. Missing/stale profiles and
+explicit source validation retain the complete source producer. Result arrays
+are independent of the base manifest.
 
 Production and development publish the same versioned manifest: each WGSL source
 has one SHA-256 identity, while repeated source blocks are stored once in a
 shared fragment table. Material variants and direct entries refer to those
 identities. The individual `.wgsl` sidecars remain available for inspection.
+The development HTTP producer retains source blocks from the admitted packaged or
+shared profile. It reuses those blocks when the current WGSL bytes match, while
+fresh authored sources follow the same digest and fragment publisher. Only
+currently referenced sources enter the response; profile replacement and plugin
+close retire the retained blocks with their owning input generation. This avoids
+splitting already cooked sources again without changing the manifest schema,
+source-byte validation, variant roster or source-build fallback.
+
 Standalone callers serialize `publishShaderManifest(manifest.entries,
 manifest.materialShaders)` before serving or storing a builder result. This is
 the same publication owner used by the plugin; JSON-stringifying the expanded
 builder model repeats the full source at every variant and defeats source sharing.
 
+Authored-material preparation uses one Shader Compiler bounded program compiler
+per package batch, including the standalone builder. Exact validated results
+and shared composition can be reused across material aliases; each alias still
+owns its publication identity and complete variant roster. Different entry,
+output format and reflection contracts retain their own validation. The existing
+128-entry / 16 MiB bound applies to the entire batch, rather than each package.
+Changed sources and failed preparations retain the existing HMR recovery path.
+
+Engine source variants respect `FORGEAX_SHADER_COMPILE_WORKERS`, including a
+single-worker build: one compilation completes before the next starts. The
+default pool reserves one available CPU, with at most 16 compiler workers.
+Both the standalone builder and Vite retain the complete ordered variant roster.
+Each batch in the single-worker path owns the same bounded program compiler as
+each Worker. Reuse ends at the batch boundary; changed entry and reflection
+options still pass their own validation.
+
+Development requests reuse one serialized response for the current shader state.
+Each request still resolves active material packages and primes missing entries;
+successful source, import, package or shared-input changes invalidate that response.
+Failed author edits preserve the existing last-known-good state. Failed publication
+is retried, and `closeBundle` releases the retained response with the shader inputs.
+
 Standalone point-shadow requests without authored packages reuse an admitted
 packaged point profile when present. Missing inputs and explicit
-`FORGEAX_ENGINE_SHADER_SOURCE_BUILD=1` requests retain source compilation;
-authored point-shadow packages also retain their source route. Invalid shared
-inputs and missing authored sources remain explicit failures.
+`FORGEAX_ENGINE_SHADER_SOURCE_BUILD=1` requests retain source compilation.
+Authored point-shadow packages reuse the admitted point projection while their
+own sources are freshly cooked. Invalid shared inputs and missing authored
+sources remain explicit failures.
+
+Forced-source production resolves each entry's unchanged transitive import
+catalog once before its capability variants, including utility entries without
+variant axes. Per-variant import reachability
+scans only preprocessor directives, preserving nested conditionals, commented
+imports, traversal order and every published variant. WGSL bodies remain inputs
+to the original source projection and compiler validation.
+
+Each source-compilation Worker prepares the selected Standard Surface source
+and owns one existing Material Program Compiler instance for its job stream.
+The same internal preparation function serves serial compilation; its emitted
+module is packaged with the plugin and adds no public entry point. The catalog
+is sent once per Worker, while each job retains its source, defines and imports. Composition and exact-result reuse share the
+compiler's original 128-entry / 16MiB bound; distinct reflection and entry
+contracts still validate independently. Worker termination releases that state,
+and emission keeps the original job order.
 
 The packaged input roster contains `base-ssao` and `point-ssao`. SSAO is an
 independent fullscreen entry, so the same projection used for transferred inputs
 removes it when disabled without recompiling material shaders. All four public
 point-shadow/SSAO configurations remain available. The release producer removes
 obsolete no-SSAO copies while preserving declarations and other live profiles.
+The packaged `buildEngineShaderManifest` path retains SSAO in both point-shadow
+configurations, matching its source-built manifest and the runtime Standard
+profile. Explicit bundler `engineEntries.hdrpSsao: false` still removes it;
+configured shared inputs retain their producer-owned projection.
 
 Each prepared profile records `source.json` with the `engineShaderSourceDigest`
 of the `@forgeax/engine-shader` `src/` WGSL it was compiled from. The loader
@@ -57,13 +111,19 @@ module and capability variant, and publishes shared modules once. A failed
 later Pass leaves the previous complete material generation installed; a
 successful edit replaces all of that package's program rows together.
 
+For Standard roots, the plugin passes the complete source catalog and geometry
+kind to that cooker. Capability lowering belongs to the cooker; stripping imports
+before lowering would erase scene-index, clustered-light and skin programs. The
+manifest publishes both direct and scene-index results with their actual ABI receipts.
+
 Authored WGSL requests use native normalized filesystem paths for identity after
 removing Vite query/hash suffixes. Both slash forms therefore match the same
 prepared material on Windows. Absolute filesystem sources (including drive-letter
 paths) remain authored sources; non-path producer keys such as `gltf:material:Name`
 are already cooked publications and are not compiled again. At the Vite HMR
 boundary, dependency edges use Vite's slash-normalized file identities so watcher
-changes can reach the affected authored modules.
+changes can reach affected authored and direct WGSL modules without query suffixes
+splitting their file identity.
 
 Pack-owned runtime materials use `publishAuthoredMaterialShaders: false` so
 Vite supplies build artifacts without creating a second runtime material
@@ -93,6 +153,11 @@ another copy of the shader fleet alive through retained plugin callbacks.
 | `virtual:forgeax/bundler` | Build-time virtual module emitting `forgeaxBundlerAdapter()` factory（feat-20260608 M3，详见下节） |
 
 ## `virtual:forgeax/bundler` virtual module
+
+The build revision is resolved when the virtual module is loaded. Constructing
+plugins for unselected projects performs no revision subprocess. Explicit
+`FORGEAX_SOURCE_SHA` precedes `GITHUB_SHA`; an active load otherwise queries Git
+in the current working directory and keeps an undefined revision outside Git.
 
 > feat-20260608-create-app-param-surface-trim / M3 / D-4 q7-A: a single inline-emit virtual module that surfaces the build-time bundler-injected wiring (`shaderManifestUrl` + optional `importTransport`) as a `BundlerOptions`-compatible factory call. AI users discover the entry through one import line; the manifest URL stays a single SSOT inside the plugin emit path.
 

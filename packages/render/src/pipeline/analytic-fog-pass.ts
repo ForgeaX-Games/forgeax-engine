@@ -5,6 +5,8 @@ import {
 } from '@forgeax/engine-render-graph';
 import type { BindGroupLayout, RenderPipeline } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
+import { addAtmosphereComposition } from '../environment/compose';
+import type { GraphAtmosphere } from '../environment/luts';
 import { postProcessShaderModuleLabel } from '../fullscreen-post-process-pass';
 import { GPU_SHADER_STAGE_FRAGMENT } from '../gpu-stage';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_UNIFORM } from '../gpu-usage';
@@ -148,46 +150,86 @@ export function addAnalyticFogPass(
   return ok(undefined);
 }
 
+interface StandardFogPassInputs {
+  readonly topology: RenderPipelineTopology;
+  readonly atmosphere?: GraphAtmosphere | undefined;
+  readonly color: RenderPipelineTarget;
+  readonly depth: RenderPipelineTarget;
+}
+
+function sceneDepthSample(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  depth: RenderPipelineTarget,
+  label: string,
+): Result<GraphTextureView, RenderGraphError> {
+  if (depth.sampleCount !== 1) return err(analyticFogSampleCountError());
+  return graph.view(depth.texture, { label, dimension: '2d', aspect: 'depth-only' });
+}
+
 /**
- * Composite every opaque-scene fog producer (froxel volume, then analytic
- * height fog) ahead of translucency in either Standard lane.
+ * Composite atmosphere and analytic height fog onto the opaque scene ahead of
+ * translucency in either Standard lane. Both are analytic media that every
+ * translucent writer re-evaluates at its own depth through the View lanes.
  */
 export function addOpaqueFogPasses(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
-  input: {
-    readonly topology: RenderPipelineTopology;
-    readonly color: RenderPipelineTarget;
-    readonly depth: RenderPipelineTarget;
+  input: StandardFogPassInputs,
+): Result<void, RenderGraphError> {
+  const analytic = input.topology.analyticFog === true;
+  if (!analytic && input.atmosphere === undefined) return ok(undefined);
+  const depthSample = sceneDepthSample(graph, input.depth, 'scene-depth.sample');
+  if (!depthSample.ok) return depthSample;
+  if (input.atmosphere !== undefined) {
+    const composed = addAtmosphereComposition(
+      graph,
+      input.color,
+      depthSample.value,
+      input.atmosphere,
+    );
+    if (!composed.ok) return composed;
+  }
+  if (analytic && input.atmosphere === undefined) {
+    const fog = addAnalyticFogPass(graph, { color: input.color, depth: depthSample.value });
+    if (!fog.ok) return fog;
+  }
+  return ok(undefined);
+}
+
+/**
+ * Composite the integrated local `VolumetricFog` medium after every
+ * translucent writer in either Standard lane.
+ *
+ * The integrate pass stores one camera-to-opaque-depth integral per pixel. It
+ * has no depth slices, so a translucent writer cannot sample "the medium in
+ * front of me". Composited before translucency, every blended surface behind
+ * the medium (sky cards, cloud decks, distant particles) replaces the medium's
+ * in-scatter with its own color and cuts a hard hole of its own shape into the
+ * lit haze. Composited after, a surface behind the medium is exact
+ * (`T * blend(src, dst) + S` equals fogging each layer) and a surface inside
+ * the medium also receives the segment behind it, which is a bounded soft
+ * over-fog rather than a missing medium.
+ */
+export function addTranslucencyVolumetricFogPasses(
+  graph: RenderGraphBuilder<RenderPipelineFrame>,
+  input: StandardFogPassInputs & {
     readonly directionalShadow: GraphTextureView | undefined;
     readonly spotShadow: GraphTextureView;
     readonly clusterBuffers: StandardClusterGraphBuffers | null;
     readonly cloudShadow: GraphTextureView | undefined;
   },
 ): Result<void, RenderGraphError> {
-  const volume = input.topology.volumetricFog?.enabled === true;
-  const analytic = input.topology.analyticFog === true;
-  if (!volume && !analytic) return ok(undefined);
-  if (input.depth.sampleCount !== 1) return err(analyticFogSampleCountError());
-  const depthSample = graph.view(input.depth.texture, {
-    label: 'scene-depth.sample',
-    dimension: '2d',
-    aspect: 'depth-only',
-  });
+  if (input.topology.volumetricFog?.enabled !== true) return ok(undefined);
+  const depthSample = sceneDepthSample(graph, input.depth, 'local-volume-scene-depth');
   if (!depthSample.ok) return depthSample;
-  if (volume) {
-    const composed = addAuthoredVolumetricFogPasses(
-      graph,
-      input.topology,
-      input.color,
-      depthSample.value,
-      input.directionalShadow,
-      input.spotShadow,
-      input.clusterBuffers,
-      input.cloudShadow,
-    );
-    if (!composed.ok) return composed;
-  }
-  return analytic
-    ? addAnalyticFogPass(graph, { color: input.color, depth: depthSample.value })
-    : ok(undefined);
+  return addAuthoredVolumetricFogPasses(
+    graph,
+    input.topology,
+    input.color,
+    depthSample.value,
+    input.directionalShadow,
+    input.spotShadow,
+    input.clusterBuffers,
+    input.cloudShadow,
+    input.atmosphere?.transmittance,
+  );
 }

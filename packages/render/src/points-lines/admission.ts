@@ -1,4 +1,10 @@
 import { err, type MaterialAsset, type MeshAsset, ok, type Result } from '@forgeax/engine-types';
+import {
+  type LineCap,
+  type LineWidthUnits,
+  lineCapFromU32,
+  lineWidthUnitsFromU32,
+} from '../components/lines';
 import { type PointShape, PointShapeValue, pointShapeFromU32 } from '../components/points';
 import type {
   PointsLinesBudgetExceededError,
@@ -20,7 +26,11 @@ export interface PointsStyleInput {
 }
 
 export interface LinesStyleInput {
-  readonly widthPx?: number;
+  readonly width?: number;
+  /** `LineWidthUnitsValue` label; decoded and validated at admission. */
+  readonly widthUnits?: number;
+  /** `LineCapValue` label; decoded and validated at admission. */
+  readonly cap?: number;
   readonly dashSize?: number;
   readonly gapSize?: number;
   readonly dashOffset?: number;
@@ -45,7 +55,9 @@ export interface PointsLinesAdmission {
   readonly component: 'Points' | 'Lines';
   readonly shape?: PointShape;
   readonly sizePx?: number;
-  readonly widthPx?: number;
+  readonly width?: number;
+  readonly widthUnits?: LineWidthUnits;
+  readonly cap?: LineCap;
   readonly dashSize?: number;
   readonly gapSize?: number;
   readonly dashOffset?: number;
@@ -114,9 +126,25 @@ function checkStyle(
     return ok({ component: 'Points', shape, sizePx });
   }
 
-  const widthPx = input.lines?.widthPx ?? 1;
-  if (!Number.isFinite(widthPx) || widthPx <= 0) {
-    return invalidStyle(input, 'Lines', 'widthPx', widthPx, 'finite widthPx > 0');
+  const width = input.lines?.width ?? 1;
+  if (!Number.isFinite(width) || width <= 0) {
+    return invalidStyle(input, 'Lines', 'width', width, 'finite width > 0');
+  }
+  const widthUnitsValue = input.lines?.widthUnits ?? 0;
+  const widthUnits = lineWidthUnitsFromU32(widthUnitsValue);
+  if (widthUnits === undefined) {
+    return invalidStyle(
+      input,
+      'Lines',
+      'widthUnits',
+      widthUnitsValue,
+      "widthUnits is 'pixels' or 'world'",
+    );
+  }
+  const capValue = input.lines?.cap ?? 0;
+  const cap = lineCapFromU32(capValue);
+  if (cap === undefined) {
+    return invalidStyle(input, 'Lines', 'cap', capValue, "cap is 'butt' or 'round'");
   }
   const dashSize = input.lines?.dashSize ?? 1;
   const gapSize = input.lines?.gapSize ?? 0;
@@ -132,7 +160,7 @@ function checkStyle(
   if (!Number.isFinite(Math.fround(dashSize + gapSize))) {
     return invalidStyle(input, 'Lines', 'dashSize', dashSize, 'dashSize + gapSize fits f32');
   }
-  return ok({ component: 'Lines', widthPx, dashSize, gapSize, dashOffset });
+  return ok({ component: 'Lines', width, widthUnits, cap, dashSize, gapSize, dashOffset });
 }
 
 function checkTopology(

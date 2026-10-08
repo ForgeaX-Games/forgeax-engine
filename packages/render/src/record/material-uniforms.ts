@@ -32,7 +32,17 @@ export function uploadMaterialUniforms(c: _InternalRenderPipelineContext): void 
   ) {
     materialUboPayload = cachedMaterialUboPayload.payload;
   } else {
-    materialUboPayload = new Uint8Array(materialSlotCount * MATERIAL_PER_ENTITY_STRIDE);
+    // A new slot table of the same size rewrites the previous payload bytes:
+    // `writeBuffer` copies at submit, and the cache is this payload's only
+    // other holder, so a per-frame slot table no longer allocates the whole
+    // material UBO image (render-worker GC pressure).
+    const payloadBytes = materialSlotCount * MATERIAL_PER_ENTITY_STRIDE;
+    if (cachedMaterialUboPayload?.payload.byteLength === payloadBytes) {
+      materialUboPayload = cachedMaterialUboPayload.payload;
+      materialUboPayload.fill(0);
+    } else {
+      materialUboPayload = new Uint8Array(payloadBytes);
+    }
     const slotPayload = new Uint8Array(MATERIAL_UNIFORM_BYTES);
     const slotPayloadF32 = new Float32Array(
       slotPayload.buffer,

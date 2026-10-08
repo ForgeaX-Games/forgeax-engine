@@ -29,7 +29,7 @@ struct TaaResolveParams {
   historyValid : u32,
   temporalFrameIndex : u32,
   hasSecondaryReactivity : u32,
-  hasCurrentCoverage : u32,
+  hasOutputTemporal : u32,
 };
 
 struct TaaResolveOutput {
@@ -49,7 +49,7 @@ struct TaaResolveOutput {
 @group(1) @binding(8) var<uniform> params : TaaResolveParams;
 @group(1) @binding(9) var historyStability : texture_2d<f32>;
 @group(1) @binding(10) var secondaryReactivity : texture_2d<f32>;
-@group(1) @binding(11) var currentCoverage : texture_2d<f32>;
+@group(1) @binding(11) var currentOutputTemporal : texture_2d<f32>;
 
 fn sampleSecondaryReactivity(uv : vec2<f32>) -> f32 {
   if (params.hasSecondaryReactivity == 0u) { return 0.0; }
@@ -143,19 +143,28 @@ struct TaaCurrentTemporal {
   depthEdge : bool,
 };
 
+fn loadCurrentTemporal(pixel : vec2<i32>) -> vec4<f32> {
+  // The Renderer binds output geometry or current internal geometry here once.
+  return textureLoad(currentOutputTemporal, pixel, 0);
+}
+
 fn closestCurrentTemporal(pixel : vec2<i32>, dimensions : vec2<i32>) -> TaaCurrentTemporal {
   let clamped = clamp(pixel, vec2<i32>(0), dimensions - vec2<i32>(1));
-  var closest = textureLoad(currentTemporal, clamped, 0);
+  var closest = loadCurrentTemporal(clamped);
   var farthestDepth = closest.z;
   var hasBackground = closest.z < 0.0;
+  // One input texel of reconstruction support spans up to three output
+  // pixels after the Standard extent's alignment (authored scale >= 0.5).
+  let ratio = vec2<f32>(dimensions) / vec2<f32>(textureDimensions(currentColor));
+  let radius = select(1, min(3, i32(ceil(max(ratio.x, ratio.y)))), params.hasOutputTemporal != 0u);
   // Jitter changes coverage at silhouettes and subpixel gaps. Select the
   // nearest valid surface in the reconstruction footprint, carrying its
   // motion and reactive flag together. The negative clear depth is absent
   // geometry, not a surface closer than every real sample.
-  for (var y = -1; y <= 1; y++) {
-    for (var x = -1; x <= 1; x++) {
+  for (var y = -radius; y <= radius; y++) {
+    for (var x = -radius; x <= radius; x++) {
       let samplePixel = clamp(pixel + vec2<i32>(x, y), vec2<i32>(0), dimensions - vec2<i32>(1));
-      let candidate = textureLoad(currentTemporal, samplePixel, 0);
+      let candidate = loadCurrentTemporal(samplePixel);
       hasBackground = hasBackground || candidate.z < 0.0;
       farthestDepth = max(farthestDepth, candidate.z);
       if (candidate.z >= 0.0 && (closest.z < 0.0 || candidate.z < closest.z)) {
@@ -272,33 +281,42 @@ fn vs_main(@builtin(vertex_index) vertexIndex : u32) -> FullscreenOutput {
 fn fs_taa_resolve(in : FullscreenOutput) -> TaaResolveOutput {
   let dimensions = vec2<i32>(textureDimensions(currentColor, 0));
   let currentUv = in.uv + params.currentJitterUv;
-  let current = textureSampleLevel(currentColor, currentSampler, currentUv, 0.0);
-  let pixel = vec2<i32>(currentUv * vec2<f32>(dimensions));
-  let currentSample = closestCurrentTemporal(pixel, dimensions);
-  let coverageDimensions = vec2<i32>(textureDimensions(currentCoverage, 0));
-  let coveragePixel = clamp(
-    vec2<i32>(in.position.xy),
-    vec2<i32>(0),
-    coverageDimensions - vec2<i32>(1),
-  );
-  let currentCovered = params.hasCurrentCoverage == 0u ||
-    textureLoad(currentCoverage, coveragePixel, 0).r >= 0.5;
+  // Integrate the actual jittered sample at every scale. Filtering current
+  // again before history accumulation adds a second tent footprint, blurring
+  // textured detail and broadening thin HDR surfaces.
+  let sourcePixel = clamp(vec2<i32>(currentUv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - vec2<i32>(1));
+  let current = textureLoad(currentColor, sourcePixel, 0);
+  // Reduced radiance can miss a whole thin surface in one jitter phase.
+  // Its output-domain geometry producer retains current velocity, validity
+  // and depth instead of substituting a binary coverage sample for identity.
+  let temporalDimensions = vec2<i32>(textureDimensions(currentOutputTemporal));
+  let pixel = vec2<i32>(currentUv * vec2<f32>(temporalDimensions));
+  let currentSample = closestCurrentTemporal(pixel, temporalDimensions);
   let sceneTemporal = currentSample.temporal;
   let temporal = vec4<f32>(sceneTemporal.xyz,
     max(sceneTemporal.w, sampleSecondaryReactivity(currentUv)));
   let historyUv = in.uv - temporal.xy;
   let historyInBounds = all(historyUv >= vec2<f32>(0.0)) && all(historyUv <= vec2<f32>(1.0));
-  let history = textureSampleLevel(historyColor, historySampler, historyUv, 0.0);
   let previousTemporal = textureSampleLevel(historyTemporal, temporalSampler, historyUv, 0.0);
   let depthDelta = abs(previousTemporal.z - temporal.z);
   let depthThreshold = 0.0025 + temporal.z * 0.01;
   let rejected =
     params.historyValid == 0u ||
-    !currentCovered ||
     !historyInBounds ||
     temporal.z < 0.0 ||
     ((previousTemporal.z < 0.0 || depthDelta > depthThreshold) && !currentSample.depthEdge);
-  let historyPixel = clamp(vec2<i32>(historyUv * vec2<f32>(dimensions)), vec2<i32>(0), dimensions - vec2<i32>(1));
+  // Rejected history contributes neither color nor stability. Avoid its
+  // neighborhood and clipping work, especially over empty reduced-scale views.
+  if (rejected) {
+    return TaaResolveOutput(
+      vec4<f32>(roundTaaHistory(current.rgb, taaRoundingNoise(vec2<u32>(in.position.xy), params.temporalFrameIndex)), current.a),
+      temporal,
+      0.0,
+    );
+  }
+  let history = textureSampleLevel(historyColor, historySampler, historyUv, 0.0);
+  let historyDimensions = vec2<i32>(textureDimensions(historyStability));
+  let historyPixel = clamp(vec2<i32>(historyUv * vec2<f32>(historyDimensions)), vec2<i32>(0), historyDimensions - vec2<i32>(1));
   let priorStability = textureLoad(historyStability, historyPixel, 0).r;
   let stableAge = taaStableAge(priorStability, !rejected, temporal, previousTemporal.xy);
   let clipped = clipTaaHistory(taaNeighborhood(currentUv, current.rgb, stableAge >= TAA_STABILITY_FRAMES), history.rgb);
@@ -310,7 +328,14 @@ fn fs_taa_resolve(in : FullscreenOutput) -> TaaResolveOutput {
   // for 64 stationary frames before reducing the residual jitter response.
   // Any rejection, receiver motion, or secondary reactivity resets this age.
   let steadyWeight = mix(0.95, 0.99, smoothstep(64.0, TAA_HISTORY_SETTLE_FRAMES, stableAge));
-  let progressiveWeight = taaAccumulationWeight(params.temporalFrameIndex, steadyWeight);
+  var progressiveWeight = taaAccumulationWeight(params.temporalFrameIndex, steadyWeight);
+  if (params.hasOutputTemporal != 0u && length(temporal.xy) < 1e-5 && temporal.w == 0.0 && stableAge < TAA_STABILITY_FRAMES) {
+    // A late stop has an old global frame index but a fresh local lattice.
+    // Retain one accepted prior sample at the first stop, then rebuild its
+    // first jitter cycle from local stationary samples rather
+    // than retaining 95% of the previously moving reconstruction each frame.
+    progressiveWeight = min(progressiveWeight, taaAccumulationWeight(u32(max(stableAge, 1.0)), steadyWeight));
+  }
   // Depth is a disocclusion gate, not a continuous history fade. A sloped
   // static surface changes sampled depth under jitter without changing its
   // identity; attenuating accepted history makes those edges oscillate.

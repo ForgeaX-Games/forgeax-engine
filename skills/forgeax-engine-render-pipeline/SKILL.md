@@ -8,6 +8,22 @@ description: ForgeaX render pipelines, post-processing, and typed RenderGraph ow
 > [!IMPORTANT]
 > RenderPipeline.build declares typed graph topology only. Renderer exclusively owns compile, last-known-good replacement, execution, retirement, finish(), and one queue.submit() per frame.
 
+## Sky atmosphere and aerial perspective
+
+Use one `Atmosphere` and one `DirectionalLight` for outdoor air. Author distance
+in metres, coefficients in inverse metres, and solar intensity as outer-space
+lux. Atmosphere Transform defines the ground reference; Skylight Transform
+selects its independent capture position. Ordinary haze comes from Rayleigh/Mie
+transport; `Fog` adds an extra height medium. Read the
+[physical atmosphere contract](../../packages/render/README.md#atmosphere-and-aerial-perspective).
+
+Keep sky, AP, solar attenuation and captures on the shared optical kernel. AP
+stores RGB luminance and RGB transmittance. Camera-specific tables belong to their
+view; medium tables and pinned capture generations belong to Renderer. Verify
+fixed-exposure AP on/off, sun sweeps and colour ROIs against high-sample transport,
+then inspect real RHI Debug work/resources and GPU timings. Single-sample depth
+and the declared device texture budget are required; unavailable is explicit.
+
 ## Local volumetric fog
 
 Use one `VolumetricFog` entity for each local medium; select
@@ -32,7 +48,8 @@ before the translucent work, bound View offset `translucentViewOffset(...)`).
 Transmission/refraction stays in the Standard pipeline: one renderer-owned backdrop copy, optional
 rough mip raster passes, transmission before ordinary transparent, then temporal/post. Use
 `renderer.inspect().transmission` for capability, extent, format, mips, bytes, and recovery facts;
-never add a second graph or app-owned scene-color copy.
+never add a second graph or app-owned scene-color copy. Below 21 sampled textures the renderer selects
+the `TRANSMISSION_SHARED_SLOTS` variant; see the material skill for the budget error and check.
 
 ## Order-independent transparency
 
@@ -46,18 +63,42 @@ Read `renderer.inspect().transparency` for requested/resolved mode, draw counts,
 reasons, and the `capability-absent` fallback. Contract:
 [render README](../../packages/render/README.md#order-independent-transparency).
 
+## Stereo output (non-XR)
+
+Add `StereoCamera { eyeSeparation, convergence, layout, swapEyes }` to a perspective
+Camera; the renderer derives two CameraView eyes (own depth, post and TAA history, one
+submit). Layouts are the closed `StereoLayoutValue` union: side-by-side, top-bottom and
+write-mask anaglyph. Branch on `StereoCameraInvalidError.detail.field` for invalid
+separation/convergence or unsupported orthographic, `Camera.target` and PlanarReflection
+cameras. `inspect().views[].eye` identifies eye rows; composite receipts have no display
+picking, so cast interaction rays from the mono Camera. Contract:
+[render README](../../packages/render/README.md#stereo-output-non-xr).
+
 ## Routing
 
 | Goal | Entry |
 |:--|:--|
 | tonemap / bloom / FXAA / MSAA | Camera fields |
+| Image-based lens flare ghosts | `LensFlare` camera companion (HDR, after Bloom) |
 | Skybox | SkyboxBackground |
+| Side-by-side / top-bottom / anaglyph stereo | `StereoCamera` on a perspective Camera |
+| Rough/glossy reflections of off-screen content under ray-traced GI | Deferred `diffuseGi: { gather, reflections: {} defaults 0.4/0.1 }` with `ibl: false`, any gather; `'exact'` traces both lobes, `'irradiance-field'`/`'screen-probe'` read the radiance cache above the trace threshold and trace Global SDF→Card below it, then denoise the traced lobe (hit-distance reprojection, same-reflector rejection, 3x3 variance clamp, 8-frame cap, edge-stopping filter; passes `irradiance-field.reflection-temporal` / `.reflection-denoise`). SSR stays first, world value fills misses. [Lite reflections](../../packages/render/README.md#lite-reflections-world-traced-specular-indirect) |
 | CubeCamera / ReflectionProbe capture | `CubeCamera` / `ReflectionProbe` + one Renderer receipt path |
 | RenderTarget source / readback | `Renderer.createRenderTargetTextureSource` + receipt-bound `observe` |
+| Freeze a region of this frame for later material sampling | `Renderer.requestFramebufferSnapshot(target, { region, camera? })` into a 2D `rgba16float` target (linear-HDR scene color, copied before tonemap); observe the ticket via `observe(receipt, { framebufferSnapshots })`. Contract: [render README](../../packages/render/README.md#framebuffer-region-snapshot) |
+| 3D / array RenderTarget (volume slices, layer atlases) | `shape: '3d' \| '2d-array'` + `depthOrArrayLayers`; one `Camera.target` writer per layer via `Camera.targetLayer`; `requestTargetReadback(target, { layer })`; [layered targets](../../packages/render/README.md#layered-targets-3d-and-2d-array) |
 | Standard linear-output stages/camera effects | Camera companion + Standard output plan + ordinary RenderFeature |
 | Encoded-output tail effects | createFullscreenRenderFeature + createRenderer({ features }); only effects that preserve spatial position |
+| Diffuse GI (exact reference or Lumen-Lite irradiance field) | `StandardProfile.diffuseGi` with `gather: 'exact' \| 'irradiance-field'` (deferred, IBL off); exact MASK coverage runs 3 GPU-driven indirect rounds over a shared candidate pool, so a nonzero coverage-header `overflow` (invalid samples) means the pool, not the scene, ran out; [contract](../../packages/render/README.md#irradiance-field-diffuse-gi-lumen-lite) |
 | Replace pass topology | RenderPipeline.build |
 | Feature writes scene color/depth | createRenderFeatureTarget + staging.addGraphicsPass |
+| Which GI world traversal ran (Global SDF or hardware Ray Query) | Automatic; read `renderer.inspect().diffuseGi.traversal` / `traversalFallback` / `acceleration` (screen-probe: `diffuseGi.field.*`) and the `irradiance-field.world-acceleration` build pass. Scene edits stay in place on both lanes; on Ray Query, `acceleration.blasBuilt` / `tlasBuilt` / `bytesBuilt` show the cost (move: TLAS only; add: one BLAS per new mesh; material: none); [world traversal seam](../../packages/render/README.md#world-traversal-seam-global-sdf-or-hardware-ray-query) |
+| Static-scene diffuse GI with no per-frame tracing (build-time light bake) | Cook an `irradiance-volume` with `createIrradianceVolumeCooker()` (`@forgeax/engine-render/internal`, a NativeCooker over the exact path integrator; keep the GUID across rebakes), publish it in the Catalog, then `StandardProfile.diffuseGi: { gather: 'baked', volume: <guid>, resolution }` (deferred, IBL off). Inspect `renderer.inspect().diffuseGi.volume`; passes are only `baked-field.*`; dynamic objects receive, never contribute. [contract](../../packages/render/README.md#baked-irradiance-volume-build-time-light-bake) |
+| Lumen-Lite Screen Probe diffuse GI (screen trace first, field fallback) | `StandardProfile.diffuseGi` with `gather: 'screen-probe'`, `probes` and the shared `field` (deferred, IBL off, compute required); inspect `renderer.inspect().diffuseGi` and `screen-probe.*` pass timings; [contract](../../packages/render/README.md#screen-probe-diffuse-gi-lumen-lite) |
+| Camera-following GI probes over a large world (scroll re-traces only exposed slabs) | `field.clipmap: { levels, dimensions }` (or `DiffuseGiTierScene.clipmapDimensions`); `probeBudget` splits over levels; inspect `renderer.inspect().diffuseGi.probes.clipmap`. [Clipmap](../../packages/render/README.md#camera-following-probe-clipmap) |
+| Pick a diffuse GI quality preset (low/medium/high/epic) with capability fallback | `resolveDiffuseGiTier(tier, scene, renderer.inspect().capabilities)` and spread `.profile` over the Standard profile; `.fallback.reason` is data. [Quality tiers](../../packages/render/README.md#quality-tiers) |
+| Move/remove/add objects or change materials under the irradiance field without a reset | Nothing to call: moves, removals, adds and material changes edit Cards, the Global SDF box and nearby probes in place within the field's spare capacity (overflow or a handedness flip rebuilds); non-field changes skip re-projection; skinned/morph meshes are excluded from the field. Card capture (field and exact `global.cards`) is progressive, `cards.budget` tiles per frame. Inspect `renderer.inspect().diffuseGi.edits`. [Dynamic content](../../packages/render/README.md#dynamic-content) |
+| A GI scene with more Cards than `cards.maxCaptureBytes`, or several GI CameraViews | Nothing to call: the field streams Card residency on both world traversals (Global SDF and Ray Query) by view distance and screen size (`inspect().diffuseGi.residency` resident/pending/evicted); CameraViews split the probe, capture and relight budgets equally (`views[i].diffuseGi.share`), each view owning its field memory. [Card residency](../../packages/render/README.md#card-residency) |
 | Compute produces vertex/index/indirect buffers for raster | staging.addComputePass + staging.addGraphicsPass, sharing prepared GPU buffer refs |
 | RHI backend / capability | `forgeax-engine-rhi` |
 | Frame capture/replay | forgeax-engine-rhi-debug |
@@ -213,6 +254,24 @@ flowchart LR
 
 renderer.perFramePassNames reports compiled pass order; it observes topology and does not execute it.
 
+### Display-P3 output
+
+The canvas colour space is the closed union `'srgb' | 'display-p3'`. Choose it with
+`createRenderer(canvas, { outputColorSpace: 'display-p3' })` or switch at runtime with
+`renderer.setOutputColorSpace(space)` (a Result; applied at the next draw). The working space
+stays linear Rec.709. The Output Transform converts to linear P3 after tone mapping and then
+applies the sRGB OETF. Author wide colours with `displayP3([r, g, b, a])`, not with raw
+out-of-range numbers.
+
+Branch on `renderer.inspect().output.colorSpace`, never on the backend. Its `status` is either
+`'applied'` or `'fallback'`, and `effective` is what the surface presents. A fallback has
+`fallback.detail.observed` in `configure-rejected | configuration-absent | color-space-absent |
+color-space-mismatch`, and the Renderer keeps drawing sRGB. Readback of the `'final-display'`
+domain carries `colorSpace`: decode P3 bytes with `color.displayP3ToLinear`, not as sRGB. An RHI
+Debug tape records `rhiCaps.canvasColorSpace`, and the Output Transform uniform
+`TonemapParams.outputGamut` (byte 16) is `1` for P3. Limits and the SSOT are listed in the
+[render README](../../packages/render/README.md#display-p3-output-colour-space).
+
 ### Built-in camera Depth of Field
 
 DoF is authored on the active perspective `Camera` through the Engine-owned
@@ -258,6 +317,18 @@ With no component on the active camera, the projection stays present as
 orthographic requests remain inspectable through the camera snapshot's
 structured `error` (`code`, `expected`, `hint`, `detail`) and report
 `invalid` or `unsupported` without graph admission.
+
+### Built-in lens flare
+
+`LensFlare` is an HDR camera companion following the Unreal Engine lens-flare
+model: every linear HDR pixel above `threshold` (`r + g + b`) is disc-blurred
+(`bokehSize`) and re-imaged as eight ghosts at `ghostScales[i] * X` for a source
+at screen offset X, tinted by `ghostTints` and `tint`. It runs directly after
+Bloom and before exposure/tone mapping; zero intensity, zero tint, or no live
+ghost is the exact zero-work path. It needs no light entity: occluded sources
+simply are not bright pixels. Invalid fields report
+`lens-flare-invalid-parameter`. Contract:
+[render README](../../packages/render/README.md#camera-lens-flare).
 
 ### Built-in barrel distortion
 
@@ -420,8 +491,8 @@ export const customPipeline: RenderPipeline = {
 ```
 
 Forward the build context's `observationCaptureDomains` to the final output transform: it
-captures the requested `final-srgb` receipt there, so `requestObservation(['final-srgb'])` and
-`observe(receipt, { include: ['final-srgb'] })` work on a custom graph. Unrequested frames add
+captures the requested `final-display` receipt there, so `requestObservation(['final-display'])` and
+`observe(receipt, { include: ['final-display'] })` work on a custom graph. Unrequested frames add
 no copy.
 
 Feature installation happens through the public renderer construction options:
@@ -459,6 +530,7 @@ RenderGraphBuilder accepts only opaque handles created or imported by that build
 | texture | `createTexture` / `importTexture` | `sampled-read`, `storage-read`, `storage-write`, `color-attachment`, `depth-stencil-read`, `depth-stencil-write`, `copy-src`, `copy-dst` |
 | Texture view | view / importView | Attachments and texture read/write access |
 | buffer | `createBuffer` / `importBuffer` | `uniform-read`, `storage-read`, `storage-write`, `vertex-read`, `index-read`, `indirect-read`, `copy-src`, `copy-dst` |
+| TLAS | `importAccelerationStructure` (caller-owned, never allocated) | `acceleration-structure-build` (copy passes only), `acceleration-structure-read` (requires `caps.rayQuery`, else `capability-missing` `'ray-query'`) |
 
 storage-write followed by vertex-read/index-read/indirect-read establishes compute-to-raster dependencies and required barriers. Do not duplicate this with a resource ledger, string keys, or manual pass dependencies.
 
@@ -591,17 +663,28 @@ finer; `lod-changed` static misses under camera motion indicate a broken clamp.
 
 ## GPU-driven occlusion (two-phase HZB)
 
-With `caps.firstInstanceIndirect`, the main camera's GPU lane splits the scene
-pass: the early pass (`g-buffer` / `main`) draws last frame's visible items, a
+Two-phase HZB is the only main-view occlusion owner. The main camera's GPU
+lane splits the scene pass (single-sampled or MSAA): the early pass (`g-buffer` / `main`) draws last frame's visible items, a
 furthest depth pyramid (`occlusion-depth-pyramid-*`) builds from its depth,
 `gpu-driven.occlusion-cull` tests the rest, and `g-buffer-late` / `main-late`
 draws what was revealed. It is on by default; opt out per pipeline with
-`RenderPipelineAsset.config.gpuOcclusion: false`. MSAA, shadow views, and
-devices without the capability keep the single-phase path. There is no
+`RenderPipelineAsset.config.gpuOcclusion: false`; there is no CPU occlusion
+fallback. Under Deferred, shadow passes follow `g-buffer-late`. Directional and spot final-layer
+casters whose receiver prism the camera pyramid hides are skipped
+(`shadowRaster.views[].cameraCulled`). This is off for Forward, point lights, static
+layers, and any frame where another camera, capture, probe, fog or ray-diffuse
+consumer reads the maps (volumetric fog counts only when enabled). A missing
+shadow near an occluder edge means a too-small receiver dilation. A
+`cameraCulled` of 0 in a Deferred scene with occluders means the graph did not
+bind the pyramid; check the admission roster first.
+`apps/perf/shadow-stress/scripts/inspect-shadow-cull-tape.mjs` audits a
+capture: the instances each shadow view drops must equal its camera-culled
+count. There is no
 reprojection: history is a per-instance visibility bit. A missing object that
 reappears one frame late means a broken late append; a falsely culled object
 means a wrong footprint or pyramid level. Diagnose it with `readLodSelection()`
-(`occlusion.culled` / `late`) and an RHI Debug capture of the pyramid mips and
+(`occlusion.culled` / `late`, also projected into `renderer.inspect().lodOcclusion`)
+and an RHI Debug capture of the pyramid mips and
 late indirect commands, not by disabling the cull.
 
 ## Verification
@@ -637,3 +720,15 @@ passes. Use per-output blend/write masks and per-attachment `colorClearValues`.
 See [the public MRT contract](../../packages/render/README.md#public-material-mrt).
 Validate every attachment with the Browser and Dawn material-mrt fixtures,
 including resize, live/replay equality and missing-draw falsification.
+
+## Selective surface lighting
+
+Set `lightingChannels` on the light and `MeshRenderer`; unsigned u32 intersection
+selects direct illumination independently of camera visibility. Defaults match
+all; zero disables only surface direct light. Use `0x80000000` for bit 31, never
+`1 << 31`. Read the [Render contract](../../packages/render/README.md#surface-direct-light-channels)
+for shader consumers, integer ABI, invalid-input recovery, captures and cost.
+Shadow casting stays with `ShadowParticipation.cast`; unmatched receivers may
+still cast. GI, IBL, baked light and volumetric scattering keep their existing
+policies. Use linear HDR and a light-off independent oracle, then RHI Debug to
+check actual light/receiver carriers and matching shader work.

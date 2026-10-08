@@ -26,11 +26,21 @@ export interface BufferReadbackRange {
 
 export interface TextureReadbackSubresource {
   readonly mipLevel?: number;
+  /** Array layer, or the depth slice of a `3d` texture (the copy origin z). */
   readonly arrayLayer?: number;
   readonly aspect?: 'all' | 'depth-only' | 'stencil-only';
 }
 
 export type ReplayReadbackRequest = BufferReadbackRange | TextureReadbackSubresource;
+
+/** Public readback selector: a buffer byte range or one texture subresource. */
+export interface TextureSubresource {
+  readonly mipLevel: number;
+  readonly arrayLayer: number;
+  readonly aspect?: 'all' | 'depth-only' | 'stencil-only';
+}
+
+export type ReadbackSubresource = TextureSubresource | BufferReadbackRange;
 
 export interface ReplayReadbackProvenance {
   readonly generation: number;
@@ -95,6 +105,13 @@ export async function readReplayResource(
   });
 }
 
+/** Copyable z extent: array layers, or the mip's depth slices for a `3d` texture. */
+function textureLayerExtent(depthOrArrayLayers: number, dimension: string, mip: number): number {
+  return dimension === '3d'
+    ? Math.max(1, Math.floor(depthOrArrayLayers / 2 ** mip))
+    : depthOrArrayLayers;
+}
+
 function resolveTextureViewSubresource(
   view: ResourceTableEntry,
   source: ResourceTableEntry,
@@ -114,6 +131,26 @@ function resolveTextureViewSubresource(
     sourceSize.depthOrArrayLayers - baseArrayLayer;
   const localMipLevel = requested?.mipLevel ?? 0;
   const localArrayLayer = requested?.arrayLayer ?? 0;
+  if ((stringField(sourceDescriptor, 'dimension') ?? '2d') === '3d') {
+    // A 3d view spans every depth slice; the request names the slice directly.
+    const mipLevel = baseMipLevel + localMipLevel;
+    if (
+      !validIndex(localMipLevel, mipLevelCount) ||
+      baseMipLevel + mipLevelCount > sourceMipCount ||
+      !validIndex(
+        localArrayLayer,
+        textureLayerExtent(sourceSize.depthOrArrayLayers, '3d', mipLevel),
+      )
+    ) {
+      return readbackFailure('texture view subresource is outside the recorded view extent');
+    }
+    return ok({
+      ...requested,
+      mipLevel,
+      arrayLayer: localArrayLayer,
+      aspect: requested?.aspect ?? 'all',
+    });
+  }
   if (
     !validIndex(baseMipLevel, sourceMipCount + 1) ||
     !validIndex(baseArrayLayer, sourceSize.depthOrArrayLayers + 1) ||
@@ -145,6 +182,15 @@ async function readBuffer(
   const size = numberField(recordField(entry.descriptor, 'desc'), 'size');
   if (size === undefined || !Number.isSafeInteger(size) || size < 0)
     return readbackFailure(`buffer ${resourceId} has no valid recorded size`);
+  // The recorder never promotes a mappable buffer, so one recorded without
+  // COPY_SRC (MAP_READ staging) cannot be a copy source; MAP_WRITE | COPY_SRC can.
+  const usage = numberField(recordField(entry.descriptor, 'desc'), 'usage') ?? 0;
+  if ((usage & 0x3) !== 0 && (usage & 0x4) === 0)
+    return readbackUnsupported(
+      resourceId,
+      'buffer',
+      'a mappable staging buffer cannot be a copy source; read the buffer it was copied from',
+    );
   const request = isBufferRange(subresource) ? subresource : undefined;
   const offset = request?.offset ?? 0;
   const requestedSize = request?.size ?? size - offset;
@@ -199,7 +245,7 @@ async function readTexture(
     !validIndex(mipLevel, mipCount) ||
     !Number.isInteger(arrayLayer) ||
     arrayLayer < 0 ||
-    arrayLayer >= size.depthOrArrayLayers
+    arrayLayer >= textureLayerExtent(size.depthOrArrayLayers, dimension, mipLevel)
   ) {
     return readbackFailure(`texture subresource for ${resourceId} is outside the recorded extent`);
   }

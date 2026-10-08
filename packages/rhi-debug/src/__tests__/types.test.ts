@@ -120,6 +120,7 @@ describe('Tape — constructibility', () => {
       formatVersion: 2,
       rhiCapsRecorded: {
         canvasFormat: 'bgra8unorm',
+        canvasColorSpace: 'srgb',
         rgba16floatRenderable: true,
         float32Filterable: false,
         textureCompressionBc: true,
@@ -147,6 +148,7 @@ describe('Tape — constructibility', () => {
       formatVersion: 2,
       rhiCapsRecorded: {
         canvasFormat: 'bgra8unorm',
+        canvasColorSpace: 'srgb',
         rgba16floatRenderable: false,
         float32Filterable: false,
         textureCompressionBc: false,
@@ -181,6 +183,7 @@ describe('RhiCapsRecorded — constructibility', () => {
   it('minimal caps', () => {
     const caps: RhiCapsRecorded = {
       canvasFormat: 'bgra8unorm',
+      canvasColorSpace: 'srgb',
       rgba16floatRenderable: false,
       float32Filterable: false,
       textureCompressionBc: false,

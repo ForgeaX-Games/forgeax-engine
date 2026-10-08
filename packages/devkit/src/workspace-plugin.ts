@@ -62,9 +62,16 @@ export const devKitWorkspacePlugin = {
       options.provider ??
         createDevKitWorkspaceProvider({
           ...options,
-          onTargetChanged: () => {
+          onTargetChanged: async () => {
+            const project = runtime.project;
+            const retired = project?.phase === 'starting' && (project.browserGeneration ?? 0) > 0;
+            const previews = retired ? runtime.previews : [];
+            const play = retired ? runtime.play : undefined;
             publish();
-            options.onTargetChanged?.();
+            for (const preview of previews) await runtime.closePreview(preview);
+            if (play) await runtime.stopPlay?.(play);
+            if (retired) publish();
+            await options.onTargetChanged?.();
           },
         }),
     );

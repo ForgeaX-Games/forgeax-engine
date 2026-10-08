@@ -37,11 +37,11 @@ never the reverse.
 > context is available. Treat it as a miss and wait for a new frame. An
 > identity query is valid only with an explicit submitted mapping whose
 > `strength` is `0`.
-- **`pickTriangle`** — exact static CPU triangle query for a screen ray. It
+- **`pickTriangle`** — exact current-pose CPU triangle query for a screen ray. It
   transforms indexed or non-indexed triangle-list vertices into world space,
   returns the nearest world point, distance, barycentric weights, entity,
   triangle index, and optional Catalog GUID, or reports `unavailable` when
-  CPU geometry or the current skinned pose cannot be tested.
+  CPU geometry or a valid current skinned pose cannot be tested.
 - **`pickVertexOnEntity` / `pickVertex`** — per-triangle vertex-level queries
   (editor vertex-snapping workflow). Three-state static-dispatch overload:
   without options -> `VertexHit | undefined`; with `{ limit: N }` -> `VertexHit[]`
@@ -159,8 +159,12 @@ surface you own, then place an entity or debug primitive at the result.
 | `pickVertex` | `(..., { limit })` | `VertexHit[]` (globally sorted by `screenDist` asc, empty on miss) |
 
 `VertexHit = { entity, vertexIndex, worldPos: Vec3Like, screenDist, worldDist, deformed }`.
-Only `triangle-list` submeshes participate; skinned meshes report
-`deformed=true` with rest-pose `worldPos`. Behind-camera vertices are excluded.
+Only `triangle-list` submeshes participate. `worldPos` is the current CPU
+Morph/Skin pose; `deformed=true` means position deformation was evaluated. Both the
+single-entity and whole-scene query use current bounds. Behind-camera vertices
+are excluded. Unavailable CPU poses yield no candidates (`undefined` / `[]`);
+use `pickTriangle` to distinguish an unavailable pose from a miss. Explicit
+`Instances` are omitted because `VertexHit` has no instance ordinal.
 
 > [!IMPORTANT]
 > **`propagateTransforms` precondition (D-9)** — call
@@ -178,12 +182,53 @@ Only `triangle-list` submeshes participate; skinned meshes report
 `TrianglePickResult` is a closed three-state result: `hit` contains the
 nearest `TriangleHit`; `miss` means every candidate was tested and no triangle
 intersects the ray; `unavailable` names intersecting entities whose CPU
-geometry, current skinned pose, or explicit instance transforms cannot be
+geometry, current Morph/Skin pose, or explicit instance transforms cannot be
 tested. For an entity carrying `Instances`, the picker reads World-owned
 `Instances.transforms`; a hit includes the zero-based `instanceIndex`.
 No Renderer or collection resolver is needed. Pass
 `AssetRegistry.guidOf` as `assetGuidOf` when provenance is needed. The query
 does not mutate the World or own an asset registry.
+
+Morph uses the live `MorphWeights.weights` in target order, applying relative
+position deltas before Skin: $P'=P+\sum_k w_k\Delta P_k$. Entity weights override
+authored mesh defaults: glTF/FBX scene producers materialize those defaults into
+`MorphWeights`; a raw World entity without that component is neutral, as in
+render extraction. Zero weights and normal/tangent-only targets preserve source
+positions and bounds; omitted position deltas are valid. Active position Morph derives bounds from the same projected positions, including explicit
+instances. Invalid weights or active target data report `morph-pose-unavailable`
+and cannot be culled using rest bounds.
+
+For a skinned mesh, propagate transforms after advancing animation and before
+querying. `pickTriangle` reads `Skin.skeleton`, current `Skin.joints` world
+matrices, CPU `skinIndex`/`skinWeight` and position attributes. It computes
+$P_w = \sum_{i=0}^{3} w_i(J_i B_i^{-1})[P,1]$ with the same affine XYZ and
+four influences as the Standard skin shader. The mesh node's transform is
+ignored, and weights are not renormalized. A fresh posed world AABB replaces
+the rest AABB, so motion outside import-time bounds remains pickable.
+
+| Query property | Contract |
+|:--|:--|
+| Work | $O(J+V+T)$ per skinned entity: build joint palette and world vertices once, reject using posed bounds, then test supported triangles |
+| Scratch | $12V+64J$ bytes for posed positions and palette, plus bounded query scratch; Morph+Skin reuses the one positions buffer; joints are consumed synchronously without extra matrix copies |
+| Pose lifetime | Query-local; no retained pose cache, GPU readback, asynchronous wait, or World writes |
+| Result | Existing nearest-world-distance, triangle ordinal, barycentric weights, world point and GUID resolver |
+| Invalid skin | Missing/dangling joints, unavailable skeleton, malformed/nonfinite attributes or matrices, or Skin with Instances return `skinned-pose-unavailable` |
+| Unavailable bounds | An unknown pose cannot be excluded using rest bounds; it conservatively makes the query unavailable |
+| Geometry scope | CPU mesh triangles under skeletal deformation; material height displacement, shader-authored deformation, clipping and alpha coverage are not evaluated |
+
+Vertex snapping consumes the same query-local projection. Neither query retains
+pose values between calls or caches World/animation authority. Custom vertex
+shaders, material displacement, clipping, alpha coverage and renderer-selected
+LOD are outside this geometric CPU contract. A `hit` proves a supported CPU
+triangle, not arbitrary shader visibility.
+
+The [Browser/Dawn fixture](src/__tests__/skinned-triangle-gpu.fixture.ts)
+compares exact picks at raster pixel centers with real Standard skin output,
+checks captured palette/VBO provenance, replays on a fresh device, and deletes
+the geometry draw as a pixel falsifier. Each backend completes 60 frames.
+The repeatable CPU benchmark is `bun packages/picking/scripts/bench-skinned-triangle.ts
+<optional-threejs-reference-checkout>`; it reports samples and p50/p95, includes
+posed bounds, and keeps transform propagation outside query timing.
 
 ### Tile-cell (`pickTile`)
 

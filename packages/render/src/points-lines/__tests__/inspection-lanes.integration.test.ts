@@ -2,7 +2,7 @@ import { type MeshAsset, ok } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { PointsLinesMaterialUnsupportedError } from '../../errors/render';
 import { PointsLinesExpansionCache } from '../expansion-cache';
-import { inspectPointsLines, pointsLinesInspectionToJson } from '../inspection';
+import { inspectPointsLines } from '../inspection';
 import { type PointsLinesGpuResourceAdapter, PointsLinesPreparation } from '../prepare';
 import { createPointsLinesLaneContract, createPointsLinesRecordPlan } from '../record';
 import { createPointsLinesSnapshot } from '../snapshot';
@@ -31,7 +31,7 @@ function snapshot(viewport = { width: 320, height: 200, dpr: 1 }) {
     meshGeneration: 3,
     materialHandle: 12,
     materialGeneration: 4,
-    style: { kind: 'lines', widthPx: 4 },
+    style: { kind: 'lines', width: 4 },
     layer: 0,
     visible: true,
     sourceBounds: new Float32Array([0, 0, 0, 1, 1, 0]),
@@ -62,7 +62,7 @@ describe('Points/Lines inspection and recovery integration', () => {
         uploadBytes: geometry.derivedBytes,
         lastKnownGood: true,
       });
-      const json = JSON.parse(pointsLinesInspectionToJson(inspection)) as typeof inspection;
+      const json = JSON.parse(JSON.stringify(inspection)) as typeof inspection;
       expect(json).toMatchObject({
         entityKey: 7,
         worldId: 2,
@@ -139,8 +139,6 @@ describe('Points/Lines inspection and recovery integration', () => {
         lastKnownGood: false,
       },
     });
-    expect(JSON.parse(pointsLinesInspectionToJson(inspection)).refusal.hint).toContain(
-      'Materials.unlit',
-    );
+    expect(JSON.parse(JSON.stringify(inspection)).refusal.hint).toContain('Materials.unlit');
   });
 });

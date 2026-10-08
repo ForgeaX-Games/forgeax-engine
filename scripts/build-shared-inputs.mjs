@@ -102,12 +102,18 @@ process.env.FORGEAX_SHADER_COMPILE_WORKERS ??= String(Math.max(1, runnerResource
 const inputFingerprint = sharedShaderInputFingerprint(root, engineEntries);
 if (
   process.env.FORGEAX_BUILD_NO_TASK_CACHE !== '1' &&
-  reusableSharedBuild(root, output, inputFingerprint)
+  reusableSharedBuild(root, output, inputFingerprint, (reason) =>
+    console.log(`[shared-build] local shader reuse miss: ${reason}`),
+  )
 ) {
   writeProductionFacts(0, 0);
   console.log('[shared-build] verified local shader output; compile count=0');
   process.exit(0);
 }
+if (process.env.FORGEAX_BUILD_NO_TASK_CACHE === '1')
+  console.log(
+    `[shared-build] local shader reuse disabled by FORGEAX_BUILD_NO_TASK_CACHE; expected=${inputFingerprint}`,
+  );
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
@@ -142,7 +148,9 @@ const shaderManifest = join(staging, 'shaders/manifest.json');
 if (!statSync(shaderManifest).isFile())
   throw new Error('shared shader producer did not emit manifest.json');
 mkdirSync(join(output, 'shaders'), { recursive: true });
-cpSync(join(staging, 'shaders'), join(output, 'shaders'), { recursive: true });
+// The manifest embeds all source/variant/binding data. Compilation sidecars
+// are diagnostics, not part of the shared consumer closure.
+cpSync(shaderManifest, join(output, 'shaders/manifest.json'));
 rmSync(staging, { recursive: true, force: true });
 
 const outputRelative = relative(root, output).replaceAll('\\', '/');

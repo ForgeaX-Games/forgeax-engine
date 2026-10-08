@@ -208,7 +208,7 @@ describe('renderer recovery lifecycle', () => {
     );
 
     expect(outcome.kind).toBe('timeout');
-    if (outcome.kind === 'timeout') expect(outcome.timeout.cause.code).toBe('webgpu-runtime-error');
+    if (outcome.kind === 'timeout') expect(outcome.error.code).toBe('webgpu-runtime-error');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(lateWrites).toBe(0);
     expect(cleanupCount).toBe(1);

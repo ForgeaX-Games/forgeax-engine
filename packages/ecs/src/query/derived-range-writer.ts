@@ -4,11 +4,8 @@ import * as componentOwner from '../component';
 import { componentId } from '../component';
 import { Entity } from '../entity';
 import type { EntityHandle } from '../entity-handle';
-import {
-  DerivedRangeOutOfBoundsError,
-  SharedKernelFailureError,
-  WorldPoisonedError,
-} from '../errors';
+import { DerivedRangeOutOfBoundsError, SharedKernelFailureError } from '../errors';
+import { worldPoisonedError } from '../errors/shared-kernel-errors';
 import type { Table } from '../storage/table';
 import type { EcsError, World } from '../world';
 import { worldInternal } from '../world-internal';
@@ -210,9 +207,8 @@ export function createDerivedRangeWriter<R extends Component, C extends Componen
       return true;
     },
     publishChangedRows(bindingIndex, changed) {
-      if (world.execution.health === 'poisoned') {
-        return err(new WorldPoisonedError(world.identity, world.execution.fault));
-      }
+      const poisoned = worldPoisonedError(world.execution);
+      if (poisoned !== undefined) return err(poisoned);
       if (boundEpoch !== source.structureEpoch()) rebind();
       const binding = bindings[bindingIndex];
       const table = bindingTables[bindingIndex];
@@ -277,9 +273,8 @@ export function createDerivedRangeWriter<R extends Component, C extends Componen
       }
     },
     writeRange(bindingIndex, base, start, count, kernel, context) {
-      if (world.execution.health === 'poisoned') {
-        return err(new WorldPoisonedError(world.identity, world.execution.fault));
-      }
+      const poisoned = worldPoisonedError(world.execution);
+      if (poisoned !== undefined) return err(poisoned);
       if (boundEpoch !== source.structureEpoch()) rebind();
       const binding = bindings[bindingIndex];
       const table = bindingTables[bindingIndex];
@@ -331,9 +326,8 @@ export function createDerivedRangeWriter<R extends Component, C extends Componen
       }
     },
     probeAndCommitRange(bindingIndex, base, start, count, probe, commit, context) {
-      if (world.execution.health === 'poisoned') {
-        return err(new WorldPoisonedError(world.identity, world.execution.fault));
-      }
+      const poisoned = worldPoisonedError(world.execution);
+      if (poisoned !== undefined) return err(poisoned);
       if (boundEpoch !== source.structureEpoch()) rebind();
       const binding = bindings[bindingIndex];
       const table = bindingTables[bindingIndex];

@@ -14,18 +14,16 @@
 //   .hint provides concrete recovery action)
 // - charter P4 (consistent abstraction: structurally parallel to AssetError,
 //   ImageError, GltfError same 4-field shape)
-// - architecture-principles #1 SSOT (the 5 literals + class shape + hints table
+// - architecture-principles #1 SSOT (the closed literals + class shape + hints table
 //   live here once; engine-audio package references this module)
 
 /**
- * Closed `AudioErrorCode` union -- 5 members (plan-strategy D-7;
+ * Closed `AudioErrorCode` union (plan-strategy D-7;
  * requirements S-8). Exhaustive `switch (err.code)` needs no default
  * fallback -- TypeScript guards union completeness at compile time
  * (charter P3 explicit failure).
  *
- * Domain-separated from `AssetErrorCode` (runtime registry surface, 12 members)
- * and `GltfErrorCode` (importer surface, 13 members). AI users face these 5
- * alternatives at the audio engine surface (`@forgeax/engine-audio`
+ * Domain-separated from Asset and Import errors at the audio engine surface (`@forgeax/engine-audio`
  * AudioError + `@forgeax/engine-audio-webaudio` backend).
  *
  * | code | trigger |
@@ -34,14 +32,17 @@
  * | `'decode-failed'` | `decodeAudioData(arrayBuffer)` rejected (corrupt file / unsupported codec) |
  * | `'context-suspended'` | `play()` called while AudioContext.state is `'suspended'` and gesture listener failed to resume |
  * | `'invalid-clip-handle'` | AudioSource.clip handle is dangling or refers to an unregistered asset |
- * | `'bus-not-found'` | AudioSource.bus refers to a string literal outside the `'sfx' | 'music'` closed set |
+ * | `'control-failed'` | Host filter/FFT control is invalid or its source is not retained |
+ * | `'bus-not-found'` | AudioSource.bus names an ID absent from the accepted graph |
  */
 export type AudioErrorCode =
   | 'context-creation-failed'
   | 'decode-failed'
   | 'context-suspended'
   | 'invalid-clip-handle'
-  | 'bus-not-found';
+  | 'bus-not-found'
+  | 'control-failed'
+  | 'stream-failed';
 
 /**
  * Per-code `AudioError` detail shapes -- discriminated payloads narrowed
@@ -85,11 +86,23 @@ export interface AudioBusNotFoundDetail {
  * needing a fallback `as` cast (charter P3).
  */
 export type AudioErrorDetail =
+  | {
+      readonly code: 'stream-failed';
+      readonly reason:
+        | 'unsupported-format'
+        | 'range-unsupported'
+        | 'range-oversized'
+        | 'integrity-failed'
+        | 'network-failed'
+        | 'budget-exceeded';
+      readonly message: string;
+    }
   | AudioCtxCreationFailedDetail
   | AudioDecodeFailedDetail
   | AudioCtxSuspendedDetail
   | AudioInvalidClipHandleDetail
-  | AudioBusNotFoundDetail;
+  | AudioBusNotFoundDetail
+  | { readonly code: 'control-failed'; readonly reason: string };
 
 /**
  * Structured audio error -- four-field surface (`.code` / `.expected` /
@@ -106,7 +119,7 @@ export type AudioErrorDetail =
  * the same content as `.code` + `.expected` + `.hint`; AI users prefer
  * field access on the structured triple.
  *
- * @example AI-user exhaustive switch on the 5 members (no default fallback)
+ * @example AI-user exhaustive switch on the closed union (no default fallback)
  * ```ts
  * import { AudioError, type AudioErrorCode } from '@forgeax/engine-types';
  *
@@ -116,7 +129,9 @@ export type AudioErrorDetail =
  *     case 'decode-failed':          return 'ensure audio file is a valid wav/mp3/ogg/flac';
  *     case 'context-suspended':      return 'call play after user gesture to trigger resume';
  *     case 'invalid-clip-handle':    return 'verify clip was registered via AssetRegistry';
- *     case 'bus-not-found':          return 'use sfx or music bus literal';
+ *     case 'control-failed':        return 'inspect detail.reason and correct the Host control';
+ *     case 'bus-not-found':          return 'configure the requested bus ID';
+ *     case 'stream-failed':          return 'inspect the closed reason and repair source/Range/budget';
  *   }
  * }
  * ```
@@ -156,6 +171,10 @@ export class AudioError extends Error {
  * action so AI users self-repair (charter P3).
  */
 export const AUDIO_ERROR_HINTS: Readonly<Record<AudioErrorCode, string>> = {
+  'stream-failed':
+    'inspect the stream source/Range host/byte budget and retry explicitly after repair',
+  'control-failed':
+    'wait for a retained source; use distinct nodes from the supplied Host context and a valid FFT size',
   'context-creation-failed':
     'check browser supports AudioContext; verify no privacy extension blocks audio; try reloading the page after user gesture',
   'decode-failed':
@@ -164,6 +183,5 @@ export const AUDIO_ERROR_HINTS: Readonly<Record<AudioErrorCode, string>> = {
     'call play after a user gesture (click/tap/keydown) to trigger AudioContext.resume(); if in iframe check sandbox attribute',
   'invalid-clip-handle':
     'verify clip was registered via AssetRegistry.register() before spawning AudioSource; inspect active handles via assetRegistry.inspect()',
-  'bus-not-found':
-    "use 'sfx' or 'music' bus literal; custom bus names are not supported in v1 (OOS-2)",
+  'bus-not-found': 'declare the bus ID in the accepted audio graph before playback',
 };

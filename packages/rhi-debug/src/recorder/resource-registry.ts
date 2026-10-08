@@ -19,8 +19,12 @@ export class ResourceRegistry {
     }));
   }
 
-  estimateSnapshotBytes(): number {
-    return this.candidates().reduce((total, candidate) => total + candidate.estimatedBytes, 0);
+  estimateSnapshotBytes(maxResourceBytes = Number.POSITIVE_INFINITY): number {
+    return this.candidates().reduce(
+      (total, candidate) =>
+        candidate.estimatedBytes > maxResourceBytes ? total : total + candidate.estimatedBytes,
+      0,
+    );
   }
 
   clearGeneration(): void {

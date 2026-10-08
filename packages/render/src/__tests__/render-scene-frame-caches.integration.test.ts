@@ -90,12 +90,7 @@ describe('PersistentRenderScene frame caches', () => {
       world.update(1 / 60).unwrap();
       const extracted = draw();
       const visible = extracted.renderables.filter((row) => row.authorVisible !== false);
-      scene.projectVisibility(
-        [world],
-        extracted.cameras[0],
-        extracted.renderables,
-        extracted.dispatch,
-      );
+      scene.projectVisibility([world], extracted.renderables, extracted.dispatch);
       beforeCommit?.(extracted);
       scene.prepareTemporalFrame(visible);
       expect(scene.commitTemporalFrame().ok).toBe(true);

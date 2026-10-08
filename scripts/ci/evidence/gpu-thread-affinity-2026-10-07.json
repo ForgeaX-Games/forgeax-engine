@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "06c613cee7ce12f2b0f95fb1fe214ee9adfd04fa",
+  "sdkRun": 37582350600,
+  "sdkConclusion": "failure",
+  "failures": [
+    {
+      "consumer": "npm",
+      "job": 112666734583,
+      "submitted": 48,
+      "completed": 46,
+      "readyCompleted": 42
+    },
+    {
+      "consumer": "view",
+      "job": 112666734606,
+      "submitted": 53,
+      "completed": 51,
+      "readyCompleted": 47
+    }
+  ],
+  "unchangedAcceptance": {
+    "readyCompletedFrames": 60,
+    "deadlineMs": 90000,
+    "roster": "all four SDK consumers and complete Engine CI"
+  },
+  "observedAffinity": {
+    "selectedCpuList": "16-23",
+    "escapedCpuList": "0-7",
+    "escapedSwiftShaderThreadsPerGpuProcess": 16,
+    "kernelFingerprint": "7c3d6ff37bcc7ad579924eba5ffff12b7c4e2da6361f980d09aa000bac526333",
+    "causalTimeoutFixProven": false
+  },
+  "verifiedCapture": {
+    "bytesEach": 28022514,
+    "resourcesEach": 224,
+    "worksEach": 55,
+    "npmDigest": "sha256:b1aba59f45fce6a0562811fcdaae9644848a4e8d59dcc28712d2f0a93d2626f1",
+    "viewDigest": "sha256:bd807035d3aff56f19c03f669ea5e613bc02f9435b2ba4f031d4afd7387ede64",
+    "replayPerformed": false
+  },
+  "upstream": {
+    "chrome": "154.0.8037.0",
+    "swiftshader": "5b0479bd2d15058aaa9eb490e364f920ff824a8c",
+    "mechanism": "Marl maps CPU_COUNT to zero-based indices instead of inherited set bits",
+    "source": "https://github.com/google/swiftshader/blob/5b0479bd2d15058aaa9eb490e364f920ff824a8c/third_party/marl/src/thread.cpp"
+  },
+  "localQualification": {
+    "node": "22.22.3",
+    "platform": "darwin-arm64",
+    "noopBaseline": {
+      "passed": 15,
+      "failed": 2,
+      "skipped": 2
+    },
+    "candidateAffinityAndLease": {
+      "passed": 26,
+      "failed": 0,
+      "skipped": 2
+    },
+    "realLinuxSubprocessQualification": "pending final-head CI",
+    "realChromiumDeadlineQualification": "pending final-head SDK"
+  },
+  "rawEvidence": [
+    "/tmp/forgeax-ci-slim-audit/final-sdk-npm-first-failure.log",
+    "/tmp/forgeax-ci-slim-audit/final-sdk-view-first-failure.log",
+    "/tmp/forgeax-ci-slim-audit/gpu-thread-enforcement-noop-red.log",
+    "/tmp/forgeax-ci-slim-audit/gpu-affinity-and-lease-green.log"
+  ],
+  "claims": {
+    "gpuFrameSpeedup": false,
+    "wholeCiSpeedup": false,
+    "exclusiveCpuLease": false,
+    "continuousEscapePrevention": false
+  },
+  "threadRetirementCorrection": {
+    "reviewedSourceHead": "f48a537643c2ade0e40fd6d8932f13ae0fb2ce3f",
+    "redInvariant": "GPU generation and ancestry can remain valid while a worker TID retires and its numeric ID is reused by a foreign task",
+    "correction": "Read thread generation before process checks; recheck generation, Tgid and current mask immediately before binding",
+    "qualification": "Injected maintained proc lifecycle regression; no OS mutation or GPU rendering in the red diagnosis",
+    "localFinalAffinityAndLease": {
+      "passed": 28,
+      "failed": 0,
+      "linuxSkippedOnMac": 2
+    },
+    "rawRed": "/tmp/forgeax-ci-slim-audit/gpu-thread-retirement-red.log",
+    "rawGreen": "/tmp/forgeax-ci-slim-audit/gpu-thread-retirement-green.log",
+    "remainingLimitation": "Userspace snapshots do not make numeric-TID affinity syscall atomic with subsequent kernel retirement",
+    "nativeDeadlineFixProven": false
+  },
+  "head79Acceptance": {
+    "head": "79da308f0e203ad9295efa7f94779c1b85c59066",
+    "engineRun": 37587247665,
+    "engineConclusion": "success",
+    "successfulJobs": 48,
+    "sdkRun": 37587247775,
+    "sdkConclusion": "cancelled",
+    "passedConsumers": ["npm", "project", "view"],
+    "source": {
+      "job": 112683285126,
+      "conclusion": "cancelled",
+      "annotation": "The job has exceeded the maximum execution time of 30m0s",
+      "buildEngineMs": 464490,
+      "buildToolsMs": 8240,
+      "buildPreviewMs": 73004,
+      "sourceSnapshotMs": 561814,
+      "sourceTemplatesMs": 105769,
+      "baseProfilePreparationMs": 246224,
+      "viewChildStartedAt": "2026-10-07T08:00:00.445Z",
+      "viewChildCancelledAt": "2026-10-07T08:09:56.863Z",
+      "preservedArtifact": 11468927743,
+      "artifactZipSha256": "8f4837423b67cfa86c0c2bfb8881b8876e9549b6af3d6e7bcab6ea6176d56daa",
+      "editorCompletedFrames": 64,
+      "liveCaptureSha256": "8d6725d10c9138454f8a5e282f3b3b87e68bb395f37a7490b8538ee7119b44b8",
+      "liveCaptureBytes": 26542917,
+      "lastScreenshot": "embedded-rhi.png",
+      "missingTerminalEvidence": ["live-rhi.png", "browser.json", "browser-failure.json"],
+      "limitation": "Buffered child output was lost at the outer Actions deadline. Later View phase and timeout cause are unclassified; no pipeline or queue fix claimed."
+    },
+    "nextEpochProgress": {
+      "scope": "Source View diagnostic child only",
+      "baseline": {
+        "pass": 1,
+        "fail": 1
+      },
+      "candidate": {
+        "pass": 5,
+        "fail": 0
+      },
+      "realChild": "Child waits for acknowledgement of live stderr forwarding before exit; buffered baseline exits17.",
+      "contract": "Final SDK JSON stays on stdout; original commands, maxBuffer, roster, lifecycle, backend, deadlines, frames and falsifiers remain."
+    }
+  }
+}

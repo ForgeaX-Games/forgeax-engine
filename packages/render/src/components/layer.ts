@@ -3,8 +3,9 @@
 // Schema: 1 i32 column (value). Signed two's complement so negatives travel
 // through the spawn payload unchanged — background sprites live at negative
 // values (e.g. -100), the default game layer at 0, foreground at 100, UI at
-// 1000. Layer is consumed at sort time by `transparent-sort.ts` (M-3 w23)
-// as the primary key in the (layer asc, sortValue asc) composite ordering.
+// 1000. Layer is consumed at sort time by `TransparentSortCache`
+// (systems/transparent-dispatch.ts) as the primary key in the
+// (layer asc, sortValue asc) composite ordering.
 //
 // Naming convention: bare entity name (no Component suffix; single-semantic
 // component idiom aligned with Bevy ECS conventions — Transform / Camera /
@@ -45,7 +46,7 @@ import { defineComponent } from '@forgeax/engine-ecs';
  *
  * Signed i32 (two's complement, range \u00b12\u00b3\u00b9). Negatives round-trip
  * through the spawn payload unchanged — no schema-layer mutate. i32 lives in
- * the CPU sort path (transparent-sort.ts M-3 w23); no GPU-side stride
+ * the CPU sort path (`TransparentSortCache`); no GPU-side stride
  * compatibility risk.
  *
  * @example Minimal spawn (defaults to game layer 0):

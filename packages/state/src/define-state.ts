@@ -112,7 +112,7 @@ export function defineState<Name extends string, const Variants extends readonly
       'state-already-defined',
       'Each StateToken name must be registered exactly once at module level',
       `State "${name}" is already defined. Use the existing token.`,
-      { code: 'state-already-defined', name, firstDefinedAt: undefined },
+      { name, firstDefinedAt: undefined },
     );
   }
 
@@ -121,27 +121,22 @@ export function defineState<Name extends string, const Variants extends readonly
       'state-default-required',
       'defineState requires at least one variant (non-empty array)',
       `State "${name}" was defined with an empty variants array. Provide at least one variant, e.g. defineState("${name}", ["default"] as const).`,
-      { code: 'state-default-required', name },
+      { name },
     );
   }
 
   // Check for duplicate variants within the array
-  const seen = new Set<string>();
-  for (const v of variants) {
-    if (seen.has(v)) {
+  const nameToIdx = new Map<Variants[number], number>();
+  for (const [i, v] of variants.entries()) {
+    if (nameToIdx.has(v)) {
       throwStateError(
         'state-default-required',
         'Variants must be unique within a state token',
         `State "${name}" has duplicate variant "${v}". Each variant must appear exactly once.`,
-        { code: 'state-default-required', name },
+        { name },
       );
     }
-    seen.add(v);
-  }
-
-  const nameToIdx = new Map<Variants[number], number>();
-  for (let i = 0; i < variants.length; i++) {
-    nameToIdx.set(variants[i] as Variants[number], i);
+    nameToIdx.set(v as Variants[number], i);
   }
 
   const token = {

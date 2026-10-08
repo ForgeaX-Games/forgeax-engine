@@ -86,6 +86,14 @@ function readTexel(
     out[3] = ((word >> 30) & 0x3) / 3;
     return out;
   }
+  if (info.packed === 'rgb9e5ufloat') {
+    const word = view.getUint32(off, true);
+    const scale = 2 ** ((word >>> 27) - 15 - 9);
+    out[0] = (word & 0x1ff) * scale;
+    out[1] = ((word >>> 9) & 0x1ff) * scale;
+    out[2] = ((word >>> 18) & 0x1ff) * scale;
+    return out;
+  }
   if (info.packed === 'rg11b10ufloat') {
     const word = view.getUint32(off, true);
     out[0] = smallUFloatToFloat(word & 0x7ff, 6);
@@ -260,30 +268,37 @@ export function decodeTexelRaw(
   texelY: number,
 ): [number, number, number, number] | null {
   if (texelX < 0 || texelX >= width || texelY < 0 || texelY >= height) return null;
+  const reader = rawTexelReader(format);
+  if (reader === undefined) return null;
+  const byteOffset = (texelY * width + texelX) * reader.bytesPerTexel;
+  if (byteOffset + reader.bytesPerTexel > bytes.byteLength) return null;
+  return reader.read(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), byteOffset);
+}
 
+/**
+ * A per-texel raw RGBA reader for one format (same channel mapping as
+ * {@link decodeTexelRaw}), resolved once so whole-image decodes skip the
+ * per-texel format lookup. Returns undefined for formats without a host decode.
+ */
+export function rawTexelReader(format: string):
+  | {
+      readonly bytesPerTexel: number;
+      read(view: DataView, byteOffset: number): [number, number, number, number];
+    }
+  | undefined {
   const info = formatInfo(format);
   const texBytes = bytesPerTexel(format as never);
-  if (!info || texBytes === undefined) return null;
-
-  const texelIdx = texelY * width + texelX;
-  const byteOffset = texelIdx * texBytes;
-
-  // Guard: the buffer must be large enough for this texel.
-  if (byteOffset + texBytes > bytes.byteLength) return null;
-
+  if (!info || texBytes === undefined) return undefined;
   const channelBytes = info.packed ? texBytes : texBytes / info.channels;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const channels = readTexel(view, byteOffset, info, channelBytes);
-
-  if (info.channels === 1) {
-    return [channels[0], channels[0], channels[0], 1];
-  }
-  if (info.channels === 2) {
-    return [channels[0], channels[1], 0, 1];
-  }
-  // 3 or 4 channels. BGRA swizzle B<->R.
-  const r = info.bgra ? channels[2] : channels[0];
-  const b = info.bgra ? channels[0] : channels[2];
-  const a = info.channels === 4 ? channels[3] : 1;
-  return [r, channels[1], b, a];
+  return {
+    bytesPerTexel: texBytes,
+    read(view, byteOffset) {
+      const c = readTexel(view, byteOffset, info, channelBytes);
+      if (info.channels === 1) return [c[0], c[0], c[0], 1];
+      if (info.channels === 2) return [c[0], c[1], 0, 1];
+      const r = info.bgra ? c[2] : c[0];
+      const b = info.bgra ? c[0] : c[2];
+      return [r, c[1], b, info.channels === 4 ? c[3] : 1];
+    },
+  };
 }

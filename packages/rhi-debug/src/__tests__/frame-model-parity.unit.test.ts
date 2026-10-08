@@ -133,7 +133,7 @@ describe('FrameModel canonical projection', () => {
     const tape = makeTape();
     const model = buildFrameModel(tape);
     expect(model.unseededResources).toEqual([
-      { resourceId: 'buffer-1', kind: 'buffer', format: null, sampleCount: 1 },
+      { resourceId: 'buffer-1', kind: 'buffer', format: null, sampleCount: 1, omitted: false },
     ]);
     const seeded = buildFrameModel({
       ...tape,
@@ -441,7 +441,42 @@ describe('FrameModel canonical projection', () => {
     expect(model.works[0]?.attachments).toEqual({
       colorViewHandleIds: ['view:accum-msaa', 'view:plain'],
       colorResolveViewHandleIds: ['view:accum', null],
+      colorDepthSlices: [null, null],
       depthStencilViewHandleId: null,
     });
+  });
+
+  it('projects the written 3d depth slice index-aligned with color attachments', () => {
+    const tape: Tape = {
+      header: { formatVersion: 7, rhiCaps: {}, eventCount: 3, blobCount: 0 },
+      bootstrap: [],
+      events: [
+        {
+          kind: 'beginRenderPass',
+          passHandleId: 'pass:volume',
+          cmdHandleId: 'encoder:1',
+          desc: {
+            colorAttachments: [
+              { view: {}, depthSlice: 3, loadOp: 'clear', storeOp: 'store' },
+              { view: {}, loadOp: 'clear', storeOp: 'store' },
+            ],
+          },
+          colorAttachmentViewHandleIds: ['view:volume', 'view:plain'],
+        },
+        {
+          kind: 'draw',
+          passHandleId: 'pass:volume',
+          vertexCount: 3,
+          instanceCount: 1,
+          firstVertex: 0,
+          firstInstance: 0,
+        },
+        { kind: 'endRenderPass', passHandleId: 'pass:volume' },
+      ],
+      blobs: [],
+    };
+    const model = buildFrameModel(tape);
+    expect(model.passes[0]?.colorAttachmentDepthSlices).toEqual([3, null]);
+    expect(model.works[0]?.attachments?.colorDepthSlices).toEqual([3, null]);
   });
 });

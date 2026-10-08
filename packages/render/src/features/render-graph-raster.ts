@@ -150,6 +150,7 @@ export class RenderFeatureRasterGraphProjection<FrameCtx extends RenderGraphFram
     private readonly reportError?: (error: RenderError) => void,
     private readonly resolveStandardLighting?: RenderFeatureLightingResolver<FrameCtx>,
     private readonly standardSurfaceAccesses: readonly GraphAccess[] = [],
+    private readonly viewAccesses: readonly GraphAccess[] = [],
   ) {
     this.buffers = buffers ?? createRenderFeatureGraphBufferState();
   }
@@ -209,7 +210,7 @@ export class RenderFeatureRasterGraphProjection<FrameCtx extends RenderGraphFram
     const validated = validateRenderFeatureGraphicsPass(featureIdentity, descriptor, state);
     if (!validated.ok) return validated;
 
-    const accesses = [];
+    const accesses = [...this.viewAccesses];
     if (
       descriptor.draws.some((draw) => {
         const pipeline = resolved(snapshot, draw.pipeline);

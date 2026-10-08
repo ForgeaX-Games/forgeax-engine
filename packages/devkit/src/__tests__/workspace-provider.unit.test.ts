@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import {
   createApp,
   createEngineWorkspaceRuntime,
@@ -15,6 +16,7 @@ import {
 import { AssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
 import { World } from '@forgeax/engine-ecs';
 import { createBackendHost } from '@forgeax/engine-host/backend';
+import { createHostAssembly } from '@forgeax/engine-host/protocol';
 import type { HostTransportClient } from '@forgeax/engine-host/transport';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import { preparePackProgram } from '@forgeax/engine-pack/runtime';
@@ -34,6 +36,7 @@ vi.mock('../host.js', async (importOriginal) => ({
 }));
 
 import { validateHostBinding } from '../host-binding.js';
+import { devKitWorkspacePlugin } from '../workspace-plugin.js';
 import { createDevKitWorkspaceProvider, waitForRuntimeCatalog } from '../workspace-provider.js';
 
 const roots: string[] = [];
@@ -132,6 +135,111 @@ type WorkspaceCommandFixture = {
 };
 
 describe('DevKit workspace provider', () => {
+  it.each([
+    false,
+    true,
+  ])('settles a closing page disconnect without waiting for timeout (prior failure: %s)', async (failed) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const server = fakeServer();
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => server,
+    });
+    let page: HostTransportClient | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      const opened = await provider.openProject({ root });
+      assert(opened.target);
+      const target = { ...opened.target, worldId: 'closing-world' };
+      page = frontendPage(backend, target);
+      const client = page;
+      client.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+        if (command.kind === 'command' && command.operation === 'closeWorkspace') client.close();
+      });
+      await client.request(engineWorkspaceResultService(target.targetId), {
+        kind: 'ready',
+        id: target.sessionId,
+        sessionId: target.sessionId,
+        targetId: target.targetId,
+        project: opened.project,
+        target,
+      });
+      if (failed)
+        await client.request(engineWorkspaceResultService(target.targetId), {
+          kind: 'failed',
+          id: 'failed-world',
+          sessionId: target.sessionId,
+          targetId: target.targetId,
+          error: {
+            code: 'engine-workspace-target-failed',
+            expected: 'A healthy World',
+            hint: 'The old World failed.',
+            detail: {},
+          },
+        });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      closing = Promise.resolve(provider.closeProject(opened));
+      // The real Host disconnect must settle the pending close without advancing its deadline.
+      await setImmediate();
+      expect(server.close).toHaveBeenCalledOnce();
+      await closing;
+      expect(opened.failure).toMatchObject({
+        code: 'engine-workspace-page-lost',
+        detail: { cleanup: 'unconfirmed' },
+      });
+    } finally {
+      await vi.advanceTimersByTimeAsync(120_000);
+      vi.useRealTimers();
+      await closing?.catch(() => {});
+      page?.close();
+      await Promise.resolve(provider.dispose?.()).catch(() => {});
+      await backend.dispose();
+    }
+  });
+  it('invalidates the headed target when its sampled presentation lease retires', async () => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const assembly = createHostAssembly({
+      root: { program: 'fixture/frontend', codeRevision: 'one' },
+    });
+    const frontend = await backend.context.plugin({
+      provide: ['devkitWorkspaceFrontend'],
+      apply(ctx) {
+        ctx.provide('devkitWorkspaceFrontend', {
+          assembly,
+          module: { specifier: 'fixture/frontend' },
+        });
+      },
+    });
+    await frontend.await();
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: {
+        backend,
+        get frontendAssembly() {
+          return backend.context.get('devkitWorkspaceFrontend')?.assembly;
+        },
+      },
+      viteServerFactory: async () => fakeServer(),
+    });
+    let page: HostTransportClient | undefined;
+    try {
+      const session = await provider.openProject({ root });
+      assert(session.target);
+      page = frontendPage(backend, session.target);
+      await ready(page, session.target, root);
+      expect(session.phase).toBe('running');
+      await frontend.dispose();
+      expect(session.phase).toBe('failed');
+      expect(session.failure).toMatchObject({ code: 'engine-workspace-page-lost' });
+      expect(backend.context.fiber.uid).not.toBeNull();
+    } finally {
+      await provider.dispose?.();
+      page?.close();
+      await backend.dispose();
+    }
+  });
+
   it.each([
     false,
     true,
@@ -358,26 +466,16 @@ describe('DevKit workspace provider', () => {
       if (health === 'lost') {
         page.close();
         await vi.waitFor(() => expect(entries?.size).toBe(1));
+        expect(opened.phase).toBe('starting');
+        expect(opened.failure).toBeUndefined();
       } else await runtime.closeProject(opened);
       expect(entries?.size).toBe(1);
       assert(game.uid !== null);
       expect(entries?.has(game.uid)).toBe(true);
       expect(page.connected).toBe(health !== 'lost');
       expect(app.pluginContext.runtimePacks?.producer.inspect().packs).toHaveLength(1);
-      const reopened = await runtime.openProject({
-        root,
-        ...(health === 'lost'
-          ? {
-              expectedTargetId: target.targetId,
-              expectedTargetState: 'lost' as const,
-            }
-          : {}),
-      });
-      if (health === 'lost')
-        expect(opened.failure).toMatchObject({
-          code: 'engine-workspace-page-lost',
-          detail: { cleanup: 'unconfirmed', reason: 'transport-lost' },
-        });
+      const reopened = await runtime.openProject({ root });
+      if (health === 'lost') expect(opened.failure).toBeUndefined();
       await expect(
         provider.runtimePack({ ...input, request: { operation: 'plugin-install', guid } }),
       ).rejects.toMatchObject({ code: 'engine-workspace-session-closed' });
@@ -564,10 +662,12 @@ describe('DevKit workspace provider', () => {
         expect(call[3].host.frontendAssembly).toBeUndefined();
         expect(call[3].host.workspace.execution).toBe('game');
         const page = frontendPage(backend, game.target);
+        const commands: WorkspaceCommandFixture[] = [];
         const unsubscribe = page.subscribe(ENGINE_WORKSPACE_COMMAND_TOPIC, (payload) => {
           const command = payload as WorkspaceCommandFixture;
           if (command.operation === 'closeWorkspace') return;
           if (command.sessionId !== game.target.sessionId || command.kind !== 'command') return;
+          commands.push(command);
           void page.request(engineWorkspaceResultService(game.target.targetId), {
             kind: 'result',
             id: command.id,
@@ -586,7 +686,19 @@ describe('DevKit workspace provider', () => {
                 : { marker: 'actual-game' },
           });
         });
+        let earlyTreeSettled = false;
+        const earlyTree = Promise.resolve(game.tools.tree?.()).then((value) => {
+          earlyTreeSettled = true;
+          return value;
+        });
+        await setImmediate();
+        expect(earlyTreeSettled).toBe(false);
+        expect(commands).toHaveLength(0);
         await ready(page, { ...game.target, worldId: `game-${cycle}` }, call[0].root);
+        expect(await earlyTree).toEqual({ marker: 'actual-game' });
+        expect(commands.filter((command) => command.operation === 'scene-tree.get')).toHaveLength(
+          1,
+        );
         await game.ready();
         expect(game.target.worldId).toBe(`game-${cycle}`);
         expect(await game.tools.inspect({ entityId: 'entity' })).toEqual({
@@ -1085,7 +1197,7 @@ describe('DevKit workspace provider', () => {
     'message',
     'disconnect',
     'failure',
-  ])('treats browser page loss through %s as terminal without replay', async (loss) => {
+  ])('treats browser page loss through %s without replaying in-flight commands', async (loss) => {
     const root = await projectRoot();
     let backend: Awaited<ReturnType<typeof createBackendHost>> | undefined;
     let server: ReturnType<typeof fakeServer> | undefined;
@@ -1126,22 +1238,698 @@ describe('DevKit workspace provider', () => {
         sessionId: opened.target.sessionId,
         targetId: opened.target.targetId,
       });
-    const failure = {
-      code: loss === 'failure' ? 'app-system-update-failed' : 'engine-workspace-page-lost',
-    };
-    await vi.waitFor(() => expect(opened.failure).toMatchObject(failure));
     expect(commands).toHaveLength(0);
-    await expect(
-      provider.listAssets({ project: opened.project, handle: opened.handle }),
-    ).rejects.toMatchObject(failure);
+    if (loss === 'failure') {
+      const failure = { code: 'app-system-update-failed' };
+      await vi.waitFor(() => expect(opened.failure).toMatchObject(failure));
+      expect(opened.phase).toBe('failed');
+      await expect(
+        provider.listAssets({ project: opened.project, handle: opened.handle }),
+      ).rejects.toMatchObject(failure);
+      expect(commands).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(opened.phase).toBe('starting'));
+      expect(opened.failure).toBeUndefined();
+      expect(opened.browserGeneration).toBe(1);
+      expect(server?.close).not.toHaveBeenCalled();
+      const pendingAssets = provider.listAssets({
+        project: opened.project,
+        handle: opened.handle,
+      });
+      const detached = expect(pendingAssets).rejects.toMatchObject({
+        code: 'engine-workspace-session-closed',
+      });
+      expect(commands).toHaveLength(0);
+      await provider.closeProject({ project: opened.project, handle: opened.handle });
+      await detached;
+      expect(server?.close).toHaveBeenCalledOnce();
+      expect(page.connected).toBe(false);
+      return;
+    }
     expect(changed).toHaveBeenCalledTimes(2);
-    expect(commands).toHaveLength(0);
     const observer = backend.transport.connect();
     expect(observer.connected).toBe(true);
     observer.close();
     await provider.closeProject({ project: opened.project, handle: opened.handle });
     expect(server?.close).toHaveBeenCalledOnce();
     expect(page.connected).toBe(false);
+  });
+
+  it.each([
+    'replacement',
+    'failure',
+  ])('closes an in-flight Play server instead of adopting it after Editor %s', async (loss) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const editorServer = fakeServer();
+    const gameServer = fakeServer();
+    let release!: () => void;
+    const prepared = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const serverFactory = vi.fn(async () => {
+      if (serverFactory.mock.calls.length === 1) return editorServer;
+      await prepared;
+      return gameServer;
+    });
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: serverFactory,
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target || !provider.startPlay) throw new Error('workspace Play fixture missing');
+    const page = frontendPage(backend, opened.target);
+    await ready(page, { ...opened.target, worldId: 'old-world' }, root);
+    const pending = provider.startPlay(opened);
+    const failure = {
+      code: 'app-system-update-failed',
+      expected: 'healthy World',
+      hint: 'Inspect the failed system.',
+    };
+    const rejected = expect(pending).rejects.toMatchObject(
+      loss === 'failure' ? failure : { code: 'engine-workspace-browser-detached' },
+    );
+    await vi.waitFor(() => expect(serverFactory).toHaveBeenCalledTimes(2));
+    let replacement = page;
+    if (loss === 'failure')
+      await page.request(engineWorkspaceResultService(opened.target.targetId), {
+        kind: 'failed',
+        id: 'failure',
+        sessionId: opened.target.sessionId,
+        targetId: opened.target.targetId,
+        error: failure,
+      });
+    else {
+      page.close();
+      replacement = frontendPage(backend, opened.target);
+      await ready(replacement, { ...opened.target, worldId: 'new-world' }, root);
+    }
+    release();
+    await rejected;
+    expect(gameServer.close).toHaveBeenCalledOnce();
+    expect(editorServer.close).not.toHaveBeenCalled();
+    replacement.close();
+    await provider.closeProject(opened);
+    await backend.dispose();
+  });
+
+  it('admits one browser generation for concurrent and repeated ready messages', async () => {
+    const root = await projectRoot();
+    const canonicalRoot = await realpath(root);
+    const backend = await createBackendHost();
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => fakeServer(),
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const page = frontendPage(backend, target);
+    const message = {
+      kind: 'ready',
+      id: target.sessionId,
+      sessionId: target.sessionId,
+      targetId: target.targetId,
+      project: { id: 'workspace-game', root: canonicalRoot, name: 'Workspace Game' },
+      target: { ...target, worldId: 'world' },
+    };
+    await Promise.all([
+      page.request(engineWorkspaceResultService(target.targetId), message),
+      page.request(engineWorkspaceResultService(target.targetId), message),
+    ]);
+    expect(opened.browserGeneration).toBe(1);
+    await page.request(engineWorkspaceResultService(target.targetId), {
+      ...message,
+      target: { ...target, worldId: 'unadmitted-world' },
+    });
+    expect(opened.browserGeneration).toBe(1);
+    expect(opened.target?.worldId).toBe('world');
+    page.close();
+    await provider.closeProject(opened);
+    await backend.dispose();
+  });
+
+  it('does not adopt a replacement after the project closes during retirement', async () => {
+    const root = await projectRoot();
+    const canonicalRoot = await realpath(root);
+    const backend = await createBackendHost();
+    const server = fakeServer();
+    let retiring = false;
+    let release!: () => void;
+    const retirement = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => server,
+      onTargetChanged: () => (retiring ? retirement : undefined),
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const page = frontendPage(backend, target);
+    await ready(page, { ...target, worldId: 'old-world' }, root);
+    retiring = true;
+    page.close();
+    const replacement = frontendPage(backend, target);
+    const admission = replacement.request(engineWorkspaceResultService(target.targetId), {
+      kind: 'ready',
+      id: target.sessionId,
+      sessionId: target.sessionId,
+      targetId: target.targetId,
+      project: { id: 'workspace-game', root: canonicalRoot, name: 'Workspace Game' },
+      target: { ...target, worldId: 'new-world' },
+    });
+    await setImmediate();
+    const retired = expect(admission).rejects.toMatchObject({
+      code: 'host-assembly-request-aborted',
+    });
+    await provider.closeProject(opened);
+    release();
+    await retired;
+    expect(opened.browserGeneration).toBe(1);
+    expect(opened.target?.worldId).toBe('old-world');
+    expect(server.close).toHaveBeenCalledOnce();
+    replacement.close();
+    await backend.dispose();
+  });
+
+  it.each(
+    ['assets', 'preview', 'play'].flatMap((operation) =>
+      ['replacement', 'failure'].map((loss) => ({ operation, loss })),
+    ),
+  )('does not publish or allocate an old $operation request after browser $loss', async ({
+    operation,
+    loss,
+  }) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const serverFactory = vi.fn(async () => fakeServer());
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      readyTimeoutMs: 500,
+      viteServerFactory: serverFactory,
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const old = frontendPage(backend, target);
+    const commands: WorkspaceCommandFixture[] = [];
+    old.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) =>
+      commands.push(command),
+    );
+    await ready(old, { ...target, worldId: 'old-world' }, root);
+    const pending =
+      operation === 'assets'
+        ? provider.listAssets(opened)
+        : operation === 'preview'
+          ? provider.openPreview({
+              project: opened.project,
+              projectHandle: opened.handle,
+              asset: { guid: 'mesh', kind: 'mesh', previewable: true },
+              width: 64,
+              height: 64,
+            })
+          : provider.startPlay?.(opened);
+    const failure = {
+      code: 'app-system-update-failed',
+      expected: 'healthy World',
+      hint: 'Inspect the failed system.',
+    };
+    const rejected = expect(pending).rejects.toMatchObject(
+      loss === 'failure' ? failure : { code: 'engine-workspace-browser-detached' },
+    );
+    let current = old;
+    if (loss === 'failure')
+      await old.request(engineWorkspaceResultService(target.targetId), {
+        kind: 'failed',
+        id: 'failure',
+        sessionId: target.sessionId,
+        targetId: target.targetId,
+        error: failure,
+      });
+    else {
+      current = frontendPage(backend, target);
+      current.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) =>
+        commands.push(command),
+      );
+    }
+    await rejected;
+    expect(commands).toEqual([]);
+    expect(serverFactory).toHaveBeenCalledOnce();
+    old.close();
+    current.close();
+    await provider.closeProject(opened);
+    await backend.dispose();
+  });
+
+  it('sends each workspace write only to the current authenticated browser', async () => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => fakeServer(),
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const old = frontendPage(backend, target);
+    const oldCommands: WorkspaceCommandFixture[] = [];
+    old.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) =>
+      oldCommands.push(command),
+    );
+    await ready(old, { ...target, worldId: 'old-world' }, root);
+    const current = frontendPage(backend, target);
+    const commands: WorkspaceCommandFixture[] = [];
+    current.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+      if (command.operation !== 'runtimePack') return;
+      commands.push(command);
+      void current.request(engineWorkspaceResultService(target.targetId), {
+        kind: 'result',
+        id: command.id,
+        sessionId: target.sessionId,
+        targetId: target.targetId,
+        ok: true,
+        value: {},
+      });
+    });
+    await ready(current, { ...target, worldId: 'current-world' }, root);
+    try {
+      assert(provider.runtimePack);
+      await provider.runtimePack({
+        ...opened,
+        targetId: target.targetId,
+        worldId: 'current-world',
+        request: { operation: 'plugin-install', guid: '01900000-0000-7000-8000-000000000361' },
+      });
+      expect(oldCommands).toEqual([]);
+      expect(commands).toHaveLength(1);
+      await expect(
+        old.request(engineWorkspaceResultService(target.targetId), {
+          kind: 'result',
+          id: commands[0]?.id,
+          sessionId: target.sessionId,
+          targetId: target.targetId,
+          ok: true,
+          value: {},
+        }),
+      ).rejects.toMatchObject({ code: 'engine-workspace-caller-mismatch' });
+      old.close();
+      expect(opened.phase).toBe('running');
+      expect(opened.browserGeneration).toBe(2);
+    } finally {
+      old.close();
+      current.close();
+      await provider.closeProject(opened);
+      await backend.dispose();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])('does not bypass an earlier retirement when a replacement disconnects (fails: %s)', async (fails) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    let release!: () => void;
+    const retirement = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let losses = 0;
+    let opened: Awaited<
+      ReturnType<ReturnType<typeof createDevKitWorkspaceProvider>['openProject']>
+    >;
+    const failure = {
+      code: 'engine-workspace-plugin-cleanup-timeout',
+      expected: 'confirmed cleanup',
+      hint: 'Retry explicit cleanup.',
+      detail: { cleanup: 'timeout' },
+    };
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => fakeServer(),
+      onTargetChanged: async () => {
+        if (opened?.phase !== 'starting' || ++losses !== 1) return;
+        await retirement;
+        if (fails) throw failure;
+      },
+    });
+    opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const canonicalRoot = await realpath(root);
+    const first = frontendPage(backend, target);
+    await ready(first, { ...target, worldId: 'old-world' }, root);
+    first.close();
+    const second = frontendPage(backend, target);
+    second.close();
+    const third = frontendPage(backend, target);
+    const admission = third.request(engineWorkspaceResultService(target.targetId), {
+      kind: 'ready',
+      id: target.sessionId,
+      sessionId: target.sessionId,
+      targetId: target.targetId,
+      project: { id: 'workspace-game', root: canonicalRoot, name: 'Workspace Game' },
+      target: { ...target, worldId: 'new-world' },
+    });
+    await setImmediate();
+    try {
+      expect(opened.phase).toBe('starting');
+      expect(opened.browserGeneration).toBe(1);
+    } finally {
+      release();
+      await admission;
+    }
+    expect(opened.phase).toBe(fails ? 'failed' : 'running');
+    if (fails) expect(opened.failure).toMatchObject(failure);
+    third.close();
+    if (fails) await expect(provider.closeProject(opened)).rejects.toMatchObject(failure);
+    else await provider.closeProject(opened);
+    await backend.dispose().catch(() => {});
+  });
+
+  it.each([
+    false,
+    true,
+  ])('preserves a retirement error when every subsequent notification also rejects (sync: %s)', async (sync) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    let rejects = false;
+    const failure = {
+      code: 'engine-workspace-plugin-cleanup-timeout',
+      expected: 'confirmed cleanup',
+      hint: 'Retry explicit cleanup.',
+      detail: { cleanup: 'timeout' },
+    };
+    const provider = createDevKitWorkspaceProvider({
+      hostBinding: { backend },
+      viteServerFactory: async () => fakeServer(),
+      onTargetChanged: () => {
+        if (!rejects) return;
+        if (sync) throw failure;
+        return Promise.reject(failure);
+      },
+    });
+    const opened = await provider.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const page = frontendPage(backend, opened.target);
+    await ready(page, { ...opened.target, worldId: 'world' }, root);
+    rejects = true;
+    page.close();
+    await setImmediate();
+    expect(opened.phase).toBe('failed');
+    expect(opened.failure).toMatchObject(failure);
+    await expect(provider.listAssets(opened)).rejects.toMatchObject(failure);
+    await expect(provider.closeProject(opened)).rejects.toMatchObject(failure);
+    await backend.dispose().catch(() => {});
+  });
+
+  it.each([
+    false,
+    true,
+  ])('fences replacement readiness behind actual browser retirement (fails: %s)', async (fails) => {
+    const root = await projectRoot();
+    let backend: Awaited<ReturnType<typeof createBackendHost>> | undefined;
+    let retiring = false;
+    let release: (() => void) | undefined;
+    const retirement = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const failure = {
+      code: 'engine-workspace-plugin-cleanup-timeout',
+      expected: 'confirmed cleanup',
+      hint: 'Retry explicit cleanup.',
+      detail: { cleanup: 'timeout' },
+    };
+    const provider = createDevKitWorkspaceProvider({
+      readyTimeoutMs: 500,
+      onTargetChanged: async () => {
+        if (!retiring) return;
+        await retirement;
+        if (fails) {
+          retiring = false;
+          throw failure;
+        }
+      },
+      backendFactory: async () => {
+        backend = await createBackendHost();
+        return backend;
+      },
+      viteServerFactory: async () => fakeServer(),
+    });
+    const opened = await provider.openProject({ root });
+    if (!backend || !opened.target) throw new Error('workspace fixture did not open');
+    const target = opened.target;
+    const page = frontendPage(backend, target);
+    await ready(page, { ...target, worldId: 'world-old' }, root);
+    retiring = true;
+    page.close();
+    expect(opened.phase).toBe('starting');
+    const replacement = frontendPage(backend, target);
+    const canonicalRoot = await realpath(root);
+    const admission = replacement.request(engineWorkspaceResultService(target.targetId), {
+      kind: 'ready',
+      id: target.sessionId,
+      sessionId: target.sessionId,
+      targetId: target.targetId,
+      project: { id: 'workspace-game', root: canonicalRoot, name: 'Workspace Game' },
+      target: { ...target, worldId: 'world-new' },
+    });
+    await setImmediate();
+    expect(opened.phase).toBe('starting');
+    expect(opened.browserGeneration).toBe(1);
+    release?.();
+    await admission;
+    if (fails) {
+      expect(opened.phase).toBe('failed');
+      expect(opened.failure).toMatchObject(failure);
+      await expect(
+        provider.listAssets({ project: opened.project, handle: opened.handle }),
+      ).rejects.toMatchObject(failure);
+    } else {
+      expect(opened.phase).toBe('running');
+      expect(opened.browserGeneration).toBe(2);
+      expect(opened.target?.worldId).toBe('world-new');
+    }
+    replacement.close();
+    await Promise.resolve(
+      provider.closeProject({ project: opened.project, handle: opened.handle }),
+    ).catch(() => {});
+  });
+
+  it.each([
+    false,
+    true,
+  ])('retires actual previews and Play before adopting a refreshed browser (cleanup fails: %s)', async (fails) => {
+    const root = await projectRoot();
+    const backend = await createBackendHost();
+    const fiber = backend.context.plugin(devKitWorkspacePlugin, {
+      hostBinding: { backend },
+      readyTimeoutMs: 500,
+      viteServerFactory: async () => fakeServer(),
+    });
+    await fiber.await();
+    const runtime = backend.context.engineWorkspace;
+    if (!runtime) throw new Error('workspace runtime not installed');
+    const opened = await runtime.openProject({ root });
+    if (!opened.target) throw new Error('workspace target missing');
+    const target = opened.target;
+    const page = frontendPage(backend, target);
+    page.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+      if (command.operation !== 'openPreview') return;
+      void page.request(engineWorkspaceResultService(target.targetId), {
+        kind: 'result',
+        id: command.id,
+        sessionId: target.sessionId,
+        targetId: target.targetId,
+        ok: true,
+        value: {
+          previewOwner: command.id,
+          asset: command.input?.asset,
+          target: { ...target, targetId: command.input?.previewTargetId, worldId: 'old-child' },
+        },
+      });
+    });
+    await ready(page, { ...target, worldId: 'world-old' }, root);
+    const preview = await runtime.openPreview({
+      project: opened.project,
+      asset: { guid: 'mesh', kind: 'mesh', previewable: true },
+      width: 64,
+      height: 64,
+    });
+    const play = await runtime.startPlay?.({ project: opened.project, handle: opened.handle });
+    if (!play?.target) throw new Error('Play target missing');
+    const gameTarget = play.target;
+    const game = frontendPage(backend, gameTarget);
+    let closeCommand: WorkspaceCommandFixture | undefined;
+    game.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+      if (command.operation === 'closeWorkspace' && command.sessionId === gameTarget.sessionId)
+        closeCommand = command;
+    });
+    await game.request(engineWorkspaceResultService(gameTarget.targetId), {
+      kind: 'ready',
+      id: gameTarget.sessionId,
+      sessionId: gameTarget.sessionId,
+      targetId: gameTarget.targetId,
+      project: opened.project,
+      target: { ...gameTarget, worldId: 'play-world' },
+    });
+    page.close();
+    await vi.waitFor(() => expect(closeCommand).toBeDefined());
+    expect(runtime.previews).toEqual([]);
+    expect(runtime.play).toBe(play);
+    const replacement = frontendPage(backend, target);
+    const admission = replacement.request(engineWorkspaceResultService(target.targetId), {
+      kind: 'ready',
+      id: target.sessionId,
+      sessionId: target.sessionId,
+      targetId: target.targetId,
+      project: opened.project,
+      target: { ...target, worldId: 'world-new' },
+    });
+    await setImmediate();
+    expect(runtime.project?.phase).toBe('starting');
+    expect(runtime.project?.browserGeneration).toBe(1);
+    const failure = {
+      code: 'engine-workspace-plugin-cleanup-timeout',
+      expected: 'confirmed cleanup',
+      hint: 'Retry explicit cleanup.',
+      detail: { cleanup: 'timeout' },
+    };
+    if (!closeCommand) throw new Error('close command missing');
+    await game.request(engineWorkspaceResultService(gameTarget.targetId), {
+      kind: 'result',
+      id: closeCommand.id,
+      sessionId: gameTarget.sessionId,
+      targetId: gameTarget.targetId,
+      ...(fails ? { ok: false, error: failure } : { ok: true, value: { cleanup: 'completed' } }),
+    });
+    await admission;
+    await expect(
+      Promise.resolve().then(() => preview.capture?.({ targetId: preview.target.targetId })),
+    ).rejects.toMatchObject({ code: 'engine-workspace-preview-closed' });
+    if (fails) {
+      expect(runtime.play).toBe(play);
+      expect(runtime.project?.phase).toBe('failed');
+      await expect(runtime.listAssets(opened)).rejects.toMatchObject(failure);
+    } else {
+      expect(runtime.play).toBeUndefined();
+      expect(runtime.project?.phase).toBe('running');
+      expect(runtime.project?.browserGeneration).toBe(2);
+    }
+    replacement.close();
+    game.close();
+    await backend.dispose().catch(() => {});
+  });
+
+  it('reattaches a refreshed page without closing Vite or polling the catalog', async () => {
+    const root = await projectRoot();
+    let backend: Awaited<ReturnType<typeof createBackendHost>> | undefined;
+    let server: ReturnType<typeof fakeServer> | undefined;
+    const provider = createDevKitWorkspaceProvider({
+      readyTimeoutMs: 500,
+      backendFactory: async () => {
+        backend = await createBackendHost();
+        return backend;
+      },
+      viteServerFactory: async () => {
+        server = fakeServer();
+        return server;
+      },
+    });
+    const opened = await provider.openProject({ root });
+    const target = opened.target;
+    if (backend === undefined || target === undefined)
+      throw new Error('provider fixture did not open');
+    const page = frontendPage(backend, target);
+    const sent: WorkspaceCommandFixture[] = [];
+    page.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+      if (command.kind === 'command' && command.operation === 'listAssets') sent.push(command);
+    });
+    await ready(page, { ...target, worldId: 'world-1' }, root);
+    expect(opened.phase).toBe('running');
+    expect(opened.browserGeneration).toBe(1);
+    const inflight = provider.listAssets({ project: opened.project, handle: opened.handle });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const detached = expect(inflight).rejects.toMatchObject({
+      code: 'engine-workspace-browser-detached',
+    });
+    page.close();
+    await detached;
+    await vi.waitFor(() => expect(opened.phase).toBe('starting'));
+    expect(server?.close).not.toHaveBeenCalled();
+    const replacement = frontendPage(backend, target);
+    const commands: WorkspaceCommandFixture[] = [];
+    replacement.subscribe<WorkspaceCommandFixture>(ENGINE_WORKSPACE_COMMAND_TOPIC, (command) => {
+      if (command.kind !== 'command' || command.operation !== 'listAssets') return;
+      commands.push(command);
+      void replacement.request(engineWorkspaceResultService(target.targetId), {
+        kind: 'result',
+        id: command.id,
+        sessionId: command.sessionId,
+        targetId: target.targetId,
+        ok: true,
+        value: [{ guid: 'scene-guid', kind: 'scene', name: 'Scene', previewable: true }],
+      });
+    });
+    const assets = provider.listAssets({ project: opened.project, handle: opened.handle });
+    expect(commands).toHaveLength(0);
+    await ready(replacement, { ...target, worldId: 'world-1' }, root);
+    await expect(assets).resolves.toEqual([
+      { guid: 'scene-guid', kind: 'scene', name: 'Scene', previewable: true },
+    ]);
+    expect(commands).toHaveLength(1);
+    expect(opened.phase).toBe('running');
+    expect(opened.browserGeneration).toBe(2);
+    expect(opened.failure).toBeUndefined();
+    expect(server?.close).not.toHaveBeenCalled();
+    expect(server?.listen).toHaveBeenCalledOnce();
+    await provider.closeProject({ project: opened.project, handle: opened.handle });
+    expect(server?.close).toHaveBeenCalledOnce();
+  });
+
+  it('publishes the workspace URL after the Pack plugin ready promise and does not poll', async () => {
+    const root = await projectRoot();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    let releaseCatalog: (() => void) | undefined;
+    const catalogReady = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    let readyCalls = 0;
+    const provider = createDevKitWorkspaceProvider({
+      readyTimeoutMs: 1_000,
+      backendFactory: async () => createBackendHost(),
+      viteServerFactory: async () =>
+        ({
+          ...fakeServer(),
+          httpServer: {},
+          config: {
+            plugins: [
+              {
+                name: 'forgeax:pack',
+                ready: () => {
+                  readyCalls += 1;
+                  return catalogReady;
+                },
+              },
+            ],
+          },
+        }) as unknown as ViteDevServer,
+    });
+    let settled = false;
+    const pending = Promise.resolve(provider.openProject({ root })).then((opened) => {
+      settled = true;
+      return opened;
+    });
+    await vi.waitFor(() => expect(readyCalls).toBe(1));
+    expect(settled).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    releaseCatalog?.();
+    const opened = await pending;
+    expect(opened.project.id).toBe('workspace-game');
+    expect(fetchMock).not.toHaveBeenCalled();
+    await provider.dispose?.();
   });
 
   it('rejects workspace results from an old or unassociated caller', async () => {
@@ -1378,6 +2166,30 @@ it('inspects authored asset identity and source revision without any View or bro
       format: 'direct',
       properties: { exposure: 1.25 },
     });
+  } finally {
+    await provider.dispose?.();
+  }
+});
+
+it('preserves live internal package inspection without inventing an authored output key', async () => {
+  const root = await projectRoot();
+  const project = { id: 'workspace-game', root };
+  const guid = '22592f07-d967-5116-b29c-fa9781929ba8';
+  const asset = {
+    guid,
+    kind: 'mesh',
+    path: '.forgeax/generated/serve-proof/engine-builtins.pack.json',
+  };
+  const inspection = { guid, asset, source: { path: asset.path }, meta: { vertexCount: 3 } };
+  const handle = {
+    project,
+    inspectAsset: async () => inspection,
+    listAssets: async () => [asset],
+    target: { targetId: 'workspace-target' },
+  };
+  const provider = createDevKitWorkspaceProvider();
+  try {
+    expect(await provider.inspectAsset?.({ project, handle, guid })).toBe(inspection);
   } finally {
     await provider.dispose?.();
   }

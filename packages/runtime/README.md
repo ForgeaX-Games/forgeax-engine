@@ -501,3 +501,12 @@ and Engine Worker to Render Worker paths use this same pipeline. Low-frequency
 views retain their picture while shared simulation advances. The
 [CameraView contract](../render/README.md#multi-camera-viewports-and-composition)
 defines coordinates, ordering, cadence, target publication and inspection.
+
+## Surface lighting channels
+
+Runtime forwards Render's [surface channel contract](../render/README.md#surface-direct-light-channels)
+through the existing World and RenderPublication assembly. Masks stay source
+facts, including dynamic edits, captures and receiver recovery. Runtime owns no
+matching function or alternative light registry. The shared real-device owner is
+`src/__tests__/lighting-channels.fixture.ts` (Dawn and browser, World and native
+publication); its oracle observes linear HDR rather than mesh visibility.

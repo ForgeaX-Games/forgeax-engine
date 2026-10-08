@@ -1,7 +1,18 @@
+import { LineCapValue } from '../components/lines';
 import type { PointsLinesExpandedGeometry } from './expansion-cache';
-import type { PointsLinesRetainedSnapshot } from './snapshot';
+import type { PointsLinesRetainedSnapshot, PointsLinesStyle } from './snapshot';
 
 export const POINTS_LINES_MATERIAL_SHADER_ID = 'forgeax::points-lines';
+
+/**
+ * Round caps select a separate fragment entry so butt lines and points run
+ * without the per-fragment end test (undefined keeps the default `fs_main`).
+ */
+export function pointsLinesFragmentEntry(
+  style: PointsLinesStyle | undefined,
+): 'fs_round' | undefined {
+  return style?.kind === 'lines' && style.cap === LineCapValue.round ? 'fs_round' : undefined;
+}
 
 export type PointsLinesLane = 'direct' | 'clustered' | 'cpu-webgl2';
 export type PointsLinesBackend = 'webgpu' | 'wgpu-webgl2' | 'null';
@@ -41,7 +52,8 @@ export interface PointsLinesRecordPlan {
   readonly indexCount: number;
   readonly drawCount: 0 | 1;
   readonly shadowDrawCount: 0;
-  readonly conservativeMarginPx: number;
+  /** Raster margin in the style's own width units (pixels or world). */
+  readonly conservativeMargin: number;
   readonly graph: PointsLinesLaneContract['graph'];
 }
 
@@ -84,10 +96,10 @@ export function createPointsLinesRecordPlan(
 ): PointsLinesRecordPlan {
   const primitiveCount = geometry.pointCount + geometry.segmentCount;
   const visible = snapshot.visible && primitiveCount > 0;
-  const conservativeMarginPx =
+  const conservativeMargin =
     snapshot.style?.kind === 'points'
       ? snapshot.style.sizePx * 0.5
-      : (snapshot.style?.widthPx ?? 0) * 2;
+      : (snapshot.style?.width ?? 0) * 2;
   return {
     lane: contract.lane,
     backend: contract.backend,
@@ -99,7 +111,7 @@ export function createPointsLinesRecordPlan(
     indexCount: primitiveCount * 6,
     drawCount: visible ? 1 : 0,
     shadowDrawCount: 0,
-    conservativeMarginPx,
+    conservativeMargin,
     graph: contract.graph,
   };
 }

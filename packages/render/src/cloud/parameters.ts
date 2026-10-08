@@ -1,3 +1,4 @@
+import { CLOUD_EXTINCTION_COEFFICIENT } from '@forgeax/engine-shader';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import {
   type CloudLayerData,
@@ -91,16 +92,13 @@ export function cloudViewDistanceForQuality(qualityValue: CloudQuality): number 
   return CLOUD_QUALITY_PROFILES[qualityValue].viewDistance;
 }
 
-/** rgba16float is four 16-bit channels (8 bytes per texel). */
-export const CLOUD_SHADOW_BYTES_PER_TEXEL = 8;
-
 /**
  * Authored density is a normalized formation value. Convert it to a bounded
  * per-world-unit extinction coefficient only at integration time; otherwise a
  * long horizon step would become opaque after its first sample and expose
  * marching bands instead of a participating volume.
  */
-export const CLOUD_EXTINCTION_COEFFICIENT = 0.03;
+export { CLOUD_EXTINCTION_COEFFICIENT };
 
 export const DEFAULT_CLOUD_LAYER: ValidatedCloudLayer = Object.freeze({
   seed: 1337,

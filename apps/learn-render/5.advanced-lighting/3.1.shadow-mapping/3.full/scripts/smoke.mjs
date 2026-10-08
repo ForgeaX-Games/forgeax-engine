@@ -44,7 +44,7 @@ console.error = (...args) => {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(
     `[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`,

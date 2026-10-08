@@ -88,7 +88,7 @@ program files, and the vase panel/control binding from the UI together.
 | `assets/character.pack.ts` + `assets/player/player-rig.ts` | Skinning and animation example: generated player mesh, skeleton, skin, joint paths, and walk clip. | When replacing player art, update the `Player Body`/`Skin` scene reference and the binding code in `assets/player/player.ts` together; do not leave stale identity rows in the pack closure. |
 | `assets/fantasy-meshes.pack.ts`, `geometry.pack.ts`, and `materials.pack.ts` | Procedural geometry, PBR material, and fantasy-showcase examples. Geometry also supplies the ground and obstacle meshes used by the scene. | Keep, tune, or replace the examples. When deleting a showcase, remove its scene GUID references and now-unused pack/source keys together; preserve anything still referenced by the scene. |
 | `assets/materials.pack.ts` + `assets/shaders/rusted-iron.wgsl` | Import-first Standard Surface example: a short `evaluate_surface` function drives the engine-owned lit passes. | Change the WGSL parameters and matching Pack values together; keep `moduleSlots.surface` pointed at the imported module. |
-| Atmosphere and lighting in `assets/scene.pack.ts` | Engine procedural daylight shared by the visible sky and PBR environment lighting. | Tune `Atmosphere` and the single `DirectionalLight`; keep `Skylight` without an `equirect` to use the same generated sky. |
+| `assets/environment.pack.ts` and lighting in `assets/scene.pack.ts` | Authored procedural HDR daylight shared by the visible sky and PBR environment lighting. | Tune the environment generator and the single `DirectionalLight`; keep `Skylight` and `SkyboxBackground` bound to the same environment GUID. |
 | `assets/guide.ui.html` + `assets/guide.ui.css` + `assets/ui/ui.pack.ts` | Readable ShadowRoot control overlay authoring, pointer-lock state, and crosshair example. | Restyle or replace the HTML/CSS pair, or remove the corresponding UI mount/update code in `assets/ui/ui.pack.ts` and its `.ui.html.meta.json` sidecar together. |
 
 The current reference implementation expects the authored `player`, `camera`, and `player/joint/*`
@@ -98,24 +98,26 @@ owning runtime code and author sources together.
 
 ## Procedural sky and PBR reflections
 
-The scene uses Engine `Atmosphere`, one `DirectionalLight` as the sun, and a neutral
-`Skylight` without an `equirect` asset. No template-owned sky texture or shader is needed.
+`assets/environment.pack.ts` generates an ordinary linear HDR `EquirectAsset`
+from source. The scene binds the same GUID to `SkyboxBackground` and `Skylight`,
+so the blue daylight background and PBR environment lighting share one authored
+image. The generator includes a broad circumsolar response and subdued ground
+bounce; the single `DirectionalLight` owns direct sunlight. Its intensity is
+3.2, with 0.92 exposure and ACES Filmic output. These values belong to this
+artistic environment; they are not a physical Atmosphere's lux/exposure preset.
 
 ```mermaid
 flowchart LR
-    A["Atmosphere + DirectionalLight"] --> B["Cached sky cubemap"]
-    B --> C["Visible sky"]
-    B --> D["Diffuse irradiance"]
-    B --> E["Roughness-prefiltered specular radiance"]
-    D --> F["PBR materials"]
-    E --> F
+    A["environment.pack.ts"] --> B["Linear HDR EquirectAsset"]
+    B --> C["SkyboxBackground"]
+    B --> D["Skylight cube and prefilter"]
+    D --> E["Diffuse and specular PBR lighting"]
 ```
 
-The mirror sphere and torus show specular environment reflections; rough materials receive
-blurred reflections and nonmetal surfaces also receive diffuse sky lighting. Changing the sun
-or atmosphere regenerates the cached sky and its lighting products together. The sun disc is
-rendered separately; direct sunlight comes from `DirectionalLight` rather than a second sun
-baked into the environment.
+The mirror sphere and torus show specular environment reflections; rough materials
+receive blurred reflections and nonmetal surfaces receive diffuse sky lighting.
+Changing the environment source rebuilds the same asset GUID through the normal
+Pack producer. No external sky image or runtime source generator is required.
 
 These are sky reflections. Reflecting nearby scene objects requires the Engine's reflection
 probe or screen-space reflection features, which this starter does not enable.

@@ -6,7 +6,7 @@
 //
 // Like @forgeax/engine-wgpu-wasm and @forgeax/engine-codec, the fbx pkg/ carries
 // TWO files emcc emits together — fbx-wasm.wasm + its self-loading fbx-wasm.mjs
-// glue (MODULARIZE + EXPORT_ES6). src/index.ts imports the .mjs glue at runtime,
+// glue (MODULARIZE + EXPORT_ES6). src/wasm.ts imports the .mjs glue at runtime,
 // so fetching only the .wasm would leave consumers without a loader. The release
 // asset is therefore the WHOLE pkg/ packed as a content-keyed .tar.gz; this
 // script downloads and extracts it into packages/fbx/pkg/.

@@ -9,6 +9,7 @@
     "candidateId",
     "sdkVersion",
     "engineCommit",
+    "viewCommit",
     "sourceWorkflowRunId",
     "artifacts",
     "npmPackages",
@@ -16,27 +17,54 @@
     "sealedAt"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
-    "candidateId": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]+$" },
-    "sdkVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
-    "engineCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-    "sourceWorkflowRunId": { "type": "integer", "minimum": 1 },
+    "schemaVersion": {
+      "const": "1.1.0"
+    },
+    "candidateId": {
+      "type": "string",
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]+$"
+    },
+    "sdkVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "engineCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sourceWorkflowRunId": {
+      "type": "integer",
+      "minimum": 1
+    },
     "artifacts": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/artifact" }
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
     },
     "npmPackages": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/npmPackage" }
+      "items": {
+        "$ref": "#/$defs/npmPackage"
+      }
     },
     "gates": {
       "type": "array",
       "minItems": 4,
-      "items": { "$ref": "#/$defs/gate" }
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
     },
-    "sealedAt": { "type": "string", "minLength": 1 }
+    "sealedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "viewCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    }
   },
   "$defs": {
     "artifact": {
@@ -49,8 +77,14 @@
           "minLength": 1,
           "pattern": "^(?!\\.)(?!.*(?:^|/)\\.\\.?/)[^/].*$"
         },
-        "bytes": { "type": "integer", "minimum": 0 },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "npmPackage": {
@@ -58,11 +92,26 @@
       "additionalProperties": false,
       "required": ["name", "version", "path", "integrity", "publishOrder"],
       "properties": {
-        "name": { "type": "string", "pattern": "^@forgeax/engine(?:-.+)?$" },
-        "version": { "type": "string", "minLength": 1 },
-        "path": { "type": "string", "minLength": 1 },
-        "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$" },
-        "publishOrder": { "type": "integer", "minimum": 0 }
+        "name": {
+          "type": "string",
+          "pattern": "^@forgeax/(?:engine(?:-.+)?|view)$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "integrity": {
+          "type": "string",
+          "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$"
+        },
+        "publishOrder": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "gate": {
@@ -74,10 +123,21 @@
           "type": "string",
           "enum": ["npm-consumer", "archive-browser", "reproducibility", "collision"]
         },
-        "result": { "const": "passed" },
-        "durationMs": { "type": "integer", "minimum": 0 },
-        "report": { "type": "string", "minLength": 1 },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "result": {
+          "const": "passed"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "report": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     }
   }

@@ -3,6 +3,7 @@ import { copyPackData } from '@forgeax/engine-pack/runtime';
 import { copyPreparedAsset, prepareAssetPayload } from './prepare-payload.js';
 import { makeLoadContext } from './registry/load-by-guid.js';
 import { readPluginDefinition } from './registry/plugin-definition.js';
+import { captureTerrainClosure, terrainClosureCurrent } from './terrain-closure.js';
 import {
   type PublicationPreparationServices,
   preparePublicationPayloads,
@@ -424,7 +425,7 @@ export class AssetRegistry {
         >,
       })),
     };
-    for (const row of candidate.rows) this.packFileCache.set(row.packageUrl, metadata);
+    for (const row of candidate.rows) this.cachePackFile(row.packageUrl, metadata);
   }
 
   readPluginDefinition(guid: string) {
@@ -527,28 +528,43 @@ export class AssetRegistry {
   readonly inFlight: Map<string, Promise<Result<unknown, AssetError | ImageError | RhiError>>> =
     new Map();
 
-  // bug-20260610 Fix B (M3 / D-4): per-instance pack-file cache keyed by
-  // packageUrl (the .pack.json URL). `packFileInFlight` de-duplicates
-  // concurrent fetches; `packFileCache` stores resolved bodies so the
-  // same URL is fetched at most once per AssetRegistry lifetime (CON-6).
-  readonly packFileCache: Map<string, ParsedPackFile> = new Map();
-  readonly packFileInFlight: Map<string, Promise<ParsedPackFile>> = new Map();
+  /** One URL owns its retained body and current request independently. */
+  readonly packFiles = new Map<
+    string,
+    {
+      value?: ParsedPackFile;
+      pending?: Promise<ParsedPackFile>;
+    }
+  >();
+
+  cachePackFile(url: string, value: ParsedPackFile): void {
+    const state = this.packFiles.get(url) ?? {};
+    state.value = value;
+    this.packFiles.set(url, state);
+  }
+
+  /** Only the current request may settle; a failed refresh retains a prior body. */
+  settlePackFile(url: string, pending: Promise<ParsedPackFile>, value?: ParsedPackFile): void {
+    const state = this.packFiles.get(url);
+    if (state?.pending !== pending) return;
+    delete state.pending;
+    if (value !== undefined) state.value = value;
+    if (state.value === undefined) this.packFiles.delete(url);
+  }
   readonly artifactCache = new ArtifactReadCache();
   readonly loadState = new LoadStateStore();
-  /**
-   * Render-facing material readiness owned by the production GUID loader.
-   * The map stores the complete tuple result, including structured failures,
-   * so record code cannot silently fall back to a generic MaterialAsset.
-   */
-  readonly materialReadiness = new Map<string, MaterialReady | MaterialLoadError>();
-  /** Immutable cooked artifacts indexed by their specialization key. */
+  /** Current GUID publication; payload projections retain older handle identities separately. */
+  private readonly materialPublications = new Map<
+    string,
+    {
+      catalogRevision: number;
+      readiness?: MaterialReady | MaterialLoadError;
+      projection?: MaterialRenderProjection;
+      readinessCatalogRevision?: number;
+    }
+  >();
   readonly materialArtifactRegistry = new MaterialArtifactRegistry();
-  /** Current GUID publication projection used by the render assembly seam. */
-  readonly materialRenderProjections = new Map<string, MaterialRenderProjection>();
-  /** Payload-owned projection identity; old handles survive same-GUID recook. */
   readonly materialPayloadProjections = new WeakMap<object, MaterialRenderProjection>();
-  private readonly materialCatalogRevisions = new Map<string, number>();
-  private readonly materialReadinessCatalogRevisions = new Map<string, number>();
   private assetEvidenceAdapter: RuntimeAssetEvidenceAdapter = createRuntimeAssetEvidenceAdapter();
 
   // feat-20260621-asset-registry-robustness-invalidate-inflight-cach F17c:
@@ -806,12 +822,12 @@ export class AssetRegistry {
 
   /** Return the production MaterialReady/Error result for one material GUID. */
   getMaterialReadiness(guid: string): MaterialReady | MaterialLoadError | undefined {
-    return this.materialReadiness.get(guid.toLowerCase());
+    return this.materialPublications.get(guid.toLowerCase())?.readiness;
   }
 
   /** Return the current cooked render projection for one material GUID. */
   getMaterialProjection(guid: string): MaterialRenderProjection | undefined {
-    return this.materialRenderProjections.get(guid.toLowerCase());
+    return this.materialPublications.get(guid.toLowerCase())?.projection;
   }
 
   /** Resolve the program owner through the same parent catalogue as the root contract. */
@@ -835,12 +851,22 @@ export class AssetRegistry {
     return this.materialArtifactRegistry.get(specializationKey);
   }
 
+  private materialPublication(key: string) {
+    let publication = this.materialPublications.get(key);
+    if (publication === undefined) {
+      publication = { catalogRevision: 0 };
+      this.materialPublications.set(key, publication);
+    }
+    return publication;
+  }
+
   /** Record the canonical result produced by the production material loader. */
   recordMaterialReadiness(guid: string, readiness: MaterialReady | MaterialLoadError): void {
     const key = guid.toLowerCase();
     if (readiness.status !== 'Ready') {
-      this.materialReadiness.set(key, readiness);
-      this.materialRenderProjections.delete(key);
+      const publication = this.materialPublication(key);
+      publication.readiness = readiness;
+      delete publication.projection;
       return;
     }
     const projection = installMaterialReadyShaders(
@@ -848,17 +874,17 @@ export class AssetRegistry {
       readiness,
       this.materialArtifactRegistry,
     );
-    this.materialReadiness.set(key, readiness);
-    this.materialRenderProjections.set(key, projection);
-    const catalogRevision = this.materialCatalogRevisions.get(key) ?? 0;
-    const previousRevision = this.materialReadinessCatalogRevisions.get(key);
+    const publication = this.materialPublication(key);
+    publication.readiness = readiness;
+    publication.projection = projection;
+    const { catalogRevision, readinessCatalogRevision: previousRevision } = publication;
     if (previousRevision === undefined || previousRevision !== catalogRevision) {
       const currentPayload = this.assetCatalog.get(key)?.payload;
       if (currentPayload?.kind === 'material') {
         this.materialPayloadProjections.set(currentPayload, projection);
       }
     }
-    this.materialReadinessCatalogRevisions.set(key, catalogRevision);
+    publication.readinessCatalogRevision = catalogRevision;
   }
 
   /**
@@ -1140,9 +1166,12 @@ export class AssetRegistry {
     if (survivingEnvelope !== undefined) this._originIndex.set(survivingEnvelope.payload, guidKey);
     this.assetCatalog.delete(guidKey);
     this.loadState.remove(guidKey);
-    this.materialReadiness.delete(guidKey);
-    this.materialRenderProjections.delete(guidKey);
-    this.materialReadinessCatalogRevisions.delete(guidKey);
+    const material = this.materialPublications.get(guidKey);
+    if (material !== undefined) {
+      delete material.readiness;
+      delete material.projection;
+      delete material.readinessCatalogRevision;
+    }
     // R-1 hard fix (research-decisions.md): delete inFlight entry so the
     // next loadByGuid does not hit the old Promise whose generation no
     // longer matches (AC-04 requires a fresh fetch, not asset-invalidated).
@@ -1154,8 +1183,7 @@ export class AssetRegistry {
     // other GUIDs' cached bodies/index entries intact (per-GUID precision).
     const entry = this.packIndexCache?.get(guidKey);
     if (entry !== undefined) {
-      this.packFileCache.delete(entry.packageUrl);
-      this.packFileInFlight.delete(entry.packageUrl);
+      this.packFiles.delete(entry.packageUrl);
     }
     this.packIndexCache?.delete(guidKey);
     this.catalogPackIndexEpoch++;
@@ -1218,7 +1246,7 @@ export class AssetRegistry {
   /**
    * feat-20260621 F17c: invalidate ALL cached assets so the next `loadByGuid`
    * re-fetches both the pack-index and the asset body. Clears assetCatalog,
-   * inFlight, and packFileCache (wholesale), and resets packIndexCache to
+   * inFlight, and packFiles (wholesale), and resets packIndexCache to
    * `undefined` (NOT `.clear()` -- an empty Map would short-circuit
    * `resolveCatalogEntry`'s `=== undefined` re-fetch guard and serve
    * asset-not-imported for every later load; undefined forces a fresh
@@ -1234,22 +1262,18 @@ export class AssetRegistry {
     this.artifactCache.clear();
     this.assetCatalog.clear();
     this.loadState.clear();
-    this.materialReadiness.clear();
-    this.materialRenderProjections.clear();
-    this.materialCatalogRevisions.clear();
-    this.materialReadinessCatalogRevisions.clear();
+    this.materialPublications.clear();
     this.inFlight.clear();
     this.globalGeneration++;
     // Round-2 M-A: wholesale clear of the shared body cache, and reset the
-    // index cache to UNDEFINED (R2-1) -- NOT .clear(). packFileCache uses
+    // index cache to UNDEFINED (R2-1) -- NOT .clear(). packFiles uses
     // .clear() because fetchPackFile checks `.get(packageUrl)` per URL, so an
     // empty Map correctly misses and re-fetches. packIndexCache uses =undefined
     // because resolveCatalogEntry's re-fetch guard tests `=== undefined`; an
     // empty Map would short-circuit it and serve asset-not-imported for every
     // later load -- the exact F17b pollution this feat fixes. The asymmetry is
     // intentional; do not normalise the two operations.
-    this.packFileCache.clear();
-    this.packFileInFlight.clear();
+    this.packFiles.clear();
     this.packIndexCache = undefined;
     this.catalogPackIndexEpoch++;
     if (this.catalogSourceOwnsPackIndex()) this.catalogPackIndexNeedsRefresh = true;
@@ -1697,6 +1721,19 @@ export class AssetRegistry {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();
     const kind = a.kind;
+    if (
+      stored.kind === 'terrain' &&
+      this.loadState.get(key)?.status !== 'provisional' &&
+      !captureTerrainClosure(this, stored)
+    )
+      return err(
+        new AssetError({
+          code: 'asset-parse-failed',
+          expected:
+            'complete terrain dependencies with height bytes derived from the author samples',
+          hint: 'catalog the whole cooked closure before its root; do not replace derived heights independently',
+        }),
+      );
     // Drain any name recorded by an earlier _registerPackage call whose body had
     // not yet been catalogued (prod disk path; D-6). Preserve a name already on
     // a prior envelope for this key (re-catalog of the same GUID).
@@ -1726,13 +1763,14 @@ export class AssetRegistry {
       refs: refs ?? [],
     });
     if (stored.kind === 'material') {
-      const catalogRevision = (this.materialCatalogRevisions.get(key) ?? 0) + 1;
-      this.materialCatalogRevisions.set(key, catalogRevision);
-      const projection = this.materialRenderProjections.get(key);
+      const publication = this.materialPublication(key);
+      publication.catalogRevision++;
+      const { projection } = publication;
       if (projection !== undefined) this.materialPayloadProjections.set(stored, projection);
     }
     this.catalogEpoch++;
     this.loadState.registerReady(key, stored);
+    if (stored.kind === 'terrain') captureTerrainClosure(this, stored);
     // D-1: catalog() inline path defaults every GUID to the no-package state
     // (null). loadByGuid + builtin override via their own registerPackage calls
     // before / after this so the package mapping is populated for all assets
@@ -1968,6 +2006,11 @@ export class AssetRegistry {
    * ECS/render side (e.g. `walkMaterialParents` in `resolve-asset-handle.ts`)
    * to resolve a payload's embedded sub-asset GUIDs (D-19) without minting.
    */
+  /** Terrain-derived dependencies remain paired with their adopted root payload. */
+  terrainClosureCurrent(root: import('@forgeax/engine-types').TerrainAsset): boolean {
+    return terrainClosureCurrent(this, root);
+  }
+
   lookup<T = Asset>(guid: AssetGuid | string): T | undefined {
     const key =
       typeof guid === 'string' ? guid.toLowerCase() : AssetGuid.format(guid).toLowerCase();

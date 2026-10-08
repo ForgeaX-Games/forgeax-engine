@@ -69,6 +69,18 @@ for (const state of ['absent', 'stale-source', 'corrupt-bytes', 'current']) {
   });
 }
 
+test('optional WASM cache bounds each download segment to two minutes', () => {
+  const action = readFileSync(actionPath, 'utf8');
+  const cache = action
+    .split('    - name: Cache wgpu-wasm pkg/ (content-keyed)\n')[1]
+    ?.split('    - name: Hydrate and verify current wgpu-wasm')[0];
+  assert.ok(cache);
+  assert.match(cache, /uses: actions\/cache@v5/);
+  assert.match(cache, /env:\n {8}SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'/);
+  assert.doesNotMatch(cache, /fail-on-cache-miss: true/);
+  assert.match(action, /node packages\/wgpu-wasm\/scripts\/verify-current\.mjs/);
+});
+
 test('full and focused CI use the same verified source fallback before building', () => {
   for (const path of ['.github/workflows/ci.yml', '.github/workflows/ci-focus.yml']) {
     const workflow = readFileSync(path, 'utf8');

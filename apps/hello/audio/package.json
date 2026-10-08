@@ -23,13 +23,43 @@
     "gauntletScenario": {
       "id": "hello-audio-stale-decode-epoch-recovery",
       "script": "smoke:gauntlet",
-      "domains": ["Audio", "Host"],
-      "packages": ["audio", "audio-webaudio", "app", "runtime"],
-      "risks": ["baseline", "fault", "behavioral", "recovery", "cleanup"],
-      "phaseInputs": ["baseline", "pending-decode", "stale-stop", "replacement", "recovery", "cleanup"],
+      "domains": [
+        "Audio",
+        "Host"
+      ],
+      "packages": [
+        "audio",
+        "audio-webaudio",
+        "app",
+        "runtime"
+      ],
+      "risks": [
+        "baseline",
+        "fault",
+        "behavioral",
+        "recovery",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "baseline",
+        "pending-decode",
+        "stale-stop",
+        "replacement",
+        "recovery",
+        "cleanup"
+      ],
       "evidence": {
-        "frontDoors": ["ecs-world", "dawn-node", "browser-app"],
-        "legs": ["semantic", "live", "behavioral", "recovery"]
+        "frontDoors": [
+          "ecs-world",
+          "dawn-node",
+          "browser-app"
+        ],
+        "legs": [
+          "semantic",
+          "live",
+          "behavioral",
+          "recovery"
+        ]
       },
       "oracle": {
         "stdoutIncludes": [
@@ -81,10 +111,11 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
+    "@webgpu/types": "^0.1.74",
     "pngjs": "^7.0.0",
     "typescript": "~5.8.3",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

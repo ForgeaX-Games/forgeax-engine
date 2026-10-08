@@ -21,6 +21,7 @@ export function executionAudioReport(state?: AudioState): ExecutionReport['audio
   const error = state?.lastError ?? null;
   return {
     owner: 'host',
+    ...(state?.streaming ? { streaming: state.streaming } : {}),
     contextState: state?.contextState ?? 'suspended',
     activeSourceCount: state?.activeSourceCount ?? 0,
     lastError:

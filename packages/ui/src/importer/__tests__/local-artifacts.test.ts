@@ -1,19 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createUiImporter } from '../index.js';
 
 describe('UI asset-local artifacts', () => {
   it('assigns each companion to the owning UI asset without a publish locator', async () => {
     const importer = createUiImporter();
+    const readSibling = vi.fn(async (path: string) =>
+      path === 'hud.ui.css'
+        ? { ok: true as const, value: new TextEncoder().encode('.hud{}') }
+        : { ok: true as const, value: new Uint8Array([1, 2, 3]) },
+    );
     const result = await importer.import({
       source: 'hud.ui.html',
       readSource: async () => ({
         ok: true as const,
         value: new TextEncoder().encode('<img src="icons/panel.png">'),
       }),
-      readSibling: async (path) =>
-        path === 'hud.ui.css'
-          ? { ok: true as const, value: new TextEncoder().encode('.hud{}') }
-          : { ok: true as const, value: new Uint8Array([1, 2, 3]) },
+      readSibling,
       decodeImage: async () => {
         throw new Error('UI import does not decode image bytes');
       },
@@ -29,5 +31,6 @@ describe('UI asset-local artifacts', () => {
     expect(artifacts['icons/panel.png']?.bytes).toBeInstanceOf(Uint8Array);
     expect(artifacts['icons/panel.png']).not.toHaveProperty('path');
     expect(artifacts['icons/panel.png']).not.toHaveProperty('integrity');
+    expect(readSibling.mock.calls.map(([path]) => path)).toEqual(['hud.ui.css', 'icons/panel.png']);
   });
 });

@@ -28,17 +28,21 @@ import {
   type BindGroupDescriptor,
   type BindGroupLayout,
   type BindGroupLayoutDescriptor,
+  type Blas,
   type Buffer,
   type BufferDescriptor,
   type CommandEncoderDescriptor,
   type ComputePipeline,
   type ComputePipelineDescriptor,
+  type ExternalTexture,
+  type ExternalTextureDescriptor,
   err,
   ok,
   type PipelineLayout,
   type PipelineLayoutDescriptor,
   type QuerySet,
   type QuerySetDescriptor,
+  RAY_QUERY_BACKEND_UNSUPPORTED,
   type RenderBundleEncoderDescriptor,
   type RenderPipeline,
   type RenderPipelineDescriptor,
@@ -52,12 +56,16 @@ import {
   type RhiLimits,
   type RhiQueue,
   type RhiRenderBundleEncoder,
+  rayQueryUnsupported,
   type Sampler,
   type SamplerDescriptor,
   type Texture,
   type TextureDescriptor,
   type TextureView,
   type TextureViewDescriptor,
+  type Tlas,
+  validateRayQueryBindGroupLayout,
+  validateRayQueryBufferUsage,
 } from '@forgeax/engine-rhi';
 import { doubleDestroy, makeRhiBuffer, type RawBufferLike, unwrapBuffer } from './buffer';
 import { makeRhiCommandEncoder, type RawCommandEncoderLike } from './command-encoder';
@@ -310,7 +318,12 @@ class RhiWgpuDeviceImpl implements RhiDevice {
       storageTexture: (rawLimits.maxStorageTexturesPerShaderStage ?? 0) > 0,
       // HDR / filterable caps (feat-20260608 M1):
       ...hdrCaps,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: rawLimits.maxColorAttachments ?? 4,
+      // The wgpu-wasm target lowers to WebGL2 (and browser WebGPU when routed
+      // through wgpu-core); neither exposes acceleration structures.
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     } as RhiCaps;
     // Keep this route fact outside public RhiCaps. Render owns the closed
     // dual-view/raw-only projection and reads the shim-internal property.
@@ -391,6 +404,11 @@ class RhiWgpuDeviceImpl implements RhiDevice {
     // values end-to-end (charter proposition 5; the M2 baseline only cast the
     // raw handle which leaked the raw `mapAsync` returning Promise<void>
     // instead of Promise<Result<void, RhiError>>).
+    const usageGate = validateRayQueryBufferUsage(
+      RAY_QUERY_BACKEND_UNSUPPORTED,
+      (desc.usage as number | undefined) ?? 0,
+    );
+    if (!usageGate.ok) return usageGate;
     if (this.raw.createBuffer === undefined) {
       return webgpuRuntimeError(new Error('underlying device handle does not expose createBuffer'));
     }
@@ -514,6 +532,8 @@ class RhiWgpuDeviceImpl implements RhiDevice {
           mirroredEntries.push({ binding: entry.binding, resource: resource.value });
           break;
         }
+        case 'accelerationStructure':
+          return rayQueryUnsupported(`bind group entry ${entry.binding}`, this.caps.rayQuery);
         default: {
           const _exhaustive: never = resource;
           void _exhaustive;
@@ -533,7 +553,37 @@ class RhiWgpuDeviceImpl implements RhiDevice {
   }
 
   createBindGroupLayout(desc: BindGroupLayoutDescriptor): Result<BindGroupLayout, RhiError> {
-    return this.wrap<BindGroupLayout>(this.raw.createBindGroupLayout, desc);
+    const gate = validateRayQueryBindGroupLayout(this.caps.rayQuery, desc);
+    if (!gate.ok) return gate;
+    return this.wrap<BindGroupLayout>(this.raw.createBindGroupLayout, lowerExternalEntries(desc));
+  }
+
+  createBlas(): Result<Blas, RhiError> {
+    return rayQueryUnsupported('createBlas', this.caps.rayQuery);
+  }
+
+  createTlas(): Result<Tlas, RhiError> {
+    return rayQueryUnsupported('createTlas', this.caps.rayQuery);
+  }
+
+  destroyBlas(): Result<void, RhiError> {
+    return rayQueryUnsupported('destroyBlas', this.caps.rayQuery);
+  }
+
+  destroyTlas(): Result<void, RhiError> {
+    return rayQueryUnsupported('destroyTlas', this.caps.rayQuery);
+  }
+
+  nativeDevice(): Result<GPUDevice, RhiError> {
+    return featureNotEnabled('textureImport');
+  }
+
+  async importTexture(_texture: GPUTexture): Promise<Result<Texture, RhiError>> {
+    return featureNotEnabled('textureImport');
+  }
+
+  importExternalTexture(_desc: ExternalTextureDescriptor): Result<ExternalTexture, RhiError> {
+    return featureNotEnabled('externalTexture');
   }
 
   createPipelineLayout(desc: PipelineLayoutDescriptor): Result<PipelineLayout, RhiError> {
@@ -666,3 +716,17 @@ export function makeRhiDevice(raw: RawDeviceLike): { device: RhiDevice } {
 // writeTexture / copyExternalImageToTexture / onSubmittedWorkDone) now
 // routes through the dedicated module so the device.ts file stays focused
 // on the createX surface.
+
+/** Lower `externalTexture` layout entries to the sampled 2D view that WebGL2 binds. */
+function lowerExternalEntries(desc: BindGroupLayoutDescriptor): BindGroupLayoutDescriptor {
+  const entries = desc.entries === undefined ? [] : Array.from(desc.entries);
+  if (!entries.some((entry) => entry.externalTexture !== undefined)) return desc;
+  return {
+    ...desc,
+    entries: entries.map((entry) => {
+      if (entry.externalTexture === undefined) return entry;
+      const { externalTexture: _external, ...rest } = entry;
+      return { ...rest, texture: { sampleType: 'float', viewDimension: '2d' } };
+    }),
+  };
+}

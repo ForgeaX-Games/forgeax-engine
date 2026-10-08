@@ -5,12 +5,8 @@
 // the engine's real component registry in the shared coverage run.
 
 import { type Component, defineComponent } from '@forgeax/engine-ecs';
-import type { MountOverride } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
-import {
-  extractMountOverrideHandleGuids,
-  extractSceneEntityHandleGuids,
-} from '../scene-handle-fields';
+import { extractSceneEntityHandleGuids } from '../scene-handle-fields';
 
 const T709MeshFilter = defineComponent('T709MeshFilter', { assetHandle: 'shared<MeshAsset>' });
 const T709MeshRenderer = defineComponent('T709MeshRenderer', {
@@ -111,53 +107,5 @@ describe('extractSceneEntityHandleGuids', () => {
         arrayIndex: 1,
       },
     ]);
-  });
-});
-
-describe('extractMountOverrideHandleGuids', () => {
-  it('patch form (field present) extracts one GUID from a shared field', () => {
-    const overrides: MountOverride[] = [
-      { localId: 1 as never, comp: 'T709MeshFilter', field: 'assetHandle', value: 'mesh-guid' },
-    ];
-    const entries = extractMountOverrideHandleGuids(components, overrides);
-    expect(entries).toEqual([
-      {
-        overrideIndex: 0,
-        componentName: 'T709MeshFilter',
-        fieldName: 'assetHandle',
-        guidString: 'mesh-guid',
-      },
-    ]);
-  });
-
-  it('add form (field absent, value is a per-field map) extracts array GUIDs', () => {
-    const overrides: MountOverride[] = [
-      { localId: 1 as never, comp: 'T709MeshRenderer', value: { materials: ['a', 'b'] } },
-    ];
-    const entries = extractMountOverrideHandleGuids(components, overrides);
-    expect(entries).toEqual([
-      {
-        overrideIndex: 0,
-        componentName: 'T709MeshRenderer',
-        fieldName: 'materials',
-        guidString: 'a',
-        arrayIndex: 0,
-      },
-      {
-        overrideIndex: 0,
-        componentName: 'T709MeshRenderer',
-        fieldName: 'materials',
-        guidString: 'b',
-        arrayIndex: 1,
-      },
-    ]);
-  });
-
-  it('skips unknown components and non-object add values', () => {
-    const overrides: MountOverride[] = [
-      { localId: 1 as never, comp: 'NotRegistered709', value: { assetHandle: 'x' } },
-      { localId: 2 as never, comp: 'T709MeshFilter', value: 5 },
-    ];
-    expect(extractMountOverrideHandleGuids(components, overrides)).toEqual([]);
   });
 });

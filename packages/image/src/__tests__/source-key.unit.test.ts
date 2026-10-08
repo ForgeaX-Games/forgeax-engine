@@ -1,20 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { type ExistingExternalAssetPackage, reimportReuseMeta } from '../reimport-reuse-meta.js';
-import { deriveImageSourceKey, deriveImageSourceKeys } from '../source-key.js';
+import { deriveImageSourceKey } from '../source-key.js';
 import { subAssetKey } from '../sub-asset-key.js';
 
 const GUID = '01928000-7c00-7000-8000-000000000042';
-
-function decoded(): Parameters<typeof reimportReuseMeta>[0] {
-  return {
-    bytes: new Uint8Array(4),
-    width: 1,
-    height: 1,
-    mime: 'image/png',
-    colorSpace: 'srgb',
-    mipmap: true,
-  };
-}
 
 function existing(): ExistingExternalAssetPackage {
   return {
@@ -39,17 +28,6 @@ describe('image producer sourceKey', () => {
     expect(deriveImageSourceKey('')).toBeUndefined();
   });
 
-  it('requires unique semantic roles for multi-output images', () => {
-    expect(deriveImageSourceKeys(['texture', 'equirect'])).toEqual({
-      ok: true,
-      keys: ['image:texture', 'image:equirect'],
-    });
-    expect(deriveImageSourceKeys(['texture', 'texture'])).toMatchObject({
-      ok: false,
-      code: 'duplicate-source-key',
-    });
-  });
-
   it('keeps legacy indexFallback separate from producer sourceKey', () => {
     expect(subAssetKey({ kind: 'texture', sourceIndex: 0 })).toEqual({
       kind: 'texture',
@@ -59,7 +37,31 @@ describe('image producer sourceKey', () => {
   });
 
   it('reuses identity after source relocation while emitting the role key', () => {
-    const result = reimportReuseMeta(decoded(), existing());
+    const result = reimportReuseMeta(existing());
     expect(result[0]).toMatchObject({ guid: GUID, sourceIndex: 0, sourceKey: 'image:texture' });
+  });
+  it('preserves source-order precedence between legacy and semantic identity matches', () => {
+    const meta = existing();
+    const legacy = { guid: GUID, kind: 'texture', sourceIndex: 0 };
+    const semantic = {
+      guid: '01928000-7c00-7000-8000-000000000043',
+      kind: 'texture',
+      sourceIndex: 9,
+      sourceKey: 'image:texture',
+    };
+    expect(reimportReuseMeta({ ...meta, subAssets: [legacy, semantic] })[0]?.guid).toBe(
+      legacy.guid,
+    );
+    expect(reimportReuseMeta({ ...meta, subAssets: [semantic, legacy] })[0]?.guid).toBe(
+      semantic.guid,
+    );
+  });
+
+  it('does not reuse a named legacy locator without the semantic source identity', () => {
+    const meta = {
+      ...existing(),
+      subAssets: [{ guid: GUID, kind: 'texture', sourceIndex: 0, name: 'Other' }],
+    };
+    expect(reimportReuseMeta(meta)[0]?.guid).not.toBe(GUID);
   });
 });

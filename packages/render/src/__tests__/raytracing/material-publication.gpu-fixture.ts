@@ -20,16 +20,16 @@ import { createRenderPublisher } from '../../publication/publisher';
 import { RenderPublicationReceiver } from '../../publication/receiver';
 import { buildRaySurfaceScene } from '../../raytracing/attributes';
 import { createSubmittedRayPathTracer } from '../../raytracing/path-tracer';
-import type { RayPathFixture } from './path-tracer.commands';
+import type { RayPublicationFixture } from './path-tracer.commands';
 import { plane, readBuffer } from './path-tracer.fixture';
 
 /** Real cooked publication and World values feed the shared Surface compute entry. */
 export async function verifyPublishedRayMaterial(
-  fixture: RayPathFixture,
+  fixture: RayPublicationFixture,
   saveCapture?: (bytes: Uint8Array) => Promise<void>,
 ) {
-  const material = fixture.materials.find((entry) => entry.name === 'emission');
-  assert(material);
+  const material = fixture.material;
+  assert(material.name === 'emission');
   const assets = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const received = new AssetRegistry(new ShaderRegistry({ manifestUrl: undefined }));
   const record = validateCookedMaterialRecord(
@@ -42,7 +42,7 @@ export async function verifyPublishedRayMaterial(
       artifacts: Object.fromEntries(
         Object.entries(material.cookedPublication.artifacts).map(([path, bytes]) => [
           path,
-          { bytes: Uint8Array.from(bytes) },
+          { bytes: new TextEncoder().encode(bytes) },
         ]),
       ),
     }),
@@ -110,10 +110,12 @@ export async function verifyPublishedRayMaterial(
       installPublicationPrograms(received, packet.programs);
       const accepted = receiver.accept(packet).unwrap();
       const snapshot = accepted.frame.renderables[0]?.material;
-      assert(snapshot?.materialRay);
-      expect(snapshot.materialRay.programKey).toBe(material.publication.program);
+      assert(snapshot?.materialSurfacePrograms?.['ray-hit']);
+      expect(snapshot.materialSurfacePrograms?.['ray-hit'].programKey).toBe(
+        material.publication.program,
+      );
       const shader = received.shaderRegistry
-        .findMaterialArtifact(snapshot.materialRay.programKey)
+        .findMaterialArtifact(snapshot.materialSurfacePrograms?.['ray-hit'].programKey)
         .unwrap();
       expect(shader.source).toBe(material.program.wgsl);
       const layout = derive(shader.paramSchema);
@@ -128,7 +130,7 @@ export async function verifyPublishedRayMaterial(
       facts.push({
         intensity,
         revision: packet.revision,
-        program: snapshot.materialRay.programKey,
+        program: snapshot.materialSurfacePrograms?.['ray-hit'].programKey,
         publicationCpuMs: performance.now() - start,
       });
       const request: Parameters<typeof createSubmittedRayPathTracer>[2] = {
@@ -160,7 +162,7 @@ export async function verifyPublishedRayMaterial(
         },
       };
       for (const [invalid, code] of [
-        [{ ...snapshot, materialRay: undefined }, 'ray-reference-invalid'],
+        [{ ...snapshot, materialSurfacePrograms: undefined }, 'ray-reference-invalid'],
         [
           { ...snapshot, paramSnapshot: { ...snapshot.paramSnapshot, alphaHash: 1 } },
           'ray-material-unsupported',

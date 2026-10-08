@@ -48,7 +48,7 @@ console.log('navigator.gpu:', !!navigator.gpu);
 | webgl2 works but output remains black | Engine fallback may be defective | Follow EngineEnvironmentError.detail.wgpuError.hint through WASM. |
 | navigator.gpu exists but output is black | Adapter may be unavailable in headless/iframe/remote desktop | Verify Channel 3 fallback; check WASM loading if it also fails. |
 
-**Repair**: browser configuration is external to Engine. composeEnvErrorHint in create-renderer-env-classify.ts already adds configuration guidance when both channels fail with adapter-unavailable/rhi-not-available.
+**Repair**: browser configuration is external to Engine. `classifyEnvErrorReason` in `packages/render/src/assembly/factory.ts` keeps the `no usable rendering backend` wording only for GPU-class inner codes (adapter-unavailable, rhi-not-available, ...); the message carries no browser-flag guidance, so apply the table above.
 
 Verify an actual fallback context exists before debugging fallback selection.
 

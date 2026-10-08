@@ -5,11 +5,13 @@ import {
   type AssetPublicationTuple,
   err,
   ok,
+  type PackV2,
   type PluginAssetDefinition,
   type Result,
 } from '@forgeax/engine-types';
 import type { AssetRegistry } from '../asset-registry.js';
-import { PackReader } from '../internal/pack-reader.js';
+import { freezePackValue, PackReader, validatePackEnvelope } from '../internal/pack-reader.js';
+import { isRetainedJsonTree } from '../internal/retained-pack-json.js';
 import {
   fetchAndCachePackFile,
   resolveCatalogEntry,
@@ -37,7 +39,7 @@ export async function readPluginDefinition(
     );
   const before = validateRegistryReferences(registry, guid);
   if (!before.ok) return before;
-  if (!registry.packFileCache.has(entry.packageUrl)) {
+  if (registry.packFiles.get(entry.packageUrl)?.value === undefined) {
     const loaded = await fetchAndCachePackFile(
       registry,
       entry.packageUrl,
@@ -47,17 +49,29 @@ export async function readPluginDefinition(
     );
     if (!loaded.ok) return loaded;
   }
-  const raw = structuredClone(registry.packFileCache.get(entry.packageUrl));
+  const retained = registry.packFiles.get(entry.packageUrl)?.value;
+  const jsonTree = isRetainedJsonTree(retained);
+  // Arbitrary public cache values retain whole-clone semantics, including
+  // unrelated non-cloneable payloads and getters evaluated only by the clone.
+  const raw = jsonTree ? retained : structuredClone(retained);
   const observed = raw as unknown as AssetPublicationTuple;
   const expected = {
     ...observed,
     ...entry.publication,
     scopeId: expectedScope ?? observed?.scopeId,
   };
-  const pack = new PackReader().verify(raw, expected);
-  if (!pack.ok) return pack;
-  const envelope = pack.value.assets.find((asset) => asset.guid === guid);
-  const definition = validatePluginAsset(envelope?.payload);
+  const checked = jsonTree
+    ? validatePackEnvelope(raw, expected)
+    : new PackReader().verify(raw, expected);
+  if (!checked.ok) return checked;
+  const pack = raw as unknown as PackV2<unknown>;
+  const envelope = pack.assets.find((asset) => asset.guid === guid);
+  // Only an owner-parsed, currently intact JSON tree skips the whole-Pack copy.
+  // The slow path already owns and freezes the complete clone through verify.
+  const payload = jsonTree
+    ? freezePackValue(structuredClone(envelope?.payload))
+    : envelope?.payload;
+  const definition = validatePluginAsset(payload);
   if (!definition.ok) return definition;
   const after = validateRegistryReferences(registry, guid);
   if (!after.ok) return after;
@@ -78,7 +92,7 @@ export async function readPluginDefinition(
         hint: 'read the current definition before mounting',
       }),
     );
-  const { scopeId, generation: publicationGeneration, digest, outputSetDigest } = pack.value;
+  const { scopeId, generation: publicationGeneration, digest, outputSetDigest } = pack;
   return ok({
     guid,
     asset: definition.value,

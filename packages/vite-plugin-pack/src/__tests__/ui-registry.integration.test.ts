@@ -1,3 +1,4 @@
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // @perf-budget-skip: intentional real Vite UI registry integration gate.
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -68,10 +69,9 @@ describe('pluginPack UI importer registration', () => {
     expect(pack.assets[0]?.payload.html).not.toContain('ui-token:');
     expect(pack.assets[0]?.artifacts).toEqual({});
 
-    const catalog = JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')) as Array<{
-      guid: string;
-      packageUrl: string;
-    }>;
+    const catalog = decodeCatalogWire(
+      JSON.parse(await readFile(join(dist, 'pack-index.json'), 'utf8')),
+    ).unwrap();
     expect(catalog.find((entry) => entry.guid === UI_GUID)?.packageUrl).toContain('.pack');
   });
 });

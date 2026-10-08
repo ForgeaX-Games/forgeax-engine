@@ -32,6 +32,8 @@ export const SCRIPTABLE_PACK_ASSET_KINDS = [
   'audio',
   'particle-effect',
   'ies-profile',
+  'terrain',
+  'navigation-mesh',
 ] as const satisfies readonly ScriptablePackAssetKind[];
 
 export function isScriptablePackAssetKind(value: string): value is ScriptablePackAssetKind {

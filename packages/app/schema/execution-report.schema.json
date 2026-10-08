@@ -260,6 +260,39 @@
               }
             }
           ]
+        },
+        "streaming": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "encodedBytes",
+            "pcmBytes",
+            "pendingBytes",
+            "pendingReads",
+            "underruns"
+          ],
+          "properties": {
+            "encodedBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pcmBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pendingBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pendingReads": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "underruns": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     },

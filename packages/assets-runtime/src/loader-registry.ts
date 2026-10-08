@@ -28,6 +28,9 @@ export interface PackLoaderInput {
   readonly kind: string;
   readonly payload: Record<string, unknown>;
   readonly refs: readonly string[];
+  readonly streams?: Readonly<
+    Record<string, { readonly descriptor: ArtifactDescriptor; readonly url: string }>
+  >;
   readonly artifacts: Readonly<Record<string, PackArtifactInput>>;
 }
 

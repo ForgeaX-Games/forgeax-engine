@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export async function openDawnCanvas(width, height) {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (globalThis.navigator === undefined) {
     Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true });

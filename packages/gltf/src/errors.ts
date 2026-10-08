@@ -80,16 +80,17 @@ export interface GltfMaterialPhysicalInvalidDetail {
     | 'KHR_materials_sheen'
     | 'KHR_materials_iridescence'
     | 'KHR_materials_specular'
-    | 'KHR_materials_diffuse_transmission';
+    | 'KHR_materials_diffuse_transmission'
+    | 'KHR_materials_emissive_strength';
   readonly field: string;
   readonly reason: 'type' | 'range' | 'non-finite';
   readonly actual?: unknown;
 }
 
-/** `gltf-accessor-type-mismatch` payload: 4-member closed reason discriminator. */
+/** `gltf-accessor-type-mismatch` payload with a closed reason discriminator. */
 export interface GltfAccessorTypeMismatchDetail {
   readonly accessorIndex: number;
-  readonly reason: 'sparse' | 'morph' | 'interleaved' | 'unknownComponentType';
+  readonly reason: 'sparse' | 'layout' | 'unknownComponentType';
 }
 
 /** `gltf-texture-load-failed` payload: URI that failed to load. */
@@ -270,6 +271,14 @@ export type GltfError = {
 type GltfErrorPolicy = { readonly expected: string; readonly hint: string };
 
 const gltfErrorPolicy = {
+  'gltf-camera-invalid': {
+    expected: 'a valid referenced glTF perspective or orthographic camera',
+    hint: 'Repair camera indices, positive magnification/FOV, and ordered clipping planes.',
+  },
+  'gltf-animation-sampler-invalid': {
+    expected: 'strictly increasing finite times and matching values/tangent cardinality',
+    hint: 'Repair animation input, output and interpolation, then reimport the same GUID.',
+  },
   'gltf-malformed-header': {
     expected:
       'GLB 12-byte header (magic 0x46546C67 + version=2 + length) plus mandatory JSON chunk',
@@ -302,8 +311,9 @@ const gltfErrorPolicy = {
     hint: 'repair the named physical material extension value and re-import the source',
   },
   'gltf-accessor-type-mismatch': {
-    expected: 'dense fixed-stride accessor with supported componentType',
-    hint: 'sparse: see feat-future-gltf-sparse-accessor; morph: see feat-future-gltf-morph; interleaved: see feat-future-gltf-mesh-multi-section',
+    expected:
+      'bounded, aligned accessor with valid dense/strided storage and ordered sparse overrides',
+    hint: 'repair component/type, byte ranges, stride/alignment or sparse indices in the source accessor',
   },
   'gltf-texture-load-failed': {
     expected: 'externalLoader resolved the URI into an ArrayBuffer without throwing',
@@ -326,8 +336,8 @@ const gltfErrorPolicy = {
     hint: 'reduce joint count below MAX_JOINTS (256) or see OOS-skin-max-joints',
   },
   'gltf-animation-cubicspline-unsupported': {
-    expected: 'animation sampler interpolation is LINEAR or STEP',
-    hint: 'see OOS-skin-cubicspline; convert CUBICSPLINE to LINEAR/STEP in DCC tool',
+    expected: 'animation sampler interpolation is LINEAR, STEP or CUBICSPLINE',
+    hint: 'this retained wire error is no longer emitted; inspect gltf-animation-sampler-invalid for malformed source',
   },
   'gltf-morph-unsupported': {
     expected: 'animation channel target path is one of translation, rotation, scale, or weights',
@@ -351,6 +361,14 @@ const gltfErrorPolicy = {
     expected:
       'every animation channel resolves to one uniquely named scene node and stable target ID',
     hint: 'name every node in the animated hierarchy and ensure each animated full path is unique',
+  },
+  'gltf-draco-decoder-required': {
+    expected: 'a decoder for required or compressed-only KHR_draco_mesh_compression',
+    hint: 'Use the build-only gltf/importer entry or supply a Draco decoder capability.',
+  },
+  'gltf-draco-decode-failed': {
+    expected: 'valid Draco triangle data matching the declared accessors',
+    hint: 'Repair the compressed source or accessor declarations and reimport.',
   },
   'gltf-meshopt-decoder-required': {
     expected:
@@ -385,9 +403,26 @@ export const GLTF_ERROR_HINTS: Readonly<Record<GltfErrorCode, string>> = Object.
   Object.entries(gltfErrorPolicy).map(([code, policy]) => [code, policy.hint]),
 ) as Readonly<Record<GltfErrorCode, string>>;
 
+export interface GltfDracoDetail {
+  readonly meshIndex: number;
+  readonly primitiveIndex: number;
+  readonly bufferView: number;
+}
+export interface GltfDracoDecodeFailedDetail extends GltfDracoDetail {
+  readonly reason: string;
+}
+
 // === DetailFor map + gltfErr factory ===
 
 interface DetailFor {
+  readonly 'gltf-camera-invalid': { readonly cameraIndex: number };
+  readonly 'gltf-animation-sampler-invalid': {
+    readonly animationIndex: number;
+    readonly samplerIndex: number;
+    readonly reason: 'times' | 'values' | 'interpolation';
+  };
+  readonly 'gltf-draco-decoder-required': GltfDracoDetail;
+  readonly 'gltf-draco-decode-failed': GltfDracoDecodeFailedDetail;
   readonly 'gltf-malformed-header': GltfMalformedHeaderDetail;
   readonly 'gltf-version-unsupported': GltfVersionUnsupportedDetail;
   readonly 'gltf-buffer-out-of-bounds': GltfBufferOutOfBoundsDetail;

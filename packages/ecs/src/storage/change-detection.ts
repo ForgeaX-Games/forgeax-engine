@@ -5,7 +5,6 @@ import * as componentOwner from '../component';
 import { type EntityHandle, entityIndex } from '../entity-handle';
 
 import type { ArchetypeGraph } from './archetype-graph';
-import { getOrCreateSparseTagSet } from './archetype-graph';
 
 export const PROJECTION_BLOCK_SIZE = 256;
 
@@ -143,12 +142,6 @@ export interface ChangeTicks {
   changed: number;
 }
 
-export const NEVER_CHANGED_TICK = -1;
-
-export function createChangeTicks(tick: number): ChangeTicks {
-  return { added: tick, changed: tick };
-}
-
 interface EntityLocation {
   readonly archetypeId: number;
   readonly archetypeRow: number;
@@ -245,4 +238,12 @@ export function publishComponentRange(
     Math.floor(start / PROJECTION_BLOCK_SIZE),
     Math.ceil((start + count) / PROJECTION_BLOCK_SIZE),
   );
+}
+
+export function getOrCreateSparseTagSet(graph: ArchetypeGraph, component: Component): SparseTagSet {
+  const current = graph.sparseTags.get(componentOwner.componentId(component));
+  if (current !== undefined) return current;
+  const set = createSparseTagSet(component);
+  graph.sparseTags.set(componentOwner.componentId(component), set);
+  return set;
 }

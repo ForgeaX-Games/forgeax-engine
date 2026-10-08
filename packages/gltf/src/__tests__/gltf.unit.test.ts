@@ -274,6 +274,8 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
   // ─── from errors.test.ts ───
 
   const ALL_CODES: readonly GltfErrorCode[] = [
+    'gltf-camera-invalid',
+    'gltf-animation-sampler-invalid',
     'gltf-malformed-header',
     'gltf-version-unsupported',
     'gltf-buffer-out-of-bounds',
@@ -304,6 +306,10 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
   function classifyByExhaustiveSwitch(err: GltfError): string {
     const code = err.code;
     switch (code) {
+      case 'gltf-camera-invalid':
+        return 'camera';
+      case 'gltf-animation-sampler-invalid':
+        return 'sampler';
       case 'gltf-malformed-header':
         return 'malformed';
       case 'gltf-version-unsupported':
@@ -360,6 +366,10 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
 
   function buildErrSample(code: GltfErrorCode): GltfError {
     switch (code) {
+      case 'gltf-camera-invalid':
+        return gltfErr(code, { cameraIndex: 0 });
+      case 'gltf-animation-sampler-invalid':
+        return gltfErr(code, { animationIndex: 0, samplerIndex: 0, reason: 'times' });
       case 'gltf-malformed-header':
         return gltfErr(code, { filePath: '/x.glb', byteOffset: 0 });
       case 'gltf-version-unsupported':
@@ -474,8 +484,8 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
     });
 
     describe('GltfErrorCode roster', () => {
-      it('GLTF_ERROR_HINTS exposes exactly 25 keys', () => {
-        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(25);
+      it('GLTF_ERROR_HINTS exposes exactly 29 keys', () => {
+        expect(Object.keys(GLTF_ERROR_HINTS).length).toBe(29);
       });
 
       it.each(ALL_CODES)('hint for %s is a non-empty string', (code) => {
@@ -2226,8 +2236,11 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         expect(EXTENSION_ALLOWLIST).toEqual([
           'EXT_mesh_gpu_instancing',
           'EXT_meshopt_compression',
+          'KHR_draco_mesh_compression',
           'KHR_lights_punctual',
           'KHR_texture_transform',
+          'KHR_materials_unlit',
+          'KHR_materials_emissive_strength',
           'KHR_materials_transmission',
           'KHR_materials_ior',
           'KHR_materials_volume',
@@ -2269,13 +2282,13 @@ function unwrapReimport(result: ReturnType<typeof reimportReuseMeta>) {
         const result = checkExtensions({ extensionsUsed: ['KHR_materials_unlit'] });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
-        expect(result.value.unsupportedUsed).toEqual(['KHR_materials_unlit']);
+        expect(result.value.unsupportedUsed).toEqual([]);
         expect(stderrSpy).not.toHaveBeenCalled();
       });
 
       it('extensionsRequired wins fail-fast over a benign extensionsUsed entry', () => {
         const result = checkExtensions({
-          extensionsRequired: ['KHR_materials_unlit'],
+          extensionsRequired: ['KHR_materials_unknown'],
           extensionsUsed: ['KHR_materials_unlit'],
         });
         expect(result.ok).toBe(false);

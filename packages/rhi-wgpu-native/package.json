@@ -1,0 +1,59 @@
+{
+  "name": "@forgeax/engine-rhi-wgpu-native",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "description": "Node RHI over native wgpu with hardware Ray Query — a WebGPU-shaped GPU from an opt-in napi addon, consumed through @forgeax/engine-rhi-webgpu.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src/*.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:native": "node scripts/build-native-addon.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@forgeax/engine-rhi": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
+    "@forgeax/engine-types": "workspace:*",
+    "@webgpu/types": "^0.1.74"
+  },
+  "forgeax": {
+    "metrics": {
+      "bundle-size": {
+        "enabled": true,
+        "path": "dist/index.mjs",
+        "compression": "gzip"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "offscreen Node device; frame timing evidence lives in apps/hello/gi scripts"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "no package-level bench; GI lane timings are measured by the consuming app"
+      },
+      "gate": {
+        "enabled": false,
+        "reason": "the addon is an opt-in local build with no committed binary; the native-ray-query workflow owns its gate"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike package"
+      }
+    }
+  }
+}

@@ -84,7 +84,7 @@ describe('PixelSurface', () => {
       mips: { kind: 'none' },
     });
     const decoded = first.toDecodedImage();
-    const pack = toAssetPack(decoded, META);
+    const pack = toAssetPack(META);
     expect(pack.subAssets).toEqual([{ guid: META.guid, sourceIndex: 0, kind: 'texture' }]);
     expect(pack.importSettings.mipmap).toBe('none');
     const changed = decoded.bytes.slice();

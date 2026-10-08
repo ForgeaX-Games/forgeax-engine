@@ -30,6 +30,7 @@ import {
   validateLightProbeData,
   validateRectAreaLightData,
 } from '../components/light-helpers';
+import { validateLightingChannels } from '../components/lighting-channels';
 import { selectEnvironment } from '../environment/frame';
 import type { EnvironmentCandidate, EnvironmentFrame } from '../extract/environment';
 import { COOKIE_SLICE_CAPACITY, IES_SLICE_CAPACITY } from '../prepare/extended-lighting/resources';
@@ -127,14 +128,24 @@ export function extractWorldEnvironment(
         shadowFilter: number;
         shadowAngularRadius: number;
         maxPenumbraTexels: number;
+        staggerCascades: boolean;
       }
     | undefined;
   for (const row of directionalLightQuery) {
     const l = row.get(DirectionalLight);
+    const channelsError = validateLightingChannels(l.lightingChannels);
+    if (channelsError !== null) {
+      worldInternal._routeError(channelsError, {
+        severity: Severity.Error,
+        systemName: 'RenderSystem.extract (lighting-channels)',
+      });
+      continue;
+    }
     directionalCount += 1;
     const intensity = l.intensity;
     const snapshot: DirectionalLightSnapshot = {
       kind: 'directional',
+      lightingChannels: l.lightingChannels,
       entity: row.entity,
       direction: vec3.create(l.direction[0] ?? 0, l.direction[1] ?? -1, l.direction[2] ?? 0),
       color: vec3.create(
@@ -160,6 +171,7 @@ export function extractWorldEnvironment(
         shadowFilter: l.shadowFilter,
         shadowAngularRadius: l.shadowAngularRadius,
         maxPenumbraTexels: l.maxPenumbraTexels,
+        staggerCascades: l.staggerCascades,
       };
     }
   }
@@ -194,6 +206,14 @@ export function extractWorldEnvironment(
     .unwrap();
   for (const row of pointLightQuery) {
     const p = row.get(PointLight);
+    const channelsError = validateLightingChannels(p.lightingChannels);
+    if (channelsError !== null) {
+      worldInternal._routeError(channelsError, {
+        severity: Severity.Error,
+        systemName: 'RenderSystem.extract (lighting-channels)',
+      });
+      continue;
+    }
     // K-2 scheme B: archetype-edge sniff -- `bundle.Transform` key is absent
     // when the archetype does not carry the Transform column.
     const hasTransform = row.get(GlobalTransform) !== undefined;
@@ -211,6 +231,7 @@ export function extractWorldEnvironment(
       worldMat !== undefined ? mat4.getTranslation(vec3.create(), worldMat) : vec3.create(0, 0, 0);
     pointSnapshots.push({
       kind: 'point',
+      lightingChannels: p.lightingChannels,
       entity: entityId,
       worldId: context.worldId,
       position,
@@ -255,6 +276,14 @@ export function extractWorldEnvironment(
   };
   for (const row of spotLightQuery) {
     const s = row.get(SpotLight);
+    const channelsError = validateLightingChannels(s.lightingChannels);
+    if (channelsError !== null) {
+      worldInternal._routeError(channelsError, {
+        severity: Severity.Error,
+        systemName: 'RenderSystem.extract (lighting-channels)',
+      });
+      continue;
+    }
     const hasTransform = row.get(GlobalTransform) !== undefined;
     const intensity = s.intensity;
     const range = s.range;
@@ -403,6 +432,7 @@ export function extractWorldEnvironment(
 
     spotSnapshots.push({
       kind: 'spot',
+      lightingChannels: s.lightingChannels,
       entity: row.entity,
       worldId: context.worldId,
       // D-6: position reflects world transform; direction stays sourced
@@ -471,6 +501,14 @@ export function extractWorldEnvironment(
     .unwrap();
   for (const row of rectLightQuery) {
     const light = row.get(RectAreaLight);
+    const channelsError = validateLightingChannels(light.lightingChannels);
+    if (channelsError !== null) {
+      worldInternal._routeError(channelsError, {
+        severity: Severity.Error,
+        systemName: 'RenderSystem.extract (lighting-channels)',
+      });
+      continue;
+    }
     const validation = validateRectAreaLightData({
       intensity: light.intensity,
       color: light.color,
@@ -528,6 +566,7 @@ export function extractWorldEnvironment(
     }
     rectSnapshots.push({
       kind: 'rect-area',
+      lightingChannels: light.lightingChannels,
       position,
       color: vec3.create(
         (light.color[0] ?? 1) * light.intensity,
@@ -615,6 +654,7 @@ export function extractWorldEnvironment(
           orthoRight: cam0.orthoRight,
           orthoBottom: cam0.orthoBottom,
           orthoTop: cam0.orthoTop,
+          ...(cam0.eye === undefined ? {} : { eye: cam0.eye }),
         }
       : undefined;
 
@@ -638,6 +678,7 @@ export function extractWorldEnvironment(
         shadowFilter: sf.shadowFilter,
         shadowAngularRadius: sf.shadowAngularRadius,
         maxPenumbraTexels: sf.maxPenumbraTexels,
+        ...(sf.staggerCascades ? { staggerCascades: true } : {}),
       };
       directionalCsmDirection = dirSnapshot.direction;
       const csm = computeDirectionalCsm(dirSnapshot.direction, directionalCsmConfig, cameraData);
@@ -797,7 +838,7 @@ export function extractWorldEnvironment(
   // feat-20260520-skylight-ibl-cubemap M4 / t26+t27: query Skylight entities.
   // First archetype hit wins (mirrors DirectionalLight pattern); multi-Skylight
   // warn in record stage (t27) uses skylightCount.
-  const skylightQuery = world.query({ read: [Skylight] }).unwrap();
+  const skylightQuery = world.query({ read: [Skylight], optional: [GlobalTransform] }).unwrap();
   let skylight: SkylightSnapshot | undefined;
   let skylightCount = 0;
   for (const row of skylightQuery) {
@@ -820,7 +861,17 @@ export function extractWorldEnvironment(
     ];
     skylightCount += 1;
     if (skylight === undefined) {
+      const captureWorld = row.get(GlobalTransform)?.world;
       skylight = {
+        ...(captureWorld === undefined
+          ? {}
+          : {
+              capturePosition: [
+                captureWorld[12] ?? 0,
+                captureWorld[13] ?? 0,
+                captureWorld[14] ?? 0,
+              ] as const,
+            }),
         equirectHandle: equirectRaw !== undefined ? Math.round(equirectRaw) : 0,
         color: [colorR, colorG, colorB],
         intensity,
@@ -899,17 +950,44 @@ export function extractWorldEnvironment(
       sourceKey: `equirect:${imageEnvironment.equirectHandle}`,
     });
   }
-  const atmosphereQuery = world.query({ read: [Atmosphere] }).unwrap();
+  const atmosphereQuery = world.query({ read: [Atmosphere], optional: [GlobalTransform] }).unwrap();
   for (const row of atmosphereQuery) {
     const value = row.get(Atmosphere);
+    const tuple = (channels: ArrayLike<number>): readonly [number, number, number] => [
+      channels[0] ?? 0,
+      channels[1] ?? 0,
+      channels[2] ?? 0,
+    ];
+    const atmosphereWorld = row.get(GlobalTransform)?.world;
     const atmosphere = {
-      turbidity: value.turbidity,
-      rayleigh: value.rayleigh,
-      mieCoefficient: value.mieCoefficient,
-      mieDirectionalG: value.mieDirectionalG,
+      planetRadius: value.planetRadius,
+      atmosphereHeight: value.atmosphereHeight,
+      groundOrigin: [
+        atmosphereWorld?.[12] ?? 0,
+        atmosphereWorld?.[13] ?? 0,
+        atmosphereWorld?.[14] ?? 0,
+      ] as const,
+      capturePosition:
+        skylight?.capturePosition ??
+        ([
+          atmosphereWorld?.[12] ?? 0,
+          (atmosphereWorld?.[13] ?? 0) + 1,
+          atmosphereWorld?.[14] ?? 0,
+        ] as const),
+      rayleighScattering: tuple(value.rayleighScattering),
+      rayleighScaleHeight: value.rayleighScaleHeight,
+      mieScattering: value.mieScattering,
+      mieAbsorption: value.mieAbsorption,
+      mieScaleHeight: value.mieScaleHeight,
+      mieAnisotropy: value.mieAnisotropy,
+      absorption: tuple(value.absorption),
+      absorptionPeakHeight: value.absorptionPeakHeight,
+      absorptionHalfWidth: value.absorptionHalfWidth,
+      groundAlbedo: tuple(value.groundAlbedo),
+      multipleScattering: value.multipleScattering,
       sunAngularRadius: value.sunAngularRadius,
-      circumsolarStrength: value.circumsolarStrength,
-      circumsolarWidth: value.circumsolarWidth,
+      aerialPerspectiveStart: value.aerialPerspectiveStart,
+      aerialPerspectiveDistanceScale: value.aerialPerspectiveDistanceScale,
     } as const;
     environmentCandidates.push({
       kind: 'atmosphere',

@@ -46,6 +46,8 @@ describe('Asset union covers all engine-known kinds', () => {
       | 'particle-effect'
       | 'ies-profile'
       | 'plugin'
+      | 'terrain'
+      | 'navigation-mesh'
     >();
   });
 });

@@ -1,5 +1,4 @@
 import {
-  type GraphAccess,
   type GraphTextureDescriptor,
   type GraphTextureView,
   type RenderGraphBuilder,
@@ -9,17 +8,9 @@ import { err, ok, type Result } from '@forgeax/engine-types';
 import { CLOUD_LAYER_FEATURE_IDENTITY } from '../cloud/feature';
 import { ProjectedDecalInvalidError } from '../decals/component';
 import { addProjectedDecalPasses } from '../decals/graph';
-import { addDepthPyramidPasses } from '../depth-pyramid/graph';
+import { addDepthPyramidPasses, type DepthPyramidProjection } from '../depth-pyramid/graph';
 import { addAtmosphereBackground } from '../environment/background';
-import { SceneDataUnavailableError, StandardProfileInvalidError } from '../errors/render';
-import type { FramePlan } from '../extract/environment';
-import { BARREL_DISTORTION_FEATURE_IDENTITY } from '../features/barrel-distortion';
-import {
-  GPU_TEXTURE_USAGE_COPY_SRC,
-  GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
-  GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-} from '../gpu-texture-usage';
-import { DEFERRED_COLOR_FORMATS } from '../pipeline-spec';
+import { StandardProfileInvalidError } from '../errors/render';
 import type {
   RenderPipeline,
   RenderPipelineBuildContext,
@@ -31,15 +22,19 @@ import {
   createRenderPipelineTarget,
   importRenderPipelineSurface,
   type RenderPipelineTarget,
-  renderPipelineCloudHistoryTargets,
 } from '../render-pipeline';
 import { addSsrCompositionPass } from '../ssr/compose';
 import { addSsrSpatialPasses } from '../ssr/graph';
 import {
+  DEFERRED_ATTACHMENT_BYTES,
+  DEFERRED_COLOR_FORMATS,
+  STANDARD_VISIBLE_SURFACE_FORMAT,
+} from '../standard-attachments';
+import {
   addStandardSceneDataPass,
   aggregateTemporalDemand,
   createStandardSceneDataTarget,
-  standardTemporalLaneAdmission,
+  requireStandardTemporalLane,
 } from '../temporal/standard-scene-data';
 import { addTargetCoveragePass } from '../temporal/target-coverage-attachment';
 import {
@@ -57,16 +52,27 @@ import {
   addTypedSsaoPasses,
 } from '../typed-render-graph-primitives';
 import { addTypedShadowPasses } from '../typed-shadow-passes';
-import { addOpaqueFogPasses } from './analytic-fog-pass';
+import { addOpaqueFogPasses, addTranslucencyVolumetricFogPasses } from './analytic-fog-pass';
 import { addGpuLateOcclusion, sceneViewImport } from './gpu-occlusion';
 import { renderExtentSize } from './render-extent';
 import {
   addSingleLayerMediumPasses,
   addSingleLayerMediumRawDepthProducer,
+  requireSingleLayerMediumInputs,
 } from './single-layer-medium-passes';
 import type { StandardPipelineBuildContext } from './standard-build-context';
+import {
+  contributeStandardCloudComposite,
+  contributeStandardCloudPreOpaque,
+  createStandardCloudSceneTarget,
+  createStandardCloudShadowTarget,
+} from './standard-cloud-stage';
 import { addStandardDeferredLighting } from './standard-deferred-lighting';
 import { buildStandardForwardLane } from './standard-forward-lane';
+import {
+  standardForwardReceiverFeatureAccesses,
+  standardForwardReceiverInputs,
+} from './standard-forward-receiver';
 import {
   addStandardClusterMembershipPass,
   importStandardClusterBuffers,
@@ -76,7 +82,7 @@ import {
   deriveStandardTopologyInput,
   type StandardTopologyInputValue,
 } from './standard-lighting/topology';
-import { addStandardPost } from './standard-post';
+import { addStandardPost, contributeStandardSceneFeatures } from './standard-post';
 import {
   DEFAULT_STANDARD_PROFILE,
   STANDARD_LIGHT_COUNTS,
@@ -189,20 +195,21 @@ function buildStandardDeferredLane(
   if (
     visibleSurfaceEnabled &&
     (topology.lane.primitiveIndex !== true ||
-      topology.lane.maxColorAttachments < 6 ||
-      (topology.lane.maxColorAttachmentBytesPerSample ?? 0) < 48 ||
+      topology.lane.maxColorAttachments < 7 ||
+      (topology.lane.maxColorAttachmentBytesPerSample ?? 0) <
+        DEFERRED_ATTACHMENT_BYTES.visibleSurface ||
       topology.camera.antialias === 'msaa')
   ) {
     return err(
       new RenderGraphError({
         code: 'resource-descriptor-invalid',
         expected:
-          'visible surfaces require primitive-index, six targets, 48 aligned attachment bytes and single sampling',
+          'visible surfaces require primitive-index, seven targets, 48 aligned attachment bytes and single sampling',
         hint: 'request these device features/limits before enabling visibleSurface',
         detail: {
           resourceLabel: 'visible-surface',
           field: 'capabilities',
-          expected: 'primitive-index / 6 targets / 48 bytes / single sample',
+          expected: 'primitive-index / 7 targets / 48 bytes / single sample',
           actual: JSON.stringify(topology.lane),
         },
       }),
@@ -215,12 +222,12 @@ function buildStandardDeferredLane(
     return err(
       new RenderGraphError({
         code: 'resource-descriptor-invalid',
-        expected: 'Standard deferred requires storage buffers and five color attachments',
+        expected: 'Standard deferred requires storage buffers and six color attachments',
         hint: 'select a device with deferred capabilities or explicitly select the Forward profile',
         detail: {
           resourceLabel: 'forgeax::standard',
           field: 'renderPath',
-          expected: 'storage buffers and five MRTs',
+          expected: 'storage buffers and six MRTs',
           actual: `storageBuffer=${topology.lane.storageBuffer}, maxColorAttachments=${topology.lane.maxColorAttachments}`,
         },
       }),
@@ -242,15 +249,23 @@ function buildStandardDeferredLane(
       ? ok(undefined)
       : addStandardClusterMembershipPass(graph, lighting, buffers.value);
   if (!membership.ok) return membership;
-  const featureShadows = context.contributeShadowFeatures?.();
-  if (featureShadows !== undefined && !featureShadows.ok) return featureShadows;
-  const shadows = addTypedShadowPasses(
-    graph,
-    topology,
-    context.projectGpuDrivenShadow,
-    featureShadows?.value,
-  );
-  if (!shadows.ok) return shadows;
+  const addShadows = (cameraPyramid: GraphTextureView | undefined) => {
+    const featureShadows = context.contributeShadowFeatures?.();
+    if (featureShadows !== undefined && !featureShadows.ok) return featureShadows;
+    return addTypedShadowPasses(
+      graph,
+      topology,
+      context.projectGpuDrivenShadow,
+      featureShadows?.value,
+      cameraPyramid,
+      context.gpuDrivenStaticShadowLayers,
+    );
+  };
+  // The atmosphere samples the directional map along open view rays before
+  // geometry, so its receivers are not the camera's surfaces and the camera
+  // pyramid cannot cull their casters.
+  const earlyShadows = topology.atmosphere === true ? addShadows(undefined) : undefined;
+  if (earlyShadows !== undefined && !earlyShadows.ok) return earlyShadows;
 
   const depth = target(graph, 'hdrp-depth', {
     format: 'depth32float-stencil8',
@@ -283,8 +298,16 @@ function buildStandardDeferredLane(
     size: internalSize,
   });
   if (!lightingContext.ok) return lightingContext;
+  const receiverGeometry = target(graph, 'gbuffer-receiver-geometry', {
+    format: DEFERRED_COLOR_FORMATS[5],
+    size: internalSize,
+  });
+  if (!receiverGeometry.ok) return receiverGeometry;
   const visibleSurface = visibleSurfaceEnabled
-    ? target(graph, 'visible-surface', { format: 'rgba32uint', size: internalSize })
+    ? target(graph, 'visible-surface', {
+        format: STANDARD_VISIBLE_SURFACE_FORMAT,
+        size: internalSize,
+      })
     : ok(undefined);
   if (!visibleSurface.ok) return visibleSurface;
   const scene = target(graph, 'hdrp-scene-color', {
@@ -315,7 +338,10 @@ function buildStandardDeferredLane(
       : ok(undefined);
   if (!mediumTargets.ok) return mediumTargets;
   const reflectionFallback =
-    topology.reflectionFallback?.enabled === true || topology.ssr?.status === 'admitted'
+    topology.reflectionFallback?.enabled === true ||
+    topology.ssr?.status === 'admitted' ||
+    (topology.standardProfile?.diffuseGi?.gather !== 'baked' &&
+      topology.standardProfile?.diffuseGi?.reflections !== undefined)
       ? target(graph, 'reflection-fallback-linear-hdr', {
           format: 'rgba16float',
           size: internalSize,
@@ -337,29 +363,27 @@ function buildStandardDeferredLane(
     ssr: topology.ssr?.status === 'admitted',
     visibleSurface: visibleSurfaceEnabled,
   });
-  const temporalLane = topology.lane.compute ? 'clustered' : 'cpu-webgl2';
-  const temporalAdmission = standardTemporalLaneAdmission({
-    lane: temporalLane,
+  const temporalAdmission = requireStandardTemporalLane({
     demand: temporalDemand,
-    capabilities: {
-      compute: topology.lane.compute,
-      storageBuffer: topology.lane.storageBuffer,
-      rgba16floatRenderable: context.capabilities?.rgba16floatRenderable ?? false,
-    },
+    compute: topology.lane.compute,
+    storageBuffer: topology.lane.storageBuffer,
+    rgba16floatRenderable: context.capabilities?.rgba16floatRenderable ?? false,
   });
-  if (temporalAdmission.status === 'unavailable' && temporalAdmission.reason !== 'no-demand') {
-    return err(
-      new SceneDataUnavailableError({
-        featureIdentity: 'forgeax::standard',
-        schema: 'forgeax::scene-data::temporal-v1',
-        lane: temporalLane,
-        reason: temporalAdmission.reason,
-        missingContributorIds: [],
-        omittedMissingContributorCount: 0,
-        recovery: 'enable-capability',
-      }),
-    );
-  }
+  if (!temporalAdmission.ok) return temporalAdmission;
+  const temporal =
+    temporalDemand.targetCount === 1
+      ? createStandardSceneDataTarget(graph, topology.extent)
+      : ok(undefined);
+  if (!temporal.ok) return temporal;
+  // The same fragments can publish temporal-v1 beside the material facts.
+  // Keep the standalone producer on devices that cannot hold this MRT shape.
+  const deferredTemporal =
+    temporal.value !== undefined &&
+    topology.lane.maxColorAttachments >= 7 + Number(visibleSurfaceEnabled) &&
+    (topology.lane.maxColorAttachmentBytesPerSample ?? 0) >=
+      (visibleSurfaceEnabled
+        ? DEFERRED_ATTACHMENT_BYTES.visibleSurfaceTemporal
+        : DEFERRED_ATTACHMENT_BYTES.temporal);
   const gpuDriven = context.projectGpuDriven({
     format: scene.value.format,
     sampleCount: scene.value.sampleCount,
@@ -371,9 +395,35 @@ function buildStandardDeferredLane(
         }),
   });
   if (!gpuDriven.ok) return gpuDriven;
+  const featureRasterWork =
+    context.hasFeatureRasterWork?.(CLOUD_LAYER_FEATURE_IDENTITY, 'scene') === true;
+  const cloudScene = createStandardCloudSceneTarget(context, featureRasterWork, {
+    format: scene.value.format,
+    size: internalSize,
+    domain: 'linear-hdr',
+  });
+  if (!cloudScene.ok) return cloudScene;
+  const cloudShadow = createStandardCloudShadowTarget(context, featureRasterWork);
+  if (!cloudShadow.ok) return cloudShadow;
+  // Cloud density and its spatial shadow must be produced before the opaque
+  // receiver pass. The composite is projected separately below, after the
+  // receiver has populated the scene target; declaration order is execution
+  // order for the typed graph.
+  const featureTargets = contributeStandardCloudPreOpaque(context, {
+    color: scene.value,
+    depth: depth.value,
+    cloudShadow: cloudShadow.value,
+  });
+  if (!featureTargets.ok) return featureTargets;
+
   // Background must precede geometry now that geometry initializes SceneColor.
   const atmosphere =
-    topology.atmosphere === true ? addAtmosphereBackground(graph, scene.value) : ok(undefined);
+    topology.atmosphere === true
+      ? addAtmosphereBackground(graph, scene.value, {
+          directional: earlyShadows?.value.directional?.view,
+          cloud: cloudShadow.value?.view,
+        })
+      : ok(undefined);
   if (!atmosphere.ok) return atmosphere;
   if (atmosphere.value === undefined) {
     const skybox = addTypedSkyboxPass(graph, scene.value);
@@ -389,7 +439,9 @@ function buildStandardDeferredLane(
       f0Occlusion.value,
       albedoMetallic.value,
       lightingContext.value,
+      receiverGeometry.value,
       ...(visibleSurface.value === undefined ? [] : [visibleSurface.value]),
+      ...(deferredTemporal && temporal.value !== undefined ? [temporal.value.temporal] : []),
     ],
     colorLoadOp: [
       'load',
@@ -397,7 +449,19 @@ function buildStandardDeferredLane(
       'clear',
       'clear',
       'clear',
+      'clear',
       ...(visibleSurfaceEnabled ? ['clear' as const] : []),
+      ...(deferredTemporal ? ['clear' as const] : []),
+    ],
+    colorClearValues: [
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+      ...(visibleSurfaceEnabled ? [[0, 0, 0, 0] as const] : []),
+      ...(deferredTemporal ? [[0, 0, -1, 1] as const] : []),
     ],
     ...(gpuDriven.value === undefined
       ? {}
@@ -414,15 +478,31 @@ function buildStandardDeferredLane(
   });
   if (!gbuffer.ok) return gbuffer;
   const importSceneView = sceneViewImport(graph);
+  // One closest-depth pyramid per view, built only when SSR or a diffuse GI
+  // gather actually reads it.
+  let closestPyramid: Result<DepthPyramidProjection, RenderGraphError> | undefined;
+  const closestDepthPyramid = (): Result<DepthPyramidProjection, RenderGraphError> => {
+    if (closestPyramid !== undefined) return closestPyramid;
+    const view = importSceneView();
+    if (!view.ok) return view;
+    closestPyramid = addDepthPyramidPasses(graph, {
+      depth: depthSample.value,
+      width: internalCopySize.width,
+      height: internalCopySize.height,
+      view: view.value,
+    });
+    return closestPyramid;
+  };
   const late = addGpuLateOcclusion(graph, {
     gpuDriven: gpuDriven.value,
     depth: depthSample.value,
+    multisampled: depth.value.sampleCount > 1,
     width: internalCopySize.width,
     height: internalCopySize.height,
     view: importSceneView,
   });
   if (!late.ok) return late;
-  if (late.value && gpuDriven.value !== undefined) {
+  if (late.value !== undefined && gpuDriven.value !== undefined) {
     const gbufferLate = addTypedScenePass(graph, {
       name: 'g-buffer-late',
       color: scene.value,
@@ -432,7 +512,9 @@ function buildStandardDeferredLane(
         f0Occlusion.value,
         albedoMetallic.value,
         lightingContext.value,
+        receiverGeometry.value,
         ...(visibleSurface.value === undefined ? [] : [visibleSurface.value]),
+        ...(deferredTemporal && temporal.value !== undefined ? [temporal.value.temporal] : []),
       ],
       colorLoadOp: [
         'load',
@@ -440,7 +522,9 @@ function buildStandardDeferredLane(
         'load',
         'load',
         'load',
+        'load',
         ...(visibleSurfaceEnabled ? ['load' as const] : []),
+        ...(deferredTemporal ? ['load' as const] : []),
       ],
       depthLoadOp: 'load',
       gpuDriven: gpuDriven.value,
@@ -453,6 +537,10 @@ function buildStandardDeferredLane(
     });
     if (!gbufferLate.ok) return gbufferLate;
   }
+  // Shadows follow the late pyramid so their caster cull can test it; the
+  // lighting pass is their first consumer either way.
+  const shadows = earlyShadows ?? addShadows(late.value);
+  if (!shadows.ok) return shadows;
   if (visibleSurface.value !== undefined) {
     const capture = addObservationCapturePass(graph, visibleSurface.value, 'visible-surface');
     if (!capture.ok) return capture;
@@ -465,10 +553,18 @@ function buildStandardDeferredLane(
     size: internalSize,
   });
   if (!decals.ok) return decals;
+  if (context.contributeProbePlacement !== undefined && visibleSurface.value !== undefined) {
+    const placed = context.contributeProbePlacement({
+      depth: depthSample.value,
+      normal: decals.value.normal,
+      identity: visibleSurface.value,
+    });
+    if (!placed.ok) return placed;
+  }
 
   let ssao: RenderPipelineTarget | undefined;
   if (topology.config?.ssao?.enabled === true) {
-    const raw = target(graph, 'ssao-raw', { format: 'r8unorm', size: 'half-surface' });
+    const raw = target(graph, 'ssao-raw', { format: 'rgba8unorm', size: 'half-surface' });
     if (!raw.ok) return raw;
     const blurred = target(graph, 'ssao-blurred', { format: 'r8unorm', size: 'half-surface' });
     if (!blurred.ok) return blurred;
@@ -482,90 +578,12 @@ function buildStandardDeferredLane(
     ssao = blurred.value;
   }
 
-  const featureRasterWork =
-    context.hasFeatureRasterWork?.(CLOUD_LAYER_FEATURE_IDENTITY, 'scene') === true;
-  const cloudScene = featureRasterWork
-    ? target(graph, 'cloud-layer-scene-color', {
-        format: scene.value.format,
-        size: internalSize,
-        sampleCount: 1,
-        domain: 'linear-hdr',
-        usage:
-          GPU_TEXTURE_USAGE_COPY_SRC |
-          GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-          GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-      })
-    : ok(undefined);
-  if (!cloudScene.ok) return cloudScene;
-  const cloudShadow =
-    featureRasterWork && context.cloudShadowResolution !== undefined
-      ? target(graph, 'cloud-layer-shadow', {
-          format: 'rgba16float',
-          size: {
-            width: context.cloudShadowResolution,
-            height: context.cloudShadowResolution,
-            depthOrArrayLayers: 1,
-          },
-          sampleCount: 1,
-          domain: 'linear-hdr',
-          usage:
-            GPU_TEXTURE_USAGE_COPY_SRC |
-            GPU_TEXTURE_USAGE_RENDER_ATTACHMENT |
-            GPU_TEXTURE_USAGE_TEXTURE_BINDING,
-        })
-      : ok(undefined);
-  if (!cloudShadow.ok) return cloudShadow;
   const targetCaptures = context.contributeCubeCaptures?.(atmosphere.value);
   if (targetCaptures !== undefined && !targetCaptures.ok) return targetCaptures;
-  const featureTargets = [
-    {
-      name: 'linear-hdr',
-      kind: 'scene-color',
-      texture: scene.value.texture,
-      view: scene.value.view,
-      format: scene.value.format,
-      sampleCount: 1,
-    },
-    {
-      kind: 'scene-depth',
-      texture: depth.value.texture,
-      view: depth.value.view,
-      format: depth.value.format,
-      sampleCount: 1,
-    },
-    ...(cloudShadow.value === undefined
-      ? []
-      : [
-          {
-            name: 'cloud-shadow',
-            kind: 'scene-color' as const,
-            texture: cloudShadow.value.texture,
-            view: cloudShadow.value.view,
-            format: cloudShadow.value.format,
-            sampleCount: 1 as const,
-          },
-        ]),
-    ...(context.cloudHistory === undefined
-      ? []
-      : renderPipelineCloudHistoryTargets(context.cloudHistory)),
-  ] as const;
-  // Cloud density and its spatial shadow must be produced before the opaque
-  // receiver pass. The composite is projected separately below, after the
-  // receiver has populated the scene target; declaration order is execution
-  // order for the typed graph.
-  const shadowFeatures = context.contributeFeatures(
-    featureTargets,
-    [],
-    cloudShadow.value === undefined ? {} : { 'cloud-shadow': cloudShadow.value },
-    [],
-    'scene',
-    ['cloud-layer-density-cache', 'cloud-layer-shadow'],
-  );
-  if (!shadowFeatures.ok) return shadowFeatures;
-
   const lightingPass = addStandardDeferredLighting(graph, {
     color: scene.value,
     gbuffer: [decals.value.normal, decals.value.albedo, decals.value.f0, lightingContext.value],
+    receiverGeometry: receiverGeometry.value,
     depth: depthSample.value,
     ...(reflectionFallback.value === undefined
       ? {}
@@ -588,17 +606,13 @@ function buildStandardDeferredLane(
   // SSR consumes the same Standard temporal-v1 producer as TAA and motion
   // blur. Insert it before the spatial chain so the graph dependency order is
   // explicit and one producer serves every temporal consumer.
-  const temporal =
-    temporalDemand.targetCount === 1
-      ? createStandardSceneDataTarget(graph, topology.extent)
-      : ok(undefined);
-  if (!temporal.ok) return temporal;
   if (temporal.value !== undefined) {
     const producer = addStandardSceneDataPass(
       graph,
       temporal.value.temporal,
       depth.value,
       gpuDriven.value,
+      deferredTemporal ? 'forward-only-opaque' : 'opaque',
     );
     if (!producer.ok) return producer;
   }
@@ -615,6 +629,15 @@ function buildStandardDeferredLane(
       f0: decals.value.f0,
       identity: visibleSurface.value,
       motion: temporal.value.temporal,
+      depthPyramid: () => {
+        const pyramid = closestDepthPyramid();
+        return pyramid.ok ? ok(pyramid.value.pyramid.pyramid) : pyramid;
+      },
+      ...(reflectionFallback.value === undefined || specularResponse.value === undefined
+        ? {}
+        : {
+            reflection: { fallback: reflectionFallback.value, response: specularResponse.value },
+          }),
     });
     if (!diffuse.ok) return diffuse;
   }
@@ -629,22 +652,12 @@ function buildStandardDeferredLane(
   if (topology.ssr !== undefined) {
     const ssrView = topology.ssr.status === 'admitted' ? importSceneView() : ok(undefined);
     if (!ssrView.ok) return ssrView;
-    // SSR is the pyramid's only consumer today, so its admission alone decides
-    // whether the view builds one.
-    const depthPyramid =
-      topology.ssr.status === 'admitted'
-        ? addDepthPyramidPasses(graph, {
-            depth: depthSample.value,
-            width: topology.surface.width,
-            height: topology.surface.height,
-            ...(ssrView.value === undefined ? {} : { view: ssrView.value }),
-          })
-        : ok(undefined);
+    const depthPyramid = topology.ssr.status === 'admitted' ? closestDepthPyramid() : ok(undefined);
     if (!depthPyramid.ok) return depthPyramid;
     const spatial = addSsrSpatialPasses(graph, {
       admission: topology.ssr,
-      width: topology.surface.width,
-      height: topology.surface.height,
+      width: internalCopySize.width,
+      height: internalCopySize.height,
       depth: depthSample.value,
       normal: decals.value.normal.view,
       scene: scene.value.view,
@@ -673,7 +686,7 @@ function buildStandardDeferredLane(
       ssrView.value !== undefined &&
       specularResponse.value !== undefined
     ) {
-      secondaryReactivity = spatial.value.resources.hitReactivity;
+      secondaryReactivity = spatial.value.reactivity;
       const radiance =
         spatial.value.resources.radiancePyramid ?? spatial.value.resources.trace.view;
       const composed = addSsrCompositionPass(graph, {
@@ -701,8 +714,12 @@ function buildStandardDeferredLane(
     demand: backdropDemand,
     sourceSampleCount: scene.value.sampleCount,
   }).active;
-  const forwardExtraAccesses: GraphAccess[] =
-    buffers.value === null ? [] : [...standardClusterReadAccesses(buffers.value)];
+  const receiver = standardForwardReceiverInputs({
+    shadows: shadows.value,
+    cloudShadow: cloudShadow.value,
+    ssao,
+    clusterReads: buffers.value === null ? [] : standardClusterReadAccesses(buffers.value),
+  });
 
   const forward = addTypedScenePass(graph, {
     environment: atmosphere.value,
@@ -712,74 +729,39 @@ function buildStandardDeferredLane(
     selector: { LightMode: ['Forward'] },
     colorLoadOp: 'load',
     depthLoadOp: 'load',
-    sampled: [
-      ...(shadows.value.directional === undefined ? [] : [shadows.value.directional]),
-      shadows.value.spot,
-      ...(shadows.value.point === undefined ? [] : [shadows.value.point]),
-      ...(cloudShadow.value === undefined ? [] : [cloudShadow.value]),
-      ...(ssao === undefined ? [] : [ssao]),
-    ],
-    ...(shadows.value.directional === undefined
-      ? {}
-      : { directionalShadow: shadows.value.directional }),
-    spotShadow: shadows.value.spot,
-    cloudShadow: cloudShadow.value,
-    ...(ssao === undefined ? {} : { ssao }),
+    ...receiver,
     ...(gpuDriven.value === undefined ? {} : { gpuDriven: gpuDriven.value }),
     passKind: 'forward',
     excludeSelector: { LightMode: ['Deferred'] },
     // Keep the deferred opaque lane separate from Surface medium passes.
     recordMode: 'opaque' as const,
     ...(gpuDriven.value === undefined ? {} : { gpuDrivenFilter: 'forward-only-opaque' as const }),
-    ...(context.occlusion === undefined ? {} : { occlusion: context.occlusion }),
-    extraAccesses: forwardExtraAccesses,
   });
   if (!forward.ok) return forward;
 
+  // Atmosphere and analytic fog composite onto the opaque scene before
+  // transmission copies and translucent draws. Every translucent writer then
+  // fogs itself at its own depth, so blending composes depth-correctly.
+  const fogged = addOpaqueFogPasses(graph, {
+    topology,
+    atmosphere: atmosphere.value?.atmosphere,
+    color: scene.value,
+    depth: depth.value,
+  });
+  if (!fogged.ok) return fogged;
+
   if (cloudScene.value !== undefined) {
-    const compositeFeatures = context.contributeFeatures(
-      featureTargets,
-      [],
-      {
-        'motion-input': scene.value,
-        'motion-output': cloudScene.value,
-        ...(cloudShadow.value === undefined ? {} : { 'cloud-shadow': cloudShadow.value }),
-        ...(context.cloudHistory === undefined
-          ? {}
-          : {
-              'cloud-history-radiance-current': context.cloudHistory.currentRadiance,
-              'cloud-history-radiance-previous': context.cloudHistory.previousRadiance,
-              'cloud-history-transmittance-current': context.cloudHistory.currentTransmittance,
-              'cloud-history-transmittance-previous': context.cloudHistory.previousTransmittance,
-              'cloud-history-depth-current': context.cloudHistory.currentDepth,
-              'cloud-history-depth-previous': context.cloudHistory.previousDepth,
-            }),
-      },
-      forwardExtraAccesses,
-      'scene',
-      // One half-resolution transport MRT produces radiance, transmittance and
-      // representative depth; the full-resolution resolve consumes that same
-      // frame and advances the ping-pong history on submit.
-      ['cloud-layer-transport', 'cloud-layer-resolve'],
+    const compositeFeatures = contributeStandardCloudComposite(
+      context,
+      featureTargets.value,
+      { input: scene.value, output: cloudScene.value, cloudShadow: cloudShadow.value },
+      receiver.extraAccesses,
+      atmosphere.value?.atmosphere,
     );
     if (!compositeFeatures.ok) return compositeFeatures;
   }
 
   if (cloudScene.value !== undefined) sceneOutput = cloudScene.value;
-
-  // Opaque analytic fog and the froxel volume composite onto the opaque scene
-  // before transmission copies and translucent draws. Every translucent writer
-  // then fogs itself at its own depth, so blending composes depth-correctly.
-  const fogged = addOpaqueFogPasses(graph, {
-    topology,
-    color: sceneOutput,
-    depth: depth.value,
-    directionalShadow: shadows.value.directional?.view,
-    spotShadow: shadows.value.spot.view,
-    clusterBuffers: buffers.value,
-    cloudShadow: cloudShadow.value?.view,
-  });
-  if (!fogged.ok) return fogged;
 
   const transmission = addTransmissionBackdropPasses({
     graph,
@@ -791,23 +773,11 @@ function buildStandardDeferredLane(
   });
   if (!transmission.ok) return transmission;
   if (topology.singleLayerMedium === true) {
-    const nearestTargets = mediumTargets.value;
-    const backdrop = transmission.value.backdrop?.view;
-    if (nearestTargets === undefined || backdrop === undefined) {
-      return err(
-        new RenderGraphError({
-          code: 'resource-descriptor-invalid',
-          expected: 'single-layer medium graph has nearest targets and an opaque backdrop',
-          hint: 'keep the shared transmission backdrop copy ahead of the Surface passes',
-          detail: {
-            resourceLabel: 'single-layer-medium',
-            field: 'backdrop',
-            expected: 'resolved graph texture view',
-            actual: 'missing',
-          },
-        }),
-      );
-    }
+    const medium = requireSingleLayerMediumInputs(
+      mediumTargets.value,
+      transmission.value.backdrop?.view,
+    );
+    if (!medium.ok) return medium;
     const rawDepth = addSingleLayerMediumRawDepthProducer({
       graph,
       sourceColor: sceneOutput,
@@ -818,28 +788,18 @@ function buildStandardDeferredLane(
     // Standard owns this producer fact. Deferred depth is single-sample, so
     // the independent r32float copy is available to both medium passes.
     const surfacePair: RenderPipelineSurfaceMediumPair = {
-      opaqueColor: backdrop,
+      opaqueColor: medium.value.backdrop,
       rawDepth: { status: 'available', view: rawDepth.value.view },
     };
     const mediumPasses = addSingleLayerMediumPasses({
       graph,
       size: internalSize,
-      ...nearestTargets,
+      ...medium.value.nearestTargets,
       color: sceneOutput,
       depth: depth.value,
-      sampled: [
-        ...(shadows.value.directional === undefined ? [] : [shadows.value.directional]),
-        shadows.value.spot,
-        ...(shadows.value.point === undefined ? [] : [shadows.value.point]),
-        ...(cloudShadow.value === undefined ? [] : [cloudShadow.value]),
-        ...(ssao === undefined ? [] : [ssao]),
-      ],
-      directionalShadow: shadows.value.directional,
-      spotShadow: shadows.value.spot,
-      cloudShadow: cloudShadow.value,
-      ssao,
+      ...receiver,
       extraAccesses: [
-        ...forwardExtraAccesses,
+        ...receiver.extraAccesses,
         ...(targetCaptures?.value === undefined
           ? []
           : [{ resource: targetCaptures.value, usage: 'sampled-read' as const }]),
@@ -859,22 +819,13 @@ function buildStandardDeferredLane(
         selector: { LightMode: ['Forward'] },
         colorLoadOp: 'load',
         depthLoadOp: 'load',
-        sampled: [
-          ...(shadows.value.directional === undefined ? [] : [shadows.value.directional]),
-          shadows.value.spot,
-          ...(shadows.value.point === undefined ? [] : [shadows.value.point]),
-          ...(ssao === undefined ? [] : [ssao]),
-        ],
-        directionalShadow: shadows.value.directional,
-        spotShadow: shadows.value.spot,
-        ...(ssao === undefined ? {} : { ssao }),
+        ...receiver,
         passKind: 'forward',
         recordMode: 'transmission',
         // Inject the complete backdrop view so the Standard shader can select
         // the producer's optional roughness mip level. mipViews[0] is only the
         // copy destination view and intentionally exposes one level.
         transmissionBackdrop: transmission.value.backdrop?.view,
-        extraAccesses: forwardExtraAccesses,
       });
       if (!transmissionPass.ok) return transmissionPass;
     }
@@ -885,19 +836,8 @@ function buildStandardDeferredLane(
       transparency: topology.transparency,
       template: {
         environment: atmosphere.value,
-        sampled: [
-          ...(shadows.value.directional === undefined ? [] : [shadows.value.directional]),
-          shadows.value.spot,
-          ...(shadows.value.point === undefined ? [] : [shadows.value.point]),
-          ...(cloudShadow.value === undefined ? [] : [cloudShadow.value]),
-          ...(ssao === undefined ? [] : [ssao]),
-        ],
-        directionalShadow: shadows.value.directional,
-        spotShadow: shadows.value.spot,
-        cloudShadow: cloudShadow.value,
-        ...(ssao === undefined ? {} : { ssao }),
+        ...receiver,
         passKind: 'forward',
-        extraAccesses: forwardExtraAccesses,
       },
     });
     if (!transparentPass.ok) return transparentPass;
@@ -914,60 +854,36 @@ function buildStandardDeferredLane(
       transparency: topology.transparency,
       template: {
         environment: atmosphere.value,
-        sampled: [
-          ...(shadows.value.directional === undefined ? [] : [shadows.value.directional]),
-          shadows.value.spot,
-          ...(shadows.value.point === undefined ? [] : [shadows.value.point]),
-          ...(cloudShadow.value === undefined ? [] : [cloudShadow.value]),
-          ...(ssao === undefined ? [] : [ssao]),
-        ],
-        directionalShadow: shadows.value.directional,
-        spotShadow: shadows.value.spot,
-        cloudShadow: cloudShadow.value,
-        ...(ssao === undefined ? {} : { ssao }),
+        ...receiver,
         passKind: 'forward',
-        extraAccesses: forwardExtraAccesses,
       },
     });
     if (!transparentPass.ok) return transparentPass;
   }
 
+  // The local froxel volume composites after every translucent writer: its
+  // per-pixel integral ends at opaque depth, so composited earlier each
+  // blended surface behind the medium would cut its shape out of the haze.
+  const volume = addTranslucencyVolumetricFogPasses(graph, {
+    topology,
+    atmosphere: atmosphere.value?.atmosphere,
+    color: sceneOutput,
+    depth: depth.value,
+    directionalShadow: shadows.value.directional?.view,
+    spotShadow: shadows.value.spot.view,
+    clusterBuffers: buffers.value,
+    cloudShadow: cloudShadow.value?.view,
+  });
+  if (!volume.ok) return volume;
+
   // Generic post features consume the final deferred scene target after cloud
   // and volume producers. Keep the same clustered, shadow, and SSAO reads that
   // the Standard receiver exposes to feature-owned lighting passes.
-  const features = context.contributeFeatures(
-    [
-      {
-        name: 'linear-hdr',
-        kind: 'scene-color',
-        texture: sceneOutput.texture,
-        view: sceneOutput.view,
-        format: sceneOutput.format,
-        sampleCount: sceneOutput.sampleCount,
-      },
-      {
-        kind: 'scene-depth',
-        texture: depth.value.texture,
-        view: depth.value.view,
-        format: depth.value.format,
-        sampleCount: depth.value.sampleCount,
-      },
-    ],
-    [],
-    {},
-    [
-      ...forwardExtraAccesses,
-      ...[
-        shadows.value.directional,
-        shadows.value.spot,
-        shadows.value.point,
-        cloudShadow.value,
-      ].flatMap((target) =>
-        target === undefined ? [] : [{ resource: target.view, usage: 'sampled-read' as const }],
-      ),
-      ...(ssao === undefined ? [] : [{ resource: ssao.view, usage: 'sampled-read' as const }]),
-    ],
-    { exclude: [BARREL_DISTORTION_FEATURE_IDENTITY] },
+  const features = contributeStandardSceneFeatures(
+    context,
+    { color: sceneOutput, colorResolve: undefined, depth: depth.value },
+    standardForwardReceiverFeatureAccesses(receiver),
+    atmosphere.value?.atmosphere,
   );
   if (!features.ok) return features;
   const observation = addTypedFrameObservationPass(graph, sceneOutput, 'forgeax::standard');
@@ -996,13 +912,6 @@ function buildStandardDeferredLane(
 export interface StandardPipeline extends RenderPipeline {
   readonly identity: typeof STANDARD_PIPELINE_ID;
 }
-
-export function standardProfileSupportsReflectionProbes(_profile: StandardProfile): boolean {
-  return true;
-}
-
-/** Standard graph inputs are derived once from the immutable frame plan. */
-export type StandardFramePlan = FramePlan;
 
 function profileFor(topology: RenderPipelineTopology): StandardProfile {
   return topology.standardProfile ?? DEFAULT_STANDARD_PROFILE;

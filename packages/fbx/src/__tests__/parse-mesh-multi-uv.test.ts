@@ -9,6 +9,7 @@
 // Covers: 2/3 sets byte-level fidelity, 0-set boundary (only NORMAL),
 // and sparse-set boundary (TEXCOORD_0+TEXCOORD_2, no TEXCOORD_1).
 
+import { decodeMeshBinary } from '@forgeax/engine-geometry';
 import type { ImportedAsset, MeshAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import type { FbxRawMesh } from '../parse-mesh.js';
@@ -48,6 +49,40 @@ function atF32(arr: Float32Array | number[], i: number): number {
 
 describe('parse-mesh-multi-uv.test.ts', () => {
   describe('parseMesh -> buildMeshAsset multi-UV fidelity', () => {
+    it('preserves mixed-width skin lanes and sparse UV gaps through the published binary', () => {
+      const pod = parseMesh(mockQuadRaw({ TEXCOORD_3: [1, 2, 3, 4, 5, 6, 7, 8] }), 0);
+      const influences = Array.from({ length: 4 }, () => ({
+        jointIndices: new Uint16Array([65535, 256, 1, 0]),
+        jointWeights: new Float32Array([0.5, 0.25, 0.125, 0.125]),
+      }));
+      const asset = buildMeshAsset(pod, 'guid-skin-sparse', influences);
+      const mesh = meshFromAsset(asset);
+      expect(mesh.attributes.uv1).toBeUndefined();
+      expect(mesh.attributes.uv2).toBeUndefined();
+      expect(mesh.vertices.byteLength).toBe(4 * 96);
+      const bytes = new DataView(mesh.vertices.buffer, mesh.vertices.byteOffset);
+      expect([0, 1, 2, 3].map((lane) => bytes.getUint16(48 + lane * 2, true))).toEqual([
+        65535, 256, 1, 0,
+      ]);
+      expect(Array.from(mesh.vertices.slice(14, 18))).toEqual([0.5, 0.25, 0.125, 0.125]);
+      expect(Array.from(mesh.vertices.slice(18, 24))).toEqual([0, 0, 0, 0, 1, 2]);
+      expect(Array.from(mesh.vertices.slice(8, 12))).toEqual([1, 0, 0, 1]);
+      const body = asset.artifacts?.body;
+      expect(body).toBeDefined();
+      if (body === undefined) throw new Error('FBX mesh body missing');
+      const decoded = decodeMeshBinary(
+        body.bytes,
+        asset.refs.map((ref) => ref.guid),
+      );
+      expect(decoded).toBeDefined();
+      expect(decoded?.vertices).toEqual(mesh.vertices);
+      expect(decoded?.attributes.skinIndex).toEqual(mesh.attributes.skinIndex);
+      expect(decoded?.attributes.skinWeight).toEqual(mesh.attributes.skinWeight);
+      expect(decoded?.attributes.uv1).toEqual(new Float32Array(8));
+      expect(decoded?.attributes.uv2).toEqual(new Float32Array(8));
+      expect(decoded?.attributes.uv3).toEqual(mesh.attributes.uv3);
+    });
+
     it('2 UV sets: TEXCOORD_0 + TEXCOORD_1 byte-identical in attributes + interleaved', () => {
       const uv0 = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
       const uv1 = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8];

@@ -7,9 +7,9 @@ import {
 } from '../rhi-debug/operations';
 import type { CommandResult } from '../types';
 
-it('exposes one schema authority for the three operation names', () => {
+it('exposes one schema authority for the four operation names', () => {
   expectTypeOf<RhiDebugOperationName>().toEqualTypeOf<
-    'rhi.capture' | 'rhi.summary' | 'rhi.inspect'
+    'rhi.capture' | 'rhi.summary' | 'rhi.inspect' | 'rhi.read' | 'rhi.timing'
   >();
   expectTypeOf(RHI_DEBUG_OPERATION_MANIFEST).toMatchTypeOf<{
     readonly operations: readonly { readonly name: RhiDebugOperationName }[];

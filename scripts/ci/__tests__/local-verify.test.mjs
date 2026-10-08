@@ -531,7 +531,7 @@ test('CI runs the engine-template browser smoke with the headed WebGPU Chrome Be
   const step = extractRunSteps(workflow.slice(start, end)).find(
     (candidate) =>
       candidate.command ===
-      'xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 pnpm --filter @forgeax/preview smoke:templates',
+      'node scripts/ci/run-with-runner-cpu-affinity.mjs -- xvfb-run -a env FORGEAX_BROWSER_HEADLESS=0 pnpm --filter @forgeax/preview smoke:templates',
   );
   assert.ok(step, 'shared-inputs-browser must run the headed engine-template Preview smoke');
   assert.equal(step.environment.FORGEAX_CHROME_CHANNEL, 'chrome-beta');
@@ -613,6 +613,26 @@ test('local PR CI projection expands the actual Bevy smoke matrix', () => {
   assert.equal(isMatrixStepEnabled('matrix.group == 0', { group: '0' }), true);
   assert.equal(isMatrixStepEnabled('matrix.group == 0', { group: '1' }), false);
   assert.equal(isMatrixStepEnabled('matrix.group == 2 && failure()', { group: '2' }), false);
+});
+
+test('Smoke balancing retains each complete expensive owner on one of four existing lanes', () => {
+  const plans = plansFor('smoke-fleet', workflow);
+  assert.equal(plans.length, 4);
+  for (const [command, group] of [
+    ['pnpm --filter @forgeax/hello-bloom smoke:all', '1'],
+    ['pnpm --filter @forgeax/hello-ssr smoke', '1'],
+    ["pnpm --filter '@forgeax/app-learn-render-5-advanced-lighting-3-2-point-shadows' smoke", '0'],
+  ]) {
+    const owners = plans.filter((plan) =>
+      plan.steps.some((step) => step.command.includes(command)),
+    );
+    assert.equal(
+      owners.length,
+      1,
+      `${command} must execute once, without dropping its complete roster`,
+    );
+    assert.equal(owners[0].matrix.group, group);
+  }
 });
 
 test('local PR CI projection carries matrix results through step-level environment', () => {

@@ -16,19 +16,8 @@ describe('LOD occlusion inspection lifecycle', () => {
       generation: 10,
       count: { candidates: 2, visible: 1, occluded: 1 },
       lodHistogram: [{ level: 0, count: 2 }],
-      queryLatencyUs: { median: 4, p95: 8, last: 3 },
-      pagePressure: { used: 1, capacity: 3 },
-      fallback: { active: false },
-      degradation: { active: false },
       samples: [],
       submit: { frameId: 10, build: 'test-build', deviceGeneration: 2 },
-      budget: {
-        configuredQueryBudget: 2048,
-        effectiveQueryBudget: 2048,
-        settleSubmits: 98,
-        retestSubmits: 44,
-        expirySubmits: 88,
-      },
       worlds: [
         {
           attachmentId: 'world-a',
@@ -48,10 +37,6 @@ describe('LOD occlusion inspection lifecycle', () => {
               generation: 10,
               count: { candidates: 2, visible: 1, occluded: 1 },
               lodHistogram: [{ level: 0, count: 2 }],
-              queryLatencyUs: { median: 4, p95: 8, last: 3 },
-              pagePressure: { used: 1, capacity: 3 },
-              fallback: { active: false },
-              degradation: { active: false },
               samples: [],
             },
           ],
@@ -63,9 +48,8 @@ describe('LOD occlusion inspection lifecycle', () => {
       ],
     });
 
-    expect(inspection.schema).toBe('forgeax::lod-occlusion-inspection::v2');
+    expect(inspection.schema).toBe('forgeax::lod-occlusion-inspection::v3');
     expect(inspection.submit).toEqual({ frameId: 10, build: 'test-build', deviceGeneration: 2 });
-    expect(inspection.budget.effectiveQueryBudget).toBe(2048);
     expect(inspection.worlds.map((world) => world.attachmentId)).toEqual(['world-a', 'world-b']);
     expect(inspection.worlds[0]?.attribution).toEqual({
       status: 'unavailable',
@@ -94,10 +78,6 @@ describe('LOD occlusion inspection lifecycle', () => {
       generation: 12,
       count: { candidates: 2, visible: 1, occluded: 1 },
       lodHistogram: [{ level: 0, count: 2 }],
-      queryLatencyUs: { median: 4, p95: 8, last: 3 },
-      pagePressure: { used: 1, capacity: 3 },
-      fallback: { active: false as const },
-      degradation: { active: false as const },
       samples: [],
     };
     const inspection = inspectLodOcclusion({
@@ -148,10 +128,6 @@ describe('LOD occlusion inspection lifecycle', () => {
       generation: 20,
       count: { candidates, visible: candidates - 1, occluded: 1 },
       lodHistogram: [{ level: 1, count: candidates }],
-      queryLatencyUs: { median: 3, p95: 5, last: 2 },
-      pagePressure: { used: 2, capacity: 12 },
-      fallback: { active: false as const },
-      degradation: { active: false as const },
       samples: [],
     });
     const inspection = inspectLodOcclusion({
@@ -183,35 +159,5 @@ describe('LOD occlusion inspection lifecycle', () => {
       status: 'same-submit',
       submit,
     });
-  });
-
-  it('keeps identity and generation attached to a failed publication without suppressing draw', () => {
-    const inspection = inspectLodOcclusion({
-      root: { guid: '018e7a4d-1234-7abc-8def-000000000002', sourceKey: 'assets/lod-scene.gltf' },
-      view: { attachmentId: 'main', cameraEntity: 1, viewRole: 'main', viewGeneration: 4 },
-      slot: { primitiveSlot: 2, slotGeneration: 9 },
-      generation: 10,
-      count: { candidates: 100_000, visible: 100_000, occluded: 0 },
-      lodHistogram: [{ level: 0, count: 100_000 }],
-      queryLatencyUs: { median: 0, p95: 0, last: 0 },
-      pagePressure: { used: 3, capacity: 3 },
-      fallback: {
-        active: true,
-        reason: 'page-exhausted',
-        error: {
-          code: 'occlusion-query-unavailable',
-          expected: 'a bounded query page reservation',
-          hint: 'keep the candidate visible and retry on the next submitted frame',
-          detail: { capacity: 3 },
-        },
-      },
-      degradation: { active: true, reason: 'all-visible' },
-      samples: [],
-    });
-
-    expect(inspection.fallback.active).toBe(true);
-    expect(inspection.degradation).toEqual({ active: true, reason: 'all-visible' });
-    expect(inspection.count.visible).toBe(inspection.count.candidates);
-    expect(inspection.generation).toBe(10);
   });
 });

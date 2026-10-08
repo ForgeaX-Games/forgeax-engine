@@ -12,7 +12,7 @@ import {
   type Renderer,
 } from '@forgeax/engine-render';
 import type { DeviceLostInfo } from '@forgeax/engine-rhi';
-import { attachRecorder, type RecorderAttachment } from '@forgeax/engine-rhi-debug';
+import { attachRecorder, halfToFloat, type RecorderAttachment } from '@forgeax/engine-rhi-debug';
 import * as captureWebgpu from '@forgeax/engine-rhi-webgpu';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import type { MaterialAsset } from '@forgeax/engine-types';
@@ -340,6 +340,9 @@ describe('Standard Surface runtime Dawn publication', () => {
     server = undefined;
   }, DAWN_TEARDOWN_TIMEOUT_MS);
 
+  // The full optical/MSAA, two App lifecycles, Forward/Deferred matrix and
+  // device recovery share the Browser carrier's bounded 300s allowance.
+  // Cold lavapipe reached the matrix after 140s in run 36597854898.
   it('publishes and renders Standard plus two medium GUIDs through Dawn Runtime Renderer', async () => {
     const laneParity = process.env.FORGEAX_SURFACE_LANE_PARITY === '1';
     const binding = createStandaloneRuntimeAssetBinding('preview');
@@ -365,68 +368,47 @@ describe('Standard Surface runtime Dawn publication', () => {
       throw new Error('surface-standard: Dawn publication server URL unavailable');
     const liveBinding = absoluteBinding(binding, baseUrl);
     const shaderManifestUrl = new URL('shaders/manifest.json', baseUrl).href;
-    const temporalDrawCounts: number[] = [];
-    const bundleDrawCounts = new WeakMap<GPURenderBundle, number>();
-    const countDraws = (commands: GPURenderCommandsMixin, onDraw: () => void) => {
-      for (const method of [
-        'draw',
-        'drawIndexed',
-        'drawIndirect',
-        'drawIndexedIndirect',
-      ] as const) {
-        const original = commands[method];
-        Object.assign(commands, {
-          [method]: (...args: unknown[]) => {
-            onDraw();
-            return Reflect.apply(original, commands, args);
-          },
-        });
-      }
-    };
+    let temporalTarget: GPUTexture | undefined;
+    const textureViews = new WeakMap<object, GPUTexture>();
     const nativeErrors: string[] = [];
     canvas = createDawnCanvas((created) => {
       device = created;
       created.addEventListener('uncapturederror', (event) =>
         nativeErrors.push(event.error.message),
       );
-      const createBundleEncoder = created.createRenderBundleEncoder.bind(created);
-      created.createRenderBundleEncoder = (descriptor) => {
-        const encoder = createBundleEncoder(descriptor);
-        let draws = 0;
-        countDraws(encoder, () => draws++);
-        const finish = encoder.finish.bind(encoder);
-        encoder.finish = (descriptor) => {
-          const bundle = finish(descriptor);
-          bundleDrawCounts.set(bundle, draws);
-          return bundle;
+      const createTexture = created.createTexture.bind(created);
+      created.createTexture = (descriptor) => {
+        // The observer reads the existing motion target; production keeps its
+        // render/sample-only usage and performs no diagnostic readback.
+        const texture = createTexture(
+          descriptor.label === 'standard-scene-temporal'
+            ? { ...descriptor, usage: descriptor.usage | TEXTURE_USAGE_COPY_SRC }
+            : descriptor,
+        );
+        const createView = texture.createView.bind(texture);
+        texture.createView = (viewDescriptor) => {
+          const view = createView(viewDescriptor);
+          textureViews.set(view, texture);
+          return view;
         };
-        return encoder;
+        return texture;
       };
       const createEncoder = created.createCommandEncoder.bind(created);
       created.createCommandEncoder = (descriptor) => {
         const encoder = createEncoder(descriptor);
         const begin = encoder.beginRenderPass.bind(encoder);
         encoder.beginRenderPass = (descriptor) => {
-          const pass = begin(descriptor);
-          if (descriptor.label !== 'standard-scene-data') return pass;
-          let draws = 0;
-          countDraws(pass, () => draws++);
-          const executeBundles = pass.executeBundles.bind(pass);
-          const end = pass.end.bind(pass);
-          pass.executeBundles = (bundles) => {
-            const handles = Array.from(bundles);
-            for (const bundle of handles) {
-              const count = bundleDrawCounts.get(bundle);
-              if (count === undefined) throw new Error('unobserved Surface render bundle');
-              draws += count;
-            }
-            executeBundles(handles);
-          };
-          pass.end = () => {
-            temporalDrawCounts.push(draws);
-            end();
-          };
-          return pass;
+          const attachments = Array.from(descriptor.colorAttachments);
+          const view = attachments.at(-1)?.view;
+          const target = view == null ? undefined : textureViews.get(view);
+          if (
+            descriptor.label === 'standard-scene-data' ||
+            ((descriptor.label === 'g-buffer' || descriptor.label === 'g-buffer-late') &&
+              attachments.length >= 6 &&
+              target?.format === 'rgba16float')
+          )
+            temporalTarget = target;
+          return begin(descriptor);
         };
         return encoder;
       };
@@ -1289,6 +1271,7 @@ describe('Standard Surface runtime Dawn publication', () => {
         if (capture !== undefined && recorder !== undefined)
           (await recorder.frameBoundary()).unwrap();
         world.update(1 / 60).unwrap();
+        temporalTarget = undefined;
         const draw = renderer.draw({
           ...('geometryLane' in combination ? { geometryLane: combination.geometryLane } : {}),
           leases: [attached.value],
@@ -1354,7 +1337,54 @@ describe('Standard Surface runtime Dawn publication', () => {
         expect(current.renderScene.gpuDriven.cpuFallbackDrawItems).toBe(0);
       }
       expect(current.perFramePassNames.includes('ssao-calc')).toBe(ssao);
-      if (antialias === 3) expect(temporalDrawCounts.at(-1)).toBe(4);
+      if (antialias === 3) {
+        // Read actual motion coverage, independent of MRT/supplement pass
+        // placement and empty GPU indirect commands. All four opaque material
+        // centers lie on the plane at view distance six, including at DRS .67.
+        expect(temporalTarget).toBeDefined();
+        if (temporalTarget === undefined) throw new Error('missing Surface temporal target');
+        const motionBuffer = device.createBuffer({
+          size: 256 * 4,
+          usage: BUFFER_USAGE_MAP_READ | BUFFER_USAGE_COPY_DST,
+        });
+        try {
+          const encoder = device.createCommandEncoder();
+          for (let index = 0; index < 4; index++) {
+            encoder.copyTextureToBuffer(
+              {
+                texture: temporalTarget,
+                origin: {
+                  x: Math.floor(((index + 0.5) * temporalTarget.width) / SURFACE_CASES.length),
+                  y: Math.floor(temporalTarget.height / 2),
+                  z: 0,
+                },
+              },
+              { buffer: motionBuffer, offset: index * 256, bytesPerRow: 256 },
+              { width: 1, height: 1, depthOrArrayLayers: 1 },
+            );
+          }
+          device.queue.submit([encoder.finish()]);
+          await motionBuffer.mapAsync(MAP_MODE_READ);
+          const values = new DataView(motionBuffer.getMappedRange());
+          for (let index = 0; index < 4; index++) {
+            // temporal-v1 stores log2(1 + view depth) in its half-float Z lane.
+            const depth = 2 ** halfToFloat(values.getUint16(index * 256 + 4, true)) - 1;
+            expect(depth, `${SURFACE_CASES[index]?.id}: actual temporal coverage`).toBeCloseTo(
+              6,
+              2,
+            );
+            for (const channel of [0, 1]) {
+              expect(
+                Math.abs(halfToFloat(values.getUint16(index * 256 + channel * 2, true))),
+                `${SURFACE_CASES[index]?.id}: stationary motion`,
+              ).toBeLessThan(0.001);
+            }
+          }
+          motionBuffer.unmap();
+        } finally {
+          motionBuffer.destroy();
+        }
+      }
       const lit = await readPresentedPixels(device, canvas.target);
       expect(lit.some((value, index) => index % 4 !== 3 && value > 0)).toBe(true);
       if (!ssao && antialias === 0 && bloom === 0) {
@@ -1482,5 +1512,5 @@ describe('Standard Surface runtime Dawn publication', () => {
       'artifacts/standard-deferred/surface-parity.json',
       JSON.stringify(deferredParity, null, 2),
     );
-  }, 180000);
+  }, 300_000);
 });

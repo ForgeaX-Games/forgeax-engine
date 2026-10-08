@@ -6,7 +6,6 @@ import type { RenderPipelineFrame } from '../../render-pipeline';
 import { createRenderPipelineTarget } from '../../render-pipeline';
 import { sortDispatchByQueue } from '../../render-system-extract';
 import { addTransmissionBackdropPasses, type TransmissionBackdropGraph } from '../backdrop';
-import { fresnelReflectance, resolveRefractionBackdrop } from '../oracle.js';
 
 let device: RhiDevice;
 
@@ -105,24 +104,6 @@ describe('transmission composition integration', () => {
     });
     expectCompositionContract(built.passes, built.accesses);
     expect(built.roughMipLevels).toEqual([1, 2, 3]);
-  });
-
-  it('falls back from edge or TIR refraction through environment to unrefracted color', () => {
-    expect(
-      resolveRefractionBackdrop({
-        uv: [0.01, 0.5],
-        refracted: [0.1, 0.2, 0.3],
-        environment: [0.4, 0.5, 0.6],
-        unrefracted: [0.7, 0.8, 0.9],
-      }),
-    ).toEqual({ source: 'environment', color: [0.4, 0.5, 0.6] });
-    expect(
-      resolveRefractionBackdrop({
-        uv: [0.01, 0.5],
-        unrefracted: [0.7, 0.8, 0.9],
-      }),
-    ).toEqual({ source: 'unrefracted', color: [0.7, 0.8, 0.9] });
-    expect(fresnelReflectance(0.5, 1.5)).toBe(1);
   });
 
   it('keeps transmission layers before ordinary BLEND in stable queue order', () => {

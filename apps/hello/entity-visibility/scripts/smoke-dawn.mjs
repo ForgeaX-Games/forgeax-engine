@@ -51,7 +51,7 @@ function createMockCanvas(sharedDevice, renderTargetRef) {
 }
 
 async function createDawn() {
-  const { create, globals } = await import('webgpu');
+  const { create, globals } = await import('@forgeax/engine-dawn-node');
   Object.assign(globalThis, globals);
   if (globalThis.navigator === undefined) {
     Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });

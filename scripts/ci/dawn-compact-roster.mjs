@@ -4,6 +4,7 @@
 // validated low/medium-density roster, while long-lived/high-density owners
 // remain explicit fresh-process lanes.
 export const DAWN_COMPACT_TEST_FILES = Object.freeze([
+  'packages/rhi-debug/src/__tests__/batch-readback.dawn.test.ts',
   'packages/rhi-debug/src/__tests__/copy-src-usage-validity.dawn.test.ts',
   'packages/rhi-debug/src/__tests__/readback-format-matrix.dawn.test.ts',
   'packages/rhi-debug/src/__tests__/recorder-steady-frame.dawn.test.ts',
@@ -29,10 +30,6 @@ export const DAWN_COMPACT_TEST_FILES = Object.freeze([
   'packages/render/src/__tests__/gpu-lod-parity.dawn.test.ts',
   'packages/render/src/__tests__/gpu-scene-render-graph.dawn.test.ts',
   'packages/render/src/__tests__/gpu-scene.dawn.test.ts',
-  'packages/render/src/__tests__/lod-occlusion.dawn.test.ts',
-  'packages/render/src/__tests__/morph-culling-reentry.dawn.test.ts',
-  'packages/render/src/__tests__/occlusion-pass.dawn.test.ts',
-  'packages/render/src/__tests__/occlusion-query.dawn.test.ts',
   'packages/render/src/__tests__/render-graph-compute-raster.dawn.test.ts',
   'packages/render/src/__tests__/render-graph-hzb.dawn.test.ts',
   'packages/render/src/__tests__/render-graph-storage-indirect.dawn.test.ts',

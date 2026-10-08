@@ -1,0 +1,351 @@
+{
+  "kind": "CPU-only Wasm composition microbenchmark",
+  "patterns": "3 ABBA cycles, 16 composition calls per sample, warm instances; exact output comparison on every call",
+  "limits": "Small source fixtures. Does not measure full Catalog readiness, Browser test time, physical GPU throughput or total CI duration; machine has concurrent unrelated work.",
+  "variants": [
+    {
+      "schemaVersion": "wgpu-wasm-provenance/1",
+      "sourceContentKey": "sha256-f8d6443dd30d6bc241f7519b65a9628aeb254d5b81af89b23605b50eb0d24565",
+      "artifactSha256": "595014a8fb05f876ed1e69741af6f3f0b92d01f163e90ef0adc3614c40b97a41",
+      "artifactBytes": 3268894,
+      "glueSha256": "a4164f4b59a587574c967d2d7597e74febdd78d224ccc41e5523a6b40dd366db",
+      "glueBytes": 148600,
+      "toolchain": {
+        "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+        "wasmPack": "wasm-pack 0.14.0",
+        "wasmBindgen": "unavailable"
+      },
+      "dependencies": {
+        "wgpu": "29.0.3",
+        "naga": "29.0.3",
+        "nagaOil": "0.22.0",
+        "wasmBindgen": "0.2.121"
+      },
+      "compilerFingerprint": "sha256-91e9919054aa7a6b3a3f80b3268cbf045cfa32088d269e731eeab24cadc3667f"
+    },
+    {
+      "schemaVersion": "wgpu-wasm-provenance/1",
+      "sourceContentKey": "sha256-16f3628fea4ca17e35ba028732643b57136ac802ba6bc39ff57231b736362913",
+      "artifactSha256": "a4f7f03b78f403e4fe33996339559363a620faa3683a38749a25a67b173cd89c",
+      "artifactBytes": 3268089,
+      "glueSha256": "a4164f4b59a587574c967d2d7597e74febdd78d224ccc41e5523a6b40dd366db",
+      "glueBytes": 148600,
+      "toolchain": {
+        "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+        "wasmPack": "wasm-pack 0.14.0",
+        "wasmBindgen": "unavailable"
+      },
+      "dependencies": {
+        "wgpu": "29.0.3",
+        "naga": "29.0.3",
+        "nagaOil": "0.22.0",
+        "wasmBindgen": "0.2.121"
+      },
+      "compilerFingerprint": "sha256-70fd629023c540b3576d5b92a68befa9b88fc0b0028f2ad2365b326763061271"
+    }
+  ],
+  "cases": [
+    {
+      "name": "compute",
+      "outputSha256": "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7"
+    },
+    {
+      "name": "import-branch-false",
+      "outputSha256": "499502fe528eda9d2e38a7d7f8ffb32ba7b57eca489fdae101ac11c48ea3a35d"
+    },
+    {
+      "name": "import-branch-true",
+      "outputSha256": "499502fe528eda9d2e38a7d7f8ffb32ba7b57eca489fdae101ac11c48ea3a35d"
+    },
+    {
+      "name": "primitive-index-capability",
+      "outputSha256": "896eab16bd4dcee313911032f1b130ac29693148e657332b75cab8728d8e2932"
+    }
+  ],
+  "rows": [
+    {
+      "cycle": 0,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 998.9542499999999
+    },
+    {
+      "cycle": 0,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 1265.512208
+    },
+    {
+      "cycle": 0,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 998.6859159999999
+    },
+    {
+      "cycle": 0,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 2069.020917
+    },
+    {
+      "cycle": 1,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 1317.6750000000002
+    },
+    {
+      "cycle": 1,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 526.9029580000006
+    },
+    {
+      "cycle": 1,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 620.2722919999997
+    },
+    {
+      "cycle": 1,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 2078.725375
+    },
+    {
+      "cycle": 2,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 1832.9651249999988
+    },
+    {
+      "cycle": 2,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 893.0874169999988
+    },
+    {
+      "cycle": 2,
+      "variant": 1,
+      "calls": 16,
+      "elapsedMs": 550.1223750000008
+    },
+    {
+      "cycle": 2,
+      "variant": 0,
+      "calls": 16,
+      "elapsedMs": 1108.1862499999988
+    }
+  ],
+  "missingImportRejected": true,
+  "sourceBase": "1288e4590dd0377817de3846ef574d2327a3a630",
+  "change": "packages/wgpu-wasm/src/compose.rs: initialize one fresh default Composer and assign all capabilities; all later composition, validation and emission unchanged",
+  "measurementDate": "2026-10-07 Asia/Shanghai",
+  "commands": {
+    "buildBoth": "PATH=/opt/homebrew/opt/node@22/bin:$PATH CARGO_BUILD_JOBS=2 bash packages/wgpu-wasm/build.sh",
+    "benchmark": "node /tmp/composer-init-benchmark.mjs /tmp/composer-init-baseline-20261007 /tmp/composer-init-candidate-20261007",
+    "reconstruction": "Both builds used the same isolated checkout and build.sh including wasm-opt -Oz. Baseline compose.rs was read from sourceBase; candidate changes only the two Composer construction lines. Each generated pkg and its provenance was preserved before the next build."
+  },
+  "fixtures": [
+    {
+      "name": "compute",
+      "entry": "@compute @workgroup_size(1) fn main() {}",
+      "imports": {},
+      "defines": {}
+    },
+    {
+      "name": "import-branch-false",
+      "entry": "#import test::color::{color}\n@fragment fn main() -> @location(0) vec4<f32> {return color();}",
+      "imports": {
+        "test::color": "#define_import_path test::color\nfn color() -> vec4<f32> {\n#ifdef ALT\nreturn vec4<f32>(0.75);\n#else\nreturn vec4<f32>(0.25);\n#endif\n}"
+      },
+      "defines": {
+        "ALT": false
+      }
+    },
+    {
+      "name": "import-branch-true",
+      "entry": "#import test::color::{color}\n@fragment fn main() -> @location(0) vec4<f32> {return color();}",
+      "imports": {
+        "test::color": "#define_import_path test::color\nfn color() -> vec4<f32> {\n#ifdef ALT\nreturn vec4<f32>(0.75);\n#else\nreturn vec4<f32>(0.25);\n#endif\n}"
+      },
+      "defines": {
+        "ALT": true
+      }
+    },
+    {
+      "name": "primitive-index-capability",
+      "entry": "enable primitive_index;\n@fragment fn main(@builtin(primitive_index) index: u32) -> @location(0) vec4<f32> {return vec4<f32>(f32(index));}",
+      "imports": {},
+      "defines": {}
+    }
+  ],
+  "summary": {
+    "callsPerVariant": 96,
+    "baselineSumMs": 9405.526916999997,
+    "candidateSumMs": 4854.583166,
+    "sumReductionFraction": 0.48385845802795,
+    "allOutputsByteIdentical": true
+  },
+  "profileObservation": {
+    "context": "real Capability Lab Catalog request, pre-browser and pre-GPU; original 90s deadline failed on sourceBase-equivalent compiler before optimization",
+    "profileDurationMs": 32371.5,
+    "compositionInclusiveMs": 13040.7,
+    "firstComposerDefaultMs": 2891.42,
+    "withCapabilitiesComposerDefaultMs": 3410.67,
+    "qualification": "Profile diagnoses duplicated default construction in actual compilation. A partial CPU sample is not a before/after full Catalog benchmark."
+  },
+  "validation": {
+    "sourceBuild": "PASS, pinned Rust 1.93.1, wasm-pack 0.14.0, system wasm-opt -Oz",
+    "wasmTests": "PASS, wasm-pack test --node --release; 42 existing tests passed, zero failures",
+    "outputComparison": "PASS, every measured call is byte-identical; Boolean branches, imports, primitive_index capability and missing-import falsifier covered",
+    "formatting": "Changed lines and git diff --check pass. Scoped rustfmt reports two unrelated pre-existing regions; identical reports reproduced from sourceBase."
+  },
+  "currentRecipeCheck": {
+    "base": "938e64d59b4f27c0ca2fb85977a47afbfcdc3b97",
+    "profile": "opt-level=3, FORGEAX_WGPU_WASM_OPT_MODE=disabled, same package .cargo/config.toml and pinned toolchain",
+    "benchmark": {
+      "kind": "CPU-only Wasm composition microbenchmark",
+      "patterns": "3 ABBA cycles, 16 composition calls per sample, warm instances; exact output comparison on every call",
+      "limits": "Small source fixtures. Does not measure full Catalog readiness, Browser test time, physical GPU throughput or total CI duration; machine has concurrent unrelated work.",
+      "variants": [
+        {
+          "schemaVersion": "wgpu-wasm-provenance/1",
+          "sourceContentKey": "sha256-b981f1a57cb5da950310ccdff1c8403a3abc88bac7e2ba83b1c77edc158837d0",
+          "artifactSha256": "f4b45836247bf945320bbb297c39a3dd8e712179bc3cdf5afa86c94bd4e4c802",
+          "artifactBytes": 5572249,
+          "glueSha256": "da58dcb5a9171a2c81dfa5a3e67bbc7bb60e2852f95d61bddb07386540e2d15a",
+          "glueBytes": 148599,
+          "toolchain": {
+            "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+            "wasmPack": "wasm-pack 0.14.0",
+            "wasmBindgen": "unavailable"
+          },
+          "dependencies": {
+            "wgpu": "29.0.3",
+            "naga": "29.0.3",
+            "nagaOil": "0.22.0",
+            "wasmBindgen": "0.2.121"
+          },
+          "compilerFingerprint": "sha256-9eea04b7b075907d4de4fdd2236b44335a892943c0d4be1a011d8dc1ca24fc9b"
+        },
+        {
+          "schemaVersion": "wgpu-wasm-provenance/1",
+          "sourceContentKey": "sha256-53076cab8a20db2fa695ef5ce4a68c400e59caf0f96f8daecda9347451ae9eec",
+          "artifactSha256": "104bffa2d36b29c64a2be50d9f8bd81b2e894160e28fab221efc11cabe1b55e8",
+          "artifactBytes": 5570607,
+          "glueSha256": "da58dcb5a9171a2c81dfa5a3e67bbc7bb60e2852f95d61bddb07386540e2d15a",
+          "glueBytes": 148599,
+          "toolchain": {
+            "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+            "wasmPack": "wasm-pack 0.14.0",
+            "wasmBindgen": "unavailable"
+          },
+          "dependencies": {
+            "wgpu": "29.0.3",
+            "naga": "29.0.3",
+            "nagaOil": "0.22.0",
+            "wasmBindgen": "0.2.121"
+          },
+          "compilerFingerprint": "sha256-cf285cf35791d1ddbbc9d14715fb03c71e194fbb829ce462e3bb18040c5e56d8"
+        }
+      ],
+      "cases": [
+        {
+          "name": "compute",
+          "outputSha256": "bb6519f529aee3d0301d9bbdcd98f5ec6990c069512095bf9e7df61296ed1ce7"
+        },
+        {
+          "name": "import-branch-false",
+          "outputSha256": "499502fe528eda9d2e38a7d7f8ffb32ba7b57eca489fdae101ac11c48ea3a35d"
+        },
+        {
+          "name": "import-branch-true",
+          "outputSha256": "499502fe528eda9d2e38a7d7f8ffb32ba7b57eca489fdae101ac11c48ea3a35d"
+        },
+        {
+          "name": "primitive-index-capability",
+          "outputSha256": "896eab16bd4dcee313911032f1b130ac29693148e657332b75cab8728d8e2932"
+        }
+      ],
+      "rows": [
+        {
+          "cycle": 0,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 2088.850416
+        },
+        {
+          "cycle": 0,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 1077.912792
+        },
+        {
+          "cycle": 0,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 1633.2485830000005
+        },
+        {
+          "cycle": 0,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 3683.8237919999992
+        },
+        {
+          "cycle": 1,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 2346.4134160000012
+        },
+        {
+          "cycle": 1,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 1293.024209000001
+        },
+        {
+          "cycle": 1,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 690.7129580000001
+        },
+        {
+          "cycle": 1,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 2941.3458329999994
+        },
+        {
+          "cycle": 2,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 3052.0108330000003
+        },
+        {
+          "cycle": 2,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 1559.3203749999993
+        },
+        {
+          "cycle": 2,
+          "variant": 1,
+          "calls": 16,
+          "elapsedMs": 773.0159999999996
+        },
+        {
+          "cycle": 2,
+          "variant": 0,
+          "calls": 16,
+          "elapsedMs": 2536.060125
+        }
+      ],
+      "missingImportRejected": true
+    },
+    "baselineMs": 16648.504415,
+    "candidateMs": 7027.234917000001,
+    "observedWallClockReductionPercent": 57.79059342610625,
+    "limits": "Machine load average exceeded 171 on 12 CPU cores; concurrent release tests and source preparation also ran. Preserve these raw samples and byte equality, but do not interpret the observed percentage as isolated performance or compare absolute times with the earlier recipe. All 192 measured outputs match and both missing-import falsifiers reject."
+  }
+}

@@ -4,6 +4,7 @@ import {
   type AssetKind,
   type AssetLoadError,
   err,
+  isMaterialTextureParameterType,
   MATERIAL_TEXTURE_SLOTS,
   type MaterialAsset,
   type MaterialChildAsset,
@@ -90,7 +91,7 @@ function resolveMaterialWireRefs(
     value.parameters === undefined
       ? MATERIAL_TEXTURE_SLOTS
       : value.parameters
-          .filter((parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube')
+          .filter((parameter) => isMaterialTextureParameterType(parameter.type))
           .map((parameter) => parameter.name),
   );
   const values = { ...value.values };
@@ -135,15 +136,53 @@ export const materialContribution: AssetDecoderContribution<MaterialAsset, 'mate
   kind: { kind: 'material' } as AssetKind<MaterialAsset, 'material'>,
   consumer: 'Render MaterialScene',
   decoder: {
-    async decode({ envelope }) {
-      if (!validMaterial(envelope.payload)) {
+    async decode({ envelope, artifacts }) {
+      let payload: unknown = envelope.payload;
+      if (
+        record(payload) &&
+        record(payload.cooked) &&
+        payload.cooked.schemaVersion === 'material-cook/4' &&
+        Array.isArray(payload.cooked.programs)
+      ) {
+        const programs = [...payload.cooked.programs];
+        const cooked = payload.cooked;
+        const verified = new Map<string, Uint8Array>();
+        for (const [index, program] of programs.entries()) {
+          if (!record(program) || !record(program.artifact) || program.artifact.bytes !== undefined)
+            continue;
+          const artifact = program.artifact;
+          const path = artifact.path;
+          const descriptor = typeof path === 'string' ? envelope.artifacts[path] : undefined;
+          if (
+            typeof path !== 'string' ||
+            descriptor === undefined ||
+            descriptor.integrity?.digest !== artifact.digest ||
+            (artifacts.locate !== undefined && artifacts.locate(descriptor) === undefined)
+          )
+            return invalid(
+              envelope.guid,
+              'a verified external artifact for each compact material program',
+              'compact material program artifact descriptor or digest mismatch',
+            );
+          let bytes = verified.get(path);
+          if (bytes === undefined) {
+            const loaded = await artifacts.read(descriptor);
+            if (!loaded.ok) return loaded;
+            bytes = loaded.value;
+            verified.set(path, bytes);
+          }
+          programs[index] = { ...program, artifact: { ...artifact, bytes } };
+        }
+        payload = { ...payload, cooked: { ...cooked, programs } };
+      }
+      if (!validMaterial(payload)) {
         return invalid(
           envelope.guid,
           'a material payload with cooked passes, parameters, and values',
           'material owner validation failed',
         );
       }
-      return resolveMaterialWireRefs(envelope.payload, envelope.refs, envelope.guid);
+      return resolveMaterialWireRefs(payload, envelope.refs, envelope.guid);
     },
   },
 };

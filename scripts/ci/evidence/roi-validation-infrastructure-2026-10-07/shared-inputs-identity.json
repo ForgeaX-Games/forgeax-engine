@@ -1,0 +1,16 @@
+{
+  "recordedAt": "2026-10-07T05:43:44.978Z",
+  "sourceHead": "c02945839d91a75856b3d1eeff451658047eb5c7 plus infrastructure diff",
+  "node": "v22.23.2",
+  "engineEntries": {
+    "pointShadows": true,
+    "hdrpSsao": true
+  },
+  "inputFingerprint": "sha256:e22fc1114d20ad8b947cd1be3fcc8832008cfad5d3416521e77b1f292bbde8f4",
+  "concurrency": {
+    "packageBuild": 1,
+    "shaderWorkers": 1,
+    "cargoJobs": 1
+  },
+  "claim": "source producer preparation outside physical lease; no aggregate speedup or invocation count inferred"
+}

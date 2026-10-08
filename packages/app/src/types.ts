@@ -24,6 +24,7 @@ import type { Context, Plugin, PluginPrograms } from '@forgeax/engine-plugin';
 import type { Profiler } from '@forgeax/engine-profiler';
 import type {
   GpuPassTimingOptions,
+  OutputColorSpace,
   RenderError,
   Renderer,
   RenderFeature,
@@ -208,6 +209,11 @@ export interface CreateAppOptions {
   readonly features?: readonly RenderFeature<unknown>[];
   /** Standard profile forwarded to the single renderer-owned pipeline. */
   readonly standardProfile?: RenderProfile;
+  /**
+   * Display output color space (default `'srgb'`). `'display-p3'` falls back to sRGB with a
+   * structured report in `renderer.inspect().output.colorSpace` when the canvas cannot present it.
+   */
+  readonly outputColorSpace?: OutputColorSpace;
   /** Optional bounded Render-owned GPU pass facts; this is not frame latency. */
   readonly gpuPassTiming?: GpuPassTimingOptions;
   /** Exact source/tree/lock/build identity binding for the renderer-owned SSR seam. */

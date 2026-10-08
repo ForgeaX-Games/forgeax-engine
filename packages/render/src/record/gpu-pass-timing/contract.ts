@@ -1,6 +1,6 @@
 import type { RhiCaps } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
-import type { GpuPassTimingJson, GpuPassTimingReason } from './errors.js';
+import type { GpuPassTimingReason } from './errors.js';
 
 export const GPU_PASS_TIMING_SCHEMA_VERSION = '1.0' as const;
 
@@ -94,6 +94,7 @@ export interface GpuPassTimingFrame {
   readonly measuredPassCount: number;
   readonly droppedPassCount: number;
   readonly passes: readonly GpuPassTimingEntry[];
+  /** Sum with repeated interval coverage; not frame latency or exclusive GPU cost. */
   readonly measuredPassNanoseconds: number;
 }
 
@@ -178,5 +179,3 @@ export function createGpuPassTimingFrame(input: GpuPassTimingFrameInput): GpuPas
 export function freezeGpuPassTimingFrame(frame: GpuPassTimingFrame): GpuPassTimingFrame {
   return deepFreeze(frame);
 }
-
-export type GpuPassTimingJsonObject = { readonly [key: string]: GpuPassTimingJson };

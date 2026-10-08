@@ -10,7 +10,7 @@ import {
 } from '@forgeax/engine-types';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import type { CompileResult } from '../index.js';
+import type { CompileResult } from '../compile.js';
 import {
   generateMaterialDynamicInputAccessor,
   materialDynamicInputModuleId,
@@ -25,7 +25,18 @@ import {
   validateSurfaceDependency,
   validateSurfaceSource,
 } from './surface-contract.js';
-import { lowerMaterialVariantContext, type MaterialVariantContext } from './variant-context.js';
+import type { MaterialVariantContext } from './variant-context.js';
+
+// Pure source utilities are also imported by browser material oracles. Resolve
+// the native implementation only in Node; both hash the same canonical UTF-8.
+const digestUtf8 =
+  typeof process !== 'undefined' && process.versions?.node !== undefined
+    ? await import('node:crypto').then(
+        ({ createHash }) =>
+          (source: string) =>
+            createHash('sha256').update(source).digest('hex'),
+      )
+    : (source: string) => bytesToHex(sha256(new TextEncoder().encode(source)));
 
 export interface MaterialComposeRequest {
   readonly material: string;
@@ -84,6 +95,23 @@ export interface SurfaceComposition {
   readonly sourceClosure: readonly string[];
   readonly sourceClosureDigest: string;
   readonly stages: readonly SurfaceCompositionStage[];
+  /**
+   * Whether the selected Surface or any module it imports reads
+   * `SurfaceInput.vertexColor`. A Surface that never reads it gains nothing
+   * from the vertex-colour program variant, whose only effect is the extra
+   * COLOR_0 fetch and interpolants.
+   */
+  readonly readsVertexColor: boolean;
+}
+
+/** Strip WGSL comments so documentation never counts as a read. */
+function stripWgslComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+}
+
+/** True when the Surface source refers to the `vertexColor` SurfaceInput field. */
+export function surfaceSourceReadsVertexColor(source: string): boolean {
+  return /\bvertexColor\b/.test(stripWgslComments(source));
 }
 
 export interface StandardSourcePreparationRequest {
@@ -546,7 +574,7 @@ function replaceQualifiedModuleReferences(
 }
 
 function stableSurfaceHelperPrefix(moduleId: string): string {
-  const digest = bytesToHex(sha256(new TextEncoder().encode(moduleId))).slice(0, 16);
+  const digest = digestUtf8(moduleId).slice(0, 16);
   return `fxSurfaceHelper_${digest}_`;
 }
 
@@ -583,6 +611,7 @@ const SURFACE_INPUT_FIELDS = [
   ['frontFacing', 'bool'],
   ['uvFootprint0', 'vec4<f32>'],
   ['uvFootprint1', 'vec4<f32>'],
+  ['frameTime', 'f32'],
 ] as const;
 
 const SURFACE_DATA_FIELDS = [
@@ -869,7 +898,7 @@ function closureDigest(imports: Readonly<Record<string, string>>): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([module, source]) => `${module}\n${source}`)
     .join('\n');
-  return `sha256:${bytesToHex(sha256(new TextEncoder().encode(preimage)))}`;
+  return `sha256:${digestUtf8(preimage)}`;
 }
 
 /**
@@ -987,6 +1016,7 @@ export function composeSurfaceSource(
   ];
   const visited = new Set<string>();
   const validatedSurfaceDependencies = new Set<string>();
+  let readsVertexColor = surfaceSourceReadsVertexColor(selected.value.source);
   let useParameterModuleImport = false;
   const inlineSurfaceHelpers: Array<{ readonly moduleId: string; readonly source: string }> = [];
   while (queue.length > 0) {
@@ -1022,6 +1052,9 @@ export function composeSurfaceSource(
     if (visited.has(module) && !needsSurfaceValidation) continue;
     const record = request.sources.get(module);
     if (!record.ok) return err(record.error);
+    if (needsSurfaceValidation && surfaceSourceReadsVertexColor(record.value.source)) {
+      readsVertexColor = true;
+    }
     if (needsSurfaceValidation) {
       const dependency = validateSurfaceDependency({
         material: request.material,
@@ -1076,50 +1109,6 @@ export function composeSurfaceSource(
     sourceClosure,
     sourceClosureDigest: closureDigest(closureSources),
     stages: ['slot-resolution', 'source-closure', 'surface-validation', 'parameter-generation'],
-  });
-}
-
-function isCompileResult(value: MaterialComposedSource | CompileResult): value is CompileResult {
-  return 'manifestEntry' in value;
-}
-
-export async function composeMaterial(
-  request: MaterialComposeRequest,
-  compiler?: MaterialComposeCompiler,
-): Promise<Result<ComposedMaterial, unknown>> {
-  const compile =
-    compiler ??
-    (async (input) => {
-      const { compileShader } = await import('../index.js');
-      const options = {
-        id: `${input.material}::${input.pass}`,
-        ...(input.imports === undefined ? {} : { imports: { ...input.imports } }),
-        ...(input.context === undefined
-          ? {}
-          : { defines: { ...lowerMaterialVariantContext(input.context) } }),
-      };
-      const result = await compileShader(input.source, options);
-      if (!result.ok) return result as never;
-      return result.value;
-    });
-  const result = await compile(request);
-  if (!result || typeof result !== 'object') return err(result);
-  if (isCompileResult(result)) {
-    return ok({
-      material: request.material,
-      pass: request.pass,
-      wgsl: result.wgsl,
-      bindings: result.bindings,
-      deps: result.deps,
-      vertexInputs: [],
-    });
-  }
-  return ok({
-    material: request.material,
-    pass: request.pass,
-    wgsl: result.wgsl,
-    bindings: result.bindings,
-    deps: result.deps,
-    vertexInputs: result.vertexInputs,
+    readsVertexColor,
   });
 }

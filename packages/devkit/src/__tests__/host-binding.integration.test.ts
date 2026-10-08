@@ -368,6 +368,7 @@ it('serves a package-owned frontend module when the game has no host package dep
         },
       })
     ).await();
+    expect(backend.context.get('devkitBackend')?.hostPackageRoot).toBe(packageRoot);
     const facts = await readProjectFacts(gameRoot);
     if (!facts.ok) throw facts.error;
     const config = await createViteConfig(facts.value, 'serve', '/', {

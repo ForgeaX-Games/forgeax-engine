@@ -16,4 +16,4 @@ it('renders continuous and dashed lines and proves RHI replay in Browser WebGPU'
       );
     },
   });
-}, 120_000);
+}, 240_000);

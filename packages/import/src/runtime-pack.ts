@@ -781,7 +781,7 @@ export class RuntimePackProducer {
     const parsed = parsePackSourceJson(content.source).unwrap();
     if (parsed.format !== 'direct') throw new TypeError('expected a direct source');
     projectRuntimePackTools(content);
-    const projection = projectDirectPackJson(parsed).unwrap();
+    const projection = projectDirectPackJson(parsed);
     const assets = [];
     for (const asset of projection.assets) {
       if (asset.kind === 'plugin' && 'module' in asset.payload) {
@@ -928,11 +928,12 @@ export class RuntimePackProducer {
             }
             if (asset.artifacts.body !== undefined)
               throw new TypeError('native Mesh cannot also declare a body artifact');
+            const { distanceField, ...geometry } = asset.payload as Record<string, unknown>;
             const produced = (
               await meshAssetOutputProducer.produce({
                 guid: asset.guid,
                 sourceKey: asset.guid,
-                asset: asset.payload as unknown as Asset,
+                asset: geometry as unknown as Asset,
               })
             ).unwrap();
             const artifacts: Record<string, unknown> = { ...asset.artifacts };
@@ -954,7 +955,14 @@ export class RuntimePackProducer {
                 ...(body.assetCodec ? { assetCodec: body.assetCodec } : {}),
               };
             }
-            assets.push({ ...asset, payload: { kind: asset.kind }, artifacts });
+            assets.push({
+              ...asset,
+              payload: {
+                kind: asset.kind,
+                ...(distanceField === undefined ? {} : { distanceField }),
+              },
+              artifacts,
+            });
           }
           return new TextEncoder().encode(
             JSON.stringify(normaliseForPack({ ...publication.pack, assets })),

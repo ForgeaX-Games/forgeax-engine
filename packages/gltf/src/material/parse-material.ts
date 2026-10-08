@@ -80,6 +80,8 @@ export interface GltfMaterialJson {
   readonly alphaCutoff?: number;
   readonly doubleSided?: boolean;
   readonly extensions?: {
+    readonly KHR_materials_unlit?: Record<string, never>;
+    readonly KHR_materials_emissive_strength?: { readonly emissiveStrength?: number };
     readonly KHR_materials_transmission?: {
       readonly transmissionFactor?: number;
       readonly transmissionTexture?: TextureInfoJson;
@@ -139,6 +141,8 @@ export interface GltfMaterialIr {
   readonly baseColorFactor: readonly [number, number, number, number];
   /** glTF emissiveFactor; omitted means the glTF default [0, 0, 0]. */
   readonly emissiveFactor?: readonly [number, number, number];
+  readonly emissiveStrength?: number;
+  readonly unlit?: boolean;
   readonly baseColorTexture?: GltfTextureInfoIr | number;
   readonly emissiveTexture?: GltfTextureInfoIr | number;
   readonly metallicFactor: number;
@@ -203,6 +207,41 @@ export interface GltfMaterialIr {
   readonly baseColorTexCoord?: number;
 }
 
+/**
+ * Every texture-bearing slot of {@link GltfMaterialIr}, in the order material
+ * values, pack refs and their ref-index rewrite share.
+ */
+export const GLTF_MATERIAL_TEXTURE_SLOTS = [
+  'baseColorTexture',
+  'metallicRoughnessTexture',
+  'normalTexture',
+  'occlusionTexture',
+  'emissiveTexture',
+  'transmissionTexture',
+  'thicknessTexture',
+  'clearcoatTexture',
+  'clearcoatRoughnessTexture',
+  'clearcoatNormalTexture',
+  'anisotropyTexture',
+  'sheenColorTexture',
+  'sheenRoughnessTexture',
+  'iridescenceTexture',
+  'iridescenceThicknessTexture',
+  'specularTexture',
+  'specularColorTexture',
+  'diffuseTransmissionTexture',
+  'diffuseTransmissionColorTexture',
+] as const satisfies readonly (keyof GltfMaterialIr)[];
+
+export type GltfMaterialTextureSlot = (typeof GLTF_MATERIAL_TEXTURE_SLOTS)[number];
+
+/** Normalize a slot binding; the bare-number form names only the texture. */
+export function materialTextureBinding(
+  info: GltfTextureInfoIr | number | undefined,
+): GltfTextureInfoIr | undefined {
+  return info === undefined ? undefined : typeof info === 'number' ? { texture: info } : info;
+}
+
 function tuple2(values: readonly number[] | undefined): readonly [number, number] | undefined {
   if (values === undefined || values.length < 2) return undefined;
   return [values[0] ?? 0, values[1] ?? 0];
@@ -260,6 +299,20 @@ export function parseMaterial(
   const alphaMode =
     matJson.alphaMode === 'MASK' || matJson.alphaMode === 'BLEND' ? matJson.alphaMode : undefined;
   const alphaCutoff = alphaMode === 'MASK' ? (matJson.alphaCutoff ?? 0.5) : undefined;
+  if (matJson.extensions?.KHR_materials_unlit !== undefined)
+    return ok({
+      ...(matJson.name === undefined ? {} : { name: matJson.name }),
+      unlit: true,
+      baseColorFactor: baseColor4,
+      metallicFactor: 0,
+      roughnessFactor: 1,
+      ...(pbr?.baseColorTexture === undefined
+        ? {}
+        : { baseColorTexture: parseTextureInfo(pbr.baseColorTexture, textures) }),
+      ...(alphaMode === undefined ? {} : { alphaMode }),
+      ...(alphaCutoff === undefined ? {} : { alphaCutoff }),
+      ...(matJson.doubleSided === undefined ? {} : { doubleSided: matJson.doubleSided }),
+    });
   const emissiveFactor = tuple3(matJson.emissiveFactor);
   const transmission = matJson.extensions?.KHR_materials_transmission;
   const ior = matJson.extensions?.KHR_materials_ior;
@@ -292,7 +345,8 @@ export function parseMaterial(
       | 'KHR_materials_sheen'
       | 'KHR_materials_iridescence'
       | 'KHR_materials_specular'
-      | 'KHR_materials_diffuse_transmission',
+      | 'KHR_materials_diffuse_transmission'
+      | 'KHR_materials_emissive_strength',
     field: string,
     reason: 'type' | 'range' | 'non-finite',
     actual?: unknown,
@@ -510,10 +564,25 @@ export function parseMaterial(
     ),
   ];
   for (const check of physicalChecks) if (check !== undefined) return check;
+  const emissiveStrength = matJson.extensions?.KHR_materials_emissive_strength?.emissiveStrength;
+  if (
+    emissiveStrength !== undefined &&
+    (typeof emissiveStrength !== 'number' ||
+      !Number.isFinite(emissiveStrength) ||
+      emissiveStrength < 0)
+  )
+    return physicalInvalid(
+      'KHR_materials_emissive_strength',
+      'emissiveStrength',
+      'range',
+      emissiveStrength,
+    );
   return ok({
     ...(matJson.name === undefined ? {} : { name: matJson.name }),
     baseColorFactor: baseColor4,
     ...(emissiveFactor === undefined ? {} : { emissiveFactor }),
+    ...(emissiveStrength === undefined ? {} : { emissiveStrength }),
+    ...(matJson.extensions?.KHR_materials_unlit === undefined ? {} : { unlit: true }),
     metallicFactor: pbr?.metallicFactor ?? 1.0,
     roughnessFactor: pbr?.roughnessFactor ?? 1.0,
     ...(pbr?.baseColorTexture === undefined

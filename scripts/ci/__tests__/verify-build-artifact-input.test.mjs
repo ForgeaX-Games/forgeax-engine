@@ -38,6 +38,43 @@ function runVerifier(args = []) {
   }
 }
 
+test('core family admission keeps native paths mandatory and does not replace full admission', () => {
+  const root = tmpExtraction(
+    {
+      'packages/fixture/dist': null,
+      'packages/wgpu-wasm/pkg': null,
+    },
+    (contract) => {
+      contract.artifactClasses['engine-dist'].transferArtifact = 'core-build';
+      contract.artifactClasses['wasm-runtime'].transferArtifact = 'core-build';
+      contract.artifactClasses['wasm-fbx'].transferArtifact = 'core-build';
+      contract.artifactClasses['app-dist'].transferArtifact = 'app-dist';
+      contract.consumers['primary-pnpm'].requiredArtifactClasses.push('wasm-fbx');
+    },
+  );
+  try {
+    const contractPath = join(root, 'build-artifact-contract.json');
+    const args = ['--consumer', 'primary-pnpm', '--root', root, '--contract', contractPath];
+    assert.notEqual(runVerifier([...args, '--transfer-artifact', 'core-build']).exitCode, 0);
+    mkdirSync(join(root, 'packages/fbx/pkg'), { recursive: true });
+    assert.equal(runVerifier([...args, '--transfer-artifact', 'core-build']).exitCode, 0);
+    assert.notEqual(runVerifier(args).exitCode, 0, 'full admission still requires app inputs');
+    assert.notEqual(runVerifier([...args, '--transfer-artifact', 'not-declared']).exitCode, 0);
+    const malformed = JSON.parse(readFileSync(contractPath, 'utf8'));
+    malformed.consumers['primary-pnpm'].requiredArtifactClasses.push('unknown-class');
+    writeFileSync(contractPath, JSON.stringify(malformed));
+    const invalidClass = runVerifier([...args, '--transfer-artifact', 'core-build']);
+    assert.notEqual(
+      invalidClass.exitCode,
+      0,
+      'family filtering must preserve unknown-class rejection',
+    );
+    assert.equal(JSON.parse(invalidClass.stdout).code, 'ci-artifact-contract-class-unknown');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /**
  * Create a temp directory structure simulating artifact extraction.
  * Pass an object mapping repo-relative paths to file content (or null for dir).

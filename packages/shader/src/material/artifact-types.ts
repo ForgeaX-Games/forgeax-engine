@@ -131,7 +131,7 @@ function standardPbrResourceSlots(): MaterialShaderResourceSlot[] {
 export function createStandardPbrArtifactReceipt(
   skinned = false,
   vertexColorAvailable = false,
-): MaterialShaderArtifactReceipt {
+): MaterialShaderArtifactReceipt & { readonly sceneIndexEntry: string } {
   const resourceSlots = standardPbrResourceSlots();
   const uvSets = STANDARD_PIPELINE_DERIVED.coordinateRecords.map((record) => ({
     parameter: record.parameter,
@@ -173,7 +173,7 @@ export function createStandardPbrArtifactReceipt(
 export interface MaterialProgramArtifactReceiptInput {
   readonly schema: readonly ParamSchemaEntry[];
   readonly directEntry: string;
-  readonly sceneIndexEntry: string;
+  readonly sceneIndexEntry?: string;
   readonly vertexInputs: readonly MaterialShaderVertexInput[];
   readonly layoutIdentity?: string;
   readonly alphaMask?: { readonly cutoff: string; readonly source: string };
@@ -192,14 +192,16 @@ export interface MaterialProgramArtifactReceiptInput {
  * Build a receipt for a compiler-controlled custom material.  The receipt is
  * derived from the effective parameter schema; no shader identifier or
  * Standard field inventory participates in admission.  A producer may use a
- * smaller schema, but the scene-index row is padded to the shared page so the
- * actual storage-array stride remains executable by GPU Scene.
+ * smaller schema. Direct-only programs retain its actual aligned size; programs
+ * with a scene-index entry use the shared GPU Scene storage-array page.
  */
 export function createMaterialProgramArtifactReceipt(
   input: MaterialProgramArtifactReceiptInput,
 ): MaterialShaderArtifactReceipt {
   const derived = derive(input.schema);
-  const rowStride = input.rowStride ?? GPU_DRIVEN_MATERIAL_ROW_BYTES;
+  const rowStride =
+    input.rowStride ??
+    (input.sceneIndexEntry === undefined ? derived.totalBytes : GPU_DRIVEN_MATERIAL_ROW_BYTES);
   if (!Number.isSafeInteger(rowStride) || rowStride <= 0 || rowStride % 16 !== 0) {
     throw new RangeError('material program row stride must be a positive 16-byte multiple');
   }
@@ -232,7 +234,7 @@ export function createMaterialProgramArtifactReceipt(
   const alphaMask = input.alphaMask ?? { cutoff: '', source: '' };
   return {
     directEntry: input.directEntry,
-    sceneIndexEntry: input.sceneIndexEntry,
+    ...(input.sceneIndexEntry === undefined ? {} : { sceneIndexEntry: input.sceneIndexEntry }),
     materialRow: {
       byteLength: rowStride,
       fields: [...materialRowFields(input.schema, derived)],

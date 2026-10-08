@@ -3,6 +3,45 @@ import { userEvent } from 'vitest/browser';
 import { attachBrowserInputBackend } from '../browser-backend';
 
 describe('pointer lock recovery (real Chromium)', () => {
+  it('keeps pre-lock cursor movement out of the first provider-locked scan', async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 200;
+    document.body.append(canvas);
+    let requests = 0;
+    const handle = attachBrowserInputBackend(canvas, {
+      lockProvider: {
+        requestLock: () => {
+          requests += 1;
+        },
+        exitLock: () => {},
+      },
+    });
+    const move = (x: number, y: number) => {
+      const event = new PointerEvent('pointermove', {
+        pointerId: 1,
+        pointerType: 'mouse',
+        bubbles: true,
+      });
+      Object.defineProperties(event, { movementX: { value: x }, movementY: { value: y } });
+      canvas.dispatchEvent(event);
+    };
+    try {
+      move(-480, -266);
+      await userEvent.click(canvas);
+      expect(requests).toBe(1);
+      move(8, 2);
+      expect(handle.backend.sample()).toMatchObject({
+        pointerLocked: true,
+        movementX: 8,
+        movementY: 2,
+      });
+    } finally {
+      handle();
+      canvas.remove();
+    }
+  });
+
   it('attempts a trusted click even when hasFocus is false and contains rejection/error events', async () => {
     const canvas = document.createElement('canvas');
     canvas.dataset.testid = 'pointer-lock-target';

@@ -294,7 +294,7 @@ fn cloud_direct_solar_factorX() -> f32 {
       } as never),
     ).toEqual({
       requiredFeatures: ['depth32float-stencil8'],
-      requiredLimits: { maxSampledTexturesPerShaderStage: 26 },
+      requiredLimits: { maxSampledTexturesPerShaderStage: 31 },
     });
     expect(
       deviceOptionsForAdapter({
@@ -1014,11 +1014,6 @@ describe('material shader binding contract', () => {
       resolve(import.meta.dirname, '../record/main-pass-material.ts'),
       'utf8',
     );
-    const projectionSource = readFileSync(
-      resolve(import.meta.dirname, '../assembly/material/assembly.ts'),
-      'utf8',
-    );
-    expect(projectionSource).toContain('projectMaterialRecord');
     expect(recordSource).not.toMatch(/internals\.assets\.get<MaterialAsset>/);
     expect(recordSource).not.toMatch(/firstMaterial as \{/);
     expect(recordSource).not.toContain('baseColorHandle');

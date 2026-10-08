@@ -1,6 +1,13 @@
 import type { EntityHandle } from '@forgeax/engine-ecs';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
-import { ChildOf, GlobalTransform, Name, scenePlugin, Transform } from '@forgeax/engine-scene';
+import {
+  ChildOf,
+  GlobalTransform,
+  MorphWeights,
+  Name,
+  scenePlugin,
+  Transform,
+} from '@forgeax/engine-scene';
 import type { AnimationClip, AnimationTargetIdValue, Handle } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { AnimationPlayer } from '../animation-player';
@@ -137,6 +144,94 @@ describe('generic Transform target playback', () => {
       world.set(player, AnimationPlayer, { times: [time] }).unwrap();
       world.update(0);
       expectTrsAt(world, target, time, interpolation);
+    }
+  });
+
+  it('evaluates cubic tangents at non-key times through the player and graph', async () => {
+    const clip: AnimationClip = {
+      kind: 'animation-clip',
+      duration: 2,
+      channels: [
+        {
+          targetId: TARGET_ID,
+          property: 'translation',
+          sampler: {
+            input: new Float32Array([0, 2]),
+            output: new Float32Array([0, 0, 0, 0, 0, 0, 3, 0, 0, -3, 0, 0, 0, 0, 0, 0, 0, 0]),
+            interpolation: 'CUBICSPLINE',
+          },
+        },
+      ],
+    };
+    for (const graph of [false, true]) {
+      const { world, player, target } = await setupPlayer(clip, graph);
+      for (const time of [0, 0.25, 0.7, 1, 1.8, 2]) {
+        world
+          .set(player, AnimationPlayer, graph ? { nodeTimes: [time] } : { times: [time] })
+          .unwrap();
+        world.update(0);
+        const pose = world.get(target, Transform).unwrap();
+        const u = time / 2;
+        expect(pose.pos[0]).toBeCloseTo(6 * u * (1 - u), 5);
+        expect(world.get(target, GlobalTransform).unwrap().world[12]).toBeCloseTo(
+          10 + 6 * u * (1 - u),
+          5,
+        );
+      }
+    }
+  });
+
+  it('normalizes cubic quaternion components and keeps four morph values independent', async () => {
+    const clip: AnimationClip = {
+      kind: 'animation-clip',
+      duration: 2,
+      channels: [
+        {
+          targetId: TARGET_ID,
+          property: 'rotation',
+          sampler: {
+            input: new Float32Array([0, 2]),
+            output: new Float32Array([
+              0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0.5, 0, 0, 0, -0.5, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+            ]),
+            interpolation: 'CUBICSPLINE',
+          },
+        },
+        {
+          targetId: TARGET_ID,
+          property: 'weights',
+          sampler: {
+            input: new Float32Array([0, 2]),
+            output: new Float32Array([
+              0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, -1, -2, -3, -4, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]),
+            interpolation: 'CUBICSPLINE',
+          },
+        },
+      ],
+    };
+    for (const graph of [false, true]) {
+      const { world, player, target } = await setupPlayer(clip, graph);
+      world
+        .addComponent(target, { component: MorphWeights, data: { weights: [0, 0, 0, 0] } })
+        .unwrap();
+      for (const time of [0, 0.27, 0.71, 1, 1.86, 2]) {
+        world
+          .set(player, AnimationPlayer, graph ? { nodeTimes: [time] } : { times: [time] })
+          .unwrap();
+        world.update(0);
+        const u = time / 2,
+          z = -2 * u ** 3 + 3 * u * u + u * (1 - u),
+          w = 2 * u ** 3 - 3 * u * u + 1,
+          length = Math.hypot(z, w);
+        const pose = world.get(target, Transform).unwrap();
+        expect(pose.quat[2]).toBeCloseTo(z / length, 5);
+        expect(pose.quat[3]).toBeCloseTo(w / length, 5);
+        expect(Math.hypot(...pose.quat)).toBeCloseTo(1, 5);
+        expect([...world.get(target, MorphWeights).unwrap().weights].slice(0, 4)).toEqual(
+          [1, 2, 3, 4].map((v) => expect.closeTo(2 * v * u * (1 - u), 5)),
+        );
+      }
     }
   });
 

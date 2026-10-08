@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { STANDARD_CLUSTER_LAYOUT } from '../pipeline/standard-lighting/layout';
+import { createStandardClusterLayout } from '../pipeline/standard-lighting/layout';
 import { CLUSTER_GRID_STRIDE_U32, LIGHT_INDEX_LIST_CAPACITY } from '../pipeline/standard-profile';
+
+const STANDARD_CLUSTER_LAYOUT = createStandardClusterLayout();
 
 describe('Standard lighting layout SSOT', () => {
   it('derives the transport storage sizes from one cluster layout', () => {

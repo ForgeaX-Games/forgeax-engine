@@ -146,8 +146,9 @@ function meshContent(base: MeshAsset, row: Extract<ContentRow, { kind: 'mesh' }>
       expected: 'runtime mesh position attribute',
       hint: 'Use a source mesh with a position attribute.',
     });
+  const { cardLayout: _, distanceField: __, collision: ___, ...geometry } = base;
   return Object.freeze({
-    ...base,
+    ...geometry,
     vertices,
     ...(row.indices === undefined ? {} : { indices: row.indices }),
     attributes: Object.freeze(attributes) as VertexAttributeMap,

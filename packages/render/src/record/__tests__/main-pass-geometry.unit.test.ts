@@ -1,15 +1,13 @@
+import { standardTextureMask } from '@forgeax/engine-shader';
 import { describe, expect, it } from 'vitest';
 import {
   STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES,
-  transmissionBackdropAvailable,
+  standardTransmissionAdmission,
 } from '../../assembly/device-feature-admission';
-import { buildBindGroupLayoutDescriptor } from '../../pbr-pipeline';
-import type { PipelineSpec } from '../../pipeline-spec';
 import type { DispatchEntry } from '../../render-system-extract';
 import {
   authoredTransparentDepthWrite,
   geometryRenderStateForPass,
-  requestsStandardTransmissionVariant,
   sameOpaqueTemporalDraw,
   variantSetForCoveragePass,
 } from '../main-pass-geometry';
@@ -97,47 +95,60 @@ describe('geometry pass render state', () => {
   });
 });
 
-describe('Standard transmission variant selection', () => {
-  it('uses authored transmission presence instead of the canonical reserved schema', () => {
-    const baseOnly = {
-      materialShaderId: 'forgeax::default-standard-pbr',
-      paramSnapshot: { alphaCutoff: 0.25 },
-    } as const;
-    const transmission = {
-      materialShaderId: 'forgeax::default-standard-pbr',
-      paramSnapshot: { transmission: 0 },
-    } as const;
+describe('Standard transmission sampled-texture admission', () => {
+  const mask = (...names: string[]): number =>
+    standardTextureMask(names.map((name) => ({ name, type: 'texture2d' as const })));
 
-    expect(requestsStandardTransmissionVariant(baseOnly, undefined)).toBe(false);
-    expect(requestsStandardTransmissionVariant(transmission, undefined)).toBe(true);
+  it('uses authored transmission presence instead of the canonical reserved schema', () => {
     expect(
-      requestsStandardTransmissionVariant(
+      standardTransmissionAdmission(
+        { materialShaderId: 'forgeax::default-standard-pbr', paramSnapshot: { alphaCutoff: 0.25 } },
+        undefined,
+      ),
+    ).toBeUndefined();
+    expect(
+      standardTransmissionAdmission(
+        { materialShaderId: 'forgeax::default-standard-pbr', paramSnapshot: { transmission: 0 } },
+        undefined,
+      ),
+    ).toEqual({ kind: 'dedicated' });
+    expect(
+      standardTransmissionAdmission(
         { materialShaderId: 'custom::standard', paramSnapshot: { transmission: 1 } },
         undefined,
       ),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
-  it('follows the material layout below the transmission backdrop texture budget', () => {
-    const transmission = {
+  it('shares the split scalar-map pairs below the dedicated budget', () => {
+    const material = {
       materialShaderId: 'forgeax::default-standard-pbr',
       paramSnapshot: { transmission: 1 },
+      standardTextureMask: mask(
+        'baseColorTexture',
+        'metallicRoughnessTexture',
+        'normalTexture',
+        'transmissionTexture',
+        'thicknessTexture',
+      ),
     } as const;
-    const spec: PipelineSpec = {
-      shader: { id: 'forgeax::default-standard-pbr', passKind: 'forward', variantSet: undefined },
-      attachments: { colorFormats: [], depthFormat: undefined, sampleCount: 1 },
-      geometry: { topology: 'triangle-list', vertexLayout: {} },
-      renderState: undefined,
-    };
-    for (const limit of [16, STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES]) {
-      const bindings = buildBindGroupLayoutDescriptor(spec, {
-        kind: 'pbr-material-merged',
-        caps: { storageBuffer: true, transmissionBackdrop: transmissionBackdropAvailable(limit) },
-      }).entries.map((entry) => entry.binding);
-      // thicknessTexture occupies bindings 13/14; the variant declares it only when requested.
-      expect(requestsStandardTransmissionVariant(transmission, limit)).toBe(bindings.includes(14));
-    }
-    expect(requestsStandardTransmissionVariant(transmission, 16)).toBe(false);
+    expect(standardTransmissionAdmission(material, STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES)).toEqual(
+      { kind: 'dedicated' },
+    );
+    expect(standardTransmissionAdmission(material, 16)).toEqual({ kind: 'shared' });
+  });
+
+  it('names every authored map that occupies a shared pair', () => {
+    expect(
+      standardTransmissionAdmission(
+        {
+          materialShaderId: 'forgeax::default-standard-pbr',
+          paramSnapshot: { transmission: 1 },
+          standardTextureMask: mask('metallicTexture', 'alphaTexture', 'transmissionTexture'),
+        },
+        16,
+      ),
+    ).toEqual({ kind: 'exceeded', conflicts: ['metallicTexture', 'alphaTexture'] });
   });
 });
 

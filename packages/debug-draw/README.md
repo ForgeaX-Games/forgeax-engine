@@ -185,10 +185,10 @@ import { INITIAL_VERTEX_CAPACITY, MAX_VERTEX_CAPACITY, VERTEX_STRIDE_BYTES } fro
 
 | `err.code` | When | `.hint` | `.detail` |
 |:--|:--|:--|:--|
-| `'pipeline-create-failed'` | `device.createRenderPipeline()` or shader compilation rejected | `Pipeline creation failed: ${rhiError}. Check WGSL syntax, vertex layout, and depth-stencil state.` | `{ code: 'pipeline-create-failed', rhiError: string }` |
-| `'buffer-allocation-failed'` | `device.createBuffer()` for GPU VBO or uniform buffer failed | `Buffer allocation failed: ${rhiError}. Check available device memory and buffer usage flags.` | `{ code: 'buffer-allocation-failed', rhiError: string }` |
-| `'flushed-after-destroy'` | `flush()` called on an already-destroyed instance | `DebugDraw was destroyed; create a new instance via createDebugDraw().` | `{ code: 'flushed-after-destroy' }` |
-| `'viewProj-required'` | `flush()` called with `undefined` / `null` / missing `viewProj` | `Pass a viewProj Mat4 to flush(encoder, view, viewProj).` | `{ code: 'viewProj-required' }` |
+| `'pipeline-create-failed'` | `device.createRenderPipeline()` or shader compilation rejected | `Pipeline creation failed: ${rhiError}. Check WGSL syntax, vertex layout, and depth-stencil state.` | `{ rhiError: string }` |
+| `'buffer-allocation-failed'` | `device.createBuffer()` for GPU VBO or uniform buffer failed | `Buffer allocation failed: ${rhiError}. Check available device memory and buffer usage flags.` | `{ rhiError: string }` |
+| `'flushed-after-destroy'` | `flush()` called on an already-destroyed instance | `DebugDraw was destroyed; create a new instance via createDebugDraw().` | `{}` |
+| `'viewProj-required'` | `flush()` called with `undefined` / `null` / missing `viewProj` | `Pass a viewProj Mat4 to flush(encoder, view, viewProj).` | `{}` |
 
 `DebugDrawError` is a structured four-field object:
 

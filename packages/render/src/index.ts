@@ -6,7 +6,20 @@ export {
   type OutlineSnapshot,
   resolveOutline,
 } from './components/outline';
-export { CameraViewInvalidError, OutlineInvalidParameterError } from './errors/render';
+export {
+  StereoCamera,
+  type StereoCameraData,
+  type StereoCameraInvalidField,
+  type StereoEye,
+  type StereoLayout,
+  StereoLayoutValue,
+  stereoLayoutFromU32,
+} from './components/stereo-camera';
+export {
+  CameraViewInvalidError,
+  OutlineInvalidParameterError,
+  StereoCameraInvalidError,
+} from './errors/render';
 export type { CameraViewInspection } from './inspection-types';
 // @forgeax/engine-render — AI-facing render vocabulary.
 //
@@ -154,6 +167,15 @@ export {
   createCloudHistory,
   reprojectCloudHistory,
 } from './cloud/temporal.js';
+export {
+  AMBIENT_OCCLUSION_ALGORITHMS,
+  AMBIENT_OCCLUSION_GTAO,
+  AMBIENT_OCCLUSION_QUALITIES,
+  AMBIENT_OCCLUSION_SSAO,
+  AmbientOcclusion,
+  type AmbientOcclusionData,
+  ambientOcclusionParameters,
+} from './components/ambient-occlusion.js';
 export { Atmosphere } from './components/atmosphere.js';
 export {
   BarrelDistortion,
@@ -267,9 +289,25 @@ export {
   type LensEffectsSnapshot,
   resolveLensEffects,
 } from './components/lens-effects.js';
+export {
+  LENS_FLARE_GHOST_COUNT,
+  LensFlare,
+  type LensFlareData,
+  type LensFlareSnapshot,
+  resolveLensFlare,
+} from './components/lens-flare.js';
 export * from './components/light-helpers.js';
 export { LightProbe } from './components/light-probe.js';
-export { Lines } from './components/lines.js';
+export { LIGHTING_CHANNELS_DEFAULT } from './components/lighting-channels.js';
+export {
+  type LineCap,
+  LineCapValue,
+  Lines,
+  type LineWidthUnits,
+  LineWidthUnitsValue,
+  lineCapFromU32,
+  lineWidthUnitsFromU32,
+} from './components/lines.js';
 export * from './components/mesh-filter.js';
 export * from './components/mesh-renderer.js';
 export { MotionBlur } from './components/motion-blur.js';
@@ -373,12 +411,20 @@ export { GpuDrivenPreparationError } from './errors/gpu-driven';
 export type {
   BarrelDistortionInvalidParameterDetail,
   DynamicResolutionError,
+  ExternalTextureInvalidDetail,
+  ExternalTextureInvalidReason,
+  ExternalTextureStateInvalidDetail,
+  ExternalTextureStateInvalidReason,
+  FramebufferSnapshotFailedDetail,
+  FramebufferSnapshotFailureReason,
+  MaterialSampledTextureBudgetExceededDetail,
   ReflectionProbeBudgetExceededDetail,
   RenderError,
   RenderErrorCode,
   RenderIntentInvalidDetail,
   RenderTargetCapabilityMissingDetail,
   RenderTargetDescriptorInvalidDetail,
+  RenderTargetLayerInvalidDetail,
   RenderTargetOperationFailedDetail,
   RenderTargetStateInvalidDetail,
   SceneDataUnavailableDetail,
@@ -392,8 +438,12 @@ export {
   DynamicResolutionTimingUnavailableError,
   EnvironmentGenerationFailedError,
   EnvironmentSourceConflictError,
+  ExternalTextureInvalidError,
+  ExternalTextureStateInvalidError,
   FogCardinalityError,
   LensEffectsInvalidParameterError,
+  LensFlareInvalidParameterError,
+  MaterialSampledTextureBudgetExceededError,
   OwnerStageFailedError,
   RendererOperationError,
   SceneDataUnavailableError,
@@ -549,6 +599,12 @@ export {
   InstanceTransformsError,
 } from './instances';
 export {
+  type MaterialSampledTextureBudget,
+  materialSampledTextureBudget,
+  WEBGPU_MIN_SAMPLED_TEXTURES_PER_SHADER_STAGE,
+} from './material-sampled-texture-budget';
+export {
+  displayP3,
   MaterialAuthoringContractError,
   type MaterialColorInput3,
   type MaterialColorInput4,
@@ -576,6 +632,16 @@ export {
   type OitIneligibleReason,
 } from './oit/eligibility.js';
 export type { TransparencyInspection, TransparencyViewReason } from './oit/view.js';
+export {
+  appliedOutputColorSpace,
+  isOutputColorSpace,
+  OUTPUT_COLOR_SPACES,
+  OUTPUT_GAMUT_CODE,
+  type OutputColorSpace,
+  type OutputColorSpaceFallback,
+  type OutputColorSpaceFallbackObservation,
+  type OutputColorSpaceReport,
+} from './output-color-space.js';
 export type { DynamicResolutionInspection } from './pipeline/dynamic-resolution';
 export type { RenderExtent } from './pipeline/render-extent.js';
 export type {
@@ -608,13 +674,25 @@ export {
 } from './pipeline/standard-output/auto-exposure/inspection.js';
 export type {
   StandardLutFailure,
-  StandardLutInspection,
   StandardLutState,
 } from './pipeline/standard-output/lut-state.js';
 // The host-facing default is a stable profile value; implementation-only
 // pipeline helpers remain behind the package boundary.
 export {
   DEFAULT_STANDARD_PROFILE,
+  type StandardBakedDiffuseGi,
+  type StandardCardCapture,
+  type StandardDiffuseGi,
+  type StandardExactDiffuseGi,
+  type StandardGlobalSdfRegion,
+  type StandardIrradianceField,
+  type StandardIrradianceFieldGi,
+  type StandardProbeClipmap,
+  type StandardProbeGlobal,
+  type StandardProbePlacement,
+  type StandardProbePlacementSeed,
+  type StandardScreenProbeGi,
+  type StandardScreenProbes,
   type StandardVolumetricFogProfile,
   type StandardVolumetricFogQuality,
 } from './pipeline/standard-profile.js';
@@ -646,6 +724,27 @@ export {
 } from './publication/contract';
 export { createRenderPublisher, type RenderPublicationCandidate } from './publication/publisher';
 export { RenderPublicationTargetOwner, type RenderTargetAuthoring } from './publication/targets';
+export {
+  DIFFUSE_GI_TIER_BUDGETS,
+  DIFFUSE_GI_TIERS,
+  type DiffuseGiTier,
+  type DiffuseGiTierBudget,
+  type DiffuseGiTierFallbackReason,
+  type DiffuseGiTierLane,
+  type DiffuseGiTierProfile,
+  type DiffuseGiTierResolution,
+  type DiffuseGiTierScene,
+  parseDiffuseGiTier,
+  resolveDiffuseGiTier,
+} from './raytracing/diffuse-gi-tier.js';
+export {
+  IRRADIANCE_VOLUME_KIND,
+  type IrradianceVolume,
+  type IrradianceVolumeError,
+  type IrradianceVolumeErrorCode,
+  irradianceVolumePackLoader,
+} from './raytracing/irradiance-volume.js';
+export type { BakedFieldInspection } from './raytracing/renderer-baked-field.js';
 export { resolveVisibleSurface, type VisibleSurfaceIdentity } from './raytracing/visible-surface';
 /**
  * Public bounded GPU pass facts. Use the single `gpuPassTiming` opt-in,
@@ -736,23 +835,6 @@ export type {
 } from './renderer-inspect.js';
 export type { RenderSceneBounds } from './scene/render-scene-types.js';
 export type {
-  GpuFrameTiming,
-  GpuFrameTimingProtocol,
-  GpuFrameTimingRecord,
-  GpuFrameTimingSample,
-  GpuFrameTimingSummary,
-} from './scene/visibility/gpu-frame-timing.js';
-export {
-  createGpuFrameTiming,
-  recordGpuFrameTiming,
-  summarizeGpuFrameTiming,
-} from './scene/visibility/gpu-frame-timing.js';
-export type {
-  LodOcclusionDegradation,
-  LodOcclusionFallback,
-  LodOcclusionInspectionAction,
-  LodOcclusionInspectionBudget,
-  LodOcclusionInspectionError,
   LodOcclusionInspectionInput,
   LodOcclusionInspectionRow,
   LodOcclusionInspectionSample,
@@ -762,7 +844,6 @@ export type {
   LodOcclusionWorldInspectionInput,
 } from './scene/visibility/inspection.js';
 export {
-  consumeLodOcclusionInspection,
   inspectLodOcclusion,
   LOD_OCCLUSION_INSPECTION_MAX_BYTES,
   LOD_OCCLUSION_INSPECTION_SCHEMA,
@@ -789,7 +870,6 @@ export type {
   SsrSpatialEnvironment,
   SsrSpatialLane,
   SsrSpatialStatus,
-  SsrSpatialWork,
   SsrTemporalReceipt,
 } from './ssr/admission.js';
 export {
@@ -853,11 +933,16 @@ export {
 export type { SurfaceGpuIndirectParameters } from './surface/submission-observation.js';
 export { getActiveCamera, setActiveCamera } from './systems/active-camera.js';
 export type {
+  FramebufferSnapshotData,
+  FramebufferSnapshotRegion,
+  FramebufferSnapshotRequest,
+  FramebufferSnapshotTicket,
   RenderTarget,
   RenderTargetAdmissionLimits,
   RenderTargetDepthFormat,
   RenderTargetDescriptor,
   RenderTargetFormat,
+  RenderTargetLayeredShape,
   RenderTargetMipLevels,
   RenderTargetReadbackData,
   RenderTargetReadbackRequest,
@@ -868,6 +953,7 @@ export type {
   RenderTargetTextureSource,
   RenderTargetTextureSourceOptions,
 } from './targets/contracts.js';
+export { renderTargetLayerCount } from './targets/contracts.js';
 export type { TemporalInspection, TemporalResourceInspection } from './temporal/inspection.js';
 export {
   SCENE_DATA_TEMPORAL_V1_DESCRIPTOR,
@@ -885,7 +971,18 @@ export {
   type SceneDataInspection,
 } from './temporal/scene-data-catalog.js';
 export type { TemporalView } from './temporal/view.js';
+export {
+  querySubmittedTerrainHeight,
+  type SubmittedTerrainHeightRequest,
+} from './terrain/submitted.js';
 export { CanvasTexture, type CanvasTextureSource } from './textures/canvas-texture';
+export {
+  type ExternalTexture,
+  type ExternalTextureInput,
+  type ExternalTextureKind,
+  type ExternalTextureSource,
+  isExternalTextureSource,
+} from './textures/external-texture';
 export {
   composeSingleLayerMediumColor,
   estimateSingleLayerPathLength,

@@ -63,23 +63,32 @@ if (listed.code !== 0) {
 let deleted = 0;
 let preserved = 0;
 let failed = 0;
-for (const row of listed.stdout.split(/\r?\n/).filter(Boolean)) {
-  const separator = row.indexOf('\t');
-  const artifactId = separator === -1 ? row : row.slice(0, separator);
-  const artifactName = separator === -1 ? '' : row.slice(separator + 1);
-  if (options.preserveNames.has(artifactName)) {
-    preserved += 1;
-    continue;
-  }
-  const result = await runGh([
-    'api',
-    '--method',
-    'DELETE',
-    `repos/${repository}/actions/artifacts/${artifactId}`,
-  ]);
-  if (result.code === 0) deleted += 1;
-  else failed += 1;
-}
+const rows = listed.stdout.split(/\r?\n/).filter(Boolean);
+let nextRow = 0;
+await Promise.all(
+  Array.from({ length: Math.min(4, rows.length) }, async () => {
+    while (nextRow < rows.length) {
+      const row = rows[nextRow++];
+      const separator = row.indexOf('\t');
+      const artifactId = separator === -1 ? row : row.slice(0, separator);
+      const artifactName = separator === -1 ? '' : row.slice(separator + 1);
+      // Failure captures must survive a later successful same-head retry;
+      // their producer's bounded retention remains the storage limit.
+      if (options.preserveNames.has(artifactName) || artifactName.startsWith('failure-')) {
+        preserved += 1;
+        continue;
+      }
+      const result = await runGh([
+        'api',
+        '--method',
+        'DELETE',
+        `repos/${repository}/actions/artifacts/${artifactId}`,
+      ]);
+      if (result.code === 0) deleted += 1;
+      else failed += 1;
+    }
+  }),
+);
 
 console.log(
   `transient artifacts deleted: ${deleted}; preserved: ${preserved}; failed deletions: ${failed}`,

@@ -1,7 +1,8 @@
 import type { CompiledRenderGraphInfo } from '@forgeax/engine-render-graph';
 import type { RhiCanvasSurfacePresentationProof, TextureFormat } from '@forgeax/engine-rhi';
+import type { OutputColorSpaceReport } from '../output-color-space';
 import type { AutoExposureInspection } from '../pipeline/standard-output/auto-exposure/inspection';
-import type { StandardLutInspection } from '../pipeline/standard-output/lut-state';
+import type { StandardLutState } from '../pipeline/standard-output/lut-state';
 import type { PipelineState } from '../record/render-context';
 import {
   type RenderOutputInspection,
@@ -17,9 +18,10 @@ export interface RendererOutputInspectionInput {
   readonly surfaceDisplay: TextureFormat;
   readonly surfaceProfile?: 'dual-view' | 'raw-only';
   readonly rgba16floatRenderable: boolean;
+  readonly colorSpace: OutputColorSpaceReport;
   readonly presentationProof?: RhiCanvasSurfacePresentationProof | undefined;
   readonly autoExposure?: AutoExposureInspection | undefined;
-  readonly standardLut?: StandardLutInspection | undefined;
+  readonly standardLut?: StandardLutState | undefined;
 }
 
 function isSrgbFormat(format: TextureFormat): boolean {
@@ -90,6 +92,7 @@ export function projectRendererOutputInspection(
       ? { intermediateFormat: intermediate.descriptor.format }
       : {}),
     ...(input.surfaceProfile === undefined ? {} : { surfaceProfile: input.surfaceProfile }),
+    colorSpace: input.colorSpace,
     graphPassNames: graph?.passes.map((pass) => pass.name) ?? [],
     ...(standardOutputColor === undefined ? {} : { standardOutputColor }),
     surfaceStorage: input.surfaceStorage,
@@ -119,9 +122,10 @@ export function projectRendererOutputInspectionFromSurface(input: {
   readonly surfaceReleased: boolean;
   readonly pipelineState: PipelineState | null;
   readonly rgba16floatRenderable: boolean;
+  readonly colorSpace: OutputColorSpaceReport;
   readonly presentationProof?: RhiCanvasSurfacePresentationProof | undefined;
   readonly autoExposure?: AutoExposureInspection | undefined;
-  readonly standardLut?: StandardLutInspection | undefined;
+  readonly standardLut?: StandardLutState | undefined;
 }): RenderOutputInspection {
   return projectRendererOutputInspection({
     graph: input.graph,
@@ -132,6 +136,7 @@ export function projectRendererOutputInspectionFromSurface(input: {
       ? {}
       : { surfaceProfile: input.pipelineState.surfaceProfile }),
     rgba16floatRenderable: input.rgba16floatRenderable,
+    colorSpace: input.colorSpace,
     autoExposure: input.autoExposure,
     standardLut: input.standardLut,
     ...(input.presentationProof === undefined

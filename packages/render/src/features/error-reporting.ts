@@ -1,4 +1,3 @@
-import { RhiError } from '@forgeax/engine-rhi';
 import type { RenderError } from '../errors/render';
 
 /**
@@ -96,42 +95,4 @@ function pendingRenderFeatureErrorKey(error: RenderError): string {
       ? detail.order
       : -1;
   return `${error.code}\0${featureIdentity}\0${order}`;
-}
-
-function isStructuredRendererError(error: unknown): error is RhiError | RenderError {
-  if (!(error instanceof Error)) return false;
-  const structured = error as {
-    readonly code?: unknown;
-    readonly expected?: unknown;
-    readonly hint?: unknown;
-    readonly detail?: unknown;
-  };
-  return (
-    typeof structured.code === 'string' &&
-    typeof structured.expected === 'string' &&
-    typeof structured.hint === 'string' &&
-    structured.detail !== undefined
-  );
-}
-
-export function reportPreparedGraphicsCompletionError(
-  errorRegistry: { fire(error: RhiError | RenderError): void },
-  error: unknown,
-): void {
-  if (isStructuredRendererError(error)) {
-    errorRegistry.fire(error);
-    return;
-  }
-  const innerError =
-    error instanceof RhiError
-      ? error
-      : { code: 'unknown' as const, message: String(error), name: (error as Error)?.name };
-  errorRegistry.fire(
-    new RhiError({
-      code: 'webgpu-runtime-error',
-      expected: 'prepared graphics completion cleanup reports its errors',
-      hint: 'inspect detail.error for the underlying retirement or recovery failure',
-      detail: { error: innerError },
-    }),
-  );
 }

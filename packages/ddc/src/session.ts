@@ -41,20 +41,20 @@ type MutableDdcGenerationEntryCandidate = Omit<DdcGenerationEntryCandidate, 'lea
 
 type HeartbeatTimer = ReturnType<typeof setTimeout>;
 
-interface MutableMetrics {
-  hitCount: number;
-  missCount: number;
-  corruptCount: number;
-  writeFailureCount: number;
-}
+type MutableMetrics = { -readonly [K in keyof DdcSessionMetrics]: DdcSessionMetrics[K] };
 
 export class DdcGenerationSession {
   public readonly generation: number;
   private readonly lifecycle: DdcLifecycle;
   private readonly entries: DdcEntryStore;
-  private readonly candidates = new Map<string, MutableDdcGenerationCandidate>();
+  private readonly candidates = new Map<
+    string,
+    {
+      candidate: MutableDdcGenerationCandidate;
+      heartbeat: HeartbeatTimer | undefined;
+    }
+  >();
   private readonly restoreFences = new WeakMap<DdcGenerationCandidate, DdcRestoreFence>();
-  private readonly heartbeatTimers = new Map<string, HeartbeatTimer>();
   private readonly counters: MutableMetrics = {
     hitCount: 0,
     missCount: 0,
@@ -85,7 +85,7 @@ export class DdcGenerationSession {
       lease,
       previousHead,
     };
-    this.candidates.set(lease.attempt, candidate);
+    this.candidates.set(lease.attempt, { candidate, heartbeat: undefined });
     this.scheduleHeartbeat(candidate);
     return candidate;
   }
@@ -101,7 +101,6 @@ export class DdcGenerationSession {
       const entryCandidate: MutableDdcGenerationEntryCandidate = Object.assign(candidate, {
         staged,
       });
-      this.candidates.set(candidate.lease.attempt, entryCandidate);
       return entryCandidate;
     } catch (error) {
       const fence = await this.lifecycle.fail(candidate.lease, {
@@ -109,7 +108,7 @@ export class DdcGenerationSession {
         detail: error instanceof Error ? error.message : String(error),
       });
       if (fence !== undefined) this.restoreFences.set(candidate, fence);
-      this.stopHeartbeat(candidate);
+      this.stopHeartbeat(candidate.lease.attempt);
       this.candidates.delete(candidate.lease.attempt);
       this.counters.writeFailureCount += 1;
       throw error;
@@ -134,11 +133,11 @@ export class DdcGenerationSession {
       if (result.restoreFence !== undefined)
         this.restoreFences.set(registered, result.restoreFence);
       if (result.result === 'invalid') this.counters.corruptCount += 1;
-      this.stopHeartbeat(registered);
+      this.stopHeartbeat(registered.lease.attempt);
       this.candidates.delete(registered.lease.attempt);
       return result;
     } catch (error) {
-      this.stopHeartbeat(registered);
+      this.stopHeartbeat(registered.lease.attempt);
       this.counters.writeFailureCount += 1;
       throw error;
     }
@@ -162,11 +161,11 @@ export class DdcGenerationSession {
       const result = await this.lifecycle.commit(registered.lease, validatedKey);
       if (result.restoreFence !== undefined)
         this.restoreFences.set(registered, result.restoreFence);
-      this.stopHeartbeat(registered);
+      this.stopHeartbeat(registered.lease.attempt);
       this.candidates.delete(registered.lease.attempt);
       return result;
     } catch (error) {
-      this.stopHeartbeat(registered);
+      this.stopHeartbeat(registered.lease.attempt);
       const fence = await this.lifecycle.fail(registered.lease, {
         code: 'ddc-entry-publish-failed',
         detail: error instanceof Error ? error.message : String(error),
@@ -180,10 +179,10 @@ export class DdcGenerationSession {
   }
 
   public async discardCandidate(candidate: DdcGenerationCandidate): Promise<void> {
-    const registered = this.candidates.get(candidate.lease.attempt);
+    const registered = this.candidates.get(candidate.lease.attempt)?.candidate;
     if (registered === undefined) return;
     try {
-      this.stopHeartbeat(registered);
+      this.stopHeartbeat(registered.lease.attempt);
       await this.lifecycle.discard(registered.lease);
       this.candidates.delete(registered.lease.attempt);
     } catch (error) {
@@ -197,10 +196,10 @@ export class DdcGenerationSession {
   }
 
   public async restoreEntry(candidate: DdcGenerationEntryCandidate): Promise<DdcRestoreResult> {
-    const registered = this.candidates.get(candidate.lease.attempt);
+    const registered = this.candidates.get(candidate.lease.attempt)?.candidate;
     const ownerLease = registered?.lease ?? candidate.lease;
     const fence = this.restoreFences.get(candidate);
-    this.stopHeartbeat(ownerLease);
+    this.stopHeartbeat(ownerLease.attempt);
     let result: DdcRestoreResult = {
       result: 'not-owner',
       revision: candidate.previousHead.revision ?? 0,
@@ -230,10 +229,9 @@ export class DdcGenerationSession {
   public async close(): Promise<void> {
     if (!this.accepting) return;
     this.accepting = false;
-    for (const timer of this.heartbeatTimers.values()) clearTimeout(timer);
-    this.heartbeatTimers.clear();
     const pending = [...this.candidates.values()];
-    for (const candidate of pending) {
+    for (const { candidate } of pending) this.stopHeartbeat(candidate.lease.attempt);
+    for (const { candidate } of pending) {
       try {
         await this.lifecycle.discard(candidate.lease);
       } catch {
@@ -249,7 +247,7 @@ export class DdcGenerationSession {
 
   private assertCandidate(candidate: DdcGenerationCandidate): MutableDdcGenerationCandidate {
     this.assertOpen();
-    const registered = this.candidates.get(candidate.lease.attempt);
+    const registered = this.candidates.get(candidate.lease.attempt)?.candidate;
     if (candidate.generation !== this.generation || registered === undefined) {
       throw new Error('DDC candidate belongs to another generation session');
     }
@@ -258,31 +256,32 @@ export class DdcGenerationSession {
 
   private scheduleHeartbeat(candidate: MutableDdcGenerationCandidate): void {
     const attempt = candidate.lease.attempt;
-    this.stopHeartbeat(candidate);
+    this.stopHeartbeat(candidate.lease.attempt);
     const delay = Math.max(1, Math.floor((candidate.lease.expiresAt - Date.now()) / 2));
+    const entry = this.candidates.get(attempt);
+    if (entry === undefined || entry.candidate !== candidate) return;
     const timer = setTimeout(() => {
-      this.heartbeatTimers.delete(attempt);
-      if (!this.accepting || this.candidates.get(attempt) !== candidate) return;
+      entry.heartbeat = undefined;
+      if (!this.accepting || this.candidates.get(attempt) !== entry) return;
       void this.lifecycle
         .heartbeat(candidate.lease)
         .then((lease) => {
-          if (!this.accepting || this.candidates.get(attempt) !== candidate) return;
+          if (!this.accepting || this.candidates.get(attempt) !== entry) return;
           candidate.lease = lease;
           this.scheduleHeartbeat(candidate);
         })
         .catch(() => {
-          this.stopHeartbeat(candidate);
+          this.stopHeartbeat(candidate.lease.attempt);
         });
     }, delay);
     timer.unref?.();
-    this.heartbeatTimers.set(attempt, timer);
+    entry.heartbeat = timer;
   }
 
-  private stopHeartbeat(candidate: DdcGenerationCandidate | DdcLease): void {
-    const attempt = 'lease' in candidate ? candidate.lease.attempt : candidate.attempt;
-    const timer = this.heartbeatTimers.get(attempt);
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    this.heartbeatTimers.delete(attempt);
+  private stopHeartbeat(attempt: string): void {
+    const entry = this.candidates.get(attempt);
+    if (entry?.heartbeat === undefined) return;
+    clearTimeout(entry.heartbeat);
+    entry.heartbeat = undefined;
   }
 }

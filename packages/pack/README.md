@@ -16,6 +16,8 @@ recook 并重新验证，不手改 cooked payload。
 
 ## ScriptablePack 与 Pack authoring
 
+A `terrain` ScriptablePack output supplies a validated `TerrainSource`. The terrain producer derives subsection meshes, height/control mips and Standard material arrays as one GUID-linked closure; the existing Pack cook, Catalog and runtime loader own publication. See [the terrain contract](../terrain/README.md) for bounds and layer semantics.
+
 > [!IMPORTANT]
 > 这里有两个一等 source 实体，且必须保持可见区别：`ScriptablePack` 是可执行的
 > `*.pack.ts` TypeScript source；`Pack` 是可编辑、可持久化的 `*.pack.json` JSON
@@ -118,6 +120,11 @@ as layered identity. Inspect `current` versus `generation`, repair the owning
 producer at the first divergence, cold-cook the same GUID, and verify receipt,
 artifact, and provenance.
 
+A raster ABI without `sceneIndexEntry` publishes a direct selection only. When
+that entry exists, the validator requires both direct and scene-index selections
+for the same pass/context/color inputs. A scene address without its matching ABI
+entry is invalid; direct-only publications do not fabricate a paired program.
+
 `MaterialCookRasterContext.visibleSurface` is an optional `true` capability
 axis, orthogonal to `pipeline: forward | deferred`. Absence is the only off
 representation. `materialProgramContextForPass` preserves it for color entries
@@ -129,12 +136,15 @@ not a second material definition.
 ordinary `mesh`/`sprite` layouts. This is a derived program selection within
 the same material GUID; it does not add a second authoring asset.
 
-`MaterialCookProgramContext` is the closed union of raster and ray-hit contexts.
-Ray-hit uses `pipeline: ray`, `pass: ray-hit`, `profile: forgeax-material-ray-v1`
-and mesh/storage inputs. It selects `cs_surface` from an existing authored pass;
-it adds no authored ray pass, raster address pair or raster ABI. The complete
-program-set digest covers both domains. A ray derivative cannot satisfy the
-requirement to publish the authored raster pass.
+`MaterialCookProgramContext` is the closed union of raster and Surface-derivative
+contexts. Derivatives use `pipeline: ray`, `profile: forgeax-material-ray-v1` and
+mesh/storage inputs: `pass: ray-hit` selects `cs_surface`, while `pass: card-capture`
+selects `vs_card` with the fixed `fs_card` fragment entry. Both select an existing
+authored pass without a raster address pair or submission ABI. Card cooking
+validates its four `rgba16float` outputs. The executable validator and JSON schema
+admit both contexts; `raster-probe` remains a build-time diagnostic. The complete
+program-set digest covers both derivatives and raster programs. Neither derivative
+satisfies the requirement to publish the authored raster pass.
 
 ## Mesh binary boundary
 
@@ -327,6 +337,23 @@ need their normal Registry loader/decoder. No cooker enters the player.
 The default worker executes the complete relative TypeScript module closure on the supported Node floor, including Node 22 hosts that do not load `.ts` files directly. It transpiles that closure into a disposable ESM directory, resolves bare imports through the source project's nearest `node_modules`, and removes the directory when the worker is disposed. Bulk producers can use the internal `createScriptablePackModuleExecutorPool()` with two recyclable workers; a pooled lease is released after metadata projection or one build.
 
 Path-only scans and explicit `metadataOnly` inventories read at most four ScriptablePack modules concurrently, each in its own isolated worker. They settle all started reads before reporting failure and publish declarations in source order. Inventories retaining build closures and scans using a caller-owned executor remain serial; metadata parallelism never shares or recycles those live leases.
+
+| Standalone project stage | Worker ownership |
+|:--|:--|
+| Inventory | Metadata workers release before the inventory returns |
+| Plugin bootstrap | One recyclable execution lease, acquired when each source or instance builds |
+| Formal production | One recyclable execution lease per worklist attempt; the pool closes on success or failure |
+
+`createLazyScriptablePackDefinition()` reloads from the inventory's captured
+`ScriptablePackSourceSnapshot`, preserving its module bytes, parameters and source
+evidence without keeping an idle worker per declaration. It retains the default
+module/build deadlines, package identity fence and reader context. Later author
+edits do not replace the captured body; existing publication source fences still
+own whether the candidate can publish. The lazy path adds no per-build disk
+verification. A direct producer lacking the inventory snapshot captures and
+compares its source closure before executing, so a new body cannot use old evidence.
+Caller-supplied metadata inventories must carry their captured snapshot;
+legacy inventories without a snapshot continue to consume their retained definitions.
 
 `inventoryScriptablePackSource(path, initialSourceText?, resolveImport?)` inventories
 bytes without evaluation. Its default resolver follows these authoring rules;
@@ -608,6 +635,10 @@ and integrity descriptor within that invocation. The package digest still hashes
 its canonical metadata and binary stream. No cache survives finalization: changing
 input bytes before the next call must change the appropriate digests. All existing
 digest and file formats are preserved; callers need no caching policy.
+Canonical numeric arrays are consumed directly during hashing rather than
+copied into a second array. Object-key ordering, mixed arrays and native byte
+digests retain their existing serialization contract; hashing never mutates
+the caller's input.
 
 Source inventory reuses only TypeScript import syntax by the freshly computed
 source-content digest. Its internal LRU is bounded by 512 entries and 16 MiB of
@@ -718,3 +749,32 @@ contract at the consuming owner boundary. Encoded Pack artifacts remain the port
 storage and transport representation, with real integrity descriptors produced only
 when their bytes exist. See Import's `runtime-pack-source/2` snapshot contract for
 portable source archives.
+
+Material publication uniqueness and direct/scene-index completeness include the
+color input derived from each ABI receipt. Plain and colored programs may share
+a Pass/context, but each color choice must retain its own complete address pair.
+
+The `navigation-mesh` Scriptable Pack kind carries portable baked navigation
+polygons. Its explicit build-time producer is `@forgeax/engine/import/navigation-bake`;
+ordinary Cook/Catalog delivery preserves the GUID and producer freshness digest.
+Player loading carries no Recast compiler dependency.
+
+## Deferred artifact delivery
+
+An artifact may declare `delivery: 'stream'`. Finalization retains it and includes it in transport/publication identity; it still emits the complete artifact as part of the build closure. The consuming domain validates its manifest and each fetched window. Pack owns no native decoder or request scheduler. [Audio streaming](../audio-webaudio/README.md#long-audio-through-source-meta-and-guid) requires Range-capable HTTP hosting.
+
+### Immutable build catalog transport
+
+`pack-index.json` keeps the legacy array when its rows have no repeated complete
+publication. Repeated source envelopes use `pack-index-publications/1`: `entries`
+carry a `publicationIndex` into `publications`. `encodeCatalogWire` preserves every
+row and every field of the complete envelope; `decodeCatalogWire` restores the
+ordinary Catalog rows before existing identity, revision and scene-fence checks.
+Different receipts, output sets or source revisions remain separate table entries.
+The decoder returns `Result<readonly CatalogEntry[], AssetError>`; invalid
+references, inline conflicts and unused table entries return the existing
+`asset-parse-failed` code with the failing field and index.
+Scoped live snapshots retain their existing schema and publication authority.
+Use the public decoder when inspecting emitted build catalogs; the compact wire
+is a transport projection, and does not grant asset readiness or skip artifact
+integrity checks.

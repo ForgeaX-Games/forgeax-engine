@@ -50,4 +50,48 @@ describe('Camera target consumption', () => {
       expect.arrayContaining(['display-target', 'duplicate-target']),
     );
   });
+
+  it('records every distinct layer writer of a selected target under a per-target budget', () => {
+    const [first, second] = targets();
+    const cameras: CameraTargetCandidate[] = [
+      {
+        worldId: 1,
+        entityKey: 1,
+        target: first,
+        targetLayer: 0,
+        requestVersion: 1,
+        update: 'continuous',
+      },
+      {
+        worldId: 1,
+        entityKey: 2,
+        target: first,
+        targetLayer: 2,
+        requestVersion: 1,
+        update: 'continuous',
+      },
+      {
+        worldId: 1,
+        entityKey: 3,
+        target: first,
+        targetLayer: 2,
+        requestVersion: 1,
+        update: 'continuous',
+      },
+      {
+        worldId: 1,
+        entityKey: 4,
+        target: second,
+        targetLayer: 1,
+        requestVersion: 1,
+        update: 'continuous',
+      },
+    ];
+    const selected = selectCameraTargetViews(cameras, { budget: 1 });
+    expect(selected.auxiliary.map((camera) => camera.entityKey)).toEqual([1, 2]);
+    expect(selected.rejected).toEqual([
+      { entityKey: 3, reason: 'duplicate-target' },
+      { entityKey: 4, reason: 'budget' },
+    ]);
+  });
 });

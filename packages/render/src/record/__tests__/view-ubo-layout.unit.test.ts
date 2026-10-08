@@ -9,8 +9,8 @@ const commonWgslSrc = readFileSync(
 );
 
 describe('View UBO directional shadow ABI', () => {
-  it('keeps the 1168 B payload inside the aligned 1280 B slot', () => {
-    expect(viewUboSrc).toMatch(/VIEW_UNIFORM_BYTES\s*=\s*1168/);
+  it('keeps the 1280 B payload inside the aligned 1280 B slot', () => {
+    expect(viewUboSrc).toMatch(/VIEW_UNIFORM_BYTES\s*=\s*1280/);
     expect(viewUboSrc).toMatch(/VIEW_UNIFORM_SLOT_STRIDE\s*=\s*1280/);
     expect(viewUboSrc).toMatch(/VIEW_PAYLOAD_FLOATS\s*=\s*VIEW_UNIFORM_BYTES \/ 4/);
   });

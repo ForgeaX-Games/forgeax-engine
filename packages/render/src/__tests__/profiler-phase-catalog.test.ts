@@ -12,13 +12,11 @@ describe('Render profiler phase catalog ownership', () => {
   it('matches the profiler receiver set and includes nested record owners', () => {
     const profiler = createProfiler();
     expect(profiler.registerPhaseCatalog('render', RENDER_PHASE_CATALOG).ok).toBe(true);
-    expect(RENDER_PHASE_CATALOG).toHaveLength(6 + RENDER_RECORD_PHASE_CATALOG.length);
+    expect(RENDER_PHASE_CATALOG).toHaveLength(5 + RENDER_RECORD_PHASE_CATALOG.length);
     expect(new Set(RENDER_PHASE_CATALOG).size).toBe(RENDER_PHASE_CATALOG.length);
     expect(new Set(RENDER_PHASE_CATALOG)).toEqual(new Set(profiler.phaseCatalog.render));
     expect(RENDER_RECORD_PHASE_CATALOG).toEqual(
       expect.arrayContaining([
-        'record/occlusion-query-submit',
-        'record/occlusion-global-advance',
         'record/gpu-driven-prepare',
         'record/gpu-driven-prepare/plan',
         'record/gpu-driven-prepare/filter',
@@ -38,7 +36,6 @@ describe('Render profiler phase catalog ownership', () => {
         'record/graph-execute/ssr-compose',
       ]),
     );
-    expect(RENDER_PHASE_CATALOG).toEqual(expect.arrayContaining(['occlusion-prepare']));
     expect(RENDER_SCENE_STATE_PHASE_CATALOG).toEqual(
       expect.arrayContaining([
         'record/scene-state/fold-buckets',

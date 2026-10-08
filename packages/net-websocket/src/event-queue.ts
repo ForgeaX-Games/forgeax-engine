@@ -5,7 +5,6 @@ export const DEFAULT_MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 
 export class BoundedEventQueue {
   readonly #events: EndpointEvent[] = [];
-  #closed = false;
   #bytes = 0;
   #disconnectReason: string | undefined;
 
@@ -21,7 +20,7 @@ export class BoundedEventQueue {
   }
 
   get closed(): boolean {
-    return this.#closed;
+    return this.#disconnectReason !== undefined;
   }
 
   get disconnectReason(): string | undefined {
@@ -29,7 +28,7 @@ export class BoundedEventQueue {
   }
 
   enqueue(event: EndpointEvent): boolean {
-    if (this.#closed) return false;
+    if (this.closed) return false;
     const bytes = event.kind === 'message' ? event.data.byteLength : 0;
     if (this.#events.length === this.maxQueuedEvents || this.#bytes + bytes > this.maxQueuedBytes) {
       this.close(`event queue overflow (maxQueuedEvents=${this.maxQueuedEvents})`);
@@ -41,8 +40,7 @@ export class BoundedEventQueue {
   }
 
   close(reason: string): void {
-    if (this.#closed) return;
-    this.#closed = true;
+    if (this.closed) return;
     this.#disconnectReason = reason;
   }
 

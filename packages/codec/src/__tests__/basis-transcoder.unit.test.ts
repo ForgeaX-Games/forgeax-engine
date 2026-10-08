@@ -1,8 +1,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  _basisTranscoderInitCount,
   _setBasisTranscoderImporter,
   initBasisTranscoder,
   transcodeKtx2,
@@ -23,7 +22,7 @@ import type { BasisEncoderModule, BasisModuleFactory } from '../wasm/basis-types
  *
  * pkg/ is a gitignored emcc build artifact (AC-12). When it is not built
  * (contributor without emsdk) the WASM-dependent cases skip; CI builds it in the
- * build-artifacts job so the gate runs there. The init-counting case uses an
+ * build-artifacts job so the gate runs there. The importer-observation case uses an
  * injected fake importer, so it runs regardless of pkg/ presence.
  */
 
@@ -80,8 +79,9 @@ afterEach(() => {
 
 describe('initBasisTranscoder — lazy-init singleton (D-10, w14)', () => {
   it('importer not invoked until first init call', () => {
-    _setBasisTranscoderImporter(() => Promise.resolve({} as never));
-    expect(_basisTranscoderInitCount()).toBe(0);
+    const importer = vi.fn(() => Promise.resolve({} as never));
+    _setBasisTranscoderImporter(importer);
+    expect(importer).not.toHaveBeenCalled();
   });
 
   it('loads exactly once and returns the cache on the second call', async () => {
@@ -96,7 +96,6 @@ describe('initBasisTranscoder — lazy-init singleton (D-10, w14)', () => {
     const b = await initBasisTranscoder();
     expect(a).toBe(b);
     expect(calls).toBe(1);
-    expect(_basisTranscoderInitCount()).toBe(1);
   });
 
   it('clears the cached failure so the next call retries', async () => {
@@ -144,8 +143,9 @@ describe.skipIf(!pkgBuilt)('transcodeKtx2 — real UASTC -> BC7 (w14)', () => {
     _setBasisTranscoderImporter();
     const parsed = await parseKtx2(uastcKtx2);
     if (!parsed.ok) throw new Error('parse failed');
+    const firstModule = await initBasisTranscoder();
     await transcodeKtx2(parsed.value, 'bc7-rgba-unorm');
     await transcodeKtx2(parsed.value, 'bc7-rgba-unorm');
-    expect(_basisTranscoderInitCount()).toBe(1);
+    expect(await initBasisTranscoder()).toBe(firstModule);
   });
 });

@@ -51,7 +51,8 @@ export interface MaterialSurfaceProgramAbi {
 /** Complete immutable ABI projection for one material program family. */
 export interface MaterialProgramAbi {
   readonly directEntry: string;
-  readonly sceneIndexEntry: string;
+  /** Absent for a program that only has a direct entry. */
+  readonly sceneIndexEntry?: string;
   readonly materialRow: {
     readonly byteLength: number;
     readonly fields: readonly string[];
@@ -291,8 +292,8 @@ export function isMaterialProgramAbi(value: unknown): value is MaterialProgramAb
   const validShape =
     typeof abi.directEntry === 'string' &&
     abi.directEntry.length > 0 &&
-    typeof abi.sceneIndexEntry === 'string' &&
-    abi.sceneIndexEntry.length > 0 &&
+    (abi.sceneIndexEntry === undefined ||
+      (typeof abi.sceneIndexEntry === 'string' && abi.sceneIndexEntry.length > 0)) &&
     validRow(row) &&
     validResources(abi.resourceSlots) &&
     Array.isArray(abi.uvSets) &&

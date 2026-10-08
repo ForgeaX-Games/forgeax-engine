@@ -25,7 +25,8 @@ interface ActivityRecord {
 
 let fallbackIdentity = 0;
 
-function nextIdentity(prefix: string): string {
+/** @internal Realm-neutral default identity source for direct and transported requests. */
+export function nextIntelligenceIdentity(prefix: string): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid !== undefined) return `${prefix}-${uuid}`;
   fallbackIdentity += 1;
@@ -49,6 +50,42 @@ export function resolveIntelligenceLimits(
   return limits;
 }
 
+/** @internal One admission policy for the Host runtime and its realm client. */
+export function validateActivityRequest(
+  request: ActivityRequest,
+  providerId: string,
+  maxInputChars: number,
+  closed: boolean,
+): Result<void, IntelligenceError> {
+  if (closed) return err(new IntelligenceError({ code: 'intelligence-closed', detail: {} }));
+  if (request.input.length === 0 || request.input.length > maxInputChars) {
+    return err(
+      new IntelligenceError({
+        code: 'intelligence-invalid-request',
+        detail: {
+          field: 'input',
+          reason:
+            request.input.length === 0
+              ? 'input is empty'
+              : `input exceeds ${maxInputChars} characters`,
+        },
+      }),
+    );
+  }
+  if (request.session !== undefined && request.session.providerId !== providerId) {
+    return err(
+      new IntelligenceError({
+        code: 'intelligence-session-provider-mismatch',
+        detail: {
+          expectedProviderId: providerId,
+          receivedProviderId: request.session.providerId,
+        },
+      }),
+    );
+  }
+  return ok(undefined);
+}
+
 export class IntelligenceRuntime implements IntelligenceService {
   readonly providerId: string;
   readonly limits: IntelligenceLimits;
@@ -65,8 +102,8 @@ export class IntelligenceRuntime implements IntelligenceService {
     this.providerId = provider.id;
     this.limits = resolveIntelligenceLimits(options.limits);
     this.createActivityId =
-      options.createActivityId ?? (() => activityId(nextIdentity('activity')));
-    this.createSessionId = options.createSessionId ?? (() => nextIdentity('session'));
+      options.createActivityId ?? (() => activityId(nextIntelligenceIdentity('activity')));
+    this.createSessionId = options.createSessionId ?? (() => nextIntelligenceIdentity('session'));
   }
 
   submit(request: ActivityRequest): Result<ActivityRef, IntelligenceError> {
@@ -177,33 +214,12 @@ export class IntelligenceRuntime implements IntelligenceService {
   }
 
   private validateRequest(request: ActivityRequest): Result<void, IntelligenceError> {
-    if (this.closed) return err(this.closedError());
-    if (request.input.length === 0 || request.input.length > this.limits.maxInputChars) {
-      return err(
-        new IntelligenceError({
-          code: 'intelligence-invalid-request',
-          detail: {
-            field: 'input',
-            reason:
-              request.input.length === 0
-                ? 'input is empty'
-                : `input exceeds ${this.limits.maxInputChars} characters`,
-          },
-        }),
-      );
-    }
-    if (request.session !== undefined && request.session.providerId !== this.providerId) {
-      return err(
-        new IntelligenceError({
-          code: 'intelligence-session-provider-mismatch',
-          detail: {
-            expectedProviderId: this.providerId,
-            receivedProviderId: request.session.providerId,
-          },
-        }),
-      );
-    }
-    return ok(undefined);
+    return validateActivityRequest(
+      request,
+      this.providerId,
+      this.limits.maxInputChars,
+      this.closed,
+    );
   }
 
   private createSink(record: ActivityRecord): ActivitySink {

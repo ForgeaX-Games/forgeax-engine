@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { deriveStandardLayerPlan, type MaterialProgramAbi } from '@forgeax/engine-types';
+import Ajv from 'ajv';
 import { describe, expect, it } from 'vitest';
 import {
   type CookedMaterialRecord,
@@ -82,7 +83,7 @@ const record: CookedMaterialRecord = {
   },
 };
 
-const submissionAbi: MaterialProgramAbi = {
+const submissionAbi = {
   directEntry: 'vs_main',
   sceneIndexEntry: 'vs_scene_index',
   materialRow: { byteLength: 16, fields: ['baseColor'] },
@@ -97,7 +98,7 @@ const submissionAbi: MaterialProgramAbi = {
   },
   receiptIdentity: 'custom/layout',
   generation: 1,
-};
+} satisfies MaterialProgramAbi;
 
 function seal(value: CookedMaterialRecord): CookedMaterialRecord {
   return {
@@ -113,6 +114,59 @@ function seal(value: CookedMaterialRecord): CookedMaterialRecord {
 }
 
 describe('cooked material schema', () => {
+  it('round trips both Surface derivatives through the executable and JSON contracts', () => {
+    const base = record.programs[0];
+    if (!base) throw new Error('missing base program');
+    const derivatives: MaterialCookProgram[] = ['ray-hit', 'card-capture'].map((pass) => ({
+      ...base,
+      specializationKey: pass,
+      selections: [
+        {
+          pass: 'forward',
+          entry: pass === 'ray-hit' ? 'cs_surface' : 'vs_card',
+          context: {
+            backend: 'webgpu',
+            capability: 'storage-buffer',
+            pipeline: 'ray',
+            geometry: 'mesh',
+            pass: pass as 'ray-hit' | 'card-capture',
+            profile: 'forgeax-material-ray-v1',
+            toolchain: 'naga-oil',
+            instrumentation: 'none',
+          },
+        },
+      ],
+    }));
+    const value = JSON.parse(
+      serializeCookedMaterialRecord(seal({ ...record, programs: [base, ...derivatives] })),
+    );
+    expect(validateCookedMaterialRecord(value)).toMatchObject({ ok: true });
+    const schema = JSON.parse(
+      readFileSync(new URL('../schema/material-cook.schema.json', import.meta.url), 'utf8'),
+    );
+    const validate = new Ajv({ strict: false }).compile(schema);
+    expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
+    for (const change of [
+      { entry: 'cs_surface' },
+      { entry: 'fs_card' },
+      { address: 'direct' },
+      { abi: submissionAbi },
+      { context: { ...derivatives[1]?.selections[0]?.context, pass: 'raster-probe' } },
+      { context: { ...derivatives[1]?.selections[0]?.context, visibleSurface: true } },
+    ]) {
+      const invalid = structuredClone(value);
+      Object.assign(invalid.programs[2].selections[0], change);
+      expect(validateCookedMaterialRecord(invalid).ok).toBe(false);
+      expect(validate(invalid), JSON.stringify(change)).toBe(false);
+    }
+    const duplicate = structuredClone(value);
+    duplicate.programs.push({ ...duplicate.programs[2], specializationKey: 'duplicate-card' });
+    expect(validateCookedMaterialRecord(duplicate)).toMatchObject({
+      ok: false,
+      error: { detail: { actual: 'ambiguous Pass/context selection' } },
+    });
+  });
+
   it('validates ray derivatives beside complete raster address pairs', () => {
     const primary = record.programs[0] as MaterialCookProgram;
     const context = primary.selections[0]?.context;
@@ -379,6 +433,45 @@ describe('cooked material schema', () => {
     ).toMatchObject({
       ok: false,
       error: { detail: { actual: expect.stringContaining('incomplete submission address pair') } },
+    });
+  });
+
+  it('accepts a direct-only ABI and rejects a claimed scene address without its entry', () => {
+    const primary = record.programs[0];
+    const context = primary?.selections[0]?.context;
+    if (primary === undefined || context === undefined) throw new Error('missing fixture program');
+    const { sceneIndexEntry: _sceneIndexEntry, ...directAbi } = submissionAbi;
+    const direct = {
+      pass: 'forward',
+      context,
+      address: 'direct' as const,
+      entry: directAbi.directEntry,
+      abi: directAbi,
+    };
+    const directOnly = seal({ ...record, programs: [{ ...primary, selections: [direct] }] });
+    const schema = JSON.parse(
+      readFileSync(new URL('../schema/material-cook.schema.json', import.meta.url), 'utf8'),
+    );
+    const validate = new Ajv({ strict: false }).compile(schema);
+    expect(
+      validate(JSON.parse(serializeCookedMaterialRecord(directOnly))),
+      JSON.stringify(validate.errors),
+    ).toBe(true);
+    expect(
+      validateCookedMaterialRecord(JSON.parse(serializeCookedMaterialRecord(directOnly))).ok,
+    ).toBe(true);
+    const invalid = seal({
+      ...record,
+      programs: [
+        {
+          ...primary,
+          selections: [direct, { ...direct, address: 'scene-index', entry: 'vs_scene_index' }],
+        },
+      ],
+    });
+    expect(validateCookedMaterialRecord(invalid)).toMatchObject({
+      ok: false,
+      error: { detail: { field: 'programs[0].selections[1].entry' } },
     });
   });
 

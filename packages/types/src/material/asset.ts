@@ -1,4 +1,5 @@
 import type { AssetGuid } from '../index.js';
+import type { ParamSchemaEntry } from '../material-contracts.js';
 import { err, ok, type Result } from '../result.js';
 import type { MaterialColorSpace } from './color-space.js';
 import {
@@ -24,8 +25,52 @@ export type MaterialParameterType =
   | 'vec3'
   | 'vec4'
   | 'color'
+  | MaterialTextureParameterType;
+
+/**
+ * Texture parameter view dimensions. `texture` is a 2D view; the others name
+ * their WGSL view (`texture_2d_array`, `texture_3d`, `texture_cube`).
+ * `texture_external` declares a `texture_external` WGSL slot sampled with
+ * `textureSampleBaseClampToEdge`; it binds an imported video frame (zero-copy)
+ * or a 2D texture view.
+ */
+export type MaterialTextureParameterType =
   | 'texture'
-  | 'texture_cube';
+  | 'texture_2d_array'
+  | 'texture_3d'
+  | 'texture_cube'
+  | 'texture_external';
+
+/** Narrow a parameter type to the texture family. */
+export function isMaterialTextureParameterType(
+  type: unknown,
+): type is MaterialTextureParameterType {
+  return (
+    type === 'texture' ||
+    type === 'texture_2d_array' ||
+    type === 'texture_3d' ||
+    type === 'texture_cube' ||
+    type === 'texture_external'
+  );
+}
+
+/** The derived binding type of one texture parameter. */
+export function materialTextureBindingType(
+  type: MaterialTextureParameterType,
+): 'texture2d' | 'texture2d_array' | 'texture3d' | 'texture_cube' | 'texture_external' {
+  switch (type) {
+    case 'texture':
+      return 'texture2d';
+    case 'texture_2d_array':
+      return 'texture2d_array';
+    case 'texture_3d':
+      return 'texture3d';
+    case 'texture_cube':
+      return 'texture_cube';
+    case 'texture_external':
+      return 'texture_external';
+  }
+}
 
 export interface MaterialParameter {
   readonly name: string;
@@ -41,6 +86,51 @@ export interface MaterialParameter {
   readonly sampleType?: 'float' | 'unfilterable-float';
   readonly default?: MaterialValue;
   readonly optional?: boolean;
+}
+
+/**
+ * Lower authored MaterialParameter declarations to the generic ParamSchema ABI.
+ * `bool` has no uniform ABI and fails at the first offending declaration.
+ */
+export function projectMaterialParameterSchema(
+  parameters: readonly MaterialParameter[],
+  material: string,
+  stage: 'cook' | 'runtime',
+): Result<readonly ParamSchemaEntry[], MaterialError> {
+  const schema: ParamSchemaEntry[] = [];
+  for (const parameter of parameters) {
+    if (parameter.type === 'bool') {
+      return err(
+        createMaterialError('material-parameter-type-unsupported', {
+          code: 'material-parameter-type-unsupported',
+          stage,
+          material,
+          parameter: parameter.name,
+          type: parameter.type,
+          action: 'use-supported-type',
+        }),
+      );
+    }
+    if (isMaterialTextureParameterType(parameter.type)) {
+      schema.push({
+        name: parameter.name,
+        type: materialTextureBindingType(parameter.type),
+        ...(parameter.sampleType === undefined ? {} : { sampleType: parameter.sampleType }),
+      });
+      continue;
+    }
+    const value = parameter.default;
+    schema.push({
+      name: parameter.name,
+      type: parameter.type,
+      ...(parameter.colorSpace === undefined ? {} : { colorSpace: parameter.colorSpace }),
+      ...(typeof value === 'number' ||
+      (Array.isArray(value) && value.every((item) => typeof item === 'number'))
+        ? { default: value }
+        : {}),
+    });
+  }
+  return ok(schema);
 }
 
 export interface MaterialTextureCoordinates {
@@ -323,8 +413,9 @@ export function assertMaterialAsset(
       }
       if (
         parameter.sampleType !== undefined &&
-        ((parameter.type !== 'texture' && parameter.type !== 'texture_cube') ||
-          (parameter.sampleType !== 'float' && parameter.sampleType !== 'unfilterable-float'))
+        (!isMaterialTextureParameterType(parameter.type) ||
+          (parameter.sampleType !== 'float' && parameter.sampleType !== 'unfilterable-float') ||
+          (parameter.type === 'texture_external' && parameter.sampleType !== 'float'))
       ) {
         throw new Error(`${context}: parameter ${index} has invalid sampleType`);
       }

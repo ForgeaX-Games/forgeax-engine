@@ -30,15 +30,31 @@ struct Vertex { @builtin(position) position: vec4f, @location(0) uv: vec2f }
   return vec4f(linear, color.a);
 }`;
 
+/** Output channels a picture replaces; anaglyph eyes write complementary channels. */
+export type CompositeChannels = 'all' | 'red' | 'cyan';
+
+const CHANNEL_WRITE_MASK: Readonly<Record<CompositeChannels, number>> = Object.freeze({
+  all: 0xf,
+  red: 0x1 | 0x8,
+  cyan: 0x2 | 0x4,
+});
+
 export interface CompositeView {
   readonly texture: Texture;
   readonly viewport: ReturnType<typeof cameraViewExtent>;
+  readonly channels?: CompositeChannels;
 }
 
 /** Replace each rectangle in authored order, preserving encoded output exactly once. */
 export function createViewCompositor(internals: RenderSystemInternals) {
   let resources:
-    | { pipeline: RenderPipeline; layout: BindGroupLayout; sampler: Sampler; format: TextureFormat }
+    | {
+        pipelines: Map<CompositeChannels, RenderPipeline>;
+        create: (channels: CompositeChannels) => RenderPipeline;
+        layout: BindGroupLayout;
+        sampler: Sampler;
+        format: TextureFormat;
+      }
     | undefined;
   type Frame = { encoder: RhiCommandEncoder; views: readonly CompositeView[]; output: Texture };
   let compiled: CompiledRenderGraph<Frame> | undefined;
@@ -87,22 +103,25 @@ export function createViewCompositor(internals: RenderSystemInternals) {
           }),
         );
         const pipelineLayout = value(device.createPipelineLayout({ bindGroupLayouts: [layout] }));
-        const pipeline = value(
-          device.createRenderPipeline({
-            label: 'camera-view-composite',
-            layout: pipelineLayout,
-            vertex: { module, entryPoint: 'vertex', buffers: [] },
-            fragment: {
-              module,
-              entryPoint: target === undefined ? 'fragment' : 'linear_fragment',
-              targets: [{ format }],
-            },
-            primitive: { topology: 'triangle-list', cullMode: 'none' },
-          }),
-        );
+        const entryPoint = target === undefined ? 'fragment' : 'linear_fragment';
+        const create = (channels: CompositeChannels) =>
+          value(
+            device.createRenderPipeline({
+              label: `camera-view-composite:${channels}`,
+              layout: pipelineLayout,
+              vertex: { module, entryPoint: 'vertex', buffers: [] },
+              fragment: {
+                module,
+                entryPoint,
+                targets: [{ format, writeMask: CHANNEL_WRITE_MASK[channels] }],
+              },
+              primitive: { topology: 'triangle-list', cullMode: 'none' },
+            }),
+          );
         resources = {
           format,
-          pipeline,
+          pipelines: new Map(),
+          create,
           layout,
           sampler: value(device.createSampler({ minFilter: 'linear', magFilter: 'linear' })),
         };
@@ -111,7 +130,7 @@ export function createViewCompositor(internals: RenderSystemInternals) {
         width,
         height,
         format,
-        views.map((v) => [v.viewport.renderWidth, v.viewport.renderHeight]),
+        views.map((v) => [v.viewport.renderWidth, v.viewport.renderHeight, v.channels ?? 'all']),
       ]);
       if (compiled === undefined || key !== nextKey) {
         const graph = new RenderGraphBuilder<Frame>();
@@ -150,6 +169,15 @@ export function createViewCompositor(internals: RenderSystemInternals) {
           return unwrap(graph.view(texture, { format: base.format }));
         });
         const ready = resources;
+        const pipelineFor = (channels: CompositeChannels) => {
+          let pipeline = ready.pipelines.get(channels);
+          if (pipeline === undefined) {
+            pipeline = ready.create(channels);
+            ready.pipelines.set(channels, pipeline);
+          }
+          return pipeline;
+        };
+        const viewPipelines = views.map((v) => pipelineFor(v.channels ?? 'all'));
         unwrap(
           graph.addRasterPass('camera-view-composite', {
             accesses: [
@@ -165,10 +193,12 @@ export function createViewCompositor(internals: RenderSystemInternals) {
               },
             ],
             encode: ({ pass, frame, resources: resolved }) => {
-              pass.setPipeline(ready.pipeline);
               frame.views.forEach((view, index) => {
                 const input = inputs[index];
-                if (input === undefined) throw new Error('Missing camera composite binding');
+                const pipeline = viewPipelines[index];
+                if (input === undefined || pipeline === undefined)
+                  throw new Error('Missing camera composite binding');
+                pass.setPipeline(pipeline);
                 const textureView = unwrap(resolved.textureView(input));
                 const group = value(
                   device.createBindGroup({
@@ -190,12 +220,12 @@ export function createViewCompositor(internals: RenderSystemInternals) {
         );
         if (target === undefined)
           unwrap(
-            graph.addCopyPass('final-srgb-observation', {
+            graph.addCopyPass('final-display-observation', {
               accesses: [{ resource: colorView, usage: 'copy-src' }],
               encode: ({ encoder, frame }) =>
                 encodeFrameObservationCapture(internals, encoder, {
                   texture: frame.output,
-                  domain: 'final-srgb',
+                  domain: 'final-display',
                   format: base.format,
                   width: internals.canvas.width,
                   height: internals.canvas.height,

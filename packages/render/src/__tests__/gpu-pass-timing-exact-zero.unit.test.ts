@@ -37,6 +37,8 @@ function device(ledger: string[]) {
       rgba16floatRenderable: true,
       rg11b10ufloatRenderable: true,
       float32Filterable: true,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
     },
     limits: {} as never,

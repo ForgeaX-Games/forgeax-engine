@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // learn-render 3.1 model-loading dawn-node smoke.
 //
 // The smoke loads Sponza via the canonical loadByGuid<SceneAsset> path
@@ -45,7 +46,7 @@ const FALSIFY_WRONG_GUID = FALSIFY === 'wrong-guid';
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -119,9 +120,11 @@ const mockCanvas = {
 
 // 3a. Read pack-index, build URL maps.
 const PACK_INDEX_PATH = resolve(DIST_DIR, 'pack-index.json');
+let packIndexWire;
 let packIndexJson;
 try {
-  packIndexJson = JSON.parse(readFileSync(PACK_INDEX_PATH, 'utf8'));
+  packIndexWire = JSON.parse(readFileSync(PACK_INDEX_PATH, 'utf8'));
+  packIndexJson = decodeCatalogWire(packIndexWire).unwrap();
 } catch (err) {
   console.error(`[smoke] FAIL - cannot read pack-index at ${PACK_INDEX_PATH}: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -196,7 +199,7 @@ globalThis.fetch = async (url) => {
   const urlStr = typeof url === 'string' ? url : String(url);
 
   if (urlStr === '/pack-index.json') {
-    return { ok: true, json: () => Promise.resolve(packIndexJson), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+    return { ok: true, json: () => Promise.resolve(packIndexWire), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   }
 
   const filePath = urlToPath.get(urlStr);

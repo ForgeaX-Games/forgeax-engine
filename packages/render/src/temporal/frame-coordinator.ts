@@ -79,32 +79,6 @@ export interface TemporalFrameReceipt<T = unknown> {
   readonly historyDirection: 'a-to-b' | 'b-to-a';
 }
 
-export type ReflectionFallbackTemporalReset =
-  | { readonly reset: false }
-  | { readonly reset: true; readonly reason: 'reflection-fallback-generation' };
-
-/** Maps committed producer generations into the existing temporal reset seam. */
-export function resolveReflectionFallbackTemporalReset(
-  previousGeneration: number | undefined,
-  nextGeneration: number | undefined,
-): ReflectionFallbackTemporalReset {
-  if (previousGeneration === undefined || nextGeneration === undefined) return { reset: false };
-  return previousGeneration === nextGeneration
-    ? { reset: false }
-    : { reset: true, reason: 'reflection-fallback-generation' };
-}
-
-/**
- * Keeps SSR admission on the existing producer-generation reset seam. The
- * admission path never allocates or resolves temporal history itself.
- */
-export function resolveSsrAdmissionTemporalReset(
-  previousGeneration: number | undefined,
-  nextGeneration: number | undefined,
-): ReflectionFallbackTemporalReset {
-  return resolveReflectionFallbackTemporalReset(previousGeneration, nextGeneration);
-}
-
 function failure(code: TemporalFrameErrorCode, hint: string): TemporalFrameError {
   return {
     code,

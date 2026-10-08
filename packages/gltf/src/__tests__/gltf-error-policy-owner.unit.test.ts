@@ -24,7 +24,7 @@ describe('glTF transmission error policy', () => {
   });
 
   it('keeps unknown extensionsRequired declarations rejected', () => {
-    const result = checkExtensions({ extensionsRequired: ['KHR_materials_unlit'] });
+    const result = checkExtensions({ extensionsRequired: ['KHR_materials_unknown'] });
     expect(result).toMatchObject({
       ok: false,
       error: { code: 'gltf-extension-unsupported' },

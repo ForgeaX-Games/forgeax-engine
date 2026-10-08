@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  deriveRenderExtent,
-  renderExtentSize,
-  standardExtentDomainPlan,
-} from '../pipeline/render-extent';
+import { deriveRenderExtent, renderExtentSize } from '../pipeline/render-extent';
 
 describe('RenderExtent', () => {
   it('keeps output and internal domains distinct at a fixed TAAU scale', () => {
@@ -40,24 +36,16 @@ describe('RenderExtent', () => {
     expect(extent.outputHeight).not.toBe(extent.internalHeight);
   });
 
-  it('keeps tiny surfaces native and assigns persistent/history domains explicitly', () => {
+  it('keeps tiny surfaces native', () => {
     const extent = deriveRenderExtent({
       outputWidth: 7,
       outputHeight: 5,
       requestedScale: 0.5,
       generation: 9,
     });
-    const plan = standardExtentDomainPlan(extent, 'cpu-webgl2');
 
     expect(extent.internalWidth).toBe(7);
     expect(extent.internalHeight).toBe(5);
     expect(extent.scale).toBe(1);
-    expect(plan.resources).toEqual(
-      expect.arrayContaining([
-        { name: 'scene', domain: 'internal' },
-        { name: 'taa-history', domain: 'output' },
-        { name: 'output', domain: 'output' },
-      ]),
-    );
   });
 });

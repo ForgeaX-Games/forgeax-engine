@@ -47,6 +47,7 @@ function model(): ViewerModel {
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
         colorAttachmentResolveViewHandleIds: [],
+        colorAttachmentDepthSlices: [],
         depthStencilViewHandleId: null,
       },
       {
@@ -58,6 +59,7 @@ function model(): ViewerModel {
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
         colorAttachmentResolveViewHandleIds: [],
+        colorAttachmentDepthSlices: [],
         depthStencilViewHandleId: null,
       },
     ],

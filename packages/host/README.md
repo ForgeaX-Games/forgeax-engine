@@ -23,6 +23,8 @@ await backend.dispose();
 
 Offline clients pass an assembly directly. Connected clients request it over Host transport and report the accepted revision/generation. Backend subscriptions observe reports without controlling publication. Stale reports are rejected. The existing capability request, cancellation and disconnection protocol remains the transport owner.
 
+Local request cancellation rejects the pending request even while its socket is closing. The transport sends the cancellation notice only through an open socket; a late native close event never authorizes another send.
+
 Host does not depend on Pack, project schema, World or Renderer. Those domain owners install ordinary plugins. `entryId` survives only in the external activation-report projection for wire consumers; it names a native Fiber within its session.
 
 An owner may bind a distinct frontend projection to an authenticated connection:
@@ -39,3 +41,15 @@ assembly. Disconnect and Host disposal release the retained binding.
 The Host owns only this connection/assembly seam. Project, execution, admission
 policy, snapshot lifetime and target semantics remain in the consuming domain
 plugin. Hosts without a bound projection retain their normal assembly path.
+
+The `host-assembly-not-ready` error detail uses `HostActivationEntry`: its
+`entryId`, native `fiberState` and optional structured `failure` describe the
+same pending Fiber as an activation report entry.
+
+Frontend activation states follow `HostActivationReport.state`. The backend
+adds `unavailable` for a disconnected frontend; local status errors remain
+`unknown`, while reports serialize `HostErrorSummary`.
+
+Both Host options select `context`, `startupTimeoutMs` and `startupPlugins`
+from `HostStartupOptions`, matching the fields actually forwarded to native
+startup. Assembly, transport and frontend cleanup options stay on their owners.

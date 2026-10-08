@@ -28,7 +28,6 @@ it.each([
     /* @vite-ignore */ new URL('../../../shader-compiler/dist/index.mjs', import.meta.url).href
   );
   const source = readFileSync(resolve('packages/shader/src/ssr-temporal.wgsl'), 'utf8');
-  expect(source).toContain('sampleSsrHistory(historyUv, fullSize, priorClip.w, normal)');
   const compiled = await compiler.compileShader(
     `${source}
 @group(1) @binding(0) var<storage, read_write> result: array<vec4<f32>>;
@@ -38,7 +37,7 @@ it.each([
   let coordinates = array<vec2<f32>, 5>(vec2<f32>(0.125), vec2<f32>(0.25, 0.125),
     vec2<f32>(0.375), vec2<f32>(0.5, 0.125), vec2<f32>(0.625));
   for (var i = 0u; i < 5u; i++) {
-    result[i] = sampleSsrHistory(coordinates[i], vec2<u32>(4u), 4.0, vec3<f32>(0.0, 0.0, 1.0));
+    result[i] = sampleSsrHistory(coordinates[i], vec2<u32>(4u), 4.0, vec3<f32>(0.0, 0.0, 1.0)).color;
   }
 }`,
     {
@@ -94,9 +93,10 @@ it.each([
     upload(
       surface,
       [0, 1, 2, 3].flatMap((i) => [
-        0.5,
-        0.5,
-        kind === 'normal-edge' && i % 2 === 1 ? 0 : 1,
+        0,
+        // G keeps seven oct-normal bits and a clear source-reactive low bit.
+        kind === 'normal-edge' && i % 2 === 1 ? 254 / 255 : 128 / 255,
+        kind === 'normal-edge' && i % 2 === 1 ? 1 : 0.5,
         kind === 'missing'
           ? 0
           : kind === 'partial-miss'

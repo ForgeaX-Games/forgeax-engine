@@ -12,7 +12,7 @@ import {
 
 export default defineFeature({
   title: 'SFX/Music buses',
-  catalog: 'SFX/Music buses',
+  catalog: 'Configurable audio buses',
   kind: 'probe',
   summary:
     'The Host engine owns a fixed two-bus topology: each source gain feeds the sfx or music bus gain, both buses feed one master gain. Bus volume and mute schedule a 10 ms ramp; unmute restores the previous bus volume.',

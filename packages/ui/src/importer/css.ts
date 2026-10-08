@@ -1,12 +1,12 @@
+import type { ImportDiagnostic } from '@forgeax/engine-types';
 import { parseCssAuthoring } from '../authoring/css.js';
-import type { AuthoringDiagnostic } from '../authoring/diagnostics.js';
 import type { SourceLocation, ValidationError } from './html.js';
 
 export type CssValidation =
   | { readonly ok: true; readonly value: { readonly css: string } }
   | { readonly ok: false; readonly error: ValidationError };
 
-function toLegacyError(diagnostic: AuthoringDiagnostic): ValidationError {
+function toLegacyError(diagnostic: ImportDiagnostic): ValidationError {
   return {
     code: diagnostic.code.includes('url') ? 'invalid-url' : 'unsafe-html',
     message: diagnostic.actual,

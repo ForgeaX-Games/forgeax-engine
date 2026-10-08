@@ -34,7 +34,11 @@
 /** 7 numeric WGSL types — std140-packed into one merged UBO entry (D-3). */
 export type NumericParamType = 'f32' | 'i32' | 'u32' | 'vec2' | 'vec3' | 'vec4' | 'color';
 
-/** 8 texture-binding-family WGSL types: 6 texture views + 2 sampler kinds. */
+/**
+ * 9 texture-binding-family WGSL types: 7 texture views + 2 sampler kinds.
+ * `texture_external` samples through `textureSampleBaseClampToEdge` and binds
+ * a zero-copy video frame or any 2D color view (copy path).
+ */
 export type TextureBindingParamType =
   | 'texture2d'
   | 'texture2d_array'
@@ -42,6 +46,7 @@ export type TextureBindingParamType =
   | 'texture_cube'
   | 'texture_depth_2d'
   | 'texture_cube_array'
+  | 'texture_external'
   | 'sampler'
   | 'sampler_comparison';
 
@@ -49,7 +54,7 @@ export type TextureBindingParamType =
 export type StorageBindingParamType = 'storage_buffer';
 
 /**
- * Closed union of WGSL material-parameter type literals (16 members).
+ * Closed union of WGSL material-parameter type literals (17 members).
  * Every paramSchema entry's `type` field MUST be a member of this union.
  */
 export type MaterialParamType =
@@ -58,7 +63,7 @@ export type MaterialParamType =
   | StorageBindingParamType;
 
 /**
- * v2 material parameter type whitelist — 16 ordered literal tuple (D-7).
+ * v2 material parameter type whitelist — 17 ordered literal tuple (D-7).
  * Order is significant only as a stable enumeration source for tests
  * and discoverability; consumers should treat membership as a Set.
  */
@@ -76,6 +81,7 @@ export const MATERIAL_PARAM_TYPES = [
   'texture_cube',
   'texture_depth_2d',
   'texture_cube_array',
+  'texture_external',
   'sampler',
   'sampler_comparison',
   'storage_buffer',

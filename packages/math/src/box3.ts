@@ -218,149 +218,39 @@ export function transformBox3(out: Box3, box: Box3Like, m: Mat4Like): Box3 {
   const m32 = m[14] as number;
   const m33 = m[15] as number;
 
-  // Corner 0: (bx, by, bz)
-  let x = m00 * bx + m10 * by + m20 * bz + m30;
-  let y = m01 * bx + m11 * by + m21 * bz + m31;
-  let z = m02 * bx + m12 * by + m22 * bz + m32;
-  let w = m03 * bx + m13 * by + m23 * bz + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
+  let minX = 0,
+    maxX = 0,
+    minY = 0,
+    maxY = 0,
+    minZ = 0,
+    maxZ = 0;
+  for (let corner = 0; corner < 8; corner++) {
+    const cx = corner & 1 ? bX : bx;
+    const cy = corner & 2 ? bY : by;
+    const cz = corner & 4 ? bZ : bz;
+    let x = m00 * cx + m10 * cy + m20 * cz + m30;
+    let y = m01 * cx + m11 * cy + m21 * cz + m31;
+    let z = m02 * cx + m12 * cy + m22 * cz + m32;
+    const w = m03 * cx + m13 * cy + m23 * cz + m33;
+    if (w !== 0) {
+      const iw = 1 / w;
+      x *= iw;
+      y *= iw;
+      z *= iw;
+    }
+    if (corner === 0) {
+      minX = maxX = x;
+      minY = maxY = y;
+      minZ = maxZ = z;
+    } else {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
   }
-  let minX = x,
-    maxX = x,
-    minY = y,
-    maxY = y,
-    minZ = z,
-    maxZ = z;
-
-  // Corner 1: (bX, by, bz)
-  x = m00 * bX + m10 * by + m20 * bz + m30;
-  y = m01 * bX + m11 * by + m21 * bz + m31;
-  z = m02 * bX + m12 * by + m22 * bz + m32;
-  w = m03 * bX + m13 * by + m23 * bz + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 2: (bx, bY, bz)
-  x = m00 * bx + m10 * bY + m20 * bz + m30;
-  y = m01 * bx + m11 * bY + m21 * bz + m31;
-  z = m02 * bx + m12 * bY + m22 * bz + m32;
-  w = m03 * bx + m13 * bY + m23 * bz + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 3: (bX, bY, bz)
-  x = m00 * bX + m10 * bY + m20 * bz + m30;
-  y = m01 * bX + m11 * bY + m21 * bz + m31;
-  z = m02 * bX + m12 * bY + m22 * bz + m32;
-  w = m03 * bX + m13 * bY + m23 * bz + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 4: (bx, by, bZ)
-  x = m00 * bx + m10 * by + m20 * bZ + m30;
-  y = m01 * bx + m11 * by + m21 * bZ + m31;
-  z = m02 * bx + m12 * by + m22 * bZ + m32;
-  w = m03 * bx + m13 * by + m23 * bZ + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 5: (bX, by, bZ)
-  x = m00 * bX + m10 * by + m20 * bZ + m30;
-  y = m01 * bX + m11 * by + m21 * bZ + m31;
-  z = m02 * bX + m12 * by + m22 * bZ + m32;
-  w = m03 * bX + m13 * by + m23 * bZ + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 6: (bx, bY, bZ)
-  x = m00 * bx + m10 * bY + m20 * bZ + m30;
-  y = m01 * bx + m11 * bY + m21 * bZ + m31;
-  z = m02 * bx + m12 * bY + m22 * bZ + m32;
-  w = m03 * bx + m13 * bY + m23 * bZ + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
-
-  // Corner 7: (bX, bY, bZ)
-  x = m00 * bX + m10 * bY + m20 * bZ + m30;
-  y = m01 * bX + m11 * bY + m21 * bZ + m31;
-  z = m02 * bX + m12 * bY + m22 * bZ + m32;
-  w = m03 * bX + m13 * bY + m23 * bZ + m33;
-  if (w !== 0) {
-    const iw = 1 / w;
-    x *= iw;
-    y *= iw;
-    z *= iw;
-  }
-  if (x < minX) minX = x;
-  if (x > maxX) maxX = x;
-  if (y < minY) minY = y;
-  if (y > maxY) maxY = y;
-  if (z < minZ) minZ = z;
-  if (z > maxZ) maxZ = z;
 
   out[0] = minX;
   out[1] = minY;

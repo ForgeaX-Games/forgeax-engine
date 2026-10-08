@@ -57,6 +57,13 @@ export {
 export type { ExtensionsCheckResult, GltfExtensionsJson } from './check-extensions.js';
 // KHR extensions gate (w14).
 export { checkExtensions, EXTENSION_ALLOWLIST } from './check-extensions.js';
+export { createDracoDecoder } from './draco-adapter.js';
+export type {
+  DracoAttributeArray,
+  DracoCompressionJson,
+  GltfDracoDecodeCapability,
+} from './draco-decode.js';
+export { projectDracoPrimitives } from './draco-decode.js';
 export type {
   GltfAccessorTypeMismatchDetail,
   GltfAnimationCubicsplineUnsupportedDetail,
@@ -90,6 +97,7 @@ export { err, GLTF_ERROR_HINTS, gltfErr, ok } from './errors.js';
 export { gltfImporter } from './gltf-importer.js';
 export { type GltfLodRelation, parseGltfLodExtension } from './lod/parse-lod.js';
 export { projectGltfLodMeta } from './lod/project-meta.js';
+export type { GltfCameraIr } from './parse-camera.js';
 export type { GlbChunks } from './parse-glb-chunks.js';
 // Header / chunk parsers (w8).
 export { parseGlbChunks, parseGltfHeader } from './parse-glb-chunks.js';

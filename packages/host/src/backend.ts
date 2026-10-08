@@ -1,4 +1,4 @@
-import { Context, createToolApiPlugin, type Plugin } from '@forgeax/engine-plugin';
+import { Context, createToolApiPlugin } from '@forgeax/engine-plugin';
 import {
   createHostAssembly,
   type HostActivationReport,
@@ -7,7 +7,7 @@ import {
   type HostAssemblyInput,
   validateHostAssembly,
 } from './protocol.js';
-import { createHostStartup } from './startup.js';
+import { createHostStartup, type HostStartupOptions } from './startup.js';
 import {
   createHostTransport,
   HOST_ACTIVATION_REPORT_SERVICE,
@@ -22,7 +22,7 @@ export type HostActivationReportListener = (
   caller: HostCallerIdentity,
 ) => void | Promise<void>;
 export interface BackendHostActivationStatus {
-  readonly state: 'created' | 'loading' | 'active' | 'failed' | 'unavailable' | 'disposed';
+  readonly state: HostActivationReport['state'] | 'unavailable';
   readonly revision: string;
   readonly error?: unknown;
 }
@@ -32,10 +32,8 @@ export interface BackendAssemblyAuthority {
   readonly activation: BackendHostActivationStatus;
   subscribe(listener: (assembly: HostAssembly) => void): () => void;
 }
-export interface BackendHostOptions {
-  readonly context?: Context;
-  readonly startupTimeoutMs?: number;
-  readonly startupPlugins?: readonly Plugin[];
+export interface BackendHostOptions
+  extends Pick<HostStartupOptions, 'context' | 'startupTimeoutMs' | 'startupPlugins'> {
   readonly assembly?: HostAssembly;
   readonly config?: unknown;
   readonly transport?: HostTransportServer;

@@ -1,3 +1,4 @@
+import { atmosphereEvidenceControls, type AtmosphereEvidenceSettings } from './atmosphere-evidence';
 import { installSurfaceControls } from './surface-controls';
 import { verifyProbeAtmosphere } from './probe-atmosphere-evidence';
 import { verifyProbeUpdates } from './probe-update-evidence';
@@ -15,6 +16,7 @@ import { World, type EntityHandle } from '@forgeax/engine-ecs';
 import type { RhiDevice, RhiError } from '@forgeax/engine-rhi';
 import type { MaterialAsset } from '@forgeax/engine-types';
 import {
+  createCloudLayerFeature,
   Camera,
   CUBE_CAMERA_FACE_ORDER,
   CubeCamera,
@@ -393,8 +395,11 @@ function spawnConsumerScene(
   world: World,
   target: RenderTarget,
   source: RenderTargetTextureSource,
+  aspect: number,
   reflectionEvidence = false,
 ): {
+  readonly sun?: EntityHandle;
+  readonly atmosphere?: EntityHandle;
   readonly skylight?: EntityHandle;
   readonly reflectionProbe?: EntityHandle;
   readonly camera?: EntityHandle;
@@ -404,11 +409,11 @@ function spawnConsumerScene(
   if (reflectionEvidence) {
     const scene = spawnReflectionScene(
       world,
-      1,
+      aspect,
       resolveSsrFixture(new URLSearchParams(location.search).get('fixture') ?? 'cube'),
       new URLSearchParams(location.search).get('aa') ?? 'taa',
     );
-    if (scene.reflectionProbe !== undefined) {
+    if ('reflectionProbe' in scene && scene.reflectionProbe !== undefined) {
       world.set(scene.reflectionProbe, ReflectionProbe, { updateIntent: 1 }).unwrap();
     }
     return scene;
@@ -750,6 +755,7 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     canvas,
     {
       ssrIdentity,
+      ...(new URLSearchParams(location.search).get('fixture') === 'atmosphere' ? { features: [createCloudLayerFeature()] } : {}),
       ...(new URLSearchParams(location.search).has('timings') ? { gpuPassTiming: {} } : {}),
       captureReflectionFallbackReadback: reflectionEvidence && import.meta.env.VITE_REFLECTION_PROBE_EVIDENCE === '1',
       ...(reflectionEvidence
@@ -766,7 +772,7 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
   const app = created.value;
   exposeLearnRenderTestApp(app, canvas);
   const renderer = app.renderer;
-  app.onError((error) => reportError('[hello-ssr] app error', error));
+  app.onError((error) => reportError('[hello-ssr] app error', JSON.stringify(error)));
 
   const targetResult = renderer.createRenderTarget(descriptor());
   if (!targetResult.ok) {
@@ -787,6 +793,7 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     world,
     targetResult.value,
     sourceResult.value,
+    canvas.width / canvas.height,
     reflectionEvidence,
   );
   const attached = renderer.attach(world);
@@ -830,7 +837,7 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       for (const face of CUBE_CAMERA_FACE_ORDER.keys()) {
         const ticketResult = renderer.requestTargetReadback(targetResult.value, {
           mipLevel: 0,
-          face,
+          layer: face,
         });
         if (!ticketResult.ok) throw ticketResult.error;
         cubeTickets.push(ticketResult.value);
@@ -1366,6 +1373,8 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     return pixels.value;
   };
 
+  const setAtmosphereSettings = atmosphereEvidenceControls(world,sceneEntities);
+
   // Preparation owns every producer draw; live comparison reads the captured
   // presentation without advancing the cube or probe to a different frame.
   const readReflectionPixels = async (): Promise<Uint8Array> => {
@@ -1384,12 +1393,12 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
     __readReflectionPixels: readReflectionPixels,
     __replayReflectionCapture: replayCapturedFrameInBrowser,
     __verifyProbeAtmosphere: async () => {
-      if (sceneEntities.reflectionProbe === undefined || sceneEntities.camera === undefined || sceneEntities.movingObject === undefined || sceneEntities.skylight === undefined)
+      if (sceneEntities.reflectionProbe === undefined || sceneEntities.camera === undefined || sceneEntities.movingObject === undefined || sceneEntities.skylight === undefined || sceneEntities.sun === undefined)
         throw new Error('Use the plane and cube fixture');
       app.pause().unwrap();
       world.removeComponent(sceneEntities.camera, ScreenSpaceReflection).unwrap();
       try {
-        const report = await verifyProbeAtmosphere(world, renderer, sceneEntities.reflectionProbe, sceneEntities.movingObject, sceneEntities.skylight,
+        const report = await verifyProbeAtmosphere(world, renderer, sceneEntities.reflectionProbe, sceneEntities.movingObject, sceneEntities.skylight, sceneEntities.sun,
           async () => {
             world.update(1 / 60).unwrap();
             const frame = renderer.draw({ leases: [attached.value], camera: { lease: attached.value }, environment: { lease: attached.value } });
@@ -1454,6 +1463,26 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
         app.resume().unwrap();
       }
     },
+    __setAtmosphereEvidence: async (settings: AtmosphereEvidenceSettings) => {
+      app.pause().unwrap();
+      setAtmosphereSettings(settings);
+      let timing;
+      const timings=[];
+      const cpuDrawMilliseconds=[];
+      for (let i=0;i<(settings.frames ?? 3);i++) {
+        const cpuStart=performance.now();
+        world.update(1/60).unwrap();
+        const submitted=renderer.draw({leases:[attached.value],camera:{lease:attached.value},environment:{lease:attached.value}});
+        if (!submitted.ok) throw submitted.error;
+        cpuDrawMilliseconds.push(performance.now()-cpuStart);
+        const receipt=submitted.value;
+        const completed=await receipt.completed;
+        if (!completed.ok) throw completed.error;
+        const observed=await renderer.observe(receipt,{include:['timings']});
+        if (observed.ok) {timing=observed.value.timings;timings.push(timing);}
+      }
+      return {settings,timing,timings,cpuDrawMilliseconds,inspection:renderer.inspect(),distances:[100,1000,5000,20000],solarLux:100000,exposure:1/5000};
+    },
     __inspectSsr: () => renderer.inspect(),
     __inspectSsrExecution: () => app.execution.report(),
     // Bounded evidence uses App's own paused-frame driver. Capture advances
@@ -1462,10 +1491,32 @@ async function bootstrap(canvas: HTMLCanvasElement): Promise<void> {
       const result = paused ? app.pause() : app.resume();
       if (!result.ok) throw result.error;
     },
-    __stepSsrEvidenceFrame: () => {
-      const result = app.stepFrame(0);
-      if (!result.ok) throw result.error;
-      return renderer.inspect().temporal;
+    __stepSsrEvidenceFrame: async (timings = false) => {
+      let unsubscribe = () => {};
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const submitted = timings ? new Promise<import('@forgeax/engine-render').FrameReceipt>((resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Paused App frame did not submit')), 5000);
+        unsubscribe = renderer.subscribe(event => {
+          if (event.kind === 'frame-submitted') resolve(event.receipt);
+        });
+      }) : undefined;
+      try {
+        const cpuStart = performance.now();
+        const result = app.stepFrame(0);
+        const cpuSubmissionMs = performance.now() - cpuStart;
+        if (!result.ok) throw result.error;
+        if (submitted === undefined) return renderer.inspect().temporal;
+        const receipt = await submitted;
+        const completed = await receipt.completed;
+        if (!completed.ok) throw completed.error;
+        const observation = await renderer.observe(receipt, { include: ['timings'] });
+        if (!observation.ok) throw observation.error;
+        return { frameId: receipt.frameId, cpuSubmissionMs, timings: observation.value.timings,
+          inspection: renderer.inspect(), execution: app.execution.report() };
+      } finally {
+        unsubscribe();
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
     },
   });
   publishReport(baseReport);
@@ -1621,8 +1672,14 @@ const resolution = Number(
 if (!Number.isInteger(resolution) || resolution < 128 || resolution > 2048) {
   throw new Error('[hello-ssr] resolution must be an integer in [128, 2048]');
 }
+const renderHeight = Number(new URLSearchParams(location.search).get('height') ?? resolution);
+if (!Number.isInteger(renderHeight) || renderHeight < 128 || renderHeight > 2048) {
+  throw new Error('[hello-ssr] height must be an integer in [128, 2048]');
+}
 canvas.width = resolution;
-canvas.height = resolution;
+canvas.height = renderHeight;
+canvas.style.width = `${resolution}px`;
+canvas.style.height = `${renderHeight}px`;
 document.documentElement.style.setProperty('--render-size', `${resolution}px`);
 const fixtureDescription = document.getElementById('fixture-description');
 if (fixtureDescription !== null) {

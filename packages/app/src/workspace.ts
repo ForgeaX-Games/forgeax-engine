@@ -273,6 +273,10 @@ export interface EngineWorkspaceProjectHandle {
   readonly handle?: unknown;
   /** Current terminal failure, projected from the session owner rather than probed by a command. */
   readonly failure?: unknown;
+  /** Browser realm lifecycle. `starting` covers the first boot and a refresh detach. */
+  readonly phase?: 'starting' | 'running' | 'failed' | undefined;
+  /** Increments each time a browser page for this session reports ready. */
+  readonly browserGeneration?: number | undefined;
 }
 
 /**
@@ -467,6 +471,12 @@ export function createEngineWorkspaceProvider(
         handle: session,
         get failure() {
           return session.failure;
+        },
+        get phase() {
+          return session.phase;
+        },
+        get browserGeneration() {
+          return session.browserGeneration;
         },
       };
     },
@@ -894,8 +904,8 @@ export function createEngineWorkspaceRuntime(
 
   const stopPlay = async (play: EngineWorkspacePlay): Promise<void> => {
     if (state.play !== play) return;
-    state.play = undefined;
     await play.close?.({ targetId: play.target.targetId });
+    if (state.play === play) state.play = undefined;
   };
 
   const startPlay = provider.startPlay?.bind(provider);
@@ -973,7 +983,7 @@ export function createEngineWorkspaceRuntime(
     get play() {
       return state.play;
     },
-    stopPlay,
+    stopPlay: (play) => enqueue(() => stopPlay(play)),
     ...(startPlay
       ? {
           startPlay: (input: EngineWorkspaceProjectHandle & { signal?: AbortSignal }) =>

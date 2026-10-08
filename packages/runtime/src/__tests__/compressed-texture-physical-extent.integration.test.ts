@@ -1,10 +1,8 @@
 import { numMipLevels } from '@forgeax/engine-assets-runtime';
 import { ok, type RhiCaps } from '@forgeax/engine-rhi';
-import type { TextureAsset } from '@forgeax/engine-types';
-import { toShared } from '@forgeax/engine-types';
+import { deriveTextureLayout, type TextureAsset, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { GpuResidencyCache } from '../../../render/src/device/gpu-residency';
-import { deriveMipUploadLayout } from '../../../render/src/render-data';
 
 type TextureCall = { readonly size: { readonly width: number; readonly height: number } };
 type WriteCall = {
@@ -32,6 +30,8 @@ const caps: RhiCaps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: false,
   float32Filterable: false,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
 };
 
@@ -68,22 +68,19 @@ function makeStore(calls: { create: TextureCall[]; writes: WriteCall[] }): GpuRe
 }
 
 function compressedPod(): TextureAsset {
-  const layout = deriveMipUploadLayout(
-    'bc7-rgba-unorm',
-    2085,
-    1573,
-    numMipLevels({ width: 2085, height: 1573 }),
-  );
-  const bytes = new Uint8Array(layout.reduce((total, level) => total + level.byteLength, 0));
-  for (const level of layout)
+  const shape = { viewDimension: '2d', extent: { width: 2085, height: 1573 } } as const;
+  const mips = { kind: 'packed', levelCount: numMipLevels(shape.extent) } as const;
+  const layout = deriveTextureLayout({ shape, format: 'bc7-rgba-unorm', mips }).unwrap();
+  const bytes = new Uint8Array(layout.byteLength);
+  for (const level of layout.levels)
     bytes.fill(level.level + 1, level.byteOffset, level.byteOffset + level.byteLength);
   return {
     kind: 'texture',
-    shape: { viewDimension: '2d', extent: { width: 2085, height: 1573 } },
+    shape,
     format: 'bc7-rgba-unorm',
     data: bytes,
     colorSpace: 'linear',
-    mips: { kind: 'packed', levelCount: layout.length },
+    mips,
   };
 }
 
@@ -91,12 +88,7 @@ describe('compressed texture physical extent recorded-RHI witness [w36]', () => 
   it('allocates and uploads BC7 physical extents while preserving logical asset metadata', () => {
     const calls = { create: [] as TextureCall[], writes: [] as WriteCall[] };
     const pod = compressedPod();
-    const expected = deriveMipUploadLayout(
-      pod.format,
-      pod.shape.extent.width,
-      pod.shape.extent.height,
-      pod.mips.kind === 'packed' ? pod.mips.levelCount : 1,
-    );
+    const expected = deriveTextureLayout(pod).unwrap().levels;
 
     const result = makeStore(calls).ensureResident(toShared<'TextureAsset'>(36), pod);
     if (!result.ok) throw result.error;

@@ -46,10 +46,10 @@
         "path": "dist/index.mjs",
         "compression": "gzip",
         "baseline": {
-          "source": "b2ea70919",
-          "threshold": 13280
+          "source": "packages/input/reports/roi-20-gamepad-haptics/README.md#bundle-size",
+          "threshold": 17600
         },
-        "reason": "dist/index.mjs = 12069 B gzip after the normalized input snapshot and action/gesture readpoints. Threshold 13280 B = approximately 10% headroom over measured gzip. Prior baseline 10899 B gzip @ b2ea70919 (threshold 11990). Includes: action-state.ts (deriveActionStates + getAxis/getVector), gesture-recognizer.ts (5 state machines), gamepad-frame.ts (DB remap), browser-backend.ts (recognizer wiring + lazy-load), composite-backend.ts (per-key-yield merge decorator), input-snapshot.ts (keyboard/mouse/action/gesture readpoints + PointerType narrowing), index.ts (barrel). The SDL controller DB sub-export (dist/controller-db.mjs, ~1.5 KB gzip) and data sub-export (dist/controller-db-data.mjs, ~45 KB gzip / 545 KB raw) are opt-in lazy dynamic-imports and are NOT in the main-entry path (path=dist/index.mjs)."
+        "reason": "Measured 16132 B gzip with the bounded dual-rumble producer and Host actuator lifecycle (up from the prior 12069 B input surface); 17600 B allows approximately 10% headroom for this explicit capability addition. Physical-device validation remains pending; this is a byte-size budget, not haptic performance acceptance."
       },
       "fps": {
         "enabled": false,
@@ -57,7 +57,7 @@
       },
       "bench": {
         "enabled": false,
-        "reason": "frame-start scan path is O(events-since-last-tick); not a perf-critical surface for the MVP"
+        "reason": "Contract load benchmark: bun packages/input/scripts/benchmark-feedback.ts. Host dispatch and POD roundtrip report 1/2/4 targets at idle, event and unchanged 32-command burst load. This report is not the metric registry benchmark harness and does not establish physical throughput; full App frame and hardware acceptance remain required."
       },
       "gate": {
         "enabled": false,

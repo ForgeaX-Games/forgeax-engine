@@ -1,8 +1,11 @@
-import type { ArtifactRef } from '@forgeax/engine-tool-runtime';
 import { evaluateTextureOracle, type TextureOracleInput } from '../evidence/oracle.js';
-import type { PreviewAssetRegistry, PreviewRenderRuntime } from '../host/preview-host.js';
 import { canonicalPresentation, createCanonicalPreviewRecipe } from '../kit/canonical.js';
-import { assetLoadFailure, type ResourcePreviewArgs, subjectFailure } from './subject.js';
+import {
+  loadResourceSubject,
+  type ResourcePreviewArgs,
+  type ResourcePreviewInput,
+  subjectFailure,
+} from './subject.js';
 
 export interface TextureSubjectInspection {
   readonly subjectDigest: string;
@@ -226,35 +229,11 @@ export function inspectTextureSubject(input: {
 
 export async function executeTexturePreview(
   args: ResourcePreviewArgs,
-  input: {
-    readonly assets?: PreviewAssetRegistry;
-    readonly renderer?: PreviewRenderRuntime;
-    readonly runId: string;
-    readonly artifacts?: readonly ArtifactRef[];
-  },
+  input: ResourcePreviewInput,
 ) {
-  if (input.assets === undefined)
-    return subjectFailure(
-      'resource-preview-subject-invalid',
-      'the existing AssetRegistry capability',
-      {
-        phase: 'asset-registry',
-        runId: input.runId,
-      },
-    );
-  const loaded = await input.assets.loadByGuid<Record<string, unknown>>(args.guid);
-  if (!loaded.ok)
-    return assetLoadFailure(
-      'AssetRegistry.loadByGuid to resolve the texture',
-      input.runId,
-      loaded.error,
-    );
-  const inspected = inspectTextureSubject({
-    guid: args.guid,
-    asset: loaded.value,
-    ...(loaded.digest === undefined ? {} : { digest: loaded.digest }),
-    ...(loaded.ownerFacts === undefined ? {} : { ownerFacts: loaded.ownerFacts }),
-  });
+  const loaded = await loadResourceSubject(args.guid, input, 'texture');
+  if (!loaded.ok) return loaded;
+  const inspected = inspectTextureSubject(loaded.value);
   if (!inspected.ok) return inspected;
   const renderer = input.renderer;
   const drawCalls = renderer?.texture?.drawCalls ?? renderer?.drawCalls ?? 0;

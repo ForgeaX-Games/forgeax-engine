@@ -16,9 +16,14 @@ it('validates normal/bump pixels, material bytes and fresh RHI replay in Dawn', 
   });
   try {
     mkdirSync('artifacts/normal-bump/dawn', { recursive: true });
-    await verifyNormalBump(fixture.renderer, recorder, (name, bytes) => {
-      writeFileSync(`artifacts/normal-bump/dawn/${name}`, bytes);
-    });
+    await verifyNormalBump(
+      fixture.renderer,
+      recorder,
+      (name, bytes) => {
+        writeFileSync(`artifacts/normal-bump/dawn/${name}`, bytes);
+      },
+      process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' ? 8 : 60,
+    );
   } finally {
     await fixture.renderer.dispose();
     fixture.renderTarget.destroy();

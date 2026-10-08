@@ -5,6 +5,7 @@ import { test } from 'node:test';
 
 const workflow = readFileSync(resolve('.github/workflows/nightly.yml'), 'utf8');
 const harnessSync = readFileSync(resolve('scripts/sync-harness.mjs'), 'utf8');
+const materializeDocs = readFileSync(resolve('scripts/ci/materialize-harness-docs.mjs'), 'utf8');
 
 function jobSection(name) {
   const start = workflow.indexOf(`  ${name}:`);
@@ -53,10 +54,15 @@ test('nightly bounds harness documentation recovery to the shared retry helper',
   assert.doesNotMatch(harness, /sleep|while true|for attempt/);
 });
 
-test('sparse harness sync skips the clone checkout before applying docs patterns', () => {
+test('CI reads only required document blobs while worktree bootstrap keeps docs-only checkout', () => {
   assert.match(harnessSync, /'--filter=blob:none', '--sparse', '--no-checkout'/);
   assert.match(harnessSync, /'sparse-checkout', 'set', 'docs'/);
-  assert.match(harnessSync, /git\(\['read-tree', '-mu', 'HEAD'\]/);
+  assert.match(harnessSync, /git\(\['show', `\$\{commit\}:\$\{path\}`\]/);
+  assert.match(harnessSync, /sparseDocsPaths === undefined/);
+  assert.match(
+    materializeDocs,
+    /FORGEAX_HARNESS_SPARSE_DOCS_PATHS: JSON\.stringify\(requiredDocs\)/,
+  );
 });
 
 test('nightly Metal native boundary restores its pinned wgpu source before Cargo gates', () => {

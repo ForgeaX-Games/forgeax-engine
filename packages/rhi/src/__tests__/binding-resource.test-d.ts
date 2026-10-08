@@ -12,13 +12,13 @@
 //   - { kind: 'sampler',         value: Sampler }
 //   - { kind: 'buffer',          value: { buffer: Buffer; offset?: number; size?: number } }
 //   - { kind: 'textureView',     value: TextureView }
-//   - { kind: 'externalTexture', value: GPUExternalTexture }
+//   - { kind: 'externalTexture', value: ExternalTexture } (opaque RHI brand)
 //
 // charter mapping: proposition 4 (closed-union exhaustive switch) +
 // proposition 5 (consistent abstraction — kind discriminator over duck-typing).
 
 import { describe, expectTypeOf, it } from 'vitest';
-import type { Buffer, RhiBindingResource, Sampler, TextureView } from '../index';
+import type { Buffer, ExternalTexture, RhiBindingResource, Sampler, TextureView } from '../index';
 
 describe('RhiBindingResource — 4-kind discriminated union', () => {
   it('contains kind: sampler', () => {
@@ -38,11 +38,16 @@ describe('RhiBindingResource — 4-kind discriminated union', () => {
 
   it('contains kind: externalTexture', () => {
     type ExtKind = Extract<RhiBindingResource, { kind: 'externalTexture' }>;
-    expectTypeOf<ExtKind['value']>().toMatchTypeOf<GPUExternalTexture>();
+    expectTypeOf<ExtKind['value']>().toEqualTypeOf<ExternalTexture>();
+  });
+
+  it('keeps raw GPUExternalTexture out of the RHI binding surface', () => {
+    type ExtKind = Extract<RhiBindingResource, { kind: 'externalTexture' }>;
+    expectTypeOf<GPUExternalTexture>().not.toMatchTypeOf<ExtKind['value']>();
   });
 
   it('rejects kind typo at construction (TS2322 anchor)', () => {
-    // @ts-expect-error TS2322: closed union — 'samplre' is not in 4-kind keyspace.
+    // @ts-expect-error TS2322: closed union — 'samplre' is not in 5-kind keyspace.
     const _bogus: RhiBindingResource = { kind: 'samplre', value: undefined as unknown as Sampler };
     void _bogus;
   });
@@ -58,6 +63,8 @@ describe('RhiBindingResource — 4-kind discriminated union', () => {
           return 'view';
         case 'externalTexture':
           return 'external';
+        case 'accelerationStructure':
+          return 'tlas';
       }
       // No default — TS guards: missing case here triggers compile-time red.
     }

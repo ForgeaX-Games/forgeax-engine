@@ -1,7 +1,7 @@
 import { type EntityHandle, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { ChildOf, Transform } from '../index';
-import { projectHierarchy } from '../systems';
+import { projectHierarchy } from '../systems/hierarchy-projection';
 import { setMalformedParentEdge } from './fixtures/malformed-hierarchy-edge';
 
 function childOf(world: World, parent: EntityHandle): EntityHandle {

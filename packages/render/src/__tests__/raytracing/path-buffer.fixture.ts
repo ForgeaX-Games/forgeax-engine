@@ -135,9 +135,9 @@ export async function verifyGpuPathSource(fixture: RayPathFixture, graphOwned = 
         .unwrap();
       compiled = graph.compile({ device, surfaceSize: { width: 2, height: 2 } }).unwrap();
       const inspection = compiled.inspect();
-      expect(inspection.passes.filter((pass) => pass.kind === 'compute')).toHaveLength(6);
+      expect(inspection.passes.filter((pass) => pass.kind === 'compute')).toHaveLength(2);
       expect(
-        inspection.passes.find((pass) => pass.name.endsWith('ray-path.initial-rays'))?.dependencies,
+        inspection.passes.find((pass) => pass.name.endsWith('0.ray-path.batch'))?.dependencies,
       ).toContain('receiver-producer');
       expect(
         inspection.passes.filter((pass) => pass.kind === 'copy').map((pass) => pass.name),

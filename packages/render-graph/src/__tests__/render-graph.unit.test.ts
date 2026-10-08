@@ -13,7 +13,9 @@
 // Paradigm: each block-scoped describe('<source-filename>.test.ts', ...) preserves
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
-import { describe, expect, it } from 'vitest';
+import { RAY_QUERY_BACKEND_UNSUPPORTED } from '@forgeax/engine-rhi';
+import { RhiNullAdapter } from '@forgeax/engine-rhi-null';
+import { describe, expect, it, vi } from 'vitest';
 import type { CapMissingDetail, DanglingReadDetail, DuplicateResourceDetail } from '../errors.js';
 import { err, ok, RenderGraphError, type RenderGraphErrorCode } from '../errors.js';
 import { RenderGraph } from '../graph.js';
@@ -161,7 +163,10 @@ import { RenderGraph } from '../graph.js';
           rgba16floatRenderable: false,
           rg11b10ufloatRenderable: false,
           float32Filterable: false,
+          textureImport: false,
+          externalTexture: false,
           maxColorAttachments: 8,
+          rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
         },
         // biome-ignore lint/suspicious/noExplicitAny: opaque mock device surface
         device: device as any,
@@ -223,7 +228,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -313,7 +321,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -474,7 +485,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -1211,7 +1225,38 @@ import { RenderGraph } from '../graph.js';
   // ── AC-02(c): alias folding (D-2 / KB-1) ─────────────────────────
 
   describe('alias folding (hdrComposited -> physical texture)', () => {
-    it.todo('alias-folded logical resources resolve to the same physical texture');
+    it('owns one texture/view pair per name and reuses the same pair through an alias', async () => {
+      const device = (await new RhiNullAdapter().requestDevice()).unwrap();
+      const created = vi.spyOn(device, 'createTexture');
+      const graph = new RenderGraph();
+      graph.addColorTarget('source', { format: 'rgba16float', size: { w: 4, h: 4 } }).unwrap();
+      graph.addColorTargetAlias('alias', 'source').unwrap();
+      const resolved: unknown[] = [];
+      graph.addPass('seed', {
+        reads: [],
+        writes: ['source'],
+        execute: (_, resources) => {
+          resolved.push(
+            resources.resolve('source'),
+            resources.resolve('source::tex'),
+            resources.resolve('alias'),
+          );
+        },
+      });
+      const options = { backendKind: device.caps.backendKind, caps: device.caps, device };
+      const compiled = graph.compile(options).unwrap();
+      const pair = compiled.colorTargets.get('source');
+      expect(pair).toBeDefined();
+      expect(compiled.colorTargets.size).toBe(2);
+      expect(compiled.colorTargets.get('alias')).toBe(pair);
+      expect(graph.getColorTargetTexture('source')).toBe(pair?.texture);
+      expect(graph.getColorTargetView('alias')).toBe(pair?.view);
+      graph.execute(undefined);
+      expect(resolved).toEqual([pair?.view, pair?.texture, pair?.view]);
+      expect(graph.compile(options).unwrap().colorTargets.get('source')).toBe(pair);
+      expect(created).toHaveBeenCalledTimes(1);
+      graph.drain();
+    });
   });
 
   // ── compile fail-fast with device errors ───────────────────────────
@@ -1420,7 +1465,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -1565,7 +1613,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -1739,7 +1790,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -1951,7 +2005,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -2148,7 +2205,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -2254,7 +2314,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 
@@ -2291,7 +2354,10 @@ import { RenderGraph } from '../graph.js';
       rgba16floatRenderable: false,
       rg11b10ufloatRenderable: false,
       float32Filterable: false,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
+      rayQuery: RAY_QUERY_BACKEND_UNSUPPORTED,
     };
   }
 

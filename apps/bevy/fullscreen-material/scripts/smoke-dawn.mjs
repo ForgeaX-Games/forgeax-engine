@@ -22,7 +22,7 @@ const errors = [];
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   console.error(`[smoke] FAIL - webgpu import: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

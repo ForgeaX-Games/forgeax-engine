@@ -166,7 +166,7 @@ describe('native scene root bootstrap', () => {
           '--use-angle=swiftshader',
           '--ignore-gpu-blocklist',
           '--disable-gpu-driver-bug-workarounds',
-          '--disable-dawn-features=disallow_unsafe_apis',
+          '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
         ],
       });
       page = await browser.newPage({ viewport: { width: 640, height: 360 } });
@@ -416,7 +416,7 @@ export default {
           '--use-angle=swiftshader',
           '--ignore-gpu-blocklist',
           '--disable-gpu-driver-bug-workarounds',
-          '--disable-dawn-features=disallow_unsafe_apis',
+          '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
         ],
       });
       page = await browser.newPage({ viewport: { width: 640, height: 360 } });

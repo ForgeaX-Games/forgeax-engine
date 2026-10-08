@@ -108,6 +108,8 @@ function makeDispatchSpyCtx(
       backendKind: 'webgpu' as const,
       storageBuffer: true,
       float32Filterable: true,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
       maxStorageBuffersPerShaderStage: 4,
     },
@@ -188,12 +190,12 @@ function makeDispatchSpyCtx(
   void ssaoUniformBuffer;
   void ssaoKernelBuffer;
 
-  // Mock perFrameGraph for resolveHdrDepthDepthOnlyView:
+  // Mock graph targets for resolveHdrDepthDepthOnlyView:
   // resolveHdrDepthDepthOnlyView needs graph.getColorTargetTexture(hdrDepthKey)
   // to return a dummy texture, then calls device.createTextureView on it.
   // We provide a mock texture object that createTextureView will accept.
   const mockHdrDepthTexture = { __label: 'mock-hdr-depth-tex' };
-  const mockPerFrameGraph = {
+  const mockGraphTargets = {
     getColorTargetTexture: vi.fn((_name: string) => mockHdrDepthTexture),
   };
 
@@ -230,7 +232,7 @@ function makeDispatchSpyCtx(
     viewBindGroup: null,
     meshBindGroup: null,
     frameState: {
-      perFrameGraph: mockPerFrameGraph,
+      compiledFrameGraph: { targets: mockGraphTargets },
       installedPipelineConfig: { ssao: { enabled: true, intensity: 1.0 } },
       // Post-process bind group identity cache (bloom / fxaa / ssao). Keyed on
       // the graph-resolved views so resize rebuilds automatically.

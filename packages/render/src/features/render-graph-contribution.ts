@@ -142,6 +142,7 @@ export function projectRenderFeaturePlans<FrameCtx extends RenderGraphFrame>(
     readonly reportError?: ((error: RenderError) => void) | undefined;
     readonly resolveStandardLighting?: RenderFeatureLightingResolver<FrameCtx> | undefined;
     readonly standardSurfaceAccesses?: readonly GraphAccess[] | undefined;
+    readonly viewAccesses?: readonly GraphAccess[] | undefined;
     /** Restrict projection to one Standard graph placement. */
     readonly placement?: RenderFeaturePlacement | undefined;
     /** Restrict projection to the named passes for a multi-stage feature. */
@@ -165,6 +166,7 @@ export function projectRenderFeaturePlans<FrameCtx extends RenderGraphFrame>(
     options.reportError,
     options.resolveStandardLighting,
     options.standardSurfaceAccesses,
+    options.viewAccesses,
   );
   for (const execution of executions) {
     if (options.placement !== undefined && (execution.placement ?? 'post') !== options.placement) {

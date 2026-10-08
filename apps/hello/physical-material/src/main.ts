@@ -24,6 +24,8 @@ import { createBrowserCasePlans, evaluateBrowserRecords } from '../evidence/brow
 import { describeMaterialCase } from '../evidence/material-case-builder.mjs';
 // @ts-expect-error browser-safe evidence module is intentionally JavaScript.
 import { createBrowserPhaseController } from '../evidence/browser-phase-controller.mjs';
+// @ts-expect-error browser-safe evidence module is intentionally JavaScript.
+import { createAdditiveCoatMutantPublication } from '../evidence/additive-coat-mutant.mjs';
 
 const WIDTH = caseInput.render.width;
 declare const __FORGEAX_PHYSICAL_MATERIAL_EXACT_HEAD__: string;
@@ -339,40 +341,14 @@ async function bootstrap(): Promise<void> {
   try {
     const manifestResponse = await fetch('/shaders/manifest.json');
     if (!manifestResponse.ok) throw new Error(`shader manifest fetch failed: ${manifestResponse.status}`);
-    const productManifest = JSON.parse(await manifestResponse.text()) as {
-      materialShaders?: Array<{ identifier: string; composedWgsl: string; variants?: Array<{ composedWgsl: string }> }>;
-    };
-    const productShader = productManifest.materialShaders?.find(
-      (shader) => shader.identifier === PHYSICAL_MATERIAL_MODULES.scalar,
+    const productPublication = await manifestResponse.json();
+    const mutantPublication = await createAdditiveCoatMutantPublication(
+      productPublication,
+      PHYSICAL_MATERIAL_MODULES.scalar,
+      PHYSICAL_MATERIAL_MUTANT,
     );
-    if (productShader === undefined) throw new Error('product clearcoat shader missing for mutant');
-    const mutateAdditiveCoat = (source: string): string => {
-      const needle = 'let attenuatedBase = (baseRadiance * (1f - _e2));';
-      const fullRootNeedle = 'let attenuatedBase = (baseRadiance_1 * (1f - _e2));';
-      const mutated = source.replace(needle, 'let attenuatedBase = baseRadiance;').replace(
-        fullRootNeedle,
-        'let attenuatedBase = baseRadiance_1;',
-      );
-      if (mutated === source || !source.includes('evaluateClearcoatLayer')) {
-        throw new Error('additive mutant attenuation needle missing');
-      }
-      return mutated;
-    };
-    const mutantShader = {
-      ...productShader,
-      identifier: PHYSICAL_MATERIAL_MUTANT,
-      composedWgsl: mutateAdditiveCoat(productShader.composedWgsl),
-      variants: productShader.variants?.map((variant) => ({
-        ...variant,
-        composedWgsl: mutateAdditiveCoat(variant.composedWgsl),
-      })),
-    };
-    const mutantManifest = {
-      ...productManifest,
-      materialShaders: [...(productManifest.materialShaders ?? []), mutantShader],
-    };
-    const productManifestBytes = JSON.stringify(productManifest);
-    const mutantManifestBytes = JSON.stringify(mutantManifest);
+    const productManifestBytes = JSON.stringify(productPublication);
+    const mutantManifestBytes = JSON.stringify(mutantPublication);
     mutantReceipt = {
       identifier: PHYSICAL_MATERIAL_MUTANT,
       sourceClosureDigest: fnv1a(mutantManifestBytes),

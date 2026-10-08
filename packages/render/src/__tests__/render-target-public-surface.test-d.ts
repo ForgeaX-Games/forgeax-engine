@@ -1,5 +1,7 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import type {
+  FramebufferSnapshotRequest,
+  FramebufferSnapshotTicket,
   RenderError,
   RenderErrorCode,
   Renderer,
@@ -16,7 +18,7 @@ const formats = [
   'rgba8unorm',
   'rgba8unorm-srgb',
 ] as const satisfies readonly RenderTargetFormat[];
-const shapes = ['2d', 'cube'] as const satisfies readonly RenderTargetShape[];
+const shapes = ['2d', 'cube', '3d', '2d-array'] as const satisfies readonly RenderTargetShape[];
 
 const descriptor: RenderTargetDescriptor = {
   shape: '2d',
@@ -39,9 +41,37 @@ describe('RenderTarget public surface', () => {
     // @ts-expect-error target descriptors do not carry a second color-space fact.
     const withColorSpace: RenderTargetDescriptor = { ...descriptor, colorSpace: 'srgb' };
     void withColorSpace;
-    // @ts-expect-error array targets are outside the first public target vocabulary.
+    // @ts-expect-error the array shape is spelled '2d-array', mirroring the texture view dimension.
     const arrayTarget: RenderTargetDescriptor = { ...descriptor, shape: 'array' };
     void arrayTarget;
+    const volume: RenderTargetDescriptor = {
+      ...descriptor,
+      shape: '3d',
+      mipLevels: 1,
+      depthOrArrayLayers: 8,
+    };
+    const layers: RenderTargetDescriptor = {
+      ...descriptor,
+      shape: '2d-array',
+      depthOrArrayLayers: 4,
+    };
+    void volume;
+    void layers;
+    // @ts-expect-error layered shapes must name their slice or layer count.
+    const missingLayers: RenderTargetDescriptor = {
+      shape: '3d',
+      width: 64,
+      height: 64,
+      format: 'rgba8unorm',
+      mipLevels: 1,
+      sampleCount: 1,
+      sampled: true,
+      readback: true,
+    };
+    void missingLayers;
+    // @ts-expect-error single-layer and cube shapes derive their layer count.
+    const flatWithLayers: RenderTargetDescriptor = { ...descriptor, depthOrArrayLayers: 2 };
+    void flatWithLayers;
   });
 
   it('exposes opaque target values and typed Renderer operations', () => {
@@ -60,6 +90,17 @@ describe('RenderTarget public surface', () => {
       .toEqualTypeOf<RenderTarget>();
     expectTypeOf(renderer.requestTargetReadback).parameter(0).toEqualTypeOf<RenderTarget>();
     expectTypeOf(renderer.destroyRenderTarget).parameter(0).toEqualTypeOf<RenderTarget>();
+    expectTypeOf(renderer.requestFramebufferSnapshot).parameter(0).toEqualTypeOf<RenderTarget>();
+    expectTypeOf(renderer.requestFramebufferSnapshot)
+      .parameter(1)
+      .toEqualTypeOf<FramebufferSnapshotRequest>();
+    expectTypeOf(
+      renderer.requestFramebufferSnapshot(target, { region: { x: 0, y: 0, width: 1, height: 1 } }),
+    ).toMatchTypeOf<
+      | { readonly ok: true; readonly value: FramebufferSnapshotTicket }
+      | { readonly ok: false; readonly error: RenderError }
+    >();
+    expectTypeOf<FramebufferSnapshotTicket>().not.toEqualTypeOf<RenderTargetReadbackTicket>();
     expectTypeOf(source).not.toEqualTypeOf(target);
     expectTypeOf(ticket).not.toEqualTypeOf(target);
     // @ts-expect-error opaque target values are not numeric handles.
@@ -73,6 +114,7 @@ describe('RenderTarget public surface', () => {
     const targetCodes = [
       'render-target-descriptor-invalid',
       'render-target-capability-missing',
+      'render-target-layer-invalid',
       'render-target-state-invalid',
       'render-target-operation-failed',
     ] as const satisfies readonly RenderErrorCode[];

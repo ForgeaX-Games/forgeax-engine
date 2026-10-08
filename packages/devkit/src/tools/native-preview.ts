@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { createToolPreviewRecipe, toolPreviewSubjectDrawn } from '@forgeax/engine-app';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import {
   Context,
   createContextCapabilityResolver,
@@ -24,13 +25,8 @@ import {
   type ResourcePreviewReportInput,
   runBrowserResourcePreviewHost,
 } from './browser-host.js';
-import {
-  createNativePreviewPlugin,
-  nativePreviewPlugins,
-  nativePreviewTools,
-} from './preview-catalog.js';
+import { createNativePreviewPlugin, nativePreviewPlugins } from './preview-catalog.js';
 
-const previewToolIds = new Set(nativePreviewTools.map(({ descriptor }) => descriptor.id));
 const DEFAULT_NATIVE_PREVIEW_TIMEOUT_MS = 120_000;
 
 export interface NativePreviewOptions {
@@ -74,7 +70,15 @@ async function readPreviewCatalogRow(root: string, guid: string): Promise<Previe
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as unknown;
+    const decoded = decodeCatalogWire(JSON.parse(raw));
+    if (!decoded.ok) {
+      return {
+        ok: false,
+        code: 'asset-index-invalid',
+        detail: { indexPath, code: decoded.error.code, detail: decoded.error.detail },
+      };
+    }
+    parsed = decoded.value;
   } catch (cause) {
     return {
       ok: false,
@@ -142,10 +146,6 @@ function failed(failure: {
     },
     artifacts: [],
   };
-}
-
-export function isNativePreviewTool(id: string): boolean {
-  return previewToolIds.has(id);
 }
 
 export async function runNativePreviewTool(

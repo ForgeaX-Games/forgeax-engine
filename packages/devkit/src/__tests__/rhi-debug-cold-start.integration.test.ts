@@ -36,7 +36,7 @@ async function nullReplayBackend() {
   if (!adapter.ok) throw new Error(adapter.error.hint);
   const device = await adapter.value.requestDevice();
   if (!device.ok) throw new Error(device.error.hint);
-  return ok({ device: device.value, createShaderModule });
+  return ok({ device: device.value, createShaderModule, release: () => {} });
 }
 
 function artifactContext(bytes: Uint8Array): RhiDebugOperationContext {
@@ -66,6 +66,8 @@ describe('DevKit RHI debug cold start', () => {
       'rhi.capture',
       'rhi.summary',
       'rhi.inspect',
+      'rhi.read',
+      'rhi.timing',
     ]);
     const context = {
       captureFrame: async () => ok({ ...artifact, bytes: encoded.value }),

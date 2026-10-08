@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 
 // Cinder Fall Dawn smoke intentionally drives the public Engine assembly. It
 // is a bounded consumer oracle: the renderer owns all WebGPU command encoding,
@@ -58,7 +59,7 @@ if (!existsSync(resolve(distRoot, 'pack-index.json'))) {
 armSmokeTimeout();
 
 const packIndexText = readFileSync(resolve(distRoot, 'pack-index.json'), 'utf8');
-const packIndex = JSON.parse(packIndexText);
+const packIndex = decodeCatalogWire(JSON.parse(packIndexText)).unwrap();
 const packageFiles = new Map(
   packIndex.map((entry) => [entry.packageUrl, resolve(distRoot, entry.packageUrl.slice(1))]),
 );

@@ -15,8 +15,13 @@ import { Update } from '@forgeax/engine-ecs';
 
 import { defineSystem, defineSystemSet, type SystemHandle, type World } from '@forgeax/engine-ecs';
 import { getRegisteredTokens, onStateDefined, type StateToken } from './define-state';
-import { nextStateResourceKey, previousStateResourceKey, stateResourceKey } from './resources';
-import { getScopedComponent, registerScopedComponents } from './scoped-component';
+import {
+  type NextStatePayload,
+  nextStateResourceKey,
+  previousStateResourceKey,
+  stateResourceKey,
+} from './resources';
+import { getScopedComponent } from './scoped-component';
 import { transitionStatesSystem } from './transition-system';
 
 /** Schedule anchor: system name for the input frame-start scan (registered by {@link @forgeax/engine-input}). */
@@ -27,7 +32,11 @@ const PROPAGATE_TRANSFORMS_SYSTEM = 'propagateTransforms' as const;
 
 const TRANSITION_STATES_SYSTEM_NAME = 'transitionStates';
 export const StateSet = defineSystemSet({ name: 'state' });
-const ACTIVE_STATE_RUNTIMES = new WeakSet<World>();
+interface StateRuntime {
+  lifecycle: 'active' | 'retiring' | 'rollback' | 'disposed';
+  readonly dispose: () => void;
+}
+const STATE_RUNTIMES = new WeakMap<World, StateRuntime>();
 
 /**
  * The `transitionStates` system token (M2 — full resource-ification, D-4).
@@ -60,12 +69,15 @@ export const TransitionStates: SystemHandle<readonly []> = defineSystem({
  * on the same World are no-ops; the first owner receives the sole disposer.
  */
 export function registerStatesPlugin(world: World): () => void {
-  if (ACTIVE_STATE_RUNTIMES.has(world)) return () => {};
+  const previous = STATE_RUNTIMES.get(world);
+  if (previous !== undefined) {
+    if (previous.lifecycle !== 'rollback') return () => {};
+    previous.dispose();
+  }
 
   const resourceKeys = new Set<string>();
   const componentLeases = new Map<string, () => void>();
   const registerToken = (token: StateToken): void => {
-    registerScopedComponents();
     const scopedComponent = getScopedComponent(token);
     if (!componentLeases.has(token.name)) {
       const lease = world.components.register(scopedComponent);
@@ -83,37 +95,53 @@ export function registerStatesPlugin(world: World): () => void {
     resourceKeys.add(nextKey);
     resourceKeys.add(previousKey);
     world.insertResource(stateKey, defaultValueIdx);
-    world.insertResource(nextKey, undefined as { value: number; force: boolean } | undefined);
+    world.insertResource(nextKey, undefined as NextStatePayload | undefined);
     world.insertResource(previousKey, defaultValueIdx);
   };
 
-  for (const token of getRegisteredTokens().values()) registerToken(token);
-  const installed = world.addSystems(Update, StateSet, [TransitionStates]);
-  if (!installed.ok) {
+  const releaseContributions = (): void => {
     for (const key of resourceKeys) {
       world.removeResource(key);
+      resourceKeys.delete(key);
     }
-    throw installed.error;
-  }
-  const unsubscribe = onStateDefined(registerToken);
-  ACTIVE_STATE_RUNTIMES.add(world);
-  let retiring = false;
-  let disposed = false;
-  return () => {
-    if (disposed) return;
-    if (!retiring) {
-      retiring = true;
-      unsubscribe();
-      world.removeSystem(Update, TRANSITION_STATES_SYSTEM_NAME);
-      for (const key of resourceKeys) world.removeResource(key);
-    }
-    // Keep rejected leases and the runtime ownership until a retry succeeds.
-    // The World supplies the structured component-in-use recovery error.
+    // A rejected lease remains owned so disposal can be retried.
     for (const [name, lease] of componentLeases) {
       lease();
       componentLeases.delete(name);
     }
-    disposed = true;
-    ACTIVE_STATE_RUNTIMES.delete(world);
   };
+  let unsubscribe: (() => void) | undefined;
+  const runtime: StateRuntime = {
+    lifecycle: 'rollback',
+    dispose() {
+      if (runtime.lifecycle === 'disposed') return;
+      if (runtime.lifecycle === 'active') {
+        runtime.lifecycle = 'retiring';
+        unsubscribe?.();
+        world.removeSystem(Update, TRANSITION_STATES_SYSTEM_NAME);
+      }
+      releaseContributions();
+      runtime.lifecycle = 'disposed';
+      STATE_RUNTIMES.delete(world);
+    },
+  };
+  try {
+    for (const token of getRegisteredTokens().values()) registerToken(token);
+    world.addSystems(Update, StateSet, [TransitionStates]).unwrap();
+    runtime.lifecycle = 'active';
+    unsubscribe = onStateDefined(registerToken);
+    STATE_RUNTIMES.set(world, runtime);
+    return runtime.dispose;
+  } catch (error) {
+    try {
+      runtime.dispose();
+    } catch (cleanupError) {
+      // No disposer reached the caller. Retain that same cleanup owner so a
+      // later activation retries retirement before acquiring any new leases.
+      runtime.lifecycle = 'rollback';
+      STATE_RUNTIMES.set(world, runtime);
+      throw cleanupError;
+    }
+    throw error;
+  }
 }

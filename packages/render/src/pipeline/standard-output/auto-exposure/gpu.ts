@@ -3,24 +3,19 @@ import type {
   RenderGraphBuilder,
   RenderGraphError,
 } from '@forgeax/engine-render-graph';
-import type {
-  BindGroupLayout,
-  Buffer,
-  ComputePipeline,
-  RenderPipeline,
-  RhiDevice,
-  Sampler,
-} from '@forgeax/engine-rhi';
+import type { BindGroupLayout, Buffer, ComputePipeline, RhiDevice } from '@forgeax/engine-rhi';
 import { AUTO_EXPOSURE_METER_WGSL } from '@forgeax/engine-shader';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_STORAGE } from '../../../gpu-usage';
 import type { _InternalRenderPipelineContext } from '../../../record/render-context';
 import type { RenderPipelineFrame, RenderPipelineTarget } from '../../../render-pipeline';
+import { addStandardColorStagePass } from '../color-transform';
 import {
   AUTO_EXPOSURE_FUSED_GRAPH_PASS,
   AUTO_EXPOSURE_HISTOGRAM_DISPATCH,
   resolveAutoExposureShaderModuleFactory,
 } from './graph';
+import { AutoExposureCapabilityUnavailableError } from './inspection';
 
 export const AUTO_EXPOSURE_HISTOGRAM_BYTES = 1024;
 export const AUTO_EXPOSURE_STATE_BYTES = 32;
@@ -83,8 +78,13 @@ export function createAutoExposureGpuResources(
   device: RhiDevice,
   generation: number,
 ): Result<AutoExposureGpuResources, unknown> {
-  if (!device.caps.compute || !device.caps.storageBuffer) {
-    return err(new Error('auto-exposure requires compute and storage-buffer capability'));
+  if (!device.caps.compute) {
+    return err(new AutoExposureCapabilityUnavailableError({ capability: 'compute', generation }));
+  }
+  if (!device.caps.storageBuffer) {
+    return err(
+      new AutoExposureCapabilityUnavailableError({ capability: 'storage-buffer', generation }),
+    );
   }
   const histogram = createBuffer(
     device,
@@ -377,18 +377,10 @@ export function createAutoExposureApplyWgsl(
   hasCandidate = true,
 ): string {
   const candidateBinding = hasCandidate
-    ? '@group(0) @binding(2) var<storage, read> candidate: array<vec4<f32>>;'
+    ? '@group(1) @binding(0) var<storage, read> candidate: array<vec4<f32>>;'
     : '';
   const candidateValue = hasCandidate ? 'max(candidate[0].x, 0.0)' : '1.0';
   return /* wgsl */ `
-struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
-@vertex fn auto_exposure_apply_vs(@builtin(vertex_index) index: u32) -> VertexOutput {
-  var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -3.0), vec2<f32>(3.0, 1.0), vec2<f32>(-1.0, 1.0));
-  let p = positions[index];
-  return VertexOutput(vec4<f32>(p, 0.0, 1.0), vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5));
-}
-@group(0) @binding(0) var source: texture_2d<f32>;
-@group(0) @binding(1) var sourceSampler: sampler;
 ${candidateBinding}
 
 const WB_TEMPERATURE: f32 = ${wgslFloat(whiteBalance.temperature)};
@@ -453,7 +445,7 @@ fn apply_white_balance(value: vec3<f32>) -> vec3<f32> {
   );
 }
 
-@fragment fn auto_exposure_apply_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+@fragment fn color_stage_fs(input: VertexOutput) -> @location(0) vec4<f32> {
   let color = textureSampleLevel(source, sourceSampler, input.uv, 0.0);
   let exposed = color.rgb * ${candidateValue};
   return vec4<f32>(apply_white_balance(exposed), color.a);
@@ -468,100 +460,37 @@ export function addAutoExposureExposurePass(
   resources: AutoExposureGraphResources | undefined,
   whiteBalance: AutoExposureWhiteBalance = { temperature: 6504, tint: 0 },
 ): Result<void, RenderGraphError> {
-  let pipeline: RenderPipeline | undefined;
-  let layout: BindGroupLayout | undefined;
-  let sampler: Sampler | undefined;
-  const added = context.graph.addRasterPass('standard-exposure-white-balance', {
-    accesses: [
-      { resource: input.view, usage: 'sampled-read' },
-      ...(resources === undefined
-        ? []
-        : [{ resource: resources.candidate, usage: 'storage-read' as const }]),
-      { resource: output.view, usage: 'color-attachment' },
-    ],
-    colorAttachments: [
-      {
-        view: output.view,
-        loadOp: 'clear',
-        storeOp: 'store',
-        clearValue: { r: 0, g: 0, b: 0, a: 1 },
-      },
-    ],
-    encode: ({ pass, frame, resources: resolver }) => {
-      const factory = resolveAutoExposureShaderModuleFactory(frame.runtime);
-      if (factory === undefined) throw new Error('auto-exposure apply shader factory unavailable');
-      const source = factory.createShaderModule({
-        code: createAutoExposureApplyWgsl(whiteBalance, resources !== undefined),
-        label: 'standard-exposure-white-balance',
-      });
-      if (!source.ok) throw source.error;
-      if (layout === undefined) {
-        const created = frame.runtime.device.createBindGroupLayout({
-          label: 'standard-exposure-white-balance.bgl',
-          entries: [
-            { binding: 0, visibility: 2, texture: { sampleType: 'float', viewDimension: '2d' } },
-            { binding: 1, visibility: 2, sampler: { type: 'filtering' } },
-            ...(resources === undefined
-              ? []
-              : [{ binding: 2, visibility: 2, buffer: { type: 'read-only-storage' as const } }]),
-          ],
-        });
-        if (!created.ok) throw created.error;
-        layout = created.value;
-      }
-      if (sampler === undefined) {
-        const created = frame.runtime.device.createSampler({
-          minFilter: 'linear',
-          magFilter: 'linear',
-        });
-        if (!created.ok) throw created.error;
-        sampler = created.value;
-      }
-      if (pipeline === undefined) {
-        const pipelineLayout = frame.runtime.device.createPipelineLayout({
-          label: 'standard-exposure-white-balance.layout',
-          bindGroupLayouts: [layout],
-        });
-        if (!pipelineLayout.ok) throw pipelineLayout.error;
-        const created = frame.runtime.device.createRenderPipeline({
-          label: 'standard-exposure-white-balance',
-          layout: pipelineLayout.value,
-          vertex: { module: source.value, entryPoint: 'auto_exposure_apply_vs', buffers: [] },
-          fragment: {
-            module: source.value,
-            entryPoint: 'auto_exposure_apply_fs',
-            targets: [{ format: output.format as GPUTextureFormat }],
+  let candidateLayout: BindGroupLayout | undefined;
+  return addStandardColorStagePass(
+    context.graph,
+    'standard-exposure-white-balance',
+    input,
+    output,
+    createAutoExposureApplyWgsl(whiteBalance, resources !== undefined),
+    resources === undefined
+      ? undefined
+      : {
+          accesses: [{ resource: resources.candidate, usage: 'storage-read' }],
+          bind: (device, graphResources) => {
+            if (candidateLayout === undefined) {
+              const created = device.createBindGroupLayout({
+                label: 'standard-exposure-white-balance.candidate.bgl',
+                entries: [{ binding: 0, visibility: 2, buffer: { type: 'read-only-storage' } }],
+              });
+              if (!created.ok) throw created.error;
+              candidateLayout = created.value;
+            }
+            const candidate = graphResources.buffer(resources.candidate);
+            if (!candidate.ok) throw candidate.error;
+            const bindGroup = device.createBindGroup({
+              layout: candidateLayout,
+              entries: [
+                { binding: 0, resource: { kind: 'buffer', value: { buffer: candidate.value } } },
+              ],
+            });
+            if (!bindGroup.ok) throw bindGroup.error;
+            return { layout: candidateLayout, bindGroup: bindGroup.value };
           },
-          primitive: { topology: 'triangle-list' },
-        });
-        if (!created.ok) throw created.error;
-        pipeline = created.value;
-      }
-      const sourceView = resolver.textureView(input.view);
-      if (!sourceView.ok) throw sourceView.error;
-      const candidate = resources === undefined ? undefined : resolver.buffer(resources.candidate);
-      if (candidate !== undefined && !candidate.ok) throw candidate.error;
-      const entries = [
-        { binding: 0, resource: { kind: 'textureView' as const, value: sourceView.value } },
-        { binding: 1, resource: { kind: 'sampler' as const, value: sampler } },
-        ...(candidate === undefined
-          ? []
-          : [
-              {
-                binding: 2,
-                resource: { kind: 'buffer' as const, value: { buffer: candidate.value } },
-              },
-            ]),
-      ];
-      const bindings = frame.runtime.device.createBindGroup({
-        layout,
-        entries,
-      });
-      if (!bindings.ok) throw bindings.error;
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindings.value);
-      pass.draw(3, 1, 0, 0);
-    },
-  });
-  return added.ok ? ok(undefined) : added;
+        },
+  );
 }

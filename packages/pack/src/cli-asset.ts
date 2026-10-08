@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from './catalog-wire.js';
 
 // @forgeax/engine-pack/src/cli-asset — Pack producer implementation used by
 // DevKit's unified `forgeax asset` command. It is not a package bin.
@@ -23,8 +24,8 @@ import {
 import { readSourceInventory } from './evidence/source-inventory.js';
 import { isValidAssetGuidString } from './guid.js';
 import { parsePackV2 } from './index.js';
-import { parsePackSourceJson, projectScriptablePackMeta } from './pack-authoring.js';
-import { type ScanSourceDeclaration, scanInventory } from './scanner.js';
+import { projectScriptablePackMeta } from './pack-authoring.js';
+import { declaredPackAssets, type ScanSourceDeclaration, scanInventory } from './scanner.js';
 import { loadScriptablePack } from './scriptable-pack-node.js';
 
 // The unified DevKit command tree reuses the producer implementation without
@@ -176,15 +177,7 @@ export async function scanEntries(
   const names = new Map<string, string>();
   for (const declaration of result.value.declarations.values()) {
     if (declaration.format !== 'pack.json') continue;
-    if (declaration.value.schemaVersion === '3.0.0') {
-      for (const [sourceKey, asset] of Object.entries(declaration.value.assets ?? {})) {
-        if (isRecord(asset) && typeof asset.name === 'string') {
-          names.set(`${declaration.sourcePath}:${sourceKey}`, asset.name);
-        }
-      }
-      continue;
-    }
-    for (const asset of declaration.value.assets) {
+    for (const asset of declaredPackAssets(declaration.value)) {
       if (typeof asset.name === 'string') {
         names.set(`${declaration.sourcePath}:${asset.guid.toLowerCase()}`, asset.name);
       }
@@ -194,12 +187,7 @@ export async function scanEntries(
     const declaration = result.value.declarations.get(inventoryEntry.sourcePath) as
       | ScanSourceDeclaration
       | undefined;
-    const namedByKey =
-      inventoryEntry.sourceKey === undefined
-        ? names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.guid.toLowerCase()}`)
-        : names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.sourceKey}`);
-    const name =
-      namedByKey ?? names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.guid.toLowerCase()}`);
+    const name = names.get(`${inventoryEntry.sourcePath}:${inventoryEntry.guid.toLowerCase()}`);
     entries.push({
       guid: inventoryEntry.guid,
       kind: inventoryEntry.kind,
@@ -452,8 +440,8 @@ function sourceVerificationFacts(
   }
 
   if (declaration.value.schemaVersion === '3.0.0') {
-    const parsed = parsePackSourceJson(declaration.value);
-    if (!parsed.ok || parsed.value.format !== 'direct' || entry.sourceKey === undefined) {
+    const parsed = declaration.value;
+    if (parsed.format !== 'direct' || entry.sourceKey === undefined) {
       return {
         dependencies: [],
         output: {
@@ -464,7 +452,7 @@ function sourceVerificationFacts(
         producer: { state: 'not-run' },
       };
     }
-    const asset = parsed.value.assets[entry.sourceKey];
+    const asset = parsed.assets[entry.sourceKey];
     return {
       dependencies: asset?.refs ?? [],
       output: {
@@ -654,6 +642,12 @@ async function readJson(path: string, ctx: AssetCtx): Promise<unknown | undefine
 }
 
 function catalogRows(value: unknown): readonly Record<string, unknown>[] | undefined {
+  if (isRecord(value) && value.schemaVersion === 'pack-index-publications/1') {
+    const decoded = decodeCatalogWire(value);
+    if (!decoded.ok) return undefined;
+    const entries: readonly unknown[] = decoded.value;
+    return entries.filter(isRecord);
+  }
   if (Array.isArray(value)) return value.filter(isRecord);
   if (!isRecord(value) || !Array.isArray(value.entries)) return undefined;
   return value.entries.filter(isRecord);

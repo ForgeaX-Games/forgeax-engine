@@ -27,7 +27,7 @@
       },
       "fps": {
         "enabled": false,
-        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the default zero-overhead path; sprite transparent-bucket cost is gated by runtime bench (transparent-sort.bench.ts) instead"
+        "reason": "fps no-regression covered by hello-cube / hello-room / hello-app gates that run the default zero-overhead path; sprite transparent-bucket cost is gated by render bench (packages/render/bench/transparent-sort.bench.ts) instead"
       },
       "bench": {
         "enabled": false,
@@ -59,8 +59,8 @@
     "@forgeax/apps-shared": "workspace:*",
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

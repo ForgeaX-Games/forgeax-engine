@@ -7,7 +7,11 @@ import {
   batchVisibleSpan,
   GPU_DRIVEN_INDIRECT_COMMAND_BYTES,
 } from '../gpu-driven/batch-topology';
-import { GPU_DRIVEN_VIEW_WGSL } from '../gpu-driven/view-gpu';
+import {
+  GPU_DRIVEN_VIEW_SHADOW_CAMERA_WGSL,
+  GPU_DRIVEN_VIEW_WGSL,
+  invertLightViewProjection,
+} from '../gpu-driven/view-gpu';
 import type { MaterialSnapshot, RenderableSnapshot } from '../render-system-extract';
 import { RenderScene } from '../scene/render-scene';
 import { classifyGpuDrivenView } from './gpu-driven-view-reference';
@@ -128,6 +132,15 @@ describe('GPU-driven batch topology and CPU oracle', () => {
     expect(GPU_DRIVEN_VIEW_WGSL).toContain(
       'batchWords[view.suppressionBase + (primitiveIndex >> 5u)]',
     );
+  });
+
+  it('keeps the shadow camera cull out of the module every view compiles', () => {
+    // Each view builds five pipelines from the base module; only views with a
+    // camera cull input pay for the larger one.
+    expect(GPU_DRIVEN_VIEW_WGSL).not.toContain('cullViewShadowCamera');
+    expect(GPU_DRIVEN_VIEW_WGSL).not.toContain('shadowReceiversHidden');
+    expect(GPU_DRIVEN_VIEW_SHADOW_CAMERA_WGSL.startsWith(GPU_DRIVEN_VIEW_WGSL)).toBe(true);
+    expect(GPU_DRIVEN_VIEW_SHADOW_CAMERA_WGSL).toContain('fn cullViewShadowCamera(');
   });
 
   it('patches topology only when compatibility membership changes', () => {
@@ -373,5 +386,47 @@ describe('GPU-driven batch topology and CPU oracle', () => {
     const removed = projection.apply([{ kind: 'remove', worldId: 0, entityKey: 1 }]);
     topology.apply(removed);
     expect(topology.inspect().ineligible).toBe(0);
+  });
+});
+
+describe('shadow camera cull light inverse', () => {
+  function roundTrip(lightViewProjection: Float32Array, world: readonly number[]): number[] {
+    const inverse = invertLightViewProjection(lightViewProjection);
+    if (inverse === undefined) throw new Error('expected an inverse');
+    const clip = mat4.multiply(
+      mat4.create(),
+      lightViewProjection,
+      mat4.fromTranslation(mat4.create(), world),
+    );
+    const ndc = [12, 13, 14].map((index) => (clip[index] as number) / (clip[15] as number));
+    const back = mat4.multiply(mat4.create(), inverse, mat4.fromTranslation(mat4.create(), ndc));
+    return [12, 13, 14].map((index) => (back[index] as number) / (back[15] as number));
+  }
+
+  it('inverts a kilometre cascade that mat4.invert reports as singular', () => {
+    const projection = mat4.orthographicReverseZ(mat4.create(), -500, 500, 500, -500, 0, 2000);
+    const view = mat4.lookAt(mat4.create(), [300, 900, 200], [300, 0, 200], [0, 0, -1]);
+    const light = mat4.multiply(mat4.create(), projection, view);
+    expect(mat4.invert(mat4.create(), light)).toEqual(mat4.identity(mat4.create()));
+    const point = roundTrip(light, [420, -30, -150]);
+    expect(point[0]).toBeCloseTo(420, 1);
+    expect(point[1]).toBeCloseTo(-30, 1);
+    expect(point[2]).toBeCloseTo(-150, 1);
+  });
+
+  it('inverts a spot perspective', () => {
+    const projection = mat4.perspectiveReverseZ(mat4.create(), 0.8, 1, 0.1, 50);
+    const view = mat4.lookAt(mat4.create(), [0, 5, 0], [0, 0, 0], [0, 0, -1]);
+    const point = roundTrip(mat4.multiply(mat4.create(), projection, view), [0.5, 1, -0.25]);
+    expect(point[0]).toBeCloseTo(0.5, 3);
+    expect(point[1]).toBeCloseTo(1, 3);
+    expect(point[2]).toBeCloseTo(-0.25, 3);
+  });
+
+  it('rejects a singular light so the kernel admits every caster', () => {
+    const singular = mat4.identity(mat4.create());
+    singular[10] = 0;
+    expect(invertLightViewProjection(singular)).toBeUndefined();
+    expect(invertLightViewProjection(new Float32Array(16))).toBeUndefined();
   });
 });

@@ -12,8 +12,34 @@ test('focused and full Smoke routes carry 300 through all four shards', () => {
     focusPlan('smoke', 'all', { frames: 300, shardIndex, shardCount: 4 }),
   );
   const entries = plans.flatMap((plan) => plan.entries);
-  assert.equal(entries.length, 92);
-  assert.equal(new Set(entries.map((entry) => entry.gateId)).size, 92);
+  assert.equal(entries.length, 99);
+  assert.equal(new Set(entries.map((entry) => entry.gateId)).size, 99);
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.package === '@forgeax/hello-terrain')
+      .map((entry) => [entry.gateId, entry.commandId]),
+    [['hello-terrain/smoke', 'smoke']],
+  );
+  assert.deepEqual(
+    entries
+      .filter((entry) => entry.package === '@forgeax/hello-transform-gizmo')
+      .map((entry) => entry.gateId)
+      .sort(),
+    ['hello-transform-gizmo/browser', 'hello-transform-gizmo/smoke'],
+  );
+  assert.deepEqual(
+    entries
+      .filter(
+        (entry) => entry.package === '@forgeax/app-learn-render-6-pbr-4-transmission-refraction',
+      )
+      .map((entry) => [entry.gateId, entry.commandId])
+      .sort(),
+    [
+      ['app-learn-render-6-pbr-4-transmission-refraction/features-a', 'smoke:features-a'],
+      ['app-learn-render-6-pbr-4-transmission-refraction/features-b', 'smoke:features-b'],
+      ['app-learn-render-6-pbr-4-transmission-refraction/frames', 'smoke:frames'],
+    ],
+  );
   assert.ok(plans.every((plan) => plan.frames === 300 && plan.scope === 'full'));
   assert.throws(() => focusPlan('smoke', 'all', { frames: 59 }), /frame|budget/);
   assert.throws(() => focusPlan('smoke', 'all', { shardIndex: 4, shardCount: 4 }), /shard/);
@@ -79,7 +105,10 @@ test('selected Dawn group keeps the complete owning partition and rejects typos'
 
 test('unit focus preserves exact file filtering and rejects command injection or empty scopes', () => {
   const selected = 'packages/devkit/src/__tests__/host.test.ts';
-  assert.equal(focusPlan('unit', selected).args.at(-1), selected);
+  const args = focusPlan('unit', selected).args;
+  assert.equal(args.at(-1), selected);
+  assert.deepEqual(args.slice(2, 4), ['--project', '@forgeax/engine-devkit']);
+  assert.ok(!args.includes('--project=@forgeax/*'));
   for (const selector of [
     '',
     '--passWithNoTests',

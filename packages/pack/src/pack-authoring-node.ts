@@ -23,7 +23,7 @@ import {
   resolvePackParameterInheritance,
   validatePackDefinition,
 } from './pack-authoring.js';
-import { type ScanInventory, scanInventory } from './scanner.js';
+import { declaredPackAssets, type ScanInventory, scanInventory } from './scanner.js';
 
 export interface PackAuthoringMaterializedAsset {
   readonly packageId: string;
@@ -567,22 +567,20 @@ async function createSnapshot(
       continue;
     }
     if (declaration.format !== 'pack.json' || declaration.value.schemaVersion !== '3.0.0') continue;
-    const parsed = parsePackSourceJson(declaration.value);
-    if (!parsed.ok) return err(parsed.error);
-    if (parsed.value.format === 'direct') {
-      const projected = projectDirectPackJson(parsed.value);
-      if (!projected.ok) return err(projected.error);
+    const parsed = declaration.value;
+    if (parsed.format === 'direct') {
+      const projected = projectDirectPackJson(parsed);
       const subject: DirectSubject = {
         format: 'direct',
-        packageId: parsed.value.packageId,
+        packageId: parsed.packageId,
         sourcePath,
         relativePath,
-        assets: projected.value.assets,
+        assets: projected.assets,
       };
       subjects.set(packageKey(subject.packageId), subject);
       directAssets.push(
-        ...projected.value.assets.map((asset) => ({
-          packageId: projected.value.packageId.toLowerCase(),
+        ...projected.assets.map((asset) => ({
+          packageId: projected.packageId.toLowerCase(),
           sourceKey: asset.sourceKey,
           guid: asset.guid.toLowerCase(),
           kind: asset.kind,
@@ -592,11 +590,11 @@ async function createSnapshot(
         })),
       );
     } else {
-      subjects.set(packageKey(parsed.value.packageId), {
+      subjects.set(packageKey(parsed.packageId), {
         format: 'instance',
-        packageId: parsed.value.packageId,
-        parent: parsed.value.parent,
-        values: parsed.value.values,
+        packageId: parsed.packageId,
+        parent: parsed.parent,
+        values: parsed.values,
         sourcePath,
         relativePath,
       });
@@ -1295,24 +1293,13 @@ function verificationAuthorFacts(
     };
   }
   if (declaration?.format === 'pack.json') {
-    if (declaration.value.schemaVersion === '3.0.0') {
-      const parsed = parsePackSourceJson(declaration.value);
-      if (parsed.ok && parsed.value.format === 'direct' && entry.sourceKey !== undefined) {
-        const asset = parsed.value.assets[entry.sourceKey];
-        return {
-          ...(asset?.name === undefined ? {} : { name: asset.name }),
-          dependencies: asset?.refs ?? [],
-        };
-      }
-    } else {
-      const asset = declaration.value.assets.find(
-        (candidate) => candidate.guid.toLowerCase() === entry.guid.toLowerCase(),
-      );
-      return {
-        ...(asset?.name === undefined ? {} : { name: asset.name }),
-        dependencies: asset?.refs ?? [],
-      };
-    }
+    const asset = declaredPackAssets(declaration.value).find(
+      (candidate) => candidate.guid.toLowerCase() === entry.guid.toLowerCase(),
+    );
+    return {
+      ...(asset?.name === undefined ? {} : { name: asset.name }),
+      dependencies: asset?.refs ?? [],
+    };
   }
   return { dependencies: [] };
 }

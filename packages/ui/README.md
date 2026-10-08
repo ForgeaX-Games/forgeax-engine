@@ -108,7 +108,7 @@ Every `kind: 'ui'` catalog row publishes the versioned `AssetAuthoringCapability
 `createUiPreviewSession`, `mount` names the `mountUi` lifecycle and `onAction` port, and the state,
 action, and read projections point to the host's JSON-shaped `gameProjection` seam. Input and
 navigation use the DOM-native focus/ownership contract; font files remain producer-owned UI artifact
-companions; localization currently reports a structured `missing-producer-capability` result.
+companions; localization exposes the native `i18next` operation through the opt-in localization entry.
 
 This descriptor exposes existing producer seams. It does not give an editor permission to inspect a
 game World or invent a second binding registry. Runtime action/read IDs and their semantic bodies stay
@@ -171,3 +171,82 @@ Handle `UiError` by its closed `code` union and machine-readable `detail`; do no
 
 The independent Gallery/Preview Workbench, scenario matrix, visual baseline workflow, external design
 adapters, and AI iteration workbench remain follow-up design: [`2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md`](https://github.com/ForgeaX-Games/forgeax-engine-harness/blob/main/docs/specs/2026-07-21-html-css-ui-authoring-workflow-ecosystem-design.md).
+
+## Offline localization with i18next
+
+Import `createUiLocalization`, `bindUiLocalization`, and `refreshUiLocalization` from
+`@forgeax/engine/ui/localization`. This opt-in entry uses native i18next instances;
+UI mounting and the Engine runtime root do not load its translation implementation.
+
+| Boundary | Contract |
+| --- | --- |
+| Source | `.ui.html.meta.json#importSettings.localization` names a relative JSON companion. No remote URLs or parent traversal. |
+| JSON | `{ fallbackLng, defaultNS, resources }`, with native i18next JSON v4 language/namespace bundles and string leaves. Arrays and nested keys are accepted; prototype keys, invalid fallback namespaces, sources over 1 MiB and trees beyond 16 levels are rejected. |
+| Delivery | Import tracks the JSON as a source dependency and embeds it in the same UI payload/GUID. Pack finalization, Catalog, prepared Packs, and offline loading use the existing route. |
+| Runtime | `createUiLocalization(asset, { lng, onMissingKey? })` returns `UiResult<i18n>`. Each call creates independent language and resource state. Use native `t`, `changeLanguage`, `exists`, and `dir`. |
+| UI lifetime | `bindUiLocalization(ui, i18n, render)` renders immediately and on native language/resource events. UI abort detaches every subscription; its return value also detaches manually. |
+| Revision | Validate/load the newly published same-GUID asset, then await `refreshUiLocalization(i18n, asset)`. It replaces the native resource snapshot, removes deleted keys, recalculates fallback resolution, and notifies bound UI once. Invalid data returns `invalid-asset` and preserves the previous snapshot. |
+| Text keys | Derive i18next `CustomTypeOptions.resources` from the same authored JSON import; do not maintain a second key union. |
+
+```mermaid
+flowchart LR
+  json["Translation JSON + UI Meta"] --> importer["UI importer: validate + track dependency"]
+  importer --> payload["One UI GUID / Pack payload"]
+  payload --> instance["Project-owned i18next instance"]
+  instance --> binding["Native events / UI AbortSignal"]
+  binding --> dom["Game-owned textContent and attributes"]
+```
+
+```ts
+import { createUiLocalization, bindUiLocalization } from '@forgeax/engine/ui/localization';
+
+const localized = await createUiLocalization(asset, {
+  lng: 'fr-CA',
+  onMissingKey: (languages, namespace, key) => reportMissing({ languages, namespace, key }),
+});
+if (!localized.ok) return report(localized.error);
+const i18n = localized.value;
+const title = ui.host.shadowRoot?.querySelector('[data-ui-part="title"]');
+bindUiLocalization(ui, i18n, (t) => {
+  if (title) title.textContent = t('inventory', { count: items.length, name: player.name });
+  ui.host.lang = i18n.resolvedLanguage ?? i18n.language;
+  ui.host.dir = i18n.dir();
+});
+await i18n.changeLanguage('en');
+```
+
+For typed game code, add a project-local declaration using the authored resource:
+
+```ts
+import type messages from './hud.ui.i18n.json';
+declare module 'i18next' {
+  interface CustomTypeOptions {
+    defaultNS: 'game';
+    resources: typeof messages.resources.en;
+  }
+}
+```
+
+Enable TypeScript `resolveJsonModule` in that project. This declaration belongs to the
+consumer; Engine does not globally augment i18next with one game's keys.
+
+> [!IMPORTANT]
+> Interpolation escaping is disabled because the consumer writes DOM text and attributes.
+> Never put translated content into `innerHTML`. Consumers own plural counts, interpolation
+> values, text direction, accessibility attributes, dynamic nodes, and game-specific diagnostics.
+> No backend, language detector, network request, localStorage, or translation frame system is installed.
+
+The `game-3d` control guide demonstrates packaged English/French resources and native
+language actions. The vase tool retains its own English business text. A consumer handling
+Catalog revisions must fence asynchronous loads with its UI signal before refreshing;
+`refreshUiLocalization` does not subscribe to Catalog or own asset lifetimes.
+
+Run `node packages/ui/scripts/bench-localization.mjs` after building to retain hardware,
+sampling conditions, initialization/lookup/refresh times and bundle bytes in
+`.forgeax-debug/g09/benchmark.json`. The template smoke also measures actual language
+actions and saves English/French screenshots. The production probe additionally switches
+the browser offline after loading; the development smoke retains its live HMR transport.
+After `forgeax project build --root templates/game-3d --out-dir .forgeax/g09-production`,
+run `node apps/preview/scripts/smoke-game3d-localization-production.mjs` from the repository
+root. This contributor gate serves only the built files, rejects external requests,
+requires 60 completed frames and a nonblank canvas, and saves offline action evidence.

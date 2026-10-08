@@ -167,7 +167,7 @@ const entry: ExecutionBootstrapEntry = (data) => {
           if (mode === 'points')
             world.addComponent(entity, { component: Points, data: { sizePx: 8 } }).unwrap();
           if (mode === 'lines')
-            world.addComponent(entity, { component: Lines, data: { widthPx: 5 } }).unwrap();
+            world.addComponent(entity, { component: Lines, data: { width: 5 } }).unwrap();
           const port = ctx.executionBootstrapHost.port;
           if (port !== undefined) {
             port.onmessage = (event) => {

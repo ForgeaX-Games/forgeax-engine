@@ -1,13 +1,5 @@
 import type { World } from '@forgeax/engine-ecs';
-import { err, ok, type Result } from '@forgeax/engine-types';
-import { environmentFactSignatures } from '../environment/signature';
-import {
-  AtmosphereInvalidParameterError,
-  type AtmosphereParameterRange,
-  EnvironmentSourceConflictError,
-  FogCardinalityError,
-  type RenderError,
-} from '../errors/render';
+import { AtmosphereInvalidParameterError, type AtmosphereParameterRange } from '../errors/render';
 import type { TemporalView } from '../temporal/view';
 
 /** The retained projection's environment extraction owner. */
@@ -33,27 +25,50 @@ export type EnvironmentCandidate =
       readonly atmosphere: AtmosphereParameters;
     };
 
+/** Immutable extracted atmosphere facts; groundOrigin derives from Transform. */
 export interface AtmosphereParameters {
-  readonly turbidity: number;
-  readonly rayleigh: number;
-  readonly mieCoefficient: number;
-  readonly mieDirectionalG: number;
+  readonly planetRadius: number;
+  readonly atmosphereHeight: number;
+  readonly groundOrigin: readonly [number, number, number];
+  readonly capturePosition: readonly [number, number, number];
+  readonly rayleighScattering: readonly [number, number, number];
+  readonly rayleighScaleHeight: number;
+  readonly mieScattering: number;
+  readonly mieAbsorption: number;
+  readonly mieScaleHeight: number;
+  readonly mieAnisotropy: number;
+  readonly absorption: readonly [number, number, number];
+  readonly absorptionPeakHeight: number;
+  readonly absorptionHalfWidth: number;
+  readonly groundAlbedo: readonly [number, number, number];
+  readonly multipleScattering: number;
   readonly sunAngularRadius: number;
-  readonly circumsolarStrength: number;
-  readonly circumsolarWidth: number;
+  readonly aerialPerspectiveStart: number;
+  readonly aerialPerspectiveDistanceScale: number;
 }
 
-/** Shared CPU contract for values accepted by the atmosphere shaders. */
+/** One validation vocabulary for extraction and published frame inputs. */
 export const ATMOSPHERE_PARAMETER_RANGES: Readonly<
   Record<keyof AtmosphereParameters, AtmosphereParameterRange>
 > = Object.freeze({
-  turbidity: Object.freeze({ min: 1, max: 20 }),
-  rayleigh: Object.freeze({ min: 0, max: Number.POSITIVE_INFINITY }),
-  mieCoefficient: Object.freeze({ min: 0, max: Number.POSITIVE_INFINITY }),
-  mieDirectionalG: Object.freeze({ min: 0, max: 0.999 }),
-  sunAngularRadius: Object.freeze({ min: 0, max: Number.POSITIVE_INFINITY }),
-  circumsolarStrength: Object.freeze({ min: 0, max: 4 }),
-  circumsolarWidth: Object.freeze({ min: 0.25, max: 4 }),
+  planetRadius: { min: 1, max: 1e9 },
+  atmosphereHeight: { min: 1, max: 1e8 },
+  groundOrigin: { min: -1e12, max: 1e12 },
+  capturePosition: { min: -1e12, max: 1e12 },
+  rayleighScattering: { min: 0, max: 1 },
+  rayleighScaleHeight: { min: 1, max: 1e8 },
+  mieScattering: { min: 0, max: 1 },
+  mieAbsorption: { min: 0, max: 1 },
+  mieScaleHeight: { min: 1, max: 1e8 },
+  mieAnisotropy: { min: -0.99, max: 0.99 },
+  absorption: { min: 0, max: 1 },
+  absorptionPeakHeight: { min: 0, max: 1e8 },
+  absorptionHalfWidth: { min: 1, max: 1e8 },
+  groundAlbedo: { min: 0, max: 1 },
+  multipleScattering: { min: 0, max: 2 },
+  sunAngularRadius: { min: 0, max: 0.1 },
+  aerialPerspectiveStart: { min: 0, max: 1e8 },
+  aerialPerspectiveDistanceScale: { min: 0, max: 10 },
 });
 
 export interface FogCandidate {
@@ -114,13 +129,6 @@ export interface FramePlan {
   readonly temporal: TemporalView;
 }
 
-function freezeFog(candidate: FogCandidate): FogFrame {
-  return Object.freeze({
-    ...candidate,
-    color: Object.freeze([...candidate.color] as unknown as FogFrame['color']),
-  });
-}
-
 /** Validate the bounded Fog domain once for every frame-selection producer. */
 export function validateFogParameters(candidate: FogCandidate): FogParameterIssue | undefined {
   if (candidate.color.length !== 3) {
@@ -164,69 +172,41 @@ export function validateFogParameters(candidate: FogCandidate): FogParameterIssu
   return undefined;
 }
 
-function freezeAtmosphere(parameters: AtmosphereParameters): AtmosphereParameters {
-  return Object.freeze({ ...parameters });
+export function freezeAtmosphere(parameters: AtmosphereParameters): AtmosphereParameters {
+  return Object.freeze({
+    ...parameters,
+    capturePosition: Object.freeze([
+      ...parameters.capturePosition,
+    ]) as AtmosphereParameters['capturePosition'],
+    groundOrigin: Object.freeze([
+      ...parameters.groundOrigin,
+    ]) as AtmosphereParameters['groundOrigin'],
+    rayleighScattering: Object.freeze([
+      ...parameters.rayleighScattering,
+    ]) as AtmosphereParameters['rayleighScattering'],
+    absorption: Object.freeze([...parameters.absorption]) as AtmosphereParameters['absorption'],
+    groundAlbedo: Object.freeze([
+      ...parameters.groundAlbedo,
+    ]) as AtmosphereParameters['groundAlbedo'],
+  });
 }
 
-/** Return the first invalid analytic atmosphere field at the extraction boundary. */
+/** Return the first invalid atmosphere field at the extraction boundary. */
 export function validateAtmosphereParameters(
   parameters: AtmosphereParameters,
 ): AtmosphereInvalidParameterError | undefined {
   for (const field of Object.keys(ATMOSPHERE_PARAMETER_RANGES) as (keyof AtmosphereParameters)[]) {
     const value = parameters[field];
     const range = ATMOSPHERE_PARAMETER_RANGES[field];
-    if (!Number.isFinite(value) || value < range.min || value > range.max) {
-      return new AtmosphereInvalidParameterError(field, value, range);
+    const channels = typeof value === 'number' ? [value] : value;
+    if (channels === undefined || (typeof value !== 'number' && channels.length !== 3)) {
+      return new AtmosphereInvalidParameterError(field, Number.NaN, range);
+    }
+    for (const channel of channels) {
+      if (!Number.isFinite(channel) || channel < range.min || channel > range.max) {
+        return new AtmosphereInvalidParameterError(field, channel, range);
+      }
     }
   }
   return undefined;
-}
-
-/** Select immutable environment and independent Fog facts at the frame boundary. */
-export function selectEnvironmentFrame(
-  candidates: readonly EnvironmentCandidate[],
-  fogCandidates: readonly FogCandidate[],
-): Result<EnvironmentFrame, RenderError> {
-  if (candidates.length > 1) {
-    return err(
-      new EnvironmentSourceConflictError(
-        candidates.map(({ kind, entityKey, sourceKey }) => ({ kind, entityKey, sourceKey })),
-      ),
-    );
-  }
-  if (fogCandidates.length > 1) return err(new FogCardinalityError(fogCandidates.length));
-  const candidate = candidates[0];
-  if (candidate?.kind === 'atmosphere') {
-    const invalid = validateAtmosphereParameters(candidate.atmosphere);
-    if (invalid !== undefined) return err(invalid);
-  }
-  const source: EnvironmentSource =
-    candidate === undefined
-      ? { kind: 'none' }
-      : candidate.kind === 'atmosphere'
-        ? {
-            kind: 'atmosphere',
-            entityKey: candidate.entityKey,
-            sourceKey: candidate.sourceKey,
-            atmosphere: freezeAtmosphere(candidate.atmosphere),
-          }
-        : {
-            kind: 'image',
-            entityKey: candidate.entityKey,
-            sourceKey: candidate.sourceKey,
-          };
-  const fog = fogCandidates[0] === undefined ? undefined : freezeFog(fogCandidates[0]);
-  const signatures = environmentFactSignatures({
-    environments: candidate === undefined ? [] : [candidate],
-    fogs: fogCandidates,
-    suns: [],
-  });
-  return ok(
-    Object.freeze({
-      source: Object.freeze(source),
-      fog,
-      ...signatures,
-      revision: 0,
-    }),
-  );
 }

@@ -1,6 +1,6 @@
 // @forgeax/engine-debug-draw -- error model SSOT (feat-20260615-debug-draw M1 / w2)
 //
-// Closed union DebugDrawErrorCode, discriminated detail union,
+// Closed outer DebugDrawErrorCode with correlated detail payloads,
 // and structured DebugDrawError carrying .code / .expected / .hint / .detail.
 //
 // Decision anchors:
@@ -13,25 +13,19 @@ import { err, type Result } from '@forgeax/engine-types';
 
 /** {@link pipeline-create-failed} payload: carries the RHI-level error detail. */
 export interface PipelineCreateFailedDetail {
-  readonly code: 'pipeline-create-failed';
   readonly rhiError: string;
 }
 
 /** {@link buffer-allocation-failed} payload: carries the RHI-level error detail. */
 export interface BufferAllocationFailedDetail {
-  readonly code: 'buffer-allocation-failed';
   readonly rhiError: string;
 }
 
-/** {@link flushed-after-destroy} payload: carries the instance identifier. */
-export interface FlushedAfterDestroyDetail {
-  readonly code: 'flushed-after-destroy';
-}
+/** {@link flushed-after-destroy} carries no additional payload. */
+export type FlushedAfterDestroyDetail = Readonly<Record<string, never>>;
 
-/** {@link viewProj-required} payload: carries the missing parameter name. */
-export interface ViewProjRequiredDetail {
-  readonly code: 'viewProj-required';
-}
+/** {@link viewProj-required} carries no additional payload. */
+export type ViewProjRequiredDetail = Readonly<Record<string, never>>;
 
 interface DebugDrawErrorDetailByCode {
   'pipeline-create-failed': PipelineCreateFailedDetail;
@@ -103,7 +97,7 @@ export function pipelineCreateFailed(rhiError: string): Result<never, DebugDrawE
       'pipeline-create-failed',
       'PSO creation should succeed with valid WGSL + layout',
       `Pipeline creation failed: ${rhiError}. Check WGSL syntax, vertex layout, and depth-stencil state.`,
-      { code: 'pipeline-create-failed', rhiError },
+      { rhiError },
     ),
   );
 }
@@ -114,7 +108,7 @@ export function bufferAllocationFailed(rhiError: string): Result<never, DebugDra
       'buffer-allocation-failed',
       'GPU vertex buffer allocation should succeed for the requested byte size',
       `Buffer allocation failed: ${rhiError}. Check available device memory and buffer usage flags.`,
-      { code: 'buffer-allocation-failed', rhiError },
+      { rhiError },
     ),
   );
 }
@@ -125,7 +119,7 @@ export function flushedAfterDestroy(): Result<never, DebugDrawError> {
       'flushed-after-destroy',
       'DebugDraw instance is alive and not yet destroyed',
       'DebugDraw was destroyed; create a new instance via createDebugDraw().',
-      { code: 'flushed-after-destroy' },
+      {},
     ),
   );
 }
@@ -136,7 +130,7 @@ export function viewProjRequired(): Result<never, DebugDrawError> {
       'viewProj-required',
       'viewProj must be provided as a Mat4 for flush to transform vertices',
       'Pass a viewProj Mat4 to flush(encoder, view, viewProj).',
-      { code: 'viewProj-required' },
+      {},
     ),
   );
 }

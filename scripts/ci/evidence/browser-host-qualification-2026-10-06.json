@@ -1,0 +1,92 @@
+{
+  "sourceBase": "ce1fff29135c57afb05d84ec8ba43fa0c84a8607",
+  "node": "22.23.2",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "roster": "scripts/ci/browser-host-files.json",
+  "files": 21,
+  "assertions": 76,
+  "headedGroups": [
+    {
+      "label": "Vitest browser group 4/5 files=packages/input/src/__tests__/gamepad-feedback.browser.test.ts,packages/input/src/__tests__/pointer-lock.browser.test.ts,packages/net-websocket/__tests__/browser-endpoint.browser.test.ts,packages/net-websocket/__tests__/connector-contract.browser.test.ts,packages/net-websocket/__tests__/endpoint-contract.browser.test.ts,packages/ui/src/localization/__tests__/localization.browser.test.ts,packages/ui/src/preview/__tests__/host-guard.browser.test.ts,packages/ui/src/preview/__tests__/scenario.browser.test.ts",
+      "status": 0,
+      "elapsedMs": 6704,
+      "cleanup": {
+        "kind": "alreadyGone"
+      }
+    },
+    {
+      "label": "Vitest browser group 5/5 files=packages/ui/src/preview/__tests__/session-integration.browser.test.ts,packages/ui/src/preview/__tests__/session-state.browser.test.ts,packages/ui/src/preview/__tests__/target-refresh.browser.test.ts",
+      "status": 0,
+      "elapsedMs": 3490,
+      "cleanup": {
+        "kind": "alreadyGone"
+      }
+    },
+    {
+      "label": "Vitest browser group 3/5 files=packages/audio-webaudio/src/__tests__/audio-webaudio.browser.test.ts,packages/audio-webaudio/src/__tests__/configurable-buses.browser.test.ts,packages/audio-webaudio/src/__tests__/control-ordering.browser.test.ts,packages/audio-webaudio/src/__tests__/playback-controls.browser.test.ts,packages/audio-webaudio/src/__tests__/seek.browser.test.ts,packages/audio-webaudio/src/__tests__/source-pose.browser.test.ts,packages/audio-webaudio/src/__tests__/web-audio-engine-decode-recovery.browser.test.ts,packages/input/src/__tests__/browser-edge-latch.browser.test.ts",
+      "status": 0,
+      "elapsedMs": 12452,
+      "cleanup": {
+        "kind": "alreadyGone"
+      }
+    },
+    {
+      "label": "Vitest browser group 2/5 files=packages/ui/src/preview/__tests__/capture-determinism.browser.test.ts",
+      "status": 0,
+      "elapsedMs": 4334,
+      "cleanup": {
+        "kind": "alreadyGone"
+      }
+    },
+    {
+      "label": "Vitest browser group 1/5 files=packages/audio-webaudio/src/__tests__/pcm-stream.browser.test.ts",
+      "status": 0,
+      "elapsedMs": 8967,
+      "cleanup": {
+        "kind": "alreadyGone"
+      }
+    }
+  ],
+  "headlessWithContendedPhysicalLease": {
+    "status": 0,
+    "elapsedMs": 84874,
+    "files": 21,
+    "gpuBusySamples": 135,
+    "samples": 135,
+    "CI": "1",
+    "NODE_ENV": "test",
+    "FORGEAX_LOCAL_GPU_LEASE": "1",
+    "groupConcurrency": 2,
+    "finishedAt": "2026-10-06T15:03:05.848898+00:00"
+  },
+  "launchPolicyProbe": {
+    "featureStatus": {
+      "2d_canvas": "unavailable_software",
+      "direct_rendering_display_compositor": "disabled_off_ok",
+      "gpu_compositing": "disabled_software",
+      "multiple_raster_threads": "enabled_on",
+      "opengl": "disabled_off",
+      "rasterization": "disabled_software",
+      "raw_draw": "disabled_off_ok",
+      "skia_graphite": "disabled_off",
+      "trees_in_viz": "disabled_off",
+      "video_decode": "disabled_software",
+      "video_encode": "disabled_software",
+      "webgl": "unavailable_software",
+      "webgpu": "unavailable_software",
+      "webnn": "unavailable_software"
+    },
+    "glRenderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver-5.0.0)",
+    "glImplementationParts": "(gl=egl-angle,angle=swiftshader)"
+  },
+  "regressions": {
+    "passed": 82,
+    "failed": 0
+  },
+  "limitations": [
+    "Host contract qualification only; no concurrent same-device Renderer qualification or aggregate CI speedup claim.",
+    "GPU lock was busy at every sampled instant; this is not a continuous GPU utilization measurement.",
+    "The original full-project initialization diagnostic had a Pack scan failure from a missing Engine facade and was stopped at its five-minute diagnostic window; it is not an admitted baseline."
+  ]
+}

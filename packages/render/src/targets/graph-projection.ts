@@ -9,7 +9,11 @@ import type { Texture, TextureFormat, TextureView } from '@forgeax/engine-rhi';
 import type { RenderError } from '../errors/render';
 import { RenderTargetOperationFailedError, RenderTargetStateInvalidError } from '../errors/render';
 import type { RenderResult } from '../render-contract';
-import type { RenderTarget, RenderTargetDescriptor } from './contracts';
+import {
+  type RenderTarget,
+  type RenderTargetDescriptor,
+  renderTargetLayerCount,
+} from './contracts';
 
 export interface RenderTargetGraphInput {
   readonly target: RenderTarget;
@@ -22,7 +26,8 @@ export interface RenderTargetGraphInput {
 
 export interface RenderTargetGraphSubresource {
   readonly mipLevel?: number;
-  readonly face?: number;
+  /** Array layer or cube face; a `3d` view always spans every depth slice. */
+  readonly layer?: number;
 }
 
 export interface RenderTargetGraphProjection {
@@ -63,11 +68,9 @@ function viewDescriptor(
     dimension: descriptor.shape,
     baseMipLevel: mipLevel,
     mipLevelCount: 1,
-    ...(descriptor.shape === 'cube' && subresource.face === undefined
+    ...(subresource.layer === undefined
       ? {}
-      : subresource.face === undefined
-        ? {}
-        : { baseArrayLayer: subresource.face, arrayLayerCount: 1 }),
+      : { baseArrayLayer: subresource.layer, arrayLayerCount: 1 }),
   };
 }
 
@@ -88,8 +91,11 @@ function validateSubresource(
     };
   }
   if (
-    subresource.face !== undefined &&
-    (!Number.isInteger(subresource.face) || subresource.face < 0 || subresource.face > 5)
+    subresource.layer !== undefined &&
+    (descriptor.shape === '3d' ||
+      !Number.isInteger(subresource.layer) ||
+      subresource.layer < 0 ||
+      subresource.layer >= renderTargetLayerCount(descriptor))
   ) {
     return {
       ok: false,
@@ -125,11 +131,11 @@ export function projectRenderTargetGraph<FrameCtx extends RenderGraphFrame>(
       size: {
         width: input.descriptor.width,
         height: input.descriptor.height,
-        depthOrArrayLayers: input.descriptor.shape === 'cube' ? 6 : 1,
+        depthOrArrayLayers: renderTargetLayerCount(input.descriptor),
       },
       mipLevelCount: mipCount(input.descriptor),
       sampleCount: input.descriptor.sampleCount,
-      dimension: '2d',
+      dimension: input.descriptor.shape === '3d' ? '3d' : '2d',
       usage: 0x10 | 0x04 | (input.descriptor.readback ? 0x01 : 0),
     },
     () => input.texture,

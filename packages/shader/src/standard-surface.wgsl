@@ -1,13 +1,13 @@
 #define_import_path forgeax_material::standard_surface
 #import forgeax_view::common::{view, sampleMaterialTexture}
-#import forgeax_view::fog::{translucent_fog}
+#import forgeax_view::fog::{translucent_fog_transmission}
 #import forgeax_pbr::brdf::{f_schlick}
 #import forgeax_pbr::specular_aa::{geometricNormalSpread, specularAntiAliasedRoughness}
 #import forgeax_pbr::ibl_sampling::{decodeSpecularEnvironmentScale, sampleIblDiffuse, sampleIblSpecular, sampleReflectionProbeSpecular}
 #import forgeax_pbr::lighting_probe::{evaluateProbeDiffuse}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
 #import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
-#import forgeax_cloud::layer::{cloud_apply_direct_solar}
+#import forgeax_view::atmosphere::{view_apply_direct_solar}
 #ifdef CLUSTER_FORWARD_AVAILABLE
 #import forgeax_standard::cluster::{evaluateStandardClusterLights, sampleStandardAmbientOcclusion}
 #endif
@@ -539,6 +539,8 @@ fn evaluateStandardSurface(in : VsOut, factors : StandardSurfaceFactors) -> Stan
   reflectionFallback *= screenAo;
 #endif
   var color = ambient;
+  var transmittedContribution=vec3<f32>(0.0);
+  var transmittedCoefficient=vec3<f32>(0.0);
 #ifdef TRANSMISSION_AVAILABLE
   let screenUv = in.ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
   // Read the same renderer-owned transform tables that the vertex stage uses
@@ -592,9 +594,18 @@ fn evaluateStandardSurface(in : VsOut, factors : StandardSurfaceFactors) -> Stan
       finiteScalar(thicknessSample, 1.0),
     0.0,
   );
-  let refractedUv = screenUv + (refracted.xy - incident.xy) * worldThickness * 0.25;
+  // Project the refracted ray's exit point instead of offsetting screen UVs by
+  // world-space direction deltas: world +Y is screen -V, and only a projection
+  // follows the camera orientation.
+  let refractedExitClip = view.worldViewProj * vec4<f32>(
+    in.worldPos + refracted * inverseSqrt(max(refractedLengthSquared, 1e-12)) * worldThickness,
+    1.0,
+  );
+  let refractedUv = refractedExitClip.xy / max(refractedExitClip.w, 1e-6) *
+    vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
   let guardBand = 0.02;
-  let insideGuardBand = all(refractedUv >= vec2<f32>(guardBand)) &&
+  let insideGuardBand = refractedExitClip.w > 1e-6 &&
+    all(refractedUv >= vec2<f32>(guardBand)) &&
     all(refractedUv <= vec2<f32>(1.0 - guardBand));
   let backdropMipCount = textureNumLevels(transmissionBackdropTexture);
   let backdropMaxLod = max(f32(backdropMipCount) - 1.0, 0.0);
@@ -626,41 +637,28 @@ fn evaluateStandardSurface(in : VsOut, factors : StandardSurfaceFactors) -> Stan
     pow(safeAttenuationColor, vec3<f32>(attenuationExponent)),
     safeAttenuationDistance > 1e-6 && worldThickness > 0.0,
   );
-  color = color + finiteColor(transmittedBackdrop, vec3<f32>(0.0)) *
-    transmittedEnergy * beerAttenuation;
+  transmittedCoefficient=transmittedEnergy*beerAttenuation;
+  transmittedContribution=finiteColor(transmittedBackdrop,vec3<f32>(0.0))*transmittedCoefficient;
+  color+=transmittedContribution;
 #endif
-  let directionalShadow = select(1.0, evalDirectionalShadowFactor(n, in.worldPos, in.viewZ), factors.receiveShadows);
+  let directionalShadow = select(1.0, evalDirectionalShadowFactor(n, in.worldPos, in.viewZ, 0u), factors.receiveShadows);
   let directionalBase = evalDirectionalNoShadow(n, v, diffuseAlbedo, metallic, a, f0, vec3<f32>(0.0));
-  color = color + cloud_apply_direct_solar(
-    directionalShadow * directionalBase,
-    in.worldPos,
-    view.cloudShadowOrigin.xyz,
-    view.cloudShadowRight.xyz,
-    view.cloudShadowUp.xyz,
-    view.cloudShadowProjection,
-  );
+  color = color + view_apply_direct_solar(view, directionalShadow * directionalBase, in.worldPos);
   if (factors.clearcoat != 0.0) {
     let directionalClearcoat = evalDirectionalNoShadow(
       n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), vec3<f32>(0.0),
     );
-    color = color + cloud_apply_direct_solar(
-      directionalShadow * factors.clearcoat * directionalClearcoat,
-      in.worldPos,
-      view.cloudShadowOrigin.xyz,
-      view.cloudShadowRight.xyz,
-      view.cloudShadowUp.xyz,
-      view.cloudShadowProjection,
-    );
+    color = color + view_apply_direct_solar(view, directionalShadow * factors.clearcoat * directionalClearcoat, in.worldPos);
   }
 #ifdef CLUSTER_FORWARD_AVAILABLE
   // NDC from vertex shader (perspective-divided clip-space, interpolated).
   // view_z: NDC depth for cluster Z-slice lookup.
   color = color + evaluateStandardClusterLights(
-    in.ndc.xyz, in.viewZ, in.worldPos, n, v, diffuseAlbedo, metallic, a, f0, vec3<f32>(0.0), false, factors.receiveShadows,
+    in.ndc.xyz, in.viewZ, in.worldPos, n, v, diffuseAlbedo, metallic, a, f0, vec3<f32>(0.0), false, factors.receiveShadows, 0xffffffffu,
   );
   if (factors.clearcoat != 0.0) {
       color = color + factors.clearcoat * evaluateStandardClusterLights(
-        in.ndc.xyz, in.viewZ, in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), vec3<f32>(0.0), false, factors.receiveShadows,
+        in.ndc.xyz, in.viewZ, in.worldPos, n, v, vec3<f32>(0.0), 1.0, coatAlpha, vec3<f32>(0.04), vec3<f32>(0.0), false, factors.receiveShadows, 0xffffffffu,
       );
     }
 #else
@@ -674,8 +672,10 @@ fn evaluateStandardSurface(in : VsOut, factors : StandardSurfaceFactors) -> Stan
   // Evaluate texture derivatives uniformly; the per-instance lighting switch
   // selects the result, never a divergent implicit-derivative sampling path.
   color = select(albedo, color, factors.lighting) + factors.emissive * factors.emissiveIntensity * emissiveSample;
+  transmittedContribution=select(vec3<f32>(0.0),transmittedContribution,factors.lighting);
+  transmittedCoefficient=select(vec3<f32>(0.0),transmittedCoefficient,factors.lighting);
   var output : StandardPbrOutput;
-  output.color = vec4<f32>(translucent_fog(view, in.worldPos, color, alpha), alpha);
+  output.color = vec4<f32>(translucent_fog_transmission(view, in.worldPos, color, alpha, transmittedContribution, transmittedCoefficient), alpha);
 #ifdef REFLECTION_FALLBACK_AVAILABLE
   output.reflectionFallback = vec4<f32>(select(vec3<f32>(0.0), reflectionFallback, factors.lighting), 1.0);
 #endif

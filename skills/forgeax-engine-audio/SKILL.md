@@ -13,6 +13,7 @@ description: >-
 
 ```ts
 import { createApp } from '@forgeax/engine-app';
+import { webAudioPlugin } from '@forgeax/engine-audio-webaudio';
 import {
   AUDIO_ENGINE_RESOURCE_KEY,
   AudioListener,
@@ -22,7 +23,7 @@ import {
   type AudioClipAsset,
 } from '@forgeax/engine-audio';
 
-const created = await createApp(canvas, { plugins: [audioPlugin()] });
+const created = await createApp(canvas, { plugins: [webAudioPlugin(), audioPlugin()] });
 if (!created.ok) throw created.error;
 const app = created.value;
 
@@ -47,14 +48,14 @@ backend.setBusVolume('music', 0.3);
 app.start().unwrap();
 ```
 
-Add `AudioListener` to the camera entity for spatial audio. The plugin runs listener sync after transform propagation and sends position, forward, and up as nine numeric scalars.
+Attach `Transform` to spatial `AudioSource` entities and `AudioListener` to the camera entity. Scene propagation supplies the emitter position and normalized local -Z direction; changed poses reach pending decode and paused panners through the same POD path. Configure `coneInnerAngle`, `coneOuterAngle` and `coneOuterGain` on the source for directional gain. Without a source transform, spatial playback uses the origin and -Z. The plugin runs listener sync after transform propagation and sends position, forward, and up as nine numeric scalars.
 
 ## Realm contract
 
 | Owner | Data | Rule |
 |:--|:--|:--|
-| ECS World | `AudioSource`, `AudioListener`, playing edges, listener pose | Realm-neutral gameplay authority |
-| Engine Worker | `createAudioIntentBackend()` and a per-frame intent batch | No Web Audio objects; first play carries bytes, later plays reuse `sourceKey` |
+| ECS World | `AudioSource`, `AudioListener`, playing edges, source and listener pose | Realm-neutral gameplay authority |
+| Engine Worker | `createAudioIntentBackend()` and a per-frame intent batch | No Web Audio objects; first play carries bounded bytes or a stream index, later plays reuse `sourceKey` |
 | Host | `createHostAudioConsumer()` and `WebAudioEngine` | Owns decode cache, `AudioBuffer`, nodes, buses, gesture resume, and `AudioContext` |
 | Kernel Worker | Nothing | Audio is never a Shared Kernel concern |
 
@@ -65,14 +66,17 @@ Add `AudioListener` to the camera entity for spatial audio. The plugin runs list
 | Surface | Purpose |
 |:--|:--|
 | `AudioSource.playing` | False-to-true plays; true-to-false stops. Toggle false before replaying a one-shot. |
-| `AudioSource.loop` / `volume` / `bus` | Source playback and fixed `sfx` or `music` routing |
+| `AudioSource.paused` / `playbackRate` | Retain position while paused; positive speed multiplier also changes pitch |
+| `AudioSource.fromPosition` / `AudioBackend.seek(entityId, seconds)` | Start at decoded clip seconds; edits seek once; explicit backend seek supports repeated identical requests and pending decode |
+| `AudioSource.loop` / `volume` / `bus` | Source playback and accepted bus-ID routing |
+| `AudioSource.coneInnerAngle` / `coneOuterAngle` / `coneOuterGain` | Full cone angles in degrees and outer gain; sampled on play, default omnidirectional |
 | `AudioSource.spatialBlend` | `0` routes directly to the bus; values above `0` create a panner |
 | `AudioListener` | Marker on the first listener entity whose world transform drives pose |
 | `AudioBackend` | Source volume, bus volume/mute, state, active count, and destroy |
 
 ## Clip and async safety
 
-`AudioClipAsset` is POD: `{ kind: 'audio', sourceKey: string, bytes: Uint8Array }`. The Host caches the decode Promise by `sourceKey`. Only pending plays retain per-entity options. Late decode completion checks the current pending play and source publication before creating a source; stop, replacement and disposal invalidate that identity. Volume changes during decode update those pending options.
+`AudioClipAsset` is POD: buffered encoded bytes or a Cook-validated PCM16 stream index and HTTP locator. The Host caches the decode Promise by `sourceKey`. Only pending plays retain per-entity options. Late decode completion checks the current pending play and source publication before creating a source; stop, replacement and disposal invalidate that identity. Volume changes during decode update those pending options.
 
 Set Host cache budgets with `createHostAudioConsumer(engine, options)` when the defaults do not fit the project; units and rejection behavior are defined in `packages/audio-webaudio/README.md`. Bus settings apply even before the first context is created.
 
@@ -101,3 +105,13 @@ owns `record`, `restore`, fixed-tick `trace`, semantic `report`, numeric
 Expose only the inspection summary through App, Preview, or Remote. Diagnose by
 `code`/`expected`/`hint`/`detail`, then retry with a fresh target. This is not an
 RHI tape or game replay surface.
+
+## Host filter and spectrum controls
+
+Use `webAudioPlugin(engine)` with one Host `WebAudioEngine` for native user filters and opt-in frequency analysis. After decode, `setFilters` owns an ordered chain; `createAnalyser` admits the FFT size and `readFrequencyData` writes dB into a reused caller buffer, including silence while paused. These native controls stay on the Host. Read [the package contract](../../packages/audio-webaudio/README.md#source-controls-and-spectrum) for ownership, bounds, failure and borrowed-context rules.
+
+## Configure buses and long audio
+
+Declare one acyclic parent/send graph with `AudioBackend.configureBuses`, then route source `bus` IDs through it. Install shared native chains on the Host with `WebAudioEngine.setBusEffects`; read its Result and the backend state before accepting the graph. Use source Meta `importSettings.playback: 'stream'` for supported PCM16 WAV and load the ordinary GUID. Verify Range hosting, `getStreamState` and `AudioState.streaming`; a play request or active-source count alone is not output evidence. Follow [the Host contract](../../packages/audio-webaudio/README.md#long-audio-through-source-meta-and-guid) for bounds, formats and recovery.
+
+For execution bootstrap apps, install the shared Host graph through `execution.createHostAudio`; return a fresh consumer per rebuild. Keep `audioPlugin()` in the gameplay bootstrap and follow [the assembly contract](../../packages/audio-webaudio/README.md#app-host-effect-assembly).

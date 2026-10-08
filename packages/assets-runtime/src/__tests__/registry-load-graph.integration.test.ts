@@ -1,6 +1,8 @@
+import { defineComponent } from '@forgeax/engine-ecs';
 import { materialAssetOutputProducer } from '@forgeax/engine-import';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../asset-registry';
+import * as sceneHandleFields from '../scene-handle-fields';
 
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -8,6 +10,80 @@ const C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 describe('registry load graph', () => {
+  it('extracts scene origin fields once for multiple production GUID-only refs', async () => {
+    const component = defineComponent('SceneOriginRefs', {
+      pipeline: 'shared<RenderPipelineAsset>',
+    });
+    const registry = new AssetRegistry(
+      {} as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new Map([[component.name, component]]),
+    );
+    registry.configurePackIndex('/pack-index.json');
+    const pack = {
+      schemaVersion: '2.0.0',
+      kind: 'internal-text-package',
+      assets: [
+        {
+          guid: A,
+          kind: 'scene',
+          payload: {
+            kind: 'scene',
+            entities: Object.fromEntries(
+              [B, C, D].map((guid, i) => [
+                `entity-${i}`,
+                { components: { SceneOriginRefs: { pipeline: guid } } },
+              ]),
+            ),
+          },
+          refs: [B, C, D],
+          artifacts: {},
+        },
+        ...[B, C, D].map((guid) => ({
+          guid,
+          kind: 'render-pipeline',
+          payload: {
+            kind: 'render-pipeline',
+            pipelineId: 'forgeax::standard',
+            renderPath: 'forward',
+          },
+          refs: [],
+          artifacts: {},
+        })),
+      ],
+    };
+    const extract = vi.spyOn(sceneHandleFields, 'extractSceneEntityHandleGuids');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (url: string) =>
+          new Response(
+            JSON.stringify(
+              url.endsWith('pack-index.json')
+                ? [A, B, C, D].map((guid) => ({
+                    guid,
+                    kind: guid === A ? 'scene' : 'render-pipeline',
+                    packageUrl: '/origin.pack.json',
+                    sourcePath: guid,
+                  }))
+                : pack,
+            ),
+          ),
+      ),
+    );
+    try {
+      const result = await registry.loadByGuid(registry.parseGuid(A));
+      expect(result.ok).toBe(true);
+      expect([A, B, C, D].every((guid) => registry.lookup(guid) !== undefined)).toBe(true);
+      expect(extract).toHaveBeenCalledTimes(1);
+    } finally {
+      extract.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
   it('preserves zero and integer child values through production, JSON and recursive Pack loading', async () => {
     const registry = new AssetRegistry({} as never);
     registry.configurePackIndex('/pack-index.json');

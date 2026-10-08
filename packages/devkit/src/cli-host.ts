@@ -13,14 +13,6 @@ export interface DevkitCliStartup {
   readonly service: DevkitCliService;
 }
 
-/** Binary-facing capability dispatch; command parsing stays behind the Host. */
-export async function runDevkitCli(
-  argv: readonly string[],
-): Promise<import('./unified-cli.js').UnifiedCliResult> {
-  const { runUnifiedCli } = await import('./unified-cli.js');
-  return runUnifiedCli(argv);
-}
-
 declare module '@forgeax/engine-plugin' {
   interface EngineContextServices {
     devkitCli: DevkitCliService;

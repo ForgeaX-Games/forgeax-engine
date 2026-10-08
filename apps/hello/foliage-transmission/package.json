@@ -11,20 +11,38 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-dawn.mjs",
+    "smoke:rhi": "FORGEAX_FOLIAGE_CAPTURE_DIR=artifacts/rhi node scripts/smoke-dawn.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "perf": "node scripts/perf-dawn.mjs"
   },
   "forgeax": {
     "rhiDebug": {
-      "riskFamilies": ["materials-textures"]
+      "riskFamilies": [
+        "materials-textures"
+      ]
     },
     "smokeInvocation": "pnpm --filter @forgeax/hello-foliage-transmission smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "demo bundle is downstream of engine-runtime sizes" },
-      "fps": { "enabled": false, "reason": "transmission cost is measured by the paired on/off perf script" },
-      "bench": { "enabled": false, "reason": "the on/off frame-time comparison is a local diagnostic, not a CI benchmark" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/hello-foliage-transmission smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; diffuse transmission carrier" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "demo bundle is downstream of engine-runtime sizes"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "transmission cost is measured by the paired on/off perf script"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "the on/off frame-time comparison is a local diagnostic, not a CI benchmark"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-foliage-transmission smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; diffuse transmission carrier"
+      }
     }
   },
   "dependencies": {
@@ -40,10 +58,11 @@
   },
   "devDependencies": {
     "@forgeax/engine-rhi-debug": "workspace:*",
+    "@forgeax/engine-rhi-webgpu": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

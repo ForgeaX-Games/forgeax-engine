@@ -271,9 +271,9 @@ describe('physical material smoke contract', () => {
   });
 
   it('keeps the browser additive mutant valid across clearcoat-disabled variants', () => {
-    const source = readSource('main.ts');
+    const source = readFileSync(new URL('../../evidence/additive-coat-mutant.mjs', import.meta.url), 'utf8');
     expect(source).toContain("source.includes('evaluateClearcoatLayer')");
-    expect(source).toContain('additive mutant attenuation needle missing');
+    expect(source).toContain('Additive mutant attenuation needle missing');
   });
 
   it('pairs Dawn additive baseline and mutant on one authored material identity', () => {

@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AssetRegistry } from '../../../assets-runtime/src/asset-registry';
-import { selectMaterialPassProgram } from '../../../assets-runtime/src/material/runtime-shader';
+import {
+  materialParametersToParamSchema,
+  selectMaterialPassProgram,
+} from '../../../assets-runtime/src/material/runtime-shader';
 import { normaliseForPack } from '../../../import/src/import-runner';
 import { AssetGuid } from '../../../pack/src/guid';
 import { validateCookedMaterialRecord } from '../../../pack/src/material-cook';
@@ -13,7 +16,7 @@ import {
 } from '../../../render/src/render-system-extract';
 import { ShaderRegistry } from '../../../shader/src/index';
 import { createMaterialPackCooker } from '../../../shader-compiler/src/material/pack-cooker';
-import { type MaterialAsset, standardSurfaceParameters } from '../../../types/src/index';
+import { derive, type MaterialAsset, standardSurfaceParameters } from '../../../types/src/index';
 
 const GUID = '019f0000-0000-7000-8000-0000000007a1';
 const customSurface = `#define_import_path game::custom_surface
@@ -131,7 +134,9 @@ describe('custom Surface publication path', () => {
     expect(surfaceHelperOther).toContain('struct LocalSample');
   });
 
-  it('cooks, transports, loads and selects the producer scene-index ABI', async () => {
+  it('cooks, transports, loads and selects the producer scene-index ABI', {
+    timeout: 30_000,
+  }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'forgeax-custom-surface-publication-'));
     const sourcePath = join(root, 'custom-surface.wgsl');
     const helperPath = join(root, 'surface-helper.wgsl');
@@ -163,16 +168,24 @@ describe('custom Surface publication path', () => {
       expect(ray[0]).toMatchObject({ pass: 'Forward', entry: 'cs_surface' });
       expect(ray[0]?.address).toBeUndefined();
       expect(ray[0]?.abi).toBeUndefined();
-      for (const visibleSurface of [false, true]) {
-        expect(
-          forward
-            .filter((selection) => (selection.context.visibleSurface === true) === visibleSurface)
-            .map((selection) => selection.address),
-          `Forward visibleSurface=${visibleSurface}`,
-        ).toEqual(['direct', 'scene-index']);
+      for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+        for (const visibleSurface of [false, true]) {
+          expect(
+            forward
+              .filter(
+                (selection) =>
+                  selection.context.capability === capability &&
+                  (selection.context.visibleSurface === true) === visibleSurface,
+              )
+              .map((selection) => selection.address),
+            `Forward ${capability} visibleSurface=${visibleSurface}`,
+          ).toEqual(['direct', 'scene-index', 'direct', 'scene-index']);
+        }
       }
       expect(
-        forward.every((selection) => selection.abi?.sceneIndexEntry === 'vs_scene_index'),
+        forward
+          .filter((selection) => selection.context.capability !== 'uniform-fallback')
+          .every((selection) => selection.abi?.sceneIndexEntry === 'vs_scene_index'),
       ).toBe(true);
       const sceneProgram = cooked.programs.find((program) =>
         program.selections.some((selection) => selection.address === 'scene-index'),
@@ -205,7 +218,13 @@ describe('custom Surface publication path', () => {
       const shadow = cooked.programs.flatMap((program) =>
         program.selections.filter((selection) => selection.pass === 'Occluder'),
       );
-      expect(shadow.map((selection) => selection.address)).toEqual(['direct', 'scene-index']);
+      for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+        expect(
+          shadow
+            .filter((selection) => selection.context.capability === capability)
+            .map((selection) => selection.address),
+        ).toEqual(['direct', 'scene-index', 'direct', 'scene-index']);
+      }
       const shadowSceneProgram = cooked.programs.find((program) =>
         program.selections.some(
           (selection) => selection.pass === 'Occluder' && selection.address === 'scene-index',
@@ -260,9 +279,60 @@ describe('custom Surface publication path', () => {
       expect(projection).toBeDefined();
       if (projection === undefined) return;
 
+      const uniformRowBytes = derive(
+        materialParametersToParamSchema(material.parameters ?? []),
+      ).totalBytes;
+      for (const backend of ['webgpu', 'webgl2']) {
+        for (const [pass, selections] of [
+          ['Forward', forward],
+          ['Occluder', shadow],
+        ] as const) {
+          const uniform = selections.filter(
+            (selection) =>
+              selection.context.backend === backend &&
+              selection.context.capability === 'uniform-fallback',
+          );
+          expect(uniform.map((selection) => selection.address)).toEqual(['direct', 'direct']);
+          const uniformContext = uniform[0]?.context;
+          if (uniformContext === undefined) throw new Error('missing uniform publication');
+          for (const color of [false, true]) {
+            const selected = selectMaterialPassProgram(
+              projection,
+              pass,
+              uniformContext,
+              'direct',
+              color,
+            );
+            expect(selected.entry).toBe('vs_main');
+            expect(selected.abi?.sceneIndexEntry).toBeUndefined();
+            expect(selected.abi?.materialRow.byteLength).toBe(uniformRowBytes);
+            expect(selected.abi?.vertexInputs.some((input) => input.semantic === 'color')).toBe(
+              color,
+            );
+          }
+        }
+      }
+
       const context = forward[0]?.context;
       expect(context).toBeDefined();
       if (context === undefined) return;
+      if (shadow[0] === undefined) throw new Error('missing shadow selection');
+      for (const color of [false, true]) {
+        for (const address of ['direct', 'scene-index'] as const) {
+          for (const pass of ['Forward', 'Occluder']) {
+            const selected = selectMaterialPassProgram(
+              projection,
+              pass,
+              pass === 'Forward' ? context : shadow[0].context,
+              address,
+              color,
+            );
+            expect(selected.abi?.vertexInputs.some((input) => input.semantic === 'color')).toBe(
+              color,
+            );
+          }
+        }
+      }
       const direct = selectMaterialPassProgram(projection, 'Forward', context, 'direct');
       const scene = selectMaterialPassProgram(projection, 'Forward', context, 'scene-index');
       const rayContext = ray[0]?.context;

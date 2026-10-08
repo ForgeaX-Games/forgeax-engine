@@ -3,6 +3,7 @@ import { createPlaneGeometry, packInterleavedVertexAttributes } from '@forgeax/e
 import {
   Camera,
   DirectionalLight,
+  DynamicResolution,
   Materials,
   MeshFilter,
   MeshRenderer,
@@ -33,6 +34,8 @@ export async function verifyAlphaHash(
   renderer: Renderer,
   options: {
     kind: 'standard' | 'unlit' | 'skin';
+    taaScale?: number;
+    taaRenderPath?: 'forward' | 'deferred';
     recorder?: RecorderAttachment;
     image?: (
       name: string,
@@ -334,11 +337,29 @@ export async function verifyAlphaHash(
       expect(deferred.map((value) => value > 0.5)).toEqual(stationary.map((value) => value > 0.5));
       unwrap(renderer.setProfile({ ...profile, renderPath: 'forward', ssao: false }));
     }
+    unwrap(
+      renderer.setProfile({
+        ...profile,
+        renderPath: options.taaRenderPath ?? 'forward',
+        ssao: false,
+      }),
+    );
     const noTaa = statistics(await sample(false, true, 'raw'));
     world.set(camera, Camera, { antialias: 3 }).unwrap();
+    if (options.taaScale !== undefined)
+      world
+        .addComponent(camera, {
+          component: DynamicResolution,
+          data: { minScale: options.taaScale, maxScale: options.taaScale },
+        })
+        .unwrap();
     let accumulated = stationary;
     for (let i = 0; i < 60; i++)
-      accumulated = await sample(false, true, i === 59 ? 'taa-60' : undefined);
+      accumulated = await sample(
+        options.taaRenderPath === 'deferred' && i === 59,
+        true,
+        i === 59 ? 'taa-60' : undefined,
+      );
     const taa = statistics(accumulated);
     expect(taa.variance, `TAA ${JSON.stringify(taa)} vs raw ${JSON.stringify(noTaa)}`).toBeLessThan(
       noTaa.variance * 0.85,
@@ -365,6 +386,8 @@ export async function verifyAlphaHash(
     expect(errors).toEqual([]);
     return {
       kind: options.kind,
+      taaScale: options.taaScale ?? 1,
+      taaRenderPath: options.taaRenderPath ?? 'forward',
       coverage,
       disabled,
       fence,

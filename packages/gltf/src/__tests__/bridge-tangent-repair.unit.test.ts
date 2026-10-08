@@ -41,3 +41,23 @@ it('uses a finite normal-plane basis for an undefined source frame with collapse
   }
   expect(meshIrToMeshAsset([{ ...mesh, normals: new Float32Array(9) }]).ok).toBe(false);
 });
+
+it('retains the deterministic plane direction and source handedness for a non-axis normal', () => {
+  const normal = [2, -3, 4];
+  const mesh: GltfMeshIr = {
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    normals: new Float32Array([...normal, ...normal, ...normal]),
+    tangents: new Float32Array([...normal, -1, ...normal, -1, ...normal, -1]),
+    texcoord0: new Float32Array(6),
+    indices: new Uint16Array([0, 1, 2]),
+    meshIndex: 0,
+    materialIndex: 0,
+  };
+  const tangent = meshIrToMeshAsset([mesh]).unwrap().attributes.tangent;
+  assert(tangent instanceof Float32Array);
+  for (let i = 0; i < 3; i++) {
+    expect(Array.from(tangent.subarray(i * 4, i * 4 + 4))).toEqual(
+      Array.from(new Float32Array([0, -0.8, -0.6, -1])),
+    );
+  }
+});

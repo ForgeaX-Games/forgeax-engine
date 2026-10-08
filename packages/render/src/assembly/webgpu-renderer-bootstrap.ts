@@ -4,6 +4,7 @@ import {
   LostListenerRegistry,
   RhiErrorListenerRegistry,
 } from '../lifecycle';
+import { createOutputColorSpaceState } from '../output-color-space';
 import type { RendererOptions } from '../render-contract';
 import type { RhiBackendPack } from './backend-contract';
 import type { BundlerOptions } from './bundler-contract';
@@ -67,6 +68,7 @@ export async function tryCreateWebGPURenderer(
       pack,
       importTransport,
       lossObserver,
+      outputColorSpace: createOutputColorSpaceState(options?.outputColorSpace ?? 'srgb'),
       generationState,
     }),
   };

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Reproduce Bevy's `empty` example: minimal createApp with a camera — the thinnest valid forgeax app.",
+  "description": "Reproduce Bevy's `empty` example: minimal createApp with a camera \u2014 the thinnest valid forgeax app.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -53,8 +53,8 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

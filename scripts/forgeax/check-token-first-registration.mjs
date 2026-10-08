@@ -21,7 +21,11 @@ const EXCLUDED_PREFIXES = [
 ];
 
 function trackedFiles() {
-  return execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8' })
+  return execFileSync('git', ['ls-files'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  })
     .split('\n')
     .filter(Boolean)
     .filter((path) => EXTENSIONS.has(path.slice(path.lastIndexOf('.'))))

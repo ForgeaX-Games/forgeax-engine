@@ -1,17 +1,22 @@
 import type {
+  BindGroup,
   Buffer,
   ComputePassDescriptor,
+  ComputePipeline,
   MappedBuffer,
   QuerySet,
   RhiCommandEncoder,
   RhiDevice,
 } from '@forgeax/engine-rhi';
+import { RhiError } from '@forgeax/engine-rhi';
 import { err, ok, type Result } from '@forgeax/engine-types';
+import type { PipelineBuilderShaderModuleFactory } from '../../pipeline-builder.js';
 import {
   createGpuPassTimingFrame,
   freezeGpuPassTimingFrame,
   type GpuPassTimingEntry,
   type GpuPassTimingFrame,
+  type GpuPassTimingObservation,
   type GpuPassTimingOptions,
   type GpuPassTimingPassIdentity,
   type NormalizedGpuPassTimingOptions,
@@ -28,6 +33,29 @@ const GPU_MAP_MODE_READ = 0x01;
 const QUERY_RESOLVE_ALIGNMENT = 256;
 const QUERY_RESULT_BYTES = 8;
 
+export function prepareGpuPassTimingSession(
+  device: RhiDevice,
+  options: GpuPassTimingOptions | undefined,
+  shaderModuleFactory: PipelineBuilderShaderModuleFactory | undefined,
+): {
+  readonly gpuPassTimingSession?: GpuPassTimingSession | undefined;
+  readonly gpuPassTimingUnavailable?: GpuPassTimingObservation | undefined;
+} {
+  if (options === undefined) return {};
+  const created = createGpuPassTimingSession(device, options, { shaderModuleFactory });
+  if (created.ok) return { gpuPassTimingSession: created.value };
+  return {
+    gpuPassTimingUnavailable: {
+      status: 'unavailable',
+      reason: created.error,
+      capability: {
+        timestampQuery: device.caps.timestampQuery,
+        timestampPeriodNanoseconds: device.caps.timestampPeriodNanoseconds,
+      },
+    },
+  };
+}
+
 export interface GpuPassTimingFrameIdentity {
   readonly frameId: number;
   readonly deviceGeneration: number;
@@ -35,6 +63,7 @@ export interface GpuPassTimingFrameIdentity {
 }
 
 export interface GpuPassTimingSessionOptions {
+  readonly shaderModuleFactory?: PipelineBuilderShaderModuleFactory | undefined;
   readonly mapReadback?: ((buffer: Buffer) => Promise<Result<MappedBuffer, unknown>>) | undefined;
 }
 
@@ -251,11 +280,11 @@ function createSlot(
   }
   const copyBeginningMarkerWrites: CaptureMarkerWrites = {
     querySet: markerQuerySet.value,
-    endOfPassWriteIndex: 0,
+    beginningOfPassWriteIndex: 0,
   };
   const copyEndMarkerWrites: CaptureMarkerWrites = {
     querySet: markerQuerySet.value,
-    beginningOfPassWriteIndex: 0,
+    endOfPassWriteIndex: 0,
   };
   return ok({
     queryCount,
@@ -362,6 +391,7 @@ function makeCapture(
   mapReadback: GpuPassTimingSessionOptions['mapReadback'],
   layout: CaptureLayout | undefined,
   publishLayout: (layout: CaptureLayout) => void,
+  copyMarker: () => { readonly pipeline: ComputePipeline; readonly bindGroup: BindGroup },
 ): GpuPassTimingCapture {
   const entryAt = (index: number): CaptureEntry | undefined => state.entries[index];
   const queryPairAt = (index: number): CaptureQueryPair | undefined => state.queryPairs[index];
@@ -518,6 +548,20 @@ function makeCapture(
     if (entry === undefined) return;
     markEntry(index, makeWriteUnavailable(identity, phase, cause));
   };
+  const encodeCopyMarker = (
+    encoder: RhiCommandEncoder,
+    descriptor: ComputePassDescriptor,
+  ): void => {
+    const resources = copyMarker();
+    const marker = encoder.beginComputePass(descriptor);
+    try {
+      marker.setPipeline(resources.pipeline);
+      marker.setBindGroup(0, resources.bindGroup);
+      marker.dispatchWorkgroups(1);
+    } finally {
+      marker.end();
+    }
+  };
   const copyBoundaryBefore = (
     identity: GpuPassTimingPassIdentity,
     encoder: RhiCommandEncoder,
@@ -538,8 +582,8 @@ function makeCapture(
     }
     try {
       const writes = state.slot.storage.copyBeginningMarkerWrites;
-      writes.endOfPassWriteIndex = pair.beginningQueryIndex;
-      encoder.encodeEmptyComputePass(state.slot.storage.copyBeginningMarkerDescriptor);
+      writes.beginningOfPassWriteIndex = pair.beginningQueryIndex;
+      encodeCopyMarker(encoder, state.slot.storage.copyBeginningMarkerDescriptor);
       pair.needsBeginningMarker = false;
     } catch (cause) {
       markTimestampWriteFailure(identity, 'begin', cause);
@@ -565,8 +609,8 @@ function makeCapture(
     }
     try {
       const writes = state.slot.storage.copyEndMarkerWrites;
-      writes.beginningOfPassWriteIndex = pair.endQueryIndex;
-      encoder.encodeEmptyComputePass(state.slot.storage.copyEndMarkerDescriptor);
+      writes.endOfPassWriteIndex = pair.endQueryIndex;
+      encodeCopyMarker(encoder, state.slot.storage.copyEndMarkerDescriptor);
       pair.needsEndMarker = false;
     } catch (cause) {
       markTimestampWriteFailure(entry, 'end', cause);
@@ -943,6 +987,61 @@ export function createGpuPassTimingSession(
     slots.push(slot.value);
   }
   let disposed = false;
+  let markerResources:
+    | { readonly pipeline: ComputePipeline; readonly bindGroup: BindGroup; readonly buffer: Buffer }
+    | undefined;
+  const copyMarker = () => {
+    if (markerResources !== undefined) return markerResources;
+    const factory = sessionOptions.shaderModuleFactory;
+    if (factory === undefined) {
+      throw new RhiError({
+        code: 'rhi-not-available',
+        expected: 'a shader module factory for copy timing markers',
+        hint: 'assemble the timing session with the active device shader module factory',
+      });
+    }
+    // Empty passes can lose timestamp writes; independent no-op dispatches can
+    // overlap. A private storage write orders both markers on the same resource.
+    const module = factory.createShaderModule({
+      code: `@group(0) @binding(0) var<storage, read_write> serial: atomic<u32>;
+@compute @workgroup_size(1) fn copy_timing_marker() { atomicAdd(&serial, 1u); }`,
+      label: 'gpu-pass-timing-copy-marker',
+    });
+    if (!module.ok) throw module.error;
+    const bindings = device.createBindGroupLayout({
+      entries: [{ binding: 0, visibility: 4, buffer: { type: 'storage', minBindingSize: 4 } }],
+    });
+    if (!bindings.ok) throw bindings.error;
+    const layout = device.createPipelineLayout({ bindGroupLayouts: [bindings.value] });
+    if (!layout.ok) throw layout.error;
+    const pipeline = device.createComputePipeline({
+      label: 'gpu-pass-timing-copy-marker',
+      layout: layout.value,
+      compute: { module: module.value, entryPoint: 'copy_timing_marker' },
+    });
+    if (!pipeline.ok) throw pipeline.error;
+    const buffer = device.createBuffer({ size: 4, usage: 0x80 });
+    if (!buffer.ok) throw buffer.error;
+    const bindGroup = device.createBindGroup({
+      layout: bindings.value,
+      entries: [
+        {
+          binding: 0,
+          resource: { kind: 'buffer', value: { buffer: buffer.value, offset: 0, size: 4 } },
+        },
+      ],
+    });
+    if (!bindGroup.ok) {
+      device.destroyBuffer(buffer.value);
+      throw bindGroup.error;
+    }
+    markerResources = {
+      pipeline: pipeline.value,
+      bindGroup: bindGroup.value,
+      buffer: buffer.value,
+    };
+    return markerResources;
+  };
   const mapReadback = sessionOptions.mapReadback;
   let cachedLayout: CaptureLayout | undefined;
   const publishLayout = (layout: CaptureLayout): void => {
@@ -995,12 +1094,22 @@ export function createGpuPassTimingSession(
         submitted: undefined,
       };
       slot.capture = state;
-      const capture = makeCapture(state, device, period, mapReadback, layout, publishLayout);
+      const capture = makeCapture(
+        state,
+        device,
+        period,
+        mapReadback,
+        layout,
+        publishLayout,
+        copyMarker,
+      );
       return ok(capture);
     },
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      if (markerResources !== undefined) device.destroyBuffer(markerResources.buffer);
+      markerResources = undefined;
       for (const slot of slots) {
         if (slot.capture !== undefined && slot.capture.terminal === undefined) {
           slot.capture.terminal = err(

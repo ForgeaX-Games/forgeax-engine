@@ -8,6 +8,7 @@ type MaterialEntry = MaterialVariant & { readonly variants: readonly MaterialVar
 export function publishShaderManifest<E extends ShaderEntry, M extends MaterialEntry>(
   entries: readonly E[],
   materialShaders: readonly M[],
+  sourceFragments?: ReadonlyMap<string, readonly string[]>,
 ) {
   const digests = new Map<string, string>();
   const sourceDigest = (source: string, owner: string): string => {
@@ -46,10 +47,16 @@ export function publishShaderManifest<E extends ShaderEntry, M extends MaterialE
     // Composed WGSL separates declarations with blank lines. Keeping those
     // blocks intact avoids thousands of repeated line indices per variant.
     // Retain every separator and final byte; fragments are transport, not parsing.
-    const parts = source.split('\n\n');
-    const blocks = parts
-      .map((part, index) => part + (index + 1 < parts.length ? '\n\n' : ''))
-      .filter(Boolean);
+    let blocks = sourceFragments?.get(source);
+    if (blocks !== undefined && blocks.join('') !== source) {
+      throw new Error(`Shader source fragments do not match admitted bytes: ${digest}`);
+    }
+    if (blocks === undefined) {
+      const parts = source.split('\n\n');
+      blocks = parts
+        .map((part, index) => part + (index + 1 < parts.length ? '\n\n' : ''))
+        .filter(Boolean);
+    }
     sources[digest] = blocks.map((fragment) => {
       let index = fragmentIndex.get(fragment);
       if (index === undefined) {

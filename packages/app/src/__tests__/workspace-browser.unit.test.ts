@@ -25,6 +25,14 @@ describe('workspace browser plugin lifecycle', () => {
     const app = {
       world,
       assets,
+      renderer: {
+        inspect: () => ({
+          state: 'alive',
+          frame: { frameId: 3 },
+          environment: { status: 'candidate' },
+        }),
+      },
+      execution: { report: () => ({ world: { identity: world.identity } }) },
       input: { setInputAllowed },
       observation: createAppObservation(world, {} as never, { report: () => ({}) }),
       start: vi.fn(() => ({ unwrap() {} })),
@@ -36,6 +44,7 @@ describe('workspace browser plugin lifecycle', () => {
     const frameEvents = new EventTarget();
     const capturePixels = vi.fn(() => 'data:image/png;base64,new-size');
     const canvas = {
+      dataset,
       getAttribute: () => null,
       removeAttribute() {},
       addEventListener: frameEvents.addEventListener.bind(frameEvents),
@@ -70,6 +79,89 @@ describe('workspace browser plugin lifecycle', () => {
     let releaseFrame = () => {};
     let draining = false;
     const destroyed: string[] = [];
+    let childWorldIdentity: string | undefined;
+    const unknownFailure: Record<string, unknown> = { opaqueCounter: 1n };
+    unknownFailure.self = unknownFailure;
+    const childInspection = {
+      state: 'alive',
+      surface: 'available',
+      frame: {
+        frameId: 17,
+        deviceGeneration: 7,
+        pendingCompletionCount: 1,
+        pendingCompletions: [
+          {
+            frameId: 17,
+            deviceGeneration: 7,
+            presentation: 'ready',
+            queue: 'pending',
+            reflection: 'not-required',
+          },
+        ],
+      },
+      environment: {
+        status: 'candidate',
+        source: 'image',
+        candidate: { signature: 'child-cubemap', generation: 7 },
+      },
+      recovery: { lastOutcome: 'none', candidateGeneration: 7 },
+      iblBinding: {
+        status: 'binding-chain-consistent',
+        frameId: 17,
+        deviceGeneration: 7,
+        active: 'fallback',
+        resources: { prefilter: { viewIdentity: 701, samplerIdentity: 702, deviceGeneration: 7 } },
+      },
+      meshMaterialBindings: [
+        {
+          worldId: 0,
+          worldIdentity: 'child',
+          entityKey: 42,
+          bindings: [{ handle: 4, source: 'mesh-default' }],
+          diagnostics: [
+            {
+              code: 'mesh-renderer-material-override-invalid',
+              slotIndex: 0,
+              handle: 4,
+              detail: unknownFailure,
+            },
+          ],
+          residency: [
+            {
+              readiness: 'pending',
+              samplers: [],
+              textures: [],
+              preparationFailure: {
+                code: 'pipeline-pending',
+                expected: 'A prepared material',
+                hint: 'Inspect material preparation',
+                detail: unknownFailure,
+                cause: unknownFailure,
+              },
+            },
+          ],
+        },
+      ],
+      featureGraph: { compileAttempts: 1, compileFailures: 1, accepted: 0 },
+      featureDiagnostics: [
+        {
+          identity: 'child-feature',
+          status: 'failed',
+          latestError: {
+            code: 'render-feature-preparation-failed',
+            expected: 'A prepared graphics pipeline',
+            hint: 'Inspect the preparation owner',
+            detail: { stage: 'prepare', reason: 'pipeline-pending', opaque: unknownFailure },
+            cause: unknownFailure,
+          },
+          inspection: { unsafeProducerDetail: 'not-copied' },
+        },
+      ],
+    };
+    const childStepFrame = vi.fn(() => ({
+      ok: false,
+      error: { code: 'app-frame-step-invalid', detail: { reason: 'credit' } },
+    }));
     const replies = new Map<string, (value: Record<string, unknown>) => void>();
     const failures: Record<string, unknown>[] = [];
     const pickErrors: Record<string, unknown>[] = [];
@@ -104,8 +196,12 @@ describe('workspace browser plugin lifecycle', () => {
           app,
           canvas,
           transport,
-          async createPreviewApp({ context: scope }) {
+          async createPreviewApp({ context: scope, targetId }) {
+            expect(targetId).toBe('child');
             const childWorld = new World();
+            childWorldIdentity = childWorld.identity;
+            for (const binding of childInspection.meshMaterialBindings)
+              binding.worldIdentity = childWorld.identity;
             for (const component of [
               Camera,
               SceneInstance,
@@ -131,6 +227,9 @@ describe('workspace browser plugin lifecycle', () => {
             return {
               ...app,
               world: childWorld,
+              renderer: { inspect: () => childInspection },
+              execution: { report: () => ({ world: { identity: childWorld.identity } }) },
+              stepFrame: childStepFrame,
               observation: createAppObservation(childWorld, {} as never, { report: () => ({}) }),
               async dispose() {
                 draining = true;
@@ -138,7 +237,7 @@ describe('workspace browser plugin lifecycle', () => {
                 await owner.dispose();
                 return { ok: true, value: undefined };
               },
-            } as App;
+            } as unknown as App;
           },
           project: { id: 'project', root: '/project' },
           target: {
@@ -231,13 +330,71 @@ describe('workspace browser plugin lifecycle', () => {
           publishBrowserFrameCompleted(canvas, {
             frameId: 2,
             deviceGeneration: 0,
+            presentation: 'pending',
+          });
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          expect(
+            capturePixels,
+            'pending GPU completion cannot qualify capture',
+          ).not.toHaveBeenCalled();
+          publishBrowserFrameSubmitted(canvas, { frameId: 3, deviceGeneration: 0 });
+          publishBrowserFrameCompleted(canvas, {
+            frameId: 3,
+            deviceGeneration: 0,
             presentation: 'ready',
           });
           expect(await capture).toMatchObject({
             ok: true,
-            value: { frameId: 2, width: 400, height: 300 },
+            value: { frameId: 3, width: 400, height: 300 },
           });
           expect(capturePixels).toHaveBeenCalledOnce();
+          const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+          try {
+            dataset.forgeaxPreviewRhiWindow = JSON.stringify({
+              targetId: 'target',
+              worldIdentity: world.identity,
+              status: 'recording',
+              frames: [{ frameId: 3 }],
+            });
+            const stalled = command('capture', { targetId: 'target', previewOwner });
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            clock.mockReturnValue(11_001);
+            expect(await stalled).toMatchObject({
+              ok: false,
+              error: {
+                code: 'engine-workspace-browser-failure',
+                detail: {
+                  targetId: 'target',
+                  worldIdentity: world.identity,
+                  rhiCapture: {
+                    targetId: 'target',
+                    worldIdentity: world.identity,
+                    status: 'recording',
+                    frames: [{ frameId: 3 }],
+                  },
+                  frameFloor: 3,
+                  submittedFrame: 3,
+                  readyCompletedFrame: 3,
+                  renderer: { state: 'alive', environment: { status: 'candidate' } },
+                },
+              },
+            });
+            expect(capturePixels).toHaveBeenCalledOnce();
+            dataset.forgeaxPreviewRhiWindow = JSON.stringify({
+              targetId: 'target',
+              worldIdentity: 'another-world',
+              status: 'uploaded',
+            });
+            const wrongWorld = command('capture', { targetId: 'target', previewOwner });
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            clock.mockReturnValue(22_002);
+            const rejected = await wrongWorld;
+            expect(rejected).toMatchObject({ ok: false });
+            expect((rejected.error as { detail: unknown }).detail).not.toHaveProperty('rhiCapture');
+          } finally {
+            delete dataset.forgeaxPreviewRhiWindow;
+            clock.mockRestore();
+          }
         }
         expect([canvas.style.width, canvas.style.height]).toEqual(['200px', '150px']);
         expect(
@@ -269,6 +426,84 @@ describe('workspace browser plugin lifecycle', () => {
             asset: { guid, kind: 'scene' },
           });
           expect(child).toMatchObject({ ok: true, value: { target: { targetId: 'child' } } });
+          const childOwner = (child.value as { previewOwner: string }).previewOwner;
+          const childClock = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+          try {
+            const stalledChild = command('capture', {
+              targetId: 'child',
+              previewOwner: childOwner,
+            });
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            childClock.mockReturnValue(11_001);
+            const rejectedChild = await stalledChild;
+            expect(rejectedChild).toMatchObject({
+              ok: false,
+              error: {
+                code: 'engine-workspace-browser-failure',
+                detail: {
+                  targetId: 'child',
+                  worldIdentity: childWorldIdentity,
+                  renderer: {
+                    ...childInspection,
+                    meshMaterialBindings: [
+                      {
+                        worldId: 0,
+                        worldIdentity: childWorldIdentity,
+                        entityKey: 42,
+                        bindings: [{ handle: 4, source: 'mesh-default' }],
+                        diagnostics: [
+                          {
+                            code: 'mesh-renderer-material-override-invalid',
+                            slotIndex: 0,
+                            handle: 4,
+                          },
+                        ],
+                        residency: [
+                          {
+                            readiness: 'pending',
+                            samplers: [],
+                            textures: [],
+                            preparationFailure: {
+                              code: 'pipeline-pending',
+                              expected: 'A prepared material',
+                              hint: 'Inspect material preparation',
+                            },
+                          },
+                        ],
+                      },
+                    ],
+                    featureDiagnostics: [
+                      {
+                        identity: 'child-feature',
+                        status: 'failed',
+                        latestError: {
+                          code: 'render-feature-preparation-failed',
+                          expected: 'A prepared graphics pipeline',
+                          hint: 'Inspect the preparation owner',
+                        },
+                      },
+                    ],
+                  },
+                  execution: { world: { identity: childWorldIdentity } },
+                },
+              },
+            });
+            expect(
+              (rejectedChild.error as { detail: { renderer: { featureDiagnostics: unknown[] } } })
+                .detail.renderer.featureDiagnostics[0],
+            ).not.toHaveProperty('inspection');
+            expect(() =>
+              JSON.stringify((rejectedChild.error as { detail: unknown }).detail),
+            ).not.toThrow();
+            const serialized = JSON.stringify(rejectedChild.error);
+            expect(serialized).not.toContain('opaqueCounter');
+            expect(serialized).not.toContain('unsafeProducerDetail');
+            expect(serialized).not.toContain('"cause"');
+            expect(childWorldIdentity).not.toBe(world.identity);
+            expect(capturePixels).toHaveBeenCalledOnce();
+          } finally {
+            childClock.mockRestore();
+          }
           const closing = command('closePreview', { targetId: 'child' });
           try {
             await vi.waitFor(() => expect(draining).toBe(true));

@@ -15,9 +15,8 @@
 // - plan-strategy section 3.1 (component map: types receives 7 sub-asset POD SSOT)
 // - plan-strategy section 5.3 (AC-26 is a key test point)
 
-import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(import.meta.dirname ?? '.', '..', '..', '..', '..');
@@ -29,15 +28,19 @@ const POD_PATTERN =
   'export (type|interface) (Mesh|Material|Scene|Texture|Skeleton|Skin|AnimationClip)Pod';
 
 function grepCount(pattern: string, fileOrDir: string): number {
-  try {
-    // -c gives per-file counts; sum them
-    const out = execSync(`grep -rnE '${pattern}' ${fileOrDir} --include='*.ts'`, {
-      encoding: 'utf-8',
-    });
-    return out.trim().split('\n').filter(Boolean).length;
-  } catch {
-    return 0;
+  if (statSync(fileOrDir).isFile()) {
+    const matcher = new RegExp(pattern);
+    return readFileSync(fileOrDir, 'utf8')
+      .split('\n')
+      .filter((line) => matcher.test(line)).length;
   }
+  // Scan the same real source without three shell/process launches. Read errors
+  // remain failures instead of being mistaken for zero duplicate declarations.
+  return readdirSync(fileOrDir, { withFileTypes: true }).reduce((count, child) => {
+    if (child.isDirectory() || (child.isFile() && child.name.endsWith('.ts')))
+      return count + grepCount(pattern, join(fileOrDir, child.name));
+    return count;
+  }, 0);
 }
 
 describe('M1 sub-asset POD SSOT grep gate (AC-26)', () => {

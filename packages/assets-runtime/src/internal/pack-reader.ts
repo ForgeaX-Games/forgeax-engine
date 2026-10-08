@@ -25,7 +25,8 @@ function invalid(guid: string, reason: string): Result<never, AssetLoadError> {
   });
 }
 
-function frozen<T>(value: T): T {
+/** Freeze an owned value; never pass a mutable retained Pack to this helper. */
+export function freezePackValue<T>(value: T): T {
   if (
     value !== null &&
     typeof value === 'object' &&
@@ -33,7 +34,7 @@ function frozen<T>(value: T): T {
     !Object.isFrozen(value)
   ) {
     Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) frozen(child);
+    for (const child of Object.values(value as Record<string, unknown>)) freezePackValue(child);
   }
   return value;
 }
@@ -124,67 +125,76 @@ export class PackReader {
   }
 
   verify(value: unknown, expected: AssetPublicationTuple): Result<VerifiedPack, AssetLoadError> {
-    if (value === null || typeof value !== 'object') return invalid('', 'Pack is not an object');
-    const pack = value as Partial<PackV2<unknown>>;
-    if (pack.schemaVersion !== '2.0.0' || pack.kind !== 'internal-text-package') {
-      return invalid('', 'schemaVersion or kind');
-    }
-    if (
-      typeof pack.scopeId !== 'string' ||
-      !Number.isSafeInteger(pack.generation) ||
-      typeof pack.digest !== 'string' ||
-      typeof pack.outputSetDigest !== 'string' ||
-      !sameTuple(pack as AssetPublicationTuple, expected)
-    ) {
-      return invalid('', 'publication tuple mismatch');
-    }
-    if (!Array.isArray(pack.assets)) return invalid('', 'assets');
-    const guids = new Set<string>();
-    for (const raw of pack.assets) {
-      const issue = packEnvelopeIssue(raw);
-      if (issue !== undefined) return invalid('', issue);
-      const asset = raw as Partial<AssetEnvelopeV2<unknown>>;
-      const guid = typeof asset.guid === 'string' ? asset.guid : '';
-      if (guid.length === 0 || guids.has(guid.toLowerCase()))
-        return invalid(guid, 'duplicate guid');
-      guids.add(guid.toLowerCase());
-      if (
-        typeof asset.kind !== 'string' ||
-        asset.payload === undefined ||
-        !Array.isArray(asset.refs) ||
-        asset.refs.some((ref) => typeof ref !== 'string') ||
-        asset.artifacts === null ||
-        typeof asset.artifacts !== 'object'
-      ) {
-        return invalid(guid, 'asset envelope fields');
-      }
-      for (const [artifactKey, descriptor] of Object.entries(asset.artifacts)) {
-        if (!this.validArtifact(guid, artifactKey, descriptor)) {
-          return invalid(guid, `artifact ${artifactKey}`);
-        }
-      }
-    }
-    return ok(frozen(pack as VerifiedPack));
+    const checked = validatePackEnvelope(value, expected);
+    if (!checked.ok) return checked;
+    return ok(freezePackValue(value as VerifiedPack));
   }
+}
 
-  private validArtifact(_guid: string, key: string, value: unknown): boolean {
-    if (value === null || typeof value !== 'object') return false;
-    const descriptor = value as Record<string, unknown>;
-    const integrity = descriptor.integrity;
-    return (
-      key.length > 0 &&
-      typeof descriptor.path === 'string' &&
-      descriptor.path.length > 0 &&
-      typeof descriptor.mediaType === 'string' &&
-      descriptor.mediaType.length > 0 &&
-      (descriptor.contentEncoding === 'identity' || descriptor.contentEncoding === 'zstd') &&
-      Number.isSafeInteger(descriptor.byteLength) &&
-      Number(descriptor.byteLength) >= 0 &&
-      integrity !== null &&
-      typeof integrity === 'object' &&
-      (integrity as Record<string, unknown>).algorithm === 'sha256' &&
-      typeof (integrity as Record<string, unknown>).digest === 'string' &&
-      /^sha256:[0-9a-f]{64}$/i.test(String((integrity as Record<string, unknown>).digest))
-    );
+/** Complete Pack validation without freezing or retaining the caller's mutable input. */
+export function validatePackEnvelope(
+  value: unknown,
+  expected: AssetPublicationTuple,
+): Result<void, AssetLoadError> {
+  if (value === null || typeof value !== 'object') return invalid('', 'Pack is not an object');
+  const pack = value as Partial<PackV2<unknown>>;
+  if (pack.schemaVersion !== '2.0.0' || pack.kind !== 'internal-text-package') {
+    return invalid('', 'schemaVersion or kind');
   }
+  if (
+    typeof pack.scopeId !== 'string' ||
+    !Number.isSafeInteger(pack.generation) ||
+    typeof pack.digest !== 'string' ||
+    typeof pack.outputSetDigest !== 'string' ||
+    !sameTuple(pack as AssetPublicationTuple, expected)
+  ) {
+    return invalid('', 'publication tuple mismatch');
+  }
+  if (!Array.isArray(pack.assets)) return invalid('', 'assets');
+  const guids = new Set<string>();
+  for (const raw of pack.assets) {
+    const issue = packEnvelopeIssue(raw);
+    if (issue !== undefined) return invalid('', issue);
+    const asset = raw as Partial<AssetEnvelopeV2<unknown>>;
+    const guid = typeof asset.guid === 'string' ? asset.guid : '';
+    if (guid.length === 0 || guids.has(guid.toLowerCase())) return invalid(guid, 'duplicate guid');
+    guids.add(guid.toLowerCase());
+    if (
+      typeof asset.kind !== 'string' ||
+      asset.payload === undefined ||
+      !Array.isArray(asset.refs) ||
+      asset.refs.some((ref) => typeof ref !== 'string') ||
+      asset.artifacts === null ||
+      typeof asset.artifacts !== 'object'
+    ) {
+      return invalid(guid, 'asset envelope fields');
+    }
+    for (const [artifactKey, descriptor] of Object.entries(asset.artifacts)) {
+      if (!validArtifact(guid, artifactKey, descriptor)) {
+        return invalid(guid, `artifact ${artifactKey}`);
+      }
+    }
+  }
+  return ok(undefined);
+}
+
+function validArtifact(_guid: string, key: string, value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const descriptor = value as Record<string, unknown>;
+  const integrity = descriptor.integrity;
+  return (
+    key.length > 0 &&
+    typeof descriptor.path === 'string' &&
+    descriptor.path.length > 0 &&
+    typeof descriptor.mediaType === 'string' &&
+    descriptor.mediaType.length > 0 &&
+    (descriptor.contentEncoding === 'identity' || descriptor.contentEncoding === 'zstd') &&
+    Number.isSafeInteger(descriptor.byteLength) &&
+    Number(descriptor.byteLength) >= 0 &&
+    integrity !== null &&
+    typeof integrity === 'object' &&
+    (integrity as Record<string, unknown>).algorithm === 'sha256' &&
+    typeof (integrity as Record<string, unknown>).digest === 'string' &&
+    /^sha256:[0-9a-f]{64}$/i.test(String((integrity as Record<string, unknown>).digest))
+  );
 }

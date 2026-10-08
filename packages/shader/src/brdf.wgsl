@@ -20,9 +20,18 @@ fn v_smith(nDotV : f32, nDotL : f32, a : f32) -> f32 {
   return 0.5 / max(gv + gl, 1e-5);
 }
 
+// Grazing reflectance derived from F0 (Unreal's specular occlusion). No real
+// material has F0 below 2%, so a smaller value means authored "no specular":
+// the grazing lobe fades with it and `specular: 0` becomes pure Lambert.
+// F0 >= 0.02 keeps F90 = 1, so physically based inputs are unchanged, and
+// deferred lighting derives it from the stored F0 without a new channel.
+fn specularF90(f0 : vec3<f32>) -> f32 {
+  return saturate(50.0 * max(f0.r, max(f0.g, f0.b)));
+}
+
 fn f_schlick(vDotH : f32, f0 : vec3<f32>) -> vec3<f32> {
   let fresnel = exp2((-5.55473 * vDotH - 6.98316) * vDotH);
-  return f0 * (vec3<f32>(1.0) - fresnel) + vec3<f32>(fresnel);
+  return f0 + (vec3<f32>(specularF90(f0)) - f0) * fresnel;
 }
 
 
@@ -127,11 +136,12 @@ fn threeR184DirectMultiScatter(
 ) -> vec3<f32> {
   let dfgV = sampleThreeR184DfgLut(roughness, nDotV);
   let dfgL = sampleThreeR184DfgLut(roughness, nDotL);
-  let fssEssV = F0 * dfgV.x + vec3<f32>(dfgV.y);
-  let fssEssL = F0 * dfgL.x + vec3<f32>(dfgL.y);
+  let f90 = specularF90(F0);
+  let fssEssV = F0 * dfgV.x + vec3<f32>(dfgV.y * f90);
+  let fssEssL = F0 * dfgL.x + vec3<f32>(dfgL.y * f90);
   let emsV = 1.0 - dfgV.x - dfgV.y;
   let emsL = 1.0 - dfgL.x - dfgL.y;
-  let favg = F0 + (vec3<f32>(1.0) - F0) * 0.047619;
+  let favg = F0 + (vec3<f32>(f90) - F0) * 0.047619;
   let energyLoss = emsV * emsL;
   let fms = fssEssV * fssEssL * favg
     / (vec3<f32>(1.0) - energyLoss * favg * favg + vec3<f32>(1e-6));

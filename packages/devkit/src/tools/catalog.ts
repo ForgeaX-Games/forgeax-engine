@@ -40,13 +40,9 @@ export interface ToolCatalogAuthoritySnapshot {
   readonly descriptors: readonly ToolDescriptor[];
 }
 
-export interface ToolCatalogEntry {
-  readonly id: string;
+export interface ToolCatalogEntry
+  extends Pick<ToolDescriptor, 'id' | 'title' | 'summary' | 'realm' | 'evidence'> {
   readonly path: readonly string[];
-  readonly title: string;
-  readonly summary: string;
-  readonly realm: ToolDescriptor['realm'];
-  readonly evidence: ToolDescriptor['evidence'];
   readonly argsSchema?: string;
   readonly resultSchema?: string;
 }

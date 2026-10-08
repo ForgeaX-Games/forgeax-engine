@@ -3,6 +3,9 @@ import { rhi } from '@forgeax/engine-rhi-null';
 import { err } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { PlanarCaptureState } from '../capture/planar-state';
+import { DeviceScope } from '../device/device-scope';
+import { selectEnvironment } from '../environment/frame';
+import { releaseAtmosphere, retainAtmosphere } from '../environment/storage';
 import { getOrCreateHdrpBuffers } from '../hdrp-buffers';
 import { makeZeroCameraFallbackSnapshot, type RenderFrameState } from '../record/frame-snapshot';
 import type { PipelineState, RenderSystemInternals } from '../record/render-context';
@@ -17,6 +20,7 @@ import type { ExtractedLights } from '../render-system-extract';
 import { getOrCreateSsaoFallbackTexture, resetSsaoResources } from '../ssao-buffers';
 import type { RenderTarget } from '../targets/contracts';
 import { createRenderTargetPhysical, destroyRenderTargetPhysical } from '../targets/physical';
+import { earthAtmosphere } from './atmosphere-fixture';
 
 const lights = {
   directionalCount: 0,
@@ -66,7 +70,7 @@ async function fixture() {
   const owner: CubeCaptureGraphState = { work };
   const prepare = (index = 0, base = basePipeline) =>
     prepareTargetCaptureLighting(owner, required(work[index]), runtime, state, base, lights);
-  return { gpu, runtime, basePipeline, owner, prepare };
+  return { gpu, runtime, state, basePipeline, owner, prepare };
 }
 
 describe('target capture lighting ownership', () => {
@@ -245,6 +249,39 @@ describe('target capture lighting ownership', () => {
     await Promise.resolve();
   });
 
+  it('gives each same-frame writer of one layered target its own view uniform', async () => {
+    const f = await fixture();
+    const target = {} as RenderTarget;
+    const writers = [0, 1, 2].map((layer) => {
+      const camera = makeZeroCameraFallbackSnapshot();
+      camera.position[0] = layer;
+      return { target, layer, faceCamera: camera } as CubeCaptureGraphWork;
+    });
+    f.owner.work = writers;
+    const prepare = (work: CubeCaptureGraphWork) =>
+      prepareTargetCaptureLighting(
+        f.owner,
+        work,
+        f.runtime,
+        {} as RenderFrameState,
+        f.basePipeline,
+        lights,
+      ).pipeline.viewUniformBuffer;
+    const buffers = writers.map(prepare);
+    expect(new Set(buffers).size).toBe(3);
+    const destroy = vi.spyOn(f.gpu, 'destroyBuffer');
+    // A later frame with one writer reuses ordinal 0 and retires the others.
+    f.owner.work = [required(writers[2])];
+    expect(prepare(required(writers[2]))).toBe(buffers[0]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(destroy).toHaveBeenCalledWith(buffers[1]);
+    expect(destroy).toHaveBeenCalledWith(buffers[2]);
+    expect(destroy).not.toHaveBeenCalledWith(buffers[0]);
+    disposeTargetCaptureLighting(f.owner);
+    await Promise.resolve();
+  });
+
   it('keeps different camera payloads at the same Points/Lines draw slot in separate buffers', async () => {
     const f = await fixture();
     const first = f.prepare(0);
@@ -269,4 +306,53 @@ describe('target capture lighting ownership', () => {
     disposeTargetCaptureLighting(f.owner);
     await Promise.resolve();
   });
+});
+
+it('uses current Fog while retaining the captured atmosphere and sun', async () => {
+  const f = await fixture();
+  const scope = DeviceScope.create(1, 'capture-fog');
+  Object.assign(f.runtime, { deviceScope: scope });
+  const first = selectEnvironment({
+    environments: [
+      { kind: 'atmosphere', entityKey: 1, sourceKey: 'sky', atmosphere: earthAtmosphere },
+    ],
+    suns: [{ entityKey: 2, direction: [0, 1, 0], color: [1, 1, 1], intensity: 100000 }],
+    fogs: [],
+    lane: 'direct',
+  }).unwrap();
+  const capture = retainAtmosphere(f.runtime, first);
+  const fog = {
+    entityKey: 3,
+    color: [0.2, 0.3, 0.4] as const,
+    density: 0.02,
+    heightFalloff: 0.1,
+    maxOpacity: 1,
+  };
+  f.state.environmentFrame = selectEnvironment({
+    environments: [
+      { kind: 'atmosphere', entityKey: 1, sourceKey: 'sky', atmosphere: earthAtmosphere },
+    ],
+    suns: [{ entityKey: 2, direction: [1, 0, 0], color: [1, 1, 1], intensity: 100000 }],
+    fogs: [fog],
+    lane: 'direct',
+  }).unwrap();
+  Object.assign(required(f.owner.work[0]), { atmosphere: capture.storage, candidateGeneration: 1 });
+  try {
+    const prepared = f.prepare();
+    expect(prepared.capturedAtmosphere).toBe(capture.storage);
+    expect(prepared.frameState.environmentFrame?.sun).toEqual(first.sun);
+    expect(prepared.frameState.environmentFrame?.fog).toEqual(fog);
+    expect(prepared.frameState.environmentFrame?.fogSignature).toBe(
+      f.state.environmentFrame.fogSignature,
+    );
+    expect(prepared.frameState.environmentFrame?.environmentSignature).toBe(
+      first.environmentSignature,
+    );
+  } finally {
+    disposeTargetCaptureLighting(f.owner);
+    capture.release();
+    releaseAtmosphere(f.runtime);
+    await f.gpu.queue.onSubmittedWorkDone();
+    scope.retire();
+  }
 });

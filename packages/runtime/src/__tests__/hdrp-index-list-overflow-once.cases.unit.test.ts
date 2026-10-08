@@ -394,13 +394,5 @@ type __MergedKeep =
       );
       expect(STORAGE_BUFFER_MIN_REQUIRED).toBe(4);
     });
-
-    it('POINT_LIGHT_STD430_BYTES and SPOT_LIGHT_STD430_BYTES still match URP specs', async () => {
-      const { POINT_LIGHT_STD430_BYTES, SPOT_LIGHT_STD430_BYTES } = await import(
-        '../../../render/src/light-buffer-layout'
-      );
-      expect(POINT_LIGHT_STD430_BYTES).toBe(80);
-      expect(SPOT_LIGHT_STD430_BYTES).toBe(80);
-    });
   });
 }

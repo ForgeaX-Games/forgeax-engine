@@ -59,7 +59,10 @@ export async function materializeHarnessDocs({
 
     let syncResult;
     try {
-      syncResult = sync(rootDir, env);
+      syncResult = sync(rootDir, {
+        ...env,
+        FORGEAX_HARNESS_SPARSE_DOCS_PATHS: JSON.stringify(requiredDocs),
+      });
     } catch (error) {
       log(
         `[harness:docs] harness sync invocation failed: ${error instanceof Error ? error.message : String(error)}\n`,

@@ -5,7 +5,14 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import test from 'node:test';
-import { graphicsEnvironment, parseGraphicsArgs, verifyArchive } from '../local-graphics.mjs';
+import {
+  bundlePath,
+  graphicsEnvironment,
+  parseGraphicsArgs,
+  selectProducer,
+  verifyArchive,
+  verifyBundle,
+} from '../local-graphics.mjs';
 import { resolveLavapipeIcd } from '../resolve-lavapipe-icd.mjs';
 
 test('software environment is child-scoped and overrides both stale ICD selectors', () => {
@@ -108,6 +115,29 @@ test('missing bundle prevents the requested command from running', () => {
     );
     assert.notEqual(result.status, 0);
     assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('older glibc hosts build the locked Mesa source instead of failing or skipping', () => {
+  const lock = JSON.parse(readFileSync('scripts/ci/local-graphics.lock.json', 'utf8'));
+  assert.equal(selectProducer(lock.minimumGlibc), 'prebuilt');
+  assert.equal(selectProducer('2.39'), 'prebuilt');
+  assert.equal(selectProducer('3.0'), 'prebuilt');
+  assert.equal(selectProducer('2.35'), 'source');
+  assert.match(lock.source.url, /mesa-25\.2\.8\.tar\.xz$/);
+  assert.match(lock.source.sha256, /^[0-9a-f]{64}$/);
+  assert.ok(lock.source.mesonOptions.includes('-Dvulkan-drivers=swrast'));
+  const env = { XDG_CACHE_HOME: '/cache' };
+  assert.notEqual(bundlePath(env, 'prebuilt'), bundlePath(env, 'source'));
+});
+
+test('a bundle receipt from the other producer is rejected', () => {
+  const root = mkdtempSync(join(tmpdir(), 'graphics-receipt-'));
+  try {
+    writeFileSync(join(root, 'receipt.json'), JSON.stringify({ producer: 'prebuilt' }));
+    assert.throws(() => verifyBundle(root, 'source'), /graphics-bundle-unavailable/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

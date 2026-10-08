@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import type { NativeCooker } from '@forgeax/engine-pack/native-cooker';
 import type { Importer } from '@forgeax/engine-types';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -292,10 +293,7 @@ describe('roots-scoped native catalog publication', () => {
     );
     expect(globalIndexAsset).toBeDefined();
     if (globalIndexAsset === undefined) throw new Error('expected the emitted global pack index');
-    const globalRows = JSON.parse(String(globalIndexAsset.source)) as Array<{
-      guid: string;
-      packageUrl: string;
-    }>;
+    const globalRows = decodeCatalogWire(JSON.parse(String(globalIndexAsset.source))).unwrap();
     const globalActive = globalRows.find((row) => row.guid === EFFECT_GUID);
     expect(globalActive).toBeDefined();
     if (globalActive === undefined)

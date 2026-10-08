@@ -337,6 +337,22 @@ export async function buildScriptablePack(
     built = options.definition.build(context as never);
     built = await built;
   } catch (cause) {
+    if (record(cause)) {
+      let fields: PropertyDescriptorMap | undefined;
+      try {
+        fields = Object.getOwnPropertyDescriptors(cause);
+      } catch {
+        // Opaque author objects retain the ordinary unknown-throw fallback.
+      }
+      if (
+        typeof fields?.code?.value === 'string' &&
+        typeof fields?.expected?.value === 'string' &&
+        typeof fields?.hint?.value === 'string' &&
+        (fields?.detail === undefined || 'value' in fields.detail)
+      ) {
+        return err(cause as unknown as ScriptablePackDomainError);
+      }
+    }
     return err(
       new ImportError({
         code: 'import-internal-error',
@@ -390,7 +406,7 @@ export async function buildScriptablePack(
     if (!isValidPackSourceKey(sourceKey))
       return err(sourceKeyFailure(options.sourcePath, sourceKey));
     const asset = ownedOutputs[sourceKey];
-    const customSource = record(asset) && asset.execution === 'cooked';
+    const customSource = record(asset) && 'execution' in asset && asset.execution === 'cooked';
     if (
       customSource &&
       (typeof asset.kind !== 'string' ||
@@ -443,7 +459,7 @@ export async function buildScriptablePack(
         guid,
         sourceKey,
         sourcePath: options.sourcePath,
-        source: asset.source,
+        source: (asset as Record<string, unknown>).source,
         refs: [],
       });
       if (!cooked.ok) return err(cooked.error);

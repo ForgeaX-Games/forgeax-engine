@@ -11,7 +11,7 @@ describe('SceneInstance structure characterization', () => {
     const snapshot = {
       lines: source.split('\n').length - 1,
       exportedFunctions: (source.match(/^export function\b/gm) ?? []).length,
-      hasStatePayload: source.includes('export interface SceneInstanceStatePayload'),
+      hasStatePayload: source.includes('export interface SceneInstanceState'),
       hasWorldStateWeakMap: source.includes('const sceneWorldStates = new WeakMap'),
     };
 
@@ -19,7 +19,7 @@ describe('SceneInstance structure characterization', () => {
     // runtime projection baseline, with a small guard against re-growing the
     // former numeric/mount implementation.
     expect(snapshot.lines).toBeLessThan(1700);
-    expect(snapshot.exportedFunctions).toBe(27);
+    expect(snapshot.exportedFunctions).toBe(24);
     expect(snapshot.hasStatePayload).toBe(false);
     expect(snapshot.hasWorldStateWeakMap).toBe(false);
   });

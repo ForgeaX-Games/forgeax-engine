@@ -11,7 +11,7 @@ describe('View fog ray', () => {
   });
 
   it('selects the translucent composition from the bound View copy only', () => {
-    expect(fog).toContain('let composition = u32(v.fogHeightOpacity.z + 0.5);');
-    expect(fog).toContain('if composition == 0u { return color; }');
+    expect(fog).toMatch(/let composition\s*=\s*u32\(v\.fogHeightOpacity\.z\s*\+\s*0\.5\);/);
+    expect(fog).toMatch(/if composition\s*==\s*0u && all\(transmission\s*==\s*vec3<f32>\(0\.0\)\)/);
   });
 });

@@ -61,15 +61,7 @@ function ready(
   }
   return {
     status: 'Ready',
-    guid,
-    materialGuid: guid,
-    publicationGeneration: generation,
-    specializationKey,
-    artifactDigest,
-    sourceClosure: record.sourceClosure,
-    parameterContract: record.parameterContract,
     record,
-    programs,
   };
 }
 
@@ -131,7 +123,7 @@ describe('material specialization runtime consumer', () => {
       materialGuid: MATERIAL_GUID,
       publicationGeneration: 2,
       specializationKey: 'key-b',
-      artifactHash: ready(2, 'key-b', 'variant-b').artifactDigest,
+      artifactHash: ready(2, 'key-b', 'variant-b').record.artifactDigest,
     });
   });
 

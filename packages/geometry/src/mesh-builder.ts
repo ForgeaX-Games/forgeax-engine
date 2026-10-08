@@ -3,6 +3,7 @@ import {
   ASSET_ERROR_HINTS,
   AssetError,
   err,
+  isStripTopology,
   type MeshAsset,
   type MeshMaterialSlot,
   ok,
@@ -11,45 +12,15 @@ import {
   type Submesh,
   type VertexAttributeMap,
 } from '@forgeax/engine-types';
-import { packInterleavedVertexAttributes } from './vertex-attribute-layout';
+import {
+  deriveVertexLayoutProjection,
+  packInterleavedVertexAttributes,
+  type VertexLayoutProjectionAttribute,
+} from './vertex-attribute-layout';
 
-const ATTRIBUTE_KEYS = [
-  'position',
-  'normal',
-  'uv',
-  'tangent',
-  'skinIndex',
-  'skinWeight',
-  'uv1',
-  'uv2',
-  'uv3',
-  'uv4',
-  'uv5',
-  'uv6',
-  'uv7',
-  'color',
-] as const satisfies readonly (keyof VertexAttributeMap)[];
-
-type AttributeKey = (typeof ATTRIBUTE_KEYS)[number];
+type AttributeKey = VertexLayoutProjectionAttribute['key'];
 type AttributeSource = NonNullable<VertexAttributeMap[AttributeKey]>;
 type AttributeView = Float32Array | Uint16Array;
-
-const ATTRIBUTE_COMPONENTS: Readonly<Record<AttributeKey, number>> = {
-  position: 3,
-  normal: 3,
-  uv: 2,
-  tangent: 4,
-  skinIndex: 4,
-  skinWeight: 4,
-  uv1: 2,
-  uv2: 2,
-  uv3: 2,
-  uv4: 2,
-  uv5: 2,
-  uv6: 2,
-  uv7: 2,
-  color: 4,
-};
 
 const TOPOLOGIES: readonly PrimitiveTopology[] = [
   'point-list',
@@ -116,7 +87,7 @@ function cloneAttribute(key: AttributeKey, value: AttributeSource): AttributeVie
 }
 
 function attributeKeys(attributes: VertexAttributeMap): AttributeKey[] {
-  return ATTRIBUTE_KEYS.filter((key) => attributes[key] !== undefined);
+  return deriveVertexLayoutProjection(attributes).attributes.map((attribute) => attribute.key);
 }
 
 function appendArray(target: AttributeView, source: AttributeView): AttributeView {
@@ -170,7 +141,7 @@ function validateAttributeBatch(
     );
   }
   const vertexCount = positionView.length / 3;
-  for (const key of keys) {
+  for (const { key, byteLength, format } of deriveVertexLayoutProjection(attributes).attributes) {
     const value = attributes[key];
     if (value === undefined) continue;
     const view = sourceView(key, value);
@@ -181,7 +152,7 @@ function validateAttributeBatch(
         key === 'skinIndex' ? 'storage must be Uint16Array' : 'storage must be Float32Array',
       );
     }
-    const expectedLength = vertexCount * ATTRIBUTE_COMPONENTS[key];
+    const expectedLength = vertexCount * (byteLength / (format === 'uint16x4' ? 2 : 4));
     if (view.length !== expectedLength) {
       return failure(key, view.length, `cardinality must be ${expectedLength}`);
     }
@@ -280,7 +251,7 @@ function completedSubmeshes(
         'index range exceeds the accumulated index buffer',
       );
     }
-    if (indexCount === 0 && (topology === 'line-strip' || topology === 'triangle-strip')) {
+    if (indexCount === 0 && isStripTopology(topology)) {
       return failure(
         `submeshes[${index}].topology`,
         topology,
@@ -312,7 +283,7 @@ export function createMeshBuilder(options: MeshBuilderOptions = {}): MeshBuilder
     const checked = validateAttributeBatch(batch);
     if (!checked.ok) return checked;
     const incomingKeys = checked.value.keys;
-    const existingKeys = ATTRIBUTE_KEYS.filter((key) => attributes[key] !== undefined);
+    const existingKeys = Object.keys(attributes);
     if (existingKeys.length > 0 && existingKeys.join('|') !== incomingKeys.join('|')) {
       return failure(
         'attributes',

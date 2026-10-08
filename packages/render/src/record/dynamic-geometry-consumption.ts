@@ -1,6 +1,6 @@
 import type { World } from '@forgeax/engine-ecs';
 import type { DynamicGeometryRecordStageLane } from '../dynamic-geometry';
-import type { RenderFrameState, ValidatedRenderable } from './frame-snapshot';
+import type { ValidatedRenderable } from './frame-snapshot';
 
 type RecordStageDrawLane = 'cpu' | 'gpu';
 
@@ -76,14 +76,4 @@ export function createDynamicGeometryFrameBindings(): DynamicGeometryFrameBindin
       return binding.lanes.has('gpu') ? 'gpu' : 'cpu';
     },
   };
-}
-
-/** Drop temporal history after a dynamic-geometry topology replacement. */
-export function resetDynamicGeometryTemporalHistory(frameState: RenderFrameState): void {
-  frameState.temporalFrameTransaction.reset('signature-change');
-  frameState.temporalFrame = undefined;
-  frameState.temporalFrameInput = undefined;
-  frameState.lastSuccessfulTemporalView = undefined;
-  frameState.successfulTemporalFrameIndex = 0;
-  frameState.pendingTemporalCommit = { kind: 'none' };
 }

@@ -8,17 +8,13 @@ export default defineFeature({
   catalog: 'Collider shapes',
   kind: 'headless',
   summary:
-    'Collider.shape is cuboid=0 / sphere=1 / capsule=2 with halfExtents, radius and halfHeight parameters. A bare Collider (no RigidBody) becomes implicit static geometry.',
+    'Collider supports primitive and managed shapes. This fixture raycasts cuboid, sphere and capsule using halfExtents, radius and halfHeight. A bare Collider (no RigidBody) becomes implicit static geometry.',
   expect:
     'All checks pass: shape narrowing agrees with the value map, and a downward raycast hits each shape exactly at its parameterised top (cuboid 0.5, sphere 0.7, capsule 0.3+0.5).',
   async run(checks) {
-    checks.equal(
-      'ColliderShapeValue',
-      { ...ColliderShapeValue },
-      { cuboid: 0, sphere: 1, capsule: 2 },
-    );
-    checks.equal('narrow 1', colliderShapeFromF32(1), 'sphere');
-    checks.equal('narrow 2', colliderShapeFromF32(2), 'capsule');
+    for (const [shape, value] of Object.entries(ColliderShapeValue)) {
+      checks.equal(`narrow ${shape}`, colliderShapeFromF32(value), shape);
+    }
     const harness = await createPhysicsHarness3D();
     if (typeof harness === 'string') {
       checks.ok('Rapier 3D loads', false, harness);

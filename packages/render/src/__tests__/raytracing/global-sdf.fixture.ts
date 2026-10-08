@@ -12,8 +12,16 @@ import type { SdfCardsFixture } from './sdf-cards.commands';
 import { sdfCubeInstance } from './sdf-cards.fixture';
 
 export async function verifyGlobalSdf(fixture: SdfCardsFixture) {
-  const field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
-  const sheet = { ...fixture.sheet.field, values: Float32Array.from(fixture.sheet.field.values) };
+  const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  };
+  const sheet = {
+    ...fixture.sheet.field,
+    bricks: Uint32Array.from(fixture.sheet.field.bricks),
+    values: Float32Array.from(fixture.sheet.field.values),
+  };
   assert(sheet.policy.kind !== 'sampled-visibility');
   const cube: SdfMeshInstance = { ...sdfCubeInstance, field };
   const plane: SdfMeshInstance = { ...cube, instanceId: 2, field: sheet };

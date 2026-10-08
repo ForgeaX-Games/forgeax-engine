@@ -55,3 +55,5 @@ export {
   standardSurfaceParameters,
 } from './standard-schema.js';
 export * from './surface-model.js';
+
+export { unlitMaterialParameters } from './unlit-parameters';

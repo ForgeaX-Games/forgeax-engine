@@ -14,10 +14,12 @@ import type {
   VertexAttributeMap,
 } from '@forgeax/engine-types';
 import { PROCEDURAL_FLOATS_PER_VERTEX } from '../box';
-import { validateMeshCardLayout } from '../mesh-card-artifact';
+import { admitsMeshCardLayout, validateMeshCardLayout } from '../mesh-card-artifact';
+import { validateMeshCollisionAttachment } from '../mesh-collision';
 import {
   deriveVertexLayoutProjection,
   deriveVertexLayoutProjectionFromMask,
+  unpackInterleavedVertexAttributes,
   type VertexLayoutProjection,
 } from '../vertex-attribute-layout';
 
@@ -28,6 +30,7 @@ interface PackedMesh {
   readonly indices?: Uint16Array | Uint32Array;
   readonly submeshes?: readonly Record<string, unknown>[];
   readonly cardLayout?: MeshCardLayout;
+  readonly collision?: unknown;
   readonly materialSlots?: readonly {
     readonly slotName: string;
     readonly sourceKey?: string;
@@ -145,6 +148,7 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
   let metadata: {
     readonly submeshes?: readonly Record<string, unknown>[];
     readonly cardLayout?: MeshCardLayout;
+    readonly collision?: unknown;
     readonly materialSlots?: PackedMesh['materialSlots'];
     readonly aabb?: readonly number[];
     readonly morphTargets?: readonly Record<string, readonly number[]>[];
@@ -168,31 +172,11 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
   ) {
     return undefined;
   }
-  const attributes: Record<string, Float32Array | Uint16Array> = {};
-  const view = new DataView(vertices.buffer);
-  for (const entry of projection.attributes) {
-    const components = entry.byteLength / (entry.format === 'uint16x4' ? 2 : 4);
-    const target =
-      entry.format === 'uint16x4'
-        ? new Uint16Array(header.vertexCount * components)
-        : new Float32Array(header.vertexCount * components);
-    for (let vertex = 0; vertex < header.vertexCount; vertex += 1) {
-      for (let component = 0; component < components; component += 1) {
-        const sourceOffset =
-          vertex * header.stride + entry.offset + component * (entry.format === 'uint16x4' ? 2 : 4);
-        if (sourceOffset + (entry.format === 'uint16x4' ? 2 : 4) > vertices.byteLength) {
-          return undefined;
-        }
-        if (target instanceof Uint16Array) {
-          target[vertex * components + component] = view.getUint16(sourceOffset, true);
-        } else {
-          const value = view.getFloat32(sourceOffset, true);
-          if (!Number.isFinite(value)) return undefined;
-          target[vertex * components + component] = value;
-        }
-      }
-    }
-    attributes[entry.key] = target;
+  const attributes = unpackInterleavedVertexAttributes(vertices, projection);
+  if (attributes === undefined) return undefined;
+  for (const value of Object.values(attributes)) {
+    if (value instanceof Float32Array && value.some((component) => !Number.isFinite(component)))
+      return undefined;
   }
   let decodedMorphTargets: readonly MorphTarget[] | undefined;
   try {
@@ -230,10 +214,11 @@ function unpackMeshBinary(bytes: Uint8Array): PackedMesh | undefined {
   return {
     version: header.version,
     vertices,
-    attributes: attributes as VertexAttributeMap,
+    attributes,
     projection,
     ...(indices === undefined ? {} : { indices }),
     submeshes: metadata.submeshes,
+    ...(metadata.collision === undefined ? {} : { collision: metadata.collision }),
     ...(metadata.cardLayout === undefined ? {} : { cardLayout: metadata.cardLayout }),
     materialSlots: metadata.materialSlots,
     ...(metadata.aabb === undefined ? {} : { aabb: new Float32Array(metadata.aabb) }),
@@ -323,6 +308,7 @@ function meshFromParts(
     readonly aabb?: unknown;
     readonly submeshes?: readonly Record<string, unknown>[];
     readonly cardLayout?: MeshCardLayout;
+    readonly collision?: unknown;
     readonly materialSlots?: PackedMesh['materialSlots'];
     readonly morphTargets?: unknown;
     readonly morphWeights?: unknown;
@@ -367,9 +353,11 @@ function meshFromParts(
   if (
     parts.cardLayout !== undefined &&
     (!validateMeshCardLayout(parts.cardLayout).ok ||
-      submeshes.some((section) => section.topology !== 'triangle-list') ||
-      parts.morphTargets !== undefined ||
-      attributes.skinIndex !== undefined)
+      !admitsMeshCardLayout({
+        submeshes,
+        morphTargets: parts.morphTargets,
+        skinIndex: attributes.skinIndex,
+      }))
   )
     return undefined;
   const materialSlots = materialSlotsFor(parts.materialSlots, submeshes, refs);
@@ -397,6 +385,22 @@ function meshFromParts(
       attributes[key] = values;
     }
   }
+  const collision =
+    parts.collision === undefined
+      ? undefined
+      : validateMeshCollisionAttachment(
+          {
+            kind: 'mesh',
+            vertices,
+            attributes,
+            submeshes,
+            materialSlots,
+            ...(indices === undefined ? {} : { indices }),
+            ...(morph === undefined ? {} : { morphTargets: morph }),
+          },
+          parts.collision,
+        );
+  if (collision !== undefined && !collision.ok) return undefined;
   return {
     kind: 'mesh',
     vertices,
@@ -404,6 +408,7 @@ function meshFromParts(
     attributes,
     aabb,
     submeshes,
+    ...(collision?.ok ? { collision: collision.value } : {}),
     ...(parts.cardLayout === undefined ? {} : { cardLayout: parts.cardLayout }),
     materialSlots,
     ...(morph === undefined ? {} : { morphTargets: morph }),
@@ -420,6 +425,7 @@ export function decodeMeshBinary(
   return meshFromParts(
     {
       vertices: decoded.vertices,
+      ...(decoded.collision === undefined ? {} : { collision: decoded.collision }),
       ...(decoded.cardLayout === undefined ? {} : { cardLayout: decoded.cardLayout }),
       ...(decoded.attributes === undefined ? {} : { attributes: decoded.attributes }),
       ...(decoded.indices === undefined ? {} : { indices: decoded.indices }),
@@ -449,7 +455,7 @@ export function normalizeMeshPayload(
 ): MeshAsset | undefined {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const source = payload as Record<string, unknown>;
-  if (source.kind !== 'mesh') return undefined;
+  if (source.kind !== 'mesh' || source.distanceField !== undefined) return undefined;
   const sourceAttributes =
     source.attributes !== null && typeof source.attributes === 'object'
       ? (source.attributes as VertexAttributeMap)
@@ -463,6 +469,7 @@ export function normalizeMeshPayload(
   return meshFromParts(
     {
       vertices: source.vertices,
+      ...(source.collision === undefined ? {} : { collision: source.collision }),
       ...(source.cardLayout === undefined
         ? {}
         : { cardLayout: source.cardLayout as MeshCardLayout }),

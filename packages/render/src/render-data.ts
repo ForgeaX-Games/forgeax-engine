@@ -16,11 +16,6 @@
 // switch rather than a silent fallthrough (AC-06).
 
 import {
-  bytesPerRow as blockBytesPerRow,
-  blockParamsForFormat,
-  isCompressedFormat,
-} from '@forgeax/engine-codec';
-import {
   deriveVertexLayoutProjection,
   type VertexLayoutProjection,
 } from '@forgeax/engine-geometry';
@@ -29,10 +24,12 @@ import {
   ASSET_ERROR_HINTS,
   type AssetError,
   deriveTextureLayout,
+  isCompressedFormat,
   type MeshAsset,
   type Submesh,
   type TextureAsset,
   type TextureShape,
+  textureFormatBlock,
 } from '@forgeax/engine-types';
 import {
   GPU_TEXTURE_USAGE_COPY_DST,
@@ -112,8 +109,7 @@ export interface TextureRenderData {
    * Row pitch for the BASE mip (level 0) the store passes to `writeTexture`.
    * Derived from the canonical texture layout, so format-specific uncompressed
    * widths (for example R8 density) and block-compressed widths stay aligned
-   * with the upload contract. The per-mip layout for a multi-level compressed
-   * upload comes from {@link deriveMipUploadLayout}.
+   * with the upload contract.
    */
   readonly bytesPerRow: number;
   /** True iff `format` is a block-compressed format (drives the store's upload arm). */
@@ -127,7 +123,7 @@ export interface TextureExtent {
 
 /**
  * The sole logical-content to physical-storage projection for a texture.
- * Block sizes come from codec's format table; no physical dimensions are
+ * Block sizes come from the texture format block table; no physical dimensions are
  * authored or serialized with TextureAsset.
  */
 export function deriveTextureExtent(
@@ -139,89 +135,14 @@ export function deriveTextureExtent(
   readonly physicalExtent: TextureExtent;
   readonly uvScale: readonly [number, number];
 } {
-  const params = blockParamsForFormat(format);
-  const physicalWidth = params === null ? width : Math.ceil(width / params.blockW) * params.blockW;
-  const physicalHeight =
-    params === null ? height : Math.ceil(height / params.blockH) * params.blockH;
+  const { blockWidth, blockHeight } = textureFormatBlock(format);
+  const physicalWidth = Math.ceil(width / blockWidth) * blockWidth;
+  const physicalHeight = Math.ceil(height / blockHeight) * blockHeight;
   return {
     logicalExtent: { width, height },
     physicalExtent: { width: physicalWidth, height: physicalHeight },
     uvScale: [width / physicalWidth, height / physicalHeight],
   };
-}
-
-/** One mip level's GPU-upload layout (feat-20260707 M5 / w35, AC-08). */
-export interface MipUploadLevel {
-  /** Mip level index (0 = base / largest). */
-  readonly level: number;
-  /** Logical pixel width of this level (`baseWidth >> level`, min 1). */
-  readonly width: number;
-  /** Logical pixel height of this level (`baseHeight >> level`, min 1). */
-  readonly height: number;
-  /** Block-aligned storage dimensions for this logical mip. */
-  readonly physicalWidth: number;
-  readonly physicalHeight: number;
-  /** Logical `writeTexture` copy width; full-subresource copies may end mid-block. */
-  readonly copyWidth: number;
-  /** Logical `writeTexture` copy height; full-subresource copies may end mid-block. */
-  readonly copyHeight: number;
-  /** Bytes per compressed row: `ceil(width / blockW) * bytesPerBlock`. */
-  readonly bytesPerRow: number;
-  /** Block rows: `ceil(height / blockH)` (the writeTexture `rowsPerImage`). */
-  readonly rowsPerImage: number;
-  /** Byte offset of this level in the mip-major payload (sum of prior levels). */
-  readonly byteOffset: number;
-  /** Byte length of this level (`bytesPerRow * rowsPerImage`). */
-  readonly byteLength: number;
-}
-
-/**
- * Derive the per-mip GPU-upload layout for a block-compressed texture
- * (feat-20260707 M5 / w35, AC-08). Each level pads the pixel width up to a full
- * block (`ceil(width / blockW) * bytesPerBlock`) and counts block rows
- * (`ceil(height / blockH)`); `byteOffset` accumulates the prior levels' byte
- * lengths (mip-major layout). The GPU samples only the valid texel region, so a
- * non-4-multiple size or a 1x1 / 2x2 mip tail pads up to a block without image
- * corruption (t5). Block math is sourced from the codec block table (SSOT --
- * Derive, Don't Duplicate); TextureAsset carries no block fields (F-6).
- *
- * `format` must be a block-compressed format; callers branch on the projection's
- * `compressed` flag first (the uncompressed path uses the linear `width * 4`
- * pitch). Level dimensions floor-halve per mip, clamped to a 1-pixel minimum.
- */
-export function deriveMipUploadLayout(
-  format: GPUTextureFormat,
-  baseWidth: number,
-  baseHeight: number,
-  mipLevelCount: number,
-): readonly MipUploadLevel[] {
-  const params = blockParamsForFormat(format);
-  if (params === null) return [];
-  const levels: MipUploadLevel[] = [];
-  let byteOffset = 0;
-  for (let level = 0; level < mipLevelCount; level++) {
-    const width = Math.max(1, baseWidth >> level);
-    const height = Math.max(1, baseHeight >> level);
-    const blockCols = Math.ceil(width / params.blockW);
-    const blockRows = Math.ceil(height / params.blockH);
-    const rowBytes = blockCols * params.bytesPerBlock;
-    const byteLength = rowBytes * blockRows;
-    levels.push({
-      level,
-      width,
-      height,
-      physicalWidth: blockCols * params.blockW,
-      physicalHeight: blockRows * params.blockH,
-      copyWidth: blockCols * params.blockW,
-      copyHeight: blockRows * params.blockH,
-      bytesPerRow: rowBytes,
-      rowsPerImage: blockRows,
-      byteOffset,
-      byteLength,
-    });
-    byteOffset += byteLength;
-  }
-  return levels;
 }
 
 /** Descriptor for a cubemap built from an equirect source (projected from POD). */
@@ -276,7 +197,7 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
       projectionError({
         code: 'invalid-source-format',
         expected: "format ends in '-srgb' iff colorSpace is 'srgb' (linear otherwise)",
-        hint: ASSET_ERROR_HINTS['invalid-source-format'],
+        hint: `colorSpace '${tex.colorSpace}' does not match format '${tex.format}'; author sRGB color data as a '-srgb' format with colorSpace 'srgb', and data textures (normals, masks) as a linear format with colorSpace 'linear'`,
       }),
     );
   }
@@ -334,12 +255,10 @@ export function deriveRenderDataTexture(tex: TextureAsset): Result<TextureRender
     );
   }
 
-  // Compressed rows derive from block format. Uncompressed row pitch derives
-  // from the format, not aggregate payload length: imported images may retain
-  // trailing decoder bytes and offline mip chains contain more than the base mip.
-  const bytesPerRow = compressed
-    ? (blockBytesPerRow(tex.format, width) ?? baseLevel.bytesPerRow)
-    : baseLevel.bytesPerRow;
+  // Row pitch derives from the format's block, not aggregate payload length:
+  // imported images may retain trailing decoder bytes and offline mip chains
+  // contain more than the base mip.
+  const bytesPerRow = baseLevel.bytesPerRow;
 
   // Compressed formats are not renderable -- RENDER_ATTACHMENT would fail
   // createTexture validation, and the runtime mipmap blit (which needs it) never

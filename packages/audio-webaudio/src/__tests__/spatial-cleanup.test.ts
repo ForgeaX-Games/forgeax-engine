@@ -12,6 +12,8 @@ function makeGainNode() {
 function makePannerNode() {
   return {
     panningModel: 'equalpower' as PanningModelType,
+    orientationX: { value: 1 },
+    orientationZ: { value: 0 },
     connect: vi.fn(),
     disconnect: vi.fn(),
   } as unknown as PannerNode;
@@ -20,6 +22,7 @@ function makePannerNode() {
 function makeBufferSourceNode() {
   return {
     buffer: null,
+    playbackRate: { value: 1, setValueAtTime: vi.fn() },
     loop: false,
     onended: null,
     connect: vi.fn(),
@@ -35,23 +38,24 @@ describe('WebAudioEngine spatial cleanup', () => {
   });
 
   it('disconnects the spatial graph exactly once during idempotent destroy', () => {
-    const masterGain = makeGainNode();
-    const sfxGain = makeGainNode();
-    const musicGain = makeGainNode();
     const sourceGain = makeGainNode();
     const panner = makePannerNode();
     const source = makeBufferSourceNode();
     const close = vi.fn().mockResolvedValue(undefined);
+    const allGains: ReturnType<typeof makeGainNode>[] = [];
     const context = {
       state: 'running' as AudioContextState,
       destination: {},
       listener: {},
-      createGain: vi
-        .fn()
-        .mockReturnValueOnce(masterGain)
-        .mockReturnValueOnce(sfxGain)
-        .mockReturnValueOnce(musicGain)
-        .mockReturnValueOnce(sourceGain),
+      createGain: vi.fn(() => {
+        if (allGains.length === 15) {
+          allGains.push(sourceGain);
+          return sourceGain;
+        }
+        const node = makeGainNode();
+        allGains.push(node);
+        return node;
+      }),
       createPanner: vi.fn().mockReturnValue(panner),
       createBufferSource: vi.fn().mockReturnValue(source),
       close,
@@ -76,9 +80,7 @@ describe('WebAudioEngine spatial cleanup', () => {
     expect(source.disconnect).toHaveBeenCalledOnce();
     expect(sourceGain.disconnect).toHaveBeenCalledOnce();
     expect(panner.disconnect).toHaveBeenCalledOnce();
-    expect(sfxGain.disconnect).toHaveBeenCalledOnce();
-    expect(musicGain.disconnect).toHaveBeenCalledOnce();
-    expect(masterGain.disconnect).toHaveBeenCalledOnce();
+    for (const gain of allGains) expect(gain.disconnect).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(engine.getState()).toMatchObject({ contextState: 'closed', activeSourceCount: 0 });
   });

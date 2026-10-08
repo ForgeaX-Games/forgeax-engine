@@ -14,7 +14,78 @@ import {
   type EngineWorkspacePreview,
 } from '../workspace';
 import { engineWorkspaceTargetToolsPlugin } from '../workspace-target-tools';
-import { createEngineWorkspaceTools } from '../workspace-tools';
+import { createEngineWorkspaceTools, snapshotEngineWorkspace } from '../workspace-tools';
+
+it.each([
+  false,
+  true,
+])('retains the presented Play until close settles (failure: %s)', async (fails) => {
+  let finish!: () => void;
+  let began!: () => void;
+  const started = new Promise<void>((resolve) => {
+    began = resolve;
+  });
+  const acknowledgement = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const failure = new Error('Native cleanup failed');
+  const close = vi.fn(async () => {
+    began();
+    await acknowledgement;
+    if (fails) throw failure;
+  });
+  const game: EngineWorkspacePlay = {
+    target: {
+      targetId: 'game',
+      sessionId: 'play',
+      worldId: 'world',
+      headed: true,
+      width: 320,
+      height: 240,
+    },
+    phase: 'running',
+    ready: async () => {},
+    getCamera: () => ({}),
+    close,
+  };
+  const runtime = createEngineWorkspaceRuntime({
+    openProject: ({ root }) => ({ project: { id: 'project', root }, handle: {} }),
+    closeProject() {},
+    listAssets: () => [],
+    openPreview: () => game,
+    startPlay: async () => game,
+  });
+  const project = await runtime.openProject({ root: '/project' });
+  const play = await runtime.startPlay?.(project);
+  assert(play && runtime.stopPlay && runtime.startPlay);
+  const first = runtime.stopPlay(play);
+  const second = runtime.stopPlay(play);
+  const starting = runtime.startPlay(project);
+  const next = Promise.allSettled([starting]);
+  const settled = Promise.allSettled([first, second]);
+  try {
+    await started;
+    // View uses this existing owner projection to retain or destroy its iframe.
+    expect(snapshotEngineWorkspace(runtime).play?.target?.targetId).toBe('game');
+    expect(runtime.play).toBe(play);
+  } finally {
+    finish();
+  }
+  const results = await settled;
+  if (fails) {
+    expect(results[0]).toEqual({ status: 'rejected', reason: failure });
+    expect(runtime.play).toBe(play);
+    expect((await next)[0]).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'engine-workspace-target-busy' },
+    });
+  } else {
+    expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    expect((await next)[0]).toMatchObject({ status: 'fulfilled', value: runtime.play });
+  }
+  await runtime.dispose().catch(() => {});
+});
 
 it('routes the same API to edit and Play owners and rejects unrelated run targets', async () => {
   const closeEditor = vi.fn();

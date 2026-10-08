@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "size": null,
+  "lanes": {
+    "exact": {
+      "commit": "8a8bb49e506ea2ba8bd63a07420b668d34c41cea",
+      "settings": {
+        "size": 64,
+        "frames": 16,
+        "samples": 256,
+        "gather": "exact",
+        "bounces": 1
+      }
+    },
+    "irradiance-field": {
+      "commit": "8a8bb49e506ea2ba8bd63a07420b668d34c41cea",
+      "settings": {
+        "size": 64,
+        "frames": 16,
+        "samples": 256,
+        "gather": "irradiance-field",
+        "bounces": 1
+      }
+    },
+    "screen-probe": {
+      "commit": "8a8bb49e506ea2ba8bd63a07420b668d34c41cea",
+      "settings": {
+        "size": 64,
+        "frames": 16,
+        "samples": 256,
+        "gather": "screen-probe",
+        "bounces": 1
+      }
+    }
+  },
+  "scenes": {
+    "cornell": {
+      "exact": {
+        "indirectMean": 0.07458179898887397,
+        "referenceIndirectMean": 0.07146750075622615,
+        "ratio": 1.0435764256437428,
+        "relativeRmse": 1.136577820701715,
+        "unlitRatio": 0.986909901109058,
+        "directRatio": 0.9645140882256665,
+        "giGpuMs": 12.505851999999999,
+        "totalGpuMs": 25.680363,
+        "directGpuMs": 20.662672,
+        "settleMs": 598.185335999995,
+        "errors": 0,
+        "backend": "webgpu"
+      },
+      "irradiance-field": {
+        "indirectMean": 0.06971381110425703,
+        "referenceIndirectMean": 0.07139983558850628,
+        "ratio": 0.9763861573300225,
+        "relativeRmse": 0.54577995739484,
+        "unlitRatio": 0.7495980295303358,
+        "directRatio": 0.9645140882256665,
+        "giGpuMs": 22.762552,
+        "totalGpuMs": 37.265355,
+        "directGpuMs": 20.557312,
+        "settleMs": 776.8852820000029,
+        "errors": 0,
+        "backend": "webgpu"
+      },
+      "screen-probe": {
+        "indirectMean": 0.08297999723880767,
+        "referenceIndirectMean": 0.07139983558850628,
+        "ratio": 1.162187511425664,
+        "relativeRmse": 0.6785523750926955,
+        "unlitRatio": 1.702797227146497,
+        "directRatio": 0.9645140882256665,
+        "giGpuMs": 40.85171799999999,
+        "totalGpuMs": 54.725652,
+        "directGpuMs": 16.322671,
+        "settleMs": 1291.1898440000368,
+        "errors": 0,
+        "backend": "webgpu"
+      }
+    },
+    "leak": {
+      "exact": {
+        "indirectMean": 0.38248214938499986,
+        "referenceIndirectMean": 0.3853922761728604,
+        "ratio": 0.9924489229084724,
+        "relativeRmse": 0.7029242713206867,
+        "unlitRatio": 0.8426122672487673,
+        "directRatio": 1.1162600695066855,
+        "giGpuMs": 8.691028,
+        "totalGpuMs": 21.333737,
+        "directGpuMs": 19.489186,
+        "settleMs": 616.2033279999741,
+        "errors": 0,
+        "backend": "webgpu",
+        "leakRatio": 1.0502316677107648,
+        "leakExcessEnergy": 6.744762468070516e-05
+      },
+      "irradiance-field": {
+        "indirectMean": 0.23742288894748403,
+        "referenceIndirectMean": 0.2198326265362367,
+        "ratio": 1.0800166139503764,
+        "relativeRmse": 0.5890413881855128,
+        "unlitRatio": 1.2849593951164955,
+        "directRatio": 1.1161545919871876,
+        "giGpuMs": 24.664485000000003,
+        "totalGpuMs": 45.804705,
+        "directGpuMs": 14.597382,
+        "settleMs": 757.4141899999813,
+        "errors": 0,
+        "backend": "webgpu",
+        "leakRatio": 2.493028771877908,
+        "leakExcessEnergy": 0.0020047362317921705
+      },
+      "screen-probe": {
+        "indirectMean": 0.0971177423276897,
+        "referenceIndirectMean": 0.18569714853799899,
+        "ratio": 0.5229899494542676,
+        "relativeRmse": 1.0275001708767084,
+        "unlitRatio": 1.6606212306023171,
+        "directRatio": 1.1100738514711028,
+        "giGpuMs": 40.974028,
+        "totalGpuMs": 68.716985,
+        "directGpuMs": 27.628553,
+        "settleMs": 1521.1847270000144,
+        "errors": 0,
+        "backend": "webgpu",
+        "leakRatio": 11.723394745160007,
+        "leakExcessEnergy": 0.014398636100222451
+      }
+    },
+    "courtyard": {
+      "exact": {
+        "indirectMean": 0.12328856918902269,
+        "referenceIndirectMean": 0.12319801549309972,
+        "ratio": 1.0007350256054086,
+        "relativeRmse": 0.21271720434855287,
+        "unlitRatio": 0.9920068133058011,
+        "directRatio": 1.01994886394673,
+        "giGpuMs": 21.935295000000004,
+        "totalGpuMs": 45.099414,
+        "directGpuMs": 28.004506,
+        "settleMs": 664.6917339999927,
+        "errors": 0,
+        "backend": "webgpu"
+      },
+      "irradiance-field": {
+        "indirectMean": 0.11682523913953224,
+        "referenceIndirectMean": 0.123177913611549,
+        "ratio": 0.9484268381744928,
+        "relativeRmse": 0.2079720729358745,
+        "unlitRatio": 1.1391154902465122,
+        "directRatio": 1.01994886394673,
+        "giGpuMs": 27.147935999999998,
+        "totalGpuMs": 37.978763,
+        "directGpuMs": 25.577889,
+        "settleMs": 913.6279320000322,
+        "errors": 0,
+        "backend": "webgpu"
+      },
+      "screen-probe": {
+        "indirectMean": 0.13404690444304362,
+        "referenceIndirectMean": 0.123177913611549,
+        "ratio": 1.088238146862682,
+        "relativeRmse": 0.3418088033813989,
+        "unlitRatio": 1.517393340602745,
+        "directRatio": 1.01994886394673,
+        "giGpuMs": 52.56413499999999,
+        "totalGpuMs": 65.202074,
+        "directGpuMs": 32.398192,
+        "settleMs": 1472.4269729999942,
+        "errors": 0,
+        "backend": "webgpu"
+      }
+    }
+  }
+}

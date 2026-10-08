@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // Focused game-default VFX composition proof. It exercises both authored Pack v2
 // effects without depending on the broader inspection smoke's optional codec
 // assertions.
@@ -59,14 +60,21 @@ try {
   await page.waitForFunction(() => globalThis.__forgeaxPreviewInspection?.list().reads.some(({ id }) => id === 'game-default.snapshot') ?? false, undefined, { timeout: 30_000, polling: 100 });
   await page.waitForTimeout(1_000);
 
-  const catalog = await page.evaluate(async (mode) => {
-    const response = await fetch(mode === 'production' ? '/pack-index.json' : '/__pack/scopes/preview/1/catalog.json');
-    const payload = await response.json();
-    const rows = Array.isArray(payload) ? payload : payload.entries;
-    return Array.isArray(rows)
-      ? rows.filter((row) => row.guid === 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || row.guid === 'e696463c-b254-5efb-95df-5a44ebe3b508')
-      : [];
-  }, MODE);
+  let catalog;
+  if (MODE === 'production') {
+    const catalogWire = await page.evaluate(async () => (await fetch('/pack-index.json')).json());
+    catalog = decodeCatalogWire(catalogWire).unwrap().filter((row) =>
+      row.guid === 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || row.guid === 'e696463c-b254-5efb-95df-5a44ebe3b508');
+  } else {
+    catalog = await page.evaluate(async (mode) => {
+      const response = await fetch(mode === 'production' ? '/pack-index.json' : '/__pack/scopes/preview/1/catalog.json');
+      const payload = await response.json();
+      const rows = Array.isArray(payload) ? payload : payload.entries;
+      return Array.isArray(rows)
+        ? rows.filter((row) => row.guid === 'cbc4f40d-d148-53ee-89e7-310ef3abcfe9' || row.guid === 'e696463c-b254-5efb-95df-5a44ebe3b508')
+        : [];
+    }, MODE);
+  }
   if (catalog.length !== 2 || catalog.some((row) => row.kind !== 'particle-effect' || typeof row.packageUrl !== 'string')) {
     throw new Error(`VFX catalog rows failed: ${JSON.stringify(catalog)}`);
   }

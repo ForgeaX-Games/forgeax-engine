@@ -12,12 +12,14 @@ import {
   CARD_TEXTURES,
   packCardProjection,
   type SurfaceCapture,
+  type SurfaceCaptureSource,
   type SurfaceCardSource,
   surfaceCardKey,
 } from './surface-cards';
 export const CardLookupStatus = { notSurface: 0, mapped: 1, unmapped: 2, stale: 3 } as const;
 export const CARD_LOOKUP_STRIDE = 112;
-export const CARD_LOOKUP_WGSL = `
+/** Card lookup at a world point (`lookupCardPoint`); needs no SDF hit type. */
+export const CARD_POINT_LOOKUP_WGSL = `
 fn decodeCardNormal(p: vec2f) -> vec3f {
  var n = vec3f(p,1.0-abs(p.x)-abs(p.y));
  if(n.z<0.0){n=vec3f((vec2f(1)-abs(n.yx))*select(vec2f(-1),vec2f(1),n.xy>=vec2f(0)),n.z);}
@@ -30,7 +32,7 @@ fn lookupCardPoint(position: vec3f, hitNormal: vec3f, instanceId: u32, projectio
  var best=-1.0;
  for(var i=0u;i<cardCount;i++){
   let card=cards[i];if(card.ids.x!=instanceId){continue;}
-  if(card.ids.y==0u){out.state.x=${CardLookupStatus.stale}u;continue;}
+  if(card.ids.y!=1u){out.state.x=${CardLookupStatus.stale}u;continue;}
   let alignment=dot(hitNormal,card.n.xyz);if(alignment<0.5){continue;}
   let rel=position-card.origin.xyz;let uv=vec2f(dot(rel,card.u.xyz)/card.u.w,dot(rel,card.v.xyz)/card.v.w);
   // The caller owns the world-space projection margin and its approximation.
@@ -68,6 +70,9 @@ fn lookupCardPoint(position: vec3f, hitNormal: vec3f, instanceId: u32, projectio
  }
  return out;
 }
+`;
+/** `lookupCardPoint` plus the `SdfHit` adapter `lookupSdfCard`. */
+export const CARD_LOOKUP_WGSL = `${CARD_POINT_LOOKUP_WGSL}
 fn lookupSdfCard(hit: SdfHit, cardCount: u32, resolution: u32) -> Lookup {
  if(hit.state.x!=${SdfQueryStatus.surfaceBand}u&&hit.state.x!=${SdfQueryStatus.visibilityHit}u){
   return Lookup(vec4u(${CardLookupStatus.notSurface}u,hit.state.x,0xffffffffu,hit.state.y),vec4f(0),vec4f(0),vec4f(0),vec4f(0),vec4u(0xffffffffu),vec4f(0));
@@ -100,7 +105,7 @@ export interface SdfCardLookup {
 export function packCardLookupProjections(
   cache: SurfaceCapture,
   sources: readonly { readonly instanceId: number; readonly key: string }[],
-  expected: readonly SurfaceCardSource[],
+  expected: readonly (SurfaceCardSource | Pick<SurfaceCaptureSource, 'instance' | 'captureKey'>)[],
 ): { readonly bytes: Uint8Array; readonly count: number } {
   const projectionBytes = new Uint8Array(
       Math.max(
@@ -116,7 +121,7 @@ export function packCardLookupProjections(
     const valid =
       source !== undefined &&
       current?.key === entry.geometryKey &&
-      surfaceCardKey(source) === entry.captureKey;
+      ('captureKey' in source ? source.captureKey : surfaceCardKey(source)) === entry.captureKey;
     for (const p of entry.projections) {
       projectionBytes.set(packCardProjection(p), count * 80);
       view.setUint32(count * 80 + 64, entry.instanceId, true);

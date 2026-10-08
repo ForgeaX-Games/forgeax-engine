@@ -45,12 +45,13 @@ describe('memory lifecycle and remap convergence', () => {
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
     const authoritySession = new NetSession({ endpoint: authorityEndpoint, maxRawMessages: 8 });
     const replicaWorld = new World();
-    const replica = createReplicaCoordinator(replicaWorld, replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(replicaWorld, replication);
     const replicaSession = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
     authoritySession.attachAuthority(authority);
     replicaSession.attachReplica(replica, replication.limits);
     authoritySession.receiveEvents();
     replicaSession.receiveEvents();
+    authoritySession.receiveEvents();
 
     const publish = () => {
       expect(authoritySession.publish().ok).toBe(true);

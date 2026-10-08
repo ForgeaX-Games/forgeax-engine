@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -8,6 +8,7 @@ import { executionWorkerEntries } from '../build/execution-workers.js';
 import { runtimeProgramIdentity } from '../build/pack-program-imports.js';
 import {
   engineDoctorCommand,
+  enginePackageRuntimeIdentity,
   engineStatusCommand,
   engineUnlinkCommand,
   engineUseLocalCommand,
@@ -104,6 +105,27 @@ async function fixture(workspaceDependency = false): Promise<{
   ]);
   return { game, engine };
 }
+
+describe('selected Engine runtime identity', () => {
+  it('distinguishes different source bytes at the same package version', async () => {
+    const a = await fixture();
+    const b = await fixture();
+    try {
+      const first = resolve(a.engine, 'packages/engine-render');
+      const second = resolve(b.engine, 'packages/engine-render');
+      expect(await enginePackageRuntimeIdentity(first)).toBe(
+        await enginePackageRuntimeIdentity(second),
+      );
+      await writeFile(resolve(second, 'dist/chunk-render.mjs'), 'export const value = 2;\n');
+      expect(await enginePackageRuntimeIdentity(first)).not.toBe(
+        await enginePackageRuntimeIdentity(second),
+      );
+    } finally {
+      await rm(resolve(a.engine, '..'), { recursive: true, force: true });
+      await rm(resolve(b.engine, '..'), { recursive: true, force: true });
+    }
+  });
+});
 
 describe('engine binding commands', () => {
   it('persists one local binding and returns to the SDK route on unlink', async () => {
@@ -285,7 +307,7 @@ it('uses the explicitly bound Engine for Vite program identity and imports', asy
     await writeFile(resolve(installed, 'dist/index.mjs'), 'export const installed = true;\n');
     expect(
       createRequire(resolve(game, 'package.json')).resolve('@forgeax/engine/package.json'),
-    ).toBe(resolve(installed, 'package.json'));
+    ).toBe(await realpath(resolve(installed, 'package.json')));
     expect((await engineUseLocalCommand({ root: game, path: engine })).ok).toBe(true);
     const resolver = await createEngineWorkspaceResolverForProject(game);
     expect(resolver).toBeDefined();

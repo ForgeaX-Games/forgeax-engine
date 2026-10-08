@@ -25,7 +25,11 @@ export async function verifyTwoSidedSdf(fixture: SdfCardsFixture) {
   const errors: string[] = [];
   raw.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
   const { sheet } = fixture;
-  const field = { ...sheet.field, values: Float32Array.from(sheet.field.values) };
+  const field = {
+    ...sheet.field,
+    bricks: Uint32Array.from(sheet.field.bricks),
+    values: Float32Array.from(sheet.field.values),
+  };
   assert(field.policy.kind === 'two-sided');
   const material = sheet.materials[0];
   assert(material);

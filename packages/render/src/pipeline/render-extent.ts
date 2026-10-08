@@ -30,24 +30,6 @@ export function renderExtentSize(
   return { width: extent.outputWidth, height: extent.outputHeight };
 }
 
-export type StandardLightingLane = 'direct' | 'clustered' | 'cpu-webgl2';
-
-export interface StandardExtentDomainPlan {
-  readonly extent: RenderExtent;
-  readonly lane: StandardLightingLane;
-  readonly topologyKey: string;
-  readonly dynamicDelta: 0 | 1;
-  readonly domains: {
-    readonly internal: { readonly width: number; readonly height: number };
-    readonly output: { readonly width: number; readonly height: number };
-    readonly authoring: { readonly width: number; readonly height: number };
-  };
-  readonly resources: readonly {
-    readonly name: string;
-    readonly domain: 'internal' | 'output' | 'authoring';
-  }[];
-}
-
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 1;
 const SCALE_STEPS = 32;
@@ -80,37 +62,5 @@ export function deriveRenderExtent(input: RenderExtentInput): RenderExtent {
     internalHeight,
     scale: nativeSurface ? 1 : scale,
     generation: input.generation,
-  });
-}
-
-/** Describe Standard's shared internal/output/authoring domain assignment. */
-export function standardExtentDomainPlan(
-  extent: RenderExtent,
-  lane: StandardLightingLane,
-): StandardExtentDomainPlan {
-  const domains = {
-    internal: { width: extent.internalWidth, height: extent.internalHeight },
-    output: { width: extent.outputWidth, height: extent.outputHeight },
-    authoring: { width: extent.outputWidth, height: extent.outputHeight },
-  } as const;
-  return Object.freeze({
-    extent,
-    lane,
-    topologyKey: `standard:${extent.internalWidth}x${extent.internalHeight}:${extent.outputWidth}x${extent.outputHeight}:g${extent.generation}`,
-    dynamicDelta: extent.scale === 1 ? 0 : 1,
-    domains,
-    resources: Object.freeze([
-      { name: 'scene', domain: 'internal' },
-      { name: 'depth', domain: 'internal' },
-      { name: 'g-buffer', domain: 'internal' },
-      { name: 'scene-temporal', domain: 'internal' },
-      { name: 'ssao', domain: 'internal' },
-      { name: 'taa-history', domain: 'output' },
-      { name: 'bloom', domain: 'output' },
-      { name: 'output', domain: 'output' },
-      { name: 'overlay', domain: 'output' },
-      { name: 'observation', domain: 'output' },
-      { name: 'shadow', domain: 'authoring' },
-    ] satisfies StandardExtentDomainPlan['resources']),
   });
 }

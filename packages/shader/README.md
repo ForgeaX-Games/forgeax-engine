@@ -16,6 +16,10 @@ validating the existing entry and material contracts; failed publication
 validation leaves the registry unchanged. The runtime does not compile WGSL.
 Digest verification runs in bounded batches; every source still passes SHA-256
 before the expanded manifest can be published.
+Registries that fetch byte-identical manifest text from the same URL share one
+verified expansion, held weakly so it lives only while a registry retains it;
+renderer hosts that stay alive together therefore do not each hold a copy of
+every composed WGSL source. Changed text is parsed and verified again.
 
 `ShaderRegistry.materialProgram(source)` admits one immutable program description
 per composed source within the registry lifetime. The description owns the source,
@@ -31,6 +35,28 @@ The published ray diffuse composite and Standard environment lighting share
 unit-receiver `D = E/pi`; the composite applies the G-buffer receiver color,
 metallic/Fresnel response and material occlusion once, then adds only RGB to the
 existing linear HDR target. It preserves direct lighting, emission and coverage.
+
+## Atmospheric transport
+
+`forgeax_atmosphere::optics` owns spherical bounds, densities, normalized phases,
+solar transmission and segment integration. Sky View, finite-depth aerial
+perspective and capture/direct rays share this kernel. Local geometry/cloud
+visibility multiplies the single-scattering source only. A separate low-frequency
+multiple-scattering LUT supplies the high-order approximation. Radiance LUTs
+use unit-white-sun values; consumers apply solar colour and lux once. RGB
+transmittance is independent of alpha. The homogeneous far endpoint preserves
+view-ray direction at orbital coordinates and supports infinite far planes.
+
+The 1,280-byte View carries six medium vectors and one control vector after the
+existing fog lanes. Material capability `storage-buffer-atmosphere` selects the
+cooked atmosphere bindings; the receiving device must admit the full texture
+budget. Utility program defines are build-time inputs too. Runtime stays compiler
+free, including cloud transport/resolve and custom Surface material programs.
+
+`view_fog` composes extra height fog over physical AP. Straight alpha uses `TC+L`,
+premultiplied alpha uses `TC+alpha*L`, and additive uses `TC`. Transmission keeps
+its already-fogged backdrop separate: `T*C_local + k*B + (1-k)*L`, where `k` is
+the final RGB transmission weight. No second fog pass follows translucency.
 
 ## LOD coverage ABI
 
@@ -152,6 +178,15 @@ runtime 读取 raw WGSL 或创建 app-local artifact。
 > [!IMPORTANT]
 > A custom material starts as WGSL source plus one `MaterialAsset` contract. The build manifest publishes the composed module and the material cook publishes the resolved record, artifact bytes, references, and receipt. Runtime resolves those facts from the catalog; application code does not install or duplicate shader artifacts. The recovery route is always source or cook repair.
 
+### Direct material program contract
+
+A cooked `MaterialProgramAbi` always names its direct vertex entry. Its optional
+`sceneIndexEntry` exists only when the producer compiled that entry. Direct-only
+Unlit programs publish their actual schema-aligned row, reflected vertex inputs
+and skin palette address. Cook publishes plain/color and mesh/skinned programs
+under the same GUID; Render selects the exact resident geometry contract. Their
+absence of a scene entry keeps these programs on the ordinary submission lane.
+
 ### Scene-index material program contract
 
 An authored full-custom program may opt into the indirect lane only through the
@@ -173,10 +208,14 @@ provide that opacity (including Alpha Mask) to their default ShadowCaster.
 The compiler publishes its scene-index ABI while preserving authored pass
 membership, winding and culling; a program without a shadow pass stays shadowless.
 An explicit shadow implementation remains authoritative.
-Full-custom vertex programs must author their own shadow entry and scene-index
-contract; the compiler never infers their deformation. ShadowCaster is selected
-independently, so a custom shadow program may own different coverage while
-sharing the same material schema and resource provenance.
+Full-custom materials can select `forgeax::default-shadow-caster` for native
+opaque coverage. The compiler publishes its direct/scene-index pair from the
+custom root schema and limits its vertex inputs to position plus any selected
+skin attributes; clipping and LOD coverage remain native. Custom deformation or
+cutout coverage requires an authored shadow program or explicit Surface; the
+compiler never infers those semantics. ShadowCaster is selected independently,
+so a custom shadow program may own different coverage while sharing the same
+material schema and resource provenance.
 
 For an AI inspection, resolve the published artifact and branch on the
 structured result before preparing a draw. The renderer-facing adapter selects
@@ -351,6 +390,14 @@ sample for each independent metallic, roughness, or alpha input when texture,
 sampler, and coordinates match. The selector is zero when that input needs its
 own sample. This changes sampling work without changing the Standard binding
 layout or the authored texture values.
+Bits 29 and 30 (`STANDARD_TRIPLANAR_PROJECTION_BIT`,
+`STANDARD_OBJECT_SPACE_NORMAL_BIT`) are projection selectors that
+`standardProjectionMask()` derives from the effective `triplanarSpace` and
+`normalMapSpace` values. The WGSL reads them through
+`standardUsesTriplanarProjection()` / `standardUsesObjectSpaceNormal()`, so
+every texture sample stays in uniform control flow; a per-row value never
+gates a sample. The ray entry is unspecialized, which is why ray admission
+refuses those values.
 
 ## Error recovery
 
@@ -603,9 +650,27 @@ Raster adapters derive geometry from position derivatives; exact hits and cards
 derive it from the indexed triangle, correcting mirrored winding.
 
 `RaySurfaceProgram` carries build-produced WGSL, the derived parameter schema and
-the resolved asset contract. `admitRayMaterial` is shared build/runtime admission,
-not a runtime compiler. The Standard direct-light BRDF and opaque ray BSDF share
+the resolved asset contract. `admitRayMaterial(asset, material, context)` shares
+build/runtime admission, defaulting to `ray-hit`. `card-capture` additionally
+requires the canonical Standard Surface; its restriction does not narrow ray
+qualification. The ordinary material product publishes both eligible contexts;
+runtime selects immutable artifacts without importing a compiler. The Standard direct-light BRDF and opaque ray BSDF share
 one evaluator; sampling reports the full cosine/GGX-NDF mixture density and
 explicit null events, including finite mapped/smoothed normals across the geometric
 hemisphere. Surface admission validates values; BSDF value/PDF own directional
 hemisphere clipping. Existing Standard energy conventions remain unchanged.
+
+## Surface lighting-channel transport
+
+Standard rigid/skin and Deferred share `common.wgsl::lightingChannelsMatch`.
+`evaluateStandardDirect` and `evaluateStandardClusterLights` accept the receiver
+u32 mask explicitly. `View.lightingChannels` occupies the directional padding
+word (byte 76). `DirectLightSlot.channels.x` is the surface mask in row 5 of the
+96-byte local-light ABI; volume consumers preserve this stride and do not apply
+surface policy. `Mesh.surface` is an integer tail: x/y carry visible-surface
+row/count, z carries receiver channels. Scene-index variants read the same
+`GpuScenePrimitive.lightingChannels` and transport it flat to fragments.
+`GBufferOutput.receiver_geometry` is `vec2<u32>` (packed normal/family, mask).
+Do not transport masks through UNORM encoding or numerical f32 conversion.
+See the [Render channel contract](../render/README.md#surface-direct-light-channels)
+for author validation, support and shadow/GI boundaries.

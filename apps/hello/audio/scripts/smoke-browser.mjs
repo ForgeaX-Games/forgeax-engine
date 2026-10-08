@@ -179,7 +179,7 @@ try {
       '--use-angle=swiftshader',
       '--ignore-gpu-blocklist',
       '--disable-gpu-driver-bug-workarounds',
-      '--disable-dawn-features=disallow_unsafe_apis',
+      '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
       '--autoplay-policy=user-gesture-required',
     ],
   });

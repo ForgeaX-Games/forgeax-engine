@@ -1,15 +1,15 @@
 # @forgeax/engine-codec
 
 > `@forgeax/engine-codec` provides zstd decode/encode, KTX2 container parse,
-> Basis transcode, block-format lookup, and build-time Basis encode --
+> Basis transcode, and build-time Basis encode --
 > a single package covering the full runtime codec surface for the forgeax
 > asset pipeline.
 
 > [!IMPORTANT]
 > This package uses **subpath-level encode/decode separation** (D-1). The main entry
-(`@forgeax/engine-codec`) exports runtime-safe decode + transcode + block-format
-functions. The `/encode` subpath (`@forgeax/engine-codec/encode`) exports
-build-time encode (zstd + Basis). Runtime code must never import from `/encode` --
+(`@forgeax/engine-codec`) exports runtime-safe decode + transcode functions;
+texture block math belongs to the `@forgeax/engine-types` texture layout contract.
+The `/encode` subpath (`@forgeax/engine-codec/encode`) exports build-time encode (zstd + Basis). Runtime code must never import from `/encode` --
 this is enforced by `check-image-pipeline-isolation.mjs` path d (AC-09).
 
 ## WASM provisioning
@@ -66,10 +66,6 @@ exists; it runs `fetch-basis.mjs` and `build-wasm.mjs` and requires `emcc`.
 | `selectTranscodeTarget` | `(dfdModel: number, srgb: boolean, channels: number, caps: TranscodeCaps) => GPUTextureFormat \| null` | Pure-function priority chain (node-safe, zero DOM): given a DFD color model, srgb flag, channel count, and device caps, returns the best native block format. The chain is LDR RGBA: `ASTC4x4 -> BC7 -> ETC2 -> RGBA8` (with srgb variants); single-channel R: `BC4 -> EAC-R11 -> R8`; two-channel RG: `BC5 -> EAC-RG11 -> RG8`; HDR: `BC6H -> rgba16float`. BC-first rule: when BC and ETC2/ASTC coexist, the chain selects BC (D-4 Mesa guard). Input `TranscodeCaps { bc, etc2, astc }` is a local struct -- codec never imports from rhi. Returns non-null (no-cap fallback to rgba8unorm/rgba16float). |
 | `initBasisTranscoder` | `() => Promise<BasisTranscoderModule>` | Lazy-init singleton (main-thread, D-10). First call dynamic-imports + initializes the basis_transcoder WASM; subsequent calls return the cached instance. |
 | `transcodeKtx2` | `(parsed: Ktx2Parsed, targetFormat: GPUTextureFormat) => Promise<CodecResult<TranscodedMips>>` | Transcode a scheme=1 (BasisLZ) KTX2 payload to a native block format. Iterates every mip level through the transcoder, returning `TranscodedMips { format, mips: { data, width, height }[] }`. Calls init on first use. |
-| `bytesPerRow` | `(width: number, format: GPUTextureFormat) => number` | Block-aligned bytes-per-row: `ceil(width / blockW) * bytesPerBlock`. Returns `width * 4` for non-compressed formats. SSOT with `blockFormatInfo`. |
-| `rowsPerImage` | `(height: number, format: GPUTextureFormat) => number` | Block-aligned rows-per-image: `ceil(height / blockH)`. Returns `height` for non-compressed formats. |
-| `blockFormatInfo` | `(format: GPUTextureFormat) => { blockW: number, blockH: number, bytesPerBlock: number } \| undefined` | Block dimension lookup table covering BC1-BC7, ETC2, ASTC4x4, EAC, BC6H. Returns undefined for non-compressed formats. |
-| `isCompressedFormat` | `(format: GPUTextureFormat) => boolean` | Type guard returning true for all block-compressed formats in `blockFormatInfo`. |
 
 **Priority chain rules** (D-4 BC-first, D-8 local TranscodeCaps):
 

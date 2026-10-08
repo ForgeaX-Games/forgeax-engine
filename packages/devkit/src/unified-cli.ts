@@ -256,7 +256,6 @@ export async function runUnifiedCli(argv: readonly string[]): Promise<UnifiedCli
       for (let length = parsed.path.length; length > 0; length -= 1) {
         const candidate = parsed.path.slice(0, length);
         try {
-          client.help(candidate);
           const candidateHelp = client.help(candidate);
           const remaining = [...parsed.path.slice(length), ...parsed.positionals];
           if (remaining.length > 0 && candidateHelp.leaf === undefined) {

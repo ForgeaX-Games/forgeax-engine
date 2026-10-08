@@ -106,11 +106,17 @@ function makeMockAudioParam(initialValue: number): AudioParam {
       // the contract shape. The actual type compatibility is enforced by
       // tsc when w18 wires the audio field into AppAssembleArgs.
       const dummyBackend = {
+        configureBuses: vi.fn(),
+        setBus: vi.fn(),
         play: vi.fn(),
         stop: vi.fn(),
         setVolume: vi.fn(),
+        setPlaybackRate: vi.fn(),
+        setPaused: vi.fn(),
+        seek: vi.fn(),
         setBusVolume: vi.fn(),
         setBusMute: vi.fn(),
+        setSourcePose: vi.fn(),
         setListenerPose: vi.fn(),
         getState: vi.fn(),
         getActiveSourceCount: vi.fn(),
@@ -421,7 +427,6 @@ function makeMockAudioParam(initialValue: number): AudioParam {
           kind: 'audio',
           mediaType: 'audio/mpeg',
           source: 'm69-audio.mp3',
-          bytes,
         },
         artifacts: {
           source: {
@@ -480,6 +485,7 @@ function makeMockAudioParam(initialValue: number): AudioParam {
             () =>
               ({
                 buffer: null,
+                playbackRate: { value: 1, setValueAtTime: vi.fn() },
                 loop: false,
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),
@@ -631,6 +637,7 @@ function makeMockAudioParam(initialValue: number): AudioParam {
       createBufferSource: () =>
         ({
           buffer: null,
+          playbackRate: { value: 1, setValueAtTime: vi.fn() },
           loop: false,
           connect: vi.fn().mockReturnValue(undefined),
           start: vi.fn(),
@@ -1137,9 +1144,14 @@ function makeMockAudioParam(initialValue: number): AudioParam {
       it('entity with active source -> despawn triggers backend.stop()', () => {
         const stopSpy = vi.fn();
         const backend = {
+          configureBuses: vi.fn(),
+          setBus: vi.fn(),
           play: vi.fn(),
           stop: stopSpy,
           setVolume: vi.fn(),
+          setPlaybackRate: vi.fn(),
+          setPaused: vi.fn(),
+          seek: vi.fn(),
           setBusVolume: vi.fn(),
           setBusMute: vi.fn(),
           getState: vi.fn().mockReturnValue({
@@ -1163,9 +1175,14 @@ function makeMockAudioParam(initialValue: number): AudioParam {
       it('multiple despawned entities each get one stop call', () => {
         const stopSpy = vi.fn();
         const backend = {
+          configureBuses: vi.fn(),
+          setBus: vi.fn(),
           play: vi.fn(),
           stop: stopSpy,
           setVolume: vi.fn(),
+          setPlaybackRate: vi.fn(),
+          setPaused: vi.fn(),
+          seek: vi.fn(),
           setBusVolume: vi.fn(),
           setBusMute: vi.fn(),
           getState: vi.fn().mockReturnValue({
@@ -1197,9 +1214,14 @@ function makeMockAudioParam(initialValue: number): AudioParam {
         const getActiveSourceCountSpy = vi.fn(() => state.activeSourceCount);
 
         const backend = {
+          configureBuses: vi.fn(),
+          setBus: vi.fn(),
           play: vi.fn(),
           stop: stopSpy,
           setVolume: vi.fn(),
+          setPlaybackRate: vi.fn(),
+          setPaused: vi.fn(),
+          seek: vi.fn(),
           setBusVolume: vi.fn(),
           setBusMute: vi.fn(),
           getState: vi.fn().mockReturnValue({
@@ -1229,9 +1251,14 @@ function makeMockAudioParam(initialValue: number): AudioParam {
 
         const stopSpy = vi.fn();
         const backend = {
+          configureBuses: vi.fn(),
+          setBus: vi.fn(),
           play: vi.fn(),
           stop: stopSpy,
           setVolume: vi.fn(),
+          setPlaybackRate: vi.fn(),
+          setPaused: vi.fn(),
+          seek: vi.fn(),
           setBusVolume: vi.fn(),
           setBusMute: vi.fn(),
           getState: vi.fn().mockReturnValue({
@@ -1330,6 +1357,7 @@ function makeMockAudioParam(initialValue: number): AudioParam {
             () =>
               ({
                 buffer: null,
+                playbackRate: { value: 1, setValueAtTime: vi.fn() },
                 loop: false,
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),
@@ -2188,6 +2216,7 @@ function makeMockAudioParam(initialValue: number): AudioParam {
             () =>
               ({
                 buffer: null,
+                playbackRate: { value: 1, setValueAtTime: vi.fn() },
                 loop: false,
                 connect: vi.fn().mockReturnValue(undefined),
                 disconnect: vi.fn(),

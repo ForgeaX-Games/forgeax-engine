@@ -8,7 +8,6 @@ import { createRenderPipelineTarget } from '../../render-pipeline';
 import { addTypedFullscreenPass } from '../../typed-render-graph-primitives';
 import type { DepthOfFieldParams } from './depth-of-field-params';
 
-export const DEPTH_OF_FIELD_FEATURE_IDENTITY = 'forgeax.depth-of-field';
 export const DEPTH_OF_FIELD_COC_ID = 'forgeax.dof.coc';
 export const DEPTH_OF_FIELD_PREFILTER_ID = 'forgeax.dof.prefilter';
 export const DEPTH_OF_FIELD_PREFILTER_METADATA_ID = 'forgeax.dof.prefilter.metadata';
@@ -61,10 +60,6 @@ function addPass(
   options: Parameters<typeof addTypedFullscreenPass>[1],
 ): Result<void, RenderGraphError> {
   return addTypedFullscreenPass(graph, options);
-}
-
-function sideParams(params: DepthOfFieldParams, side: 'near' | 'far'): DepthOfFieldParams {
-  return Object.freeze({ ...params, blurSide: side });
 }
 
 /**
@@ -257,12 +252,4 @@ export function depthOfFieldPassNames(topology: DepthOfFieldTopology): readonly 
   if (topology.useFar) names.push('dof-prefilter-far', 'dof-prefilter-far-metadata');
   names.push(`dof-gather-${topology.blurSide}`, 'dof-composite');
   return Object.freeze(names);
-}
-
-/** Encode params with a side-local optical declaration for future debug views. */
-export function depthOfFieldSideParams(
-  params: DepthOfFieldParams,
-  side: 'near' | 'far',
-): DepthOfFieldParams {
-  return sideParams(params, side);
 }

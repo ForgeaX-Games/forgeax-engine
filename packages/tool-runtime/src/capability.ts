@@ -4,6 +4,7 @@ import type {
   ToolRealm,
   ToolRuntimeError,
 } from './types.js';
+import { TOOL_REALMS } from './types.js';
 
 const capabilityIdPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 
@@ -168,7 +169,7 @@ export interface RealmCapabilityInput {
 }
 
 export function createRealmCapabilityMatrix(input: RealmCapabilityInput): RealmCapabilityMatrix {
-  const realms = (['build', 'host', 'engine', 'frontend'] as const).reduce(
+  const realms = TOOL_REALMS.reduce(
     (result, realm) => {
       const supported = input.supported[realm];
       result[realm] = supported

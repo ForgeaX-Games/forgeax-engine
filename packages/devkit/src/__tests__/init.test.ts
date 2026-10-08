@@ -80,6 +80,7 @@ describe('createInitPlan', () => {
       packages: [
         {
           name: '@forgeax/engine',
+          role: 'runtime',
           version: '0.1.0',
           root: 'packages/engine',
           fileCount: 1,

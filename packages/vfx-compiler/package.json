@@ -32,7 +32,7 @@
     "@forgeax/engine-vfx": "workspace:*"
   },
   "devDependencies": {
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "forgeax": {
     "metrics": {

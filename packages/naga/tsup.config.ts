@@ -8,5 +8,10 @@ export default defineConfig({
   // top-level await + wasm-bindgen ESM loading (plan-strategy §S-5 / D-P3 ensureReady)
   // requires the esnext target.
   target: 'esnext',
-  external: ['@forgeax/engine-wgpu-wasm', '@forgeax/engine-types', '@webgpu/types'],
+  external: [
+    '@forgeax/engine-shader',
+    '@forgeax/engine-wgpu-wasm',
+    '@forgeax/engine-types',
+    '@webgpu/types',
+  ],
 });

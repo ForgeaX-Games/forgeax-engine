@@ -1,7 +1,6 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
-import { gltfImporter } from '@forgeax/engine-gltf';
 import { pluginPack, reloadAssetHost } from '@forgeax/engine-vite-plugin-pack';
 import { createStandaloneRuntimeAssetBinding } from '@forgeax/engine-types';
 import { withRhiDebug } from '../../../shared/src/rhi-debug-vite-preset';
@@ -13,9 +12,10 @@ import { optionalAssetPack } from '../../../shared/src/optional-asset-pack.js';
 // capture plugins. Capture stays gated behind FORGEAX_ENGINE_RHI_DEBUG=1.
 const here = dirname(fileURLToPath(import.meta.url));
 const monorepoRoot = resolve(here, '..', '..', '..', '..');
+// Publish this demo's complete asset closure, without unrelated sibling sources.
 const assetRoots = [
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'textures'),
-  resolve(monorepoRoot, 'forgeax-engine-assets', 'learn-opengl', 'meshes'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/container.jpg.meta.json'),
+  resolve(monorepoRoot, 'forgeax-engine-assets/learn-opengl/textures/metal.png.meta.json'),
 ];
 
 export default {
@@ -31,7 +31,7 @@ export default {
           runtimeBinding: createStandaloneRuntimeAssetBinding('learn-render-4-5-framebuffers'),
           producerReadiness: 'on-demand',
           refresh: reloadAssetHost(),
-          importers: [imageImporter, gltfImporter],
+          importers: [imageImporter],
           roots: assetRoots,
         }),
       ),

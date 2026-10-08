@@ -8,6 +8,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connectHostWebSocket } from '@forgeax/engine-host/transport';
@@ -268,6 +269,45 @@ it('requires resident source changes to restart before another browser candidate
       'restart the backend',
     );
   } finally {
+    await backend.dispose();
+  }
+});
+
+it('releases an upgraded backend socket when its peer never acknowledges close', async () => {
+  const backend = await createDevKitBackend(await directory());
+  await (await backend.host.context.plugin(devKitBackendServerPlugin, { stop() {} })).await();
+  const { endpoint, token } = backend.host.context.devkitBackendServer;
+  const url = new URL(endpoint);
+  const socket = connect(Number(url.port), url.hostname);
+  const closed = new Promise<void>((done) => socket.once('close', () => done()));
+  try {
+    await new Promise<void>((done, reject) => {
+      socket.once('error', reject);
+      socket.once('connect', () => {
+        socket.write(
+          `GET /host?token=${token} HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+        );
+      });
+      socket.once('data', (bytes) => {
+        expect(bytes.toString()).toContain('101 Switching Protocols');
+        done();
+      });
+    });
+    // Read the native close frame without replying: a stalled or disappearing
+    // browser must not retain the backend's upgraded TCP connection.
+    socket.on('data', () => {});
+    await Promise.race([
+      backend.dispose().then(() => closed),
+      new Promise<never>((_done, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('backend retained its upgraded socket')),
+          1000,
+        );
+        closed.then(() => clearTimeout(timer));
+      }),
+    ]);
+  } finally {
+    socket.destroy();
     await backend.dispose();
   }
 });

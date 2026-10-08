@@ -3,7 +3,7 @@ import { propagateTransforms, Transform } from '@forgeax/engine-scene';
 import { describe, expect, it } from 'vitest';
 import { Camera } from '../components/camera';
 import { Outline, OutlineOcclusionValue, resolveOutline } from '../components/outline';
-import { extractCameraSnapshots } from '../extract/camera';
+import { extractCameraSnapshots } from '../render-system-extract';
 
 describe('Outline camera authoring', () => {
   it('detaches the entity set, preserves defaults, and projects only the selected camera', () => {

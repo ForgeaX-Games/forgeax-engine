@@ -5,25 +5,25 @@
 #import forgeax_pbr::gbuffer_output::{GBufferOutput, encodeStandardGBuffer}
 
 #import forgeax_material::slot::surface::{evaluate_surface, evaluate_standard_surface}
-#import forgeax_material::surface_v1::{SurfaceInput, SurfaceData}
-#import forgeax_view::common::{View, Mesh, meshMotionValid, InstanceData, view, shadowMap, shadowSampler, sampleMaterialTexture}
-#import forgeax_view::fog::{translucent_fog}
+#import forgeax_material::surface_v1::{SurfaceInput, SurfaceData, surfaceGeometryNormal}
+#import forgeax_view::common::{lightingChannelsMatch, View, Mesh, meshMotionValid, InstanceData, view, shadowMap, shadowSampler, sampleMaterialTexture}
+#import forgeax_view::fog::{translucent_fog_transmission}
 #ifdef GPU_DRIVEN_SCENE_INDEX_AVAILABLE
 #import forgeax_view::common::{sceneIndexDraw}
 #else
 #import forgeax_view::common::{meshes, instances, meshReceivesShadows}
 #endif
-#import forgeax_scene_temporal::{sceneViewZ}
+#import forgeax_scene_temporal::{sceneViewZ, packSceneTemporalV1WithValidity, unpackSceneTemporalV1}
 #ifdef EXTENDED_LIGHTING_AVAILABLE
 #import forgeax_view::common::{spotModifierSampler, iesProfileTexture, cookieTexture, cookieMatrices}
 #endif
-#import forgeax_pbr::temporal::{projectPbrSceneTemporal}
+#import forgeax_pbr::temporal::{projectPbrSceneTemporal, resolvePbrTemporalReactive}
 #import forgeax_pbr::brdf::{standardOpaqueF0, f_schlick, v_smith, d_ggx}
 #import forgeax_pbr::specular_aa::{geometricNormalSpread, specularAntiAliasedRoughness}
 #import forgeax_pbr::ibl_sampling::{decodeSpecularEnvironmentScale, sampleIblSpecular, sampleReflectionProbeSpecular}
 #import forgeax_pbr::tbn::{decodeTangentSpaceNormalRg, scaleTangentSpaceNormal, applyTBN}
 #ifdef CLEARCOAT_AVAILABLE
-#import forgeax_pbr::clearcoat::{evaluateClearcoatLayer}
+#import forgeax_pbr::clearcoat::{evaluateClearcoatLayer, evaluateClearcoatFresnel}
 #endif
 #ifdef ANISOTROPY_AVAILABLE
 #import forgeax_pbr::anisotropy::{evaluateAnisotropicNormal}
@@ -35,13 +35,14 @@
 #import forgeax_pbr::iridescence::{evaluateIridescenceFresnel}
 #endif
 #import forgeax_pbr::lighting_directional::{evalDirectionalNoShadow, evalDirectionalShadowFactor}
-#import forgeax_cloud::layer::{cloud_apply_direct_solar}
+#import forgeax_view::atmosphere::{view_apply_direct_solar}
 #ifdef CLUSTER_FORWARD_AVAILABLE
 #import forgeax_standard::cluster::{evaluateStandardClusterLights, sampleStandardAmbientOcclusion}
 #endif
 
 #define_import_path forgeax_material::pbr-skin
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 #pragma variant_axis CLUSTER_FORWARD_AVAILABLE
 #pragma variant_axis VERTEX_COLOR_AVAILABLE
 #pragma variant_axis PROBE_BLEND_AVAILABLE
@@ -364,42 +365,32 @@ struct VsIn  {
 };
 struct VsOut {
   @builtin(position) @invariant clip : vec4<f32>,
-#ifdef TRANSMISSION_AVAILABLE
-  @location(4) @interpolate(flat) transmissionBasis0 : vec4<f32>,
-#endif
+  // Keep mesh and instance storage vertex-only: the flat object basis
+  // (with ndc.w as its last element) serves transmission, triplanar object
+  // projection and object-space normal maps.
+  @location(4) @interpolate(flat) objectBasis0 : vec4<f32>,
   @location(0) worldPos : vec3<f32>,
   @location(1) worldNormal : vec3<f32>,
-  @location(2) uv : vec2<f32>,
+  @location(2) uv0And1 : vec4<f32>,
   @location(3) worldTangent : vec4<f32>,
   @location(7) positionOSAndViewZ : vec4<f32>,
-  // feat-city-glb multi-UV tiling: second UV set varying at location 5
-  // (parity with default-standard-pbr.wgsl).
-  @location(5) uv1 : vec2<f32>,
-  @location(8) uv2 : vec2<f32>,
-  @location(9) uv3 : vec2<f32>,
-  @location(10) uv4 : vec2<f32>,
-  @location(11) uv5 : vec2<f32>,
-  // UV6/UV7 share one vec4 slot so the transmission basis tail can stay
-  // inside WebGL2's 14 user varying locations.
+  @location(5) uv2And3 : vec4<f32>,
+  @location(9) @interpolate(flat) surfaceData : vec3<u32>,
+  @location(11) clipDelta : vec4<f32>,
+  // UV4/UV5 and UV6/UV7 each share one vec4 slot so the object basis, vertex
+  // color and scene-index address fit 15 user locations beside front_facing.
+  @location(10) uv4And5 : vec4<f32>,
   @location(12) uv6And7 : vec4<f32>,
 #ifdef VERTEX_COLOR_AVAILABLE
   @location(14) color : vec4<f32>,
 #endif
   @location(6) ndc : vec4<f32>,
-#ifdef TRANSMISSION_AVAILABLE
-  @location(13) @interpolate(flat) transmissionBasis1 : vec4<f32>,
-#else
+  @location(13) @interpolate(flat) objectBasis1 : vec4<f32>,
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
+  // Scene-index variants carry the row selector in the storage-backed lane.
+  // They never target the WebGL2 uniform-fallback limit, so location 15
+  // stays outside its 14-location ABI.
   @location(15) @interpolate(flat) materialAddress : vec3<u32>,
-#endif
-#endif
-#if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
-  // Scene-index transmission variants carry the row selector in the same
-  // storage-backed lane.  These variants never target the WebGL2
-  // uniform-fallback limit, so location 15 stays outside its 14-location ABI.
-#ifdef TRANSMISSION_AVAILABLE
-  @location(15) @interpolate(flat) materialAddress : vec3<u32>,
-#endif
 #endif
 };
 
@@ -415,7 +406,7 @@ fn standardVertexPosition(in : VsIn) -> vec3<f32> {
   return in.pos;
 }
 
-fn vs_main_impl(in : VsIn, paletteBase : u32, materialAddress : vec3<u32>) -> VsOut {
+fn vs_main_impl(in : VsIn, paletteBase : u32, materialAddress : vec3<u32>, temporal : vec2<f32>) -> VsOut {
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
   material = selectedMaterial(materialAddress.x);
 #endif
@@ -465,28 +456,37 @@ fn vs_main_impl(in : VsIn, paletteBase : u32, materialAddress : vec3<u32>) -> Vs
   // palette = jointWorld * IBM is already full world-space.
   var out : VsOut;
   out.clip = view.worldViewProj * skinnedLocal;
+  let previousSkin = previousPalette[paletteBase + in.skinIndex.x] * in.skinWeight.x +
+    previousPalette[paletteBase + in.skinIndex.y] * in.skinWeight.y +
+    previousPalette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
+    previousPalette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
+  let previousWorld = previousSkin * vec4<f32>(localPosition, 1.0);
+  let currentClip = view.temporalCurrentViewProj * skinnedLocal;
+  let previousClip = view.temporalPreviousViewProj * previousWorld;
+  // Equal poses produce exact zero before interpolation. Reprojecting two
+  // separately rounded world/clip varyings would invent stationary motion.
+  out.clipDelta = currentClip - previousClip;
+  let reactiveLane = packSceneTemporalV1WithValidity(
+    currentClip, previousClip,
+    view.temporalProjection, temporal.x, temporal.y >= 0.5).w;
+  out.surfaceData = vec3<u32>(0u, bitcast<u32>(reactiveLane), 0xffffffffu);
   out.positionOSAndViewZ = vec4<f32>(localPosition, sceneViewZ(out.clip, view.temporalProjection));
   out.worldPos = skinnedLocal.xyz;
   out.worldNormal = normalize(skinNormal3x3 * in.normal);
   let worldTangentXyz = normalize(skinNormal3x3 * in.tangent.xyz);
   out.worldTangent = vec4<f32>(worldTangentXyz, in.tangent.w);
-  out.uv = in.uv;
-  out.uv1 = in.uv1;
-  out.uv2 = in.uv2;
-  out.uv3 = in.uv3;
-  out.uv4 = in.uv4;
-  out.uv5 = in.uv5;
+  out.uv0And1 = vec4<f32>(in.uv, in.uv1);
+  out.uv2And3 = vec4<f32>(in.uv2, in.uv3);
+  out.uv4And5 = vec4<f32>(in.uv4, in.uv5);
   out.uv6And7 = vec4<f32>(in.uv6, in.uv7);
 #ifdef VERTEX_COLOR_AVAILABLE
   out.color = in.color;
 #endif
-#ifdef TRANSMISSION_AVAILABLE
   // Skin palette already contains the world-space transform. Forward its
   // affine basis so transmission does not reread Mesh/Instance storage in
   // the fragment stage.
-  out.transmissionBasis0 = vec4<f32>(skinMatrix[0].xyz, skinMatrix[1].x);
-  out.transmissionBasis1 = vec4<f32>(skinMatrix[1].y, skinMatrix[1].z, skinMatrix[2].x, skinMatrix[2].y);
-#endif
+  out.objectBasis0 = vec4<f32>(skinMatrix[0].xyz, skinMatrix[1].x);
+  out.objectBasis1 = vec4<f32>(skinMatrix[1].y, skinMatrix[1].z, skinMatrix[2].x, skinMatrix[2].y);
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
   out.materialAddress = materialAddress;
 #endif
@@ -513,11 +513,14 @@ fn sceneIndexVertex(in : VsIn, idx : u32) -> VsOut {
   let draw = sceneIndexDraw(visible.x);
   _ = draw.world;
   // Scene material rows never reach bit 31; it carries the receive opt-out.
-  return vs_main_impl(
+  var out = vs_main_impl(
     in,
     visible.z,
     vec3<u32>(visible.y | select(STANDARD_NO_RECEIVE_BIT, 0u, draw.receivesShadows), draw.probe),
+    draw.temporal,
   );
+  out.surfaceData.z = draw.lightingChannels;
+  return out;
 }
 #endif
 
@@ -550,7 +553,14 @@ fn vs_main(in : VsIn, @builtin(instance_index) idx : u32) -> VsOut {
   // createRenderPipeline would fail at binding-count validation.
   _ = meshes[0u].worldFromLocal;
   _ = instances[idx].localFromInstance;
-  return vs_main_impl(in, 0u, vec3<u32>(0xffffffffu, 0u, 0u));
+#if STORAGE_BUFFER_AVAILABLE == true
+  let temporal = vec2<f32>(meshes[0].temporal.x, select(0.0, 1.0, meshMotionValid(meshes[0].temporal.y)));
+#else
+  let temporal = vec2<f32>(1.0, 1.0);
+#endif
+  var out = vs_main_impl(in, 0u, vec3<u32>(0xffffffffu, 0u, 0u), temporal);
+  out.surfaceData.z = meshes[0u].surface.z;
+  return out;
 #endif
 }
 
@@ -572,12 +582,12 @@ fn selectedMaterial(index : u32) -> MaterialParameters {
 #endif
 
 fn transformedMaterialUv(transform : vec4<f32>, metadata : vec4<f32>, in : VsOut) -> vec2<f32> {
-  var source = in.uv;
-  if (metadata.x >= 1.0) { source = in.uv1; }
-  if (metadata.x >= 2.0) { source = in.uv2; }
-  if (metadata.x >= 3.0) { source = in.uv3; }
-  if (metadata.x >= 4.0) { source = in.uv4; }
-  if (metadata.x >= 5.0) { source = in.uv5; }
+  var source = in.uv0And1.xy;
+  if (metadata.x >= 1.0) { source = in.uv0And1.zw; }
+  if (metadata.x >= 2.0) { source = in.uv2And3.xy; }
+  if (metadata.x >= 3.0) { source = in.uv2And3.zw; }
+  if (metadata.x >= 4.0) { source = in.uv4And5.xy; }
+  if (metadata.x >= 5.0) { source = in.uv4And5.zw; }
   if (metadata.x >= 6.0) { source = in.uv6And7.xy; }
   if (metadata.x >= 7.0) { source = in.uv6And7.zw; }
   let scaled = source * transform.zw;
@@ -624,7 +634,17 @@ fn standardSkinVariantIdentity() -> f32 {
   return identity;
 }
 
-fn evaluateStandardSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
+// Linear object-to-world basis forwarded flat by the vertex stage.
+fn standardObjectToWorld(in : VsOut) -> mat3x3<f32> {
+  return mat3x3<f32>(
+    in.objectBasis0.xyz,
+    vec3<f32>(in.objectBasis0.w, in.objectBasis1.xy),
+    vec3<f32>(in.objectBasis1.zw, in.ndc.w),
+  );
+}
+
+
+fn evaluateStandardSurface(in : VsOut, frontFacing : bool, geometricNormal : vec3<f32>) -> SurfaceData {
 #ifdef DISPLACEMENT_TEXTURE_AVAILABLE
   let triangleNormal = displacedNormal(in.worldPos, in.worldNormal);
 #endif
@@ -649,9 +669,10 @@ fn evaluateStandardSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
   }
 #endif
   let input = SurfaceInput(
-    positionOS, in.worldPos, normalize(cross(dpdy(in.worldPos), dpdx(in.worldPos))) * select(-1.0, 1.0, frontFacing), vertexNormal, in.worldTangent, viewDirectionWS,
-    in.uv, in.uv1, in.uv2, in.uv3, in.uv4, in.uv5,
+    positionOS, in.worldPos, geometricNormal, vertexNormal, in.worldTangent, viewDirectionWS,
+    in.uv0And1.xy, in.uv0And1.zw, in.uv2And3.xy, in.uv2And3.zw, in.uv4And5.xy, in.uv4And5.zw,
     in.uv6And7.xy, in.uv6And7.zw, materialVertexColor(in), frontFacing, vec4<f32>(0.0), vec4<f32>(0.0),
+    standardObjectToWorld(in), view.fogHeightOpacity.w,
   );
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
 #if TRANSMISSION_AVAILABLE == false
@@ -691,6 +712,33 @@ struct StandardPbrOutput {
   @location(1) reflectionFallback : vec4<f32>,
 #endif
 };
+
+// Lit Standard surface before translucent fog. The skin fs_main fogs it through the
+// View slot it is bound to; fs_opaque serves draws bound to the unfogged slot
+// (fogHeightOpacity.z == 0), where translucent fog is the identity unless the
+// surface transmits, so the fog chain is compiled out of that entry.
+struct StandardForwardLit {
+  color : vec3<f32>,
+  alpha : f32,
+  transmittedContribution : vec3<f32>,
+  transmittedCoefficient : vec3<f32>,
+#ifdef REFLECTION_FALLBACK_AVAILABLE
+  reflectionFallback : vec4<f32>,
+#endif
+};
+
+fn standardForwardOutput(lit : StandardForwardLit, color : vec3<f32>) -> StandardPbrOutput {
+  var output : StandardPbrOutput;
+  output.color = vec4<f32>(color, lit.alpha);
+#ifdef REFLECTION_FALLBACK_AVAILABLE
+  output.reflectionFallback = lit.reflectionFallback;
+#endif
+  return output;
+}
+
+fn standardForwardFogged(in : VsOut, lit : StandardForwardLit) -> StandardPbrOutput {
+  return standardForwardOutput(lit, translucent_fog_transmission(view, in.worldPos, lit.color, lit.alpha, lit.transmittedContribution, lit.transmittedCoefficient));
+}
 
 fn standardSurfaceF0(in : VsOut, surface : SurfaceData) -> vec3<f32> {
   let albedo = surface.baseColor;
@@ -747,16 +795,21 @@ fn standardSsrCoverage() -> f32 {
   return coverage;
 }
 
-@fragment
-fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbrOutput {
+// Forward shading shared by the fs_main and fs_opaque entries.
+fn standardSkinForwardLit(in : VsOut, frontFacing : bool) -> StandardForwardLit {
   let _variantIdentity = standardSkinVariantIdentity();
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
 #if TRANSMISSION_AVAILABLE == false
   let material = selectedMaterial(in.materialAddress.x);
 #endif
 #endif
+  // Freeze actual triangle geometry before clipping or alpha discard. The
+  // receiver plane and offset cannot follow a BA gradient or normal map.
+  let receiverNormal = surfaceGeometryNormal(dpdx(in.worldPos), dpdy(in.worldPos),
+    in.worldNormal * select(-1.0, 1.0, frontFacing));
+  let geometricNormal = receiverNormal * select(-1.0, 1.0, frontFacing);
   let normalSpread = geometricNormalSpread(in.worldNormal);
-  let surface = evaluateStandardSurface(in, frontFacing);
+  let surface = evaluateStandardSurface(in, frontFacing, geometricNormal);
   alphaTestSurface(surface);
   let alpha = surface.opacity;
   let albedo = surface.baseColor;
@@ -989,19 +1042,14 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
   reflectionFallback *= screenAo;
 #endif
   var color = ambient;
+  var transmittedContribution=vec3<f32>(0.0);
+  var transmittedCoefficient=vec3<f32>(0.0);
 #ifdef TRANSMISSION_AVAILABLE
   let screenUv = in.ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
-  let localToWorld0 = in.transmissionBasis0.xyz;
-  let localToWorld1 = vec3<f32>(
-    in.transmissionBasis0.w,
-    in.transmissionBasis1.x,
-    in.transmissionBasis1.y,
-  );
-  let localToWorld2 = vec3<f32>(
-    in.transmissionBasis1.z,
-    in.transmissionBasis1.w,
-    in.ndc.w,
-  );
+  let objectToWorld = standardObjectToWorld(in);
+  let localToWorld0 = objectToWorld[0];
+  let localToWorld1 = objectToWorld[1];
+  let localToWorld2 = objectToWorld[2];
   let inverseCofactor0 = cross(localToWorld1, localToWorld2);
   let inverseCofactor1 = cross(localToWorld2, localToWorld0);
   let inverseCofactor2 = cross(localToWorld0, localToWorld1);
@@ -1036,9 +1084,18 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
       finiteScalar(thicknessSample, 1.0),
     0.0,
   );
-  let refractedUv = screenUv + (refracted.xy - incident.xy) * worldThickness * 0.25;
+  // Project the refracted ray's exit point instead of offsetting screen UVs by
+  // world-space direction deltas: world +Y is screen -V, and only a projection
+  // follows the camera orientation.
+  let refractedExitClip = view.worldViewProj * vec4<f32>(
+    in.worldPos + refracted * inverseSqrt(max(refractedLengthSquared, 1e-12)) * worldThickness,
+    1.0,
+  );
+  let refractedUv = refractedExitClip.xy / max(refractedExitClip.w, 1e-6) *
+    vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
   let guardBand = 0.02;
-  let insideGuardBand = all(refractedUv >= vec2<f32>(guardBand)) &&
+  let insideGuardBand = refractedExitClip.w > 1e-6 &&
+    all(refractedUv >= vec2<f32>(guardBand)) &&
     all(refractedUv <= vec2<f32>(1.0 - guardBand));
   let backdropMipCount = textureNumLevels(transmissionBackdropTexture);
   let backdropMaxLod = max(f32(backdropMipCount) - 1.0, 0.0);
@@ -1070,27 +1127,29 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
     pow(safeAttenuationColor, vec3<f32>(attenuationExponent)),
     safeAttenuationDistance > 1e-6 && worldThickness > 0.0,
   );
-  color = color + finiteColor(transmittedBackdrop, vec3<f32>(0.0)) *
-    transmittedEnergy * beerAttenuation;
+  transmittedCoefficient=transmittedEnergy*beerAttenuation;
+  transmittedContribution=finiteColor(transmittedBackdrop,vec3<f32>(0.0))*transmittedCoefficient;
+  color+=transmittedContribution;
 #endif
   color = color + surface.emissive;
-  var directionalShadowNormal = physicalNormal;
+  var directionalShadowNormal = receiverNormal;
 #ifdef DIFFUSE_TRANSMISSION_AVAILABLE
   // A back-lit thin surface receives through its opposite face; offset the
   // shadow receiver toward the light so the leaf does not shadow itself
   // (Unreal TwoSidedBxDF uses the same flipped-normal shadow bias).
-  directionalShadowNormal = select(physicalNormal, -physicalNormal,
-    dot(physicalNormal, -view.lightDir) < 0.0);
+  directionalShadowNormal = select(receiverNormal, -receiverNormal,
+    dot(receiverNormal, -view.lightDir) < 0.0);
 #endif
   let receiveShadows = standardReceivesShadows(in);
   let directionalShadow = select(1.0, evalDirectionalShadowFactor(
     directionalShadowNormal,
     in.worldPos,
     standardViewZ(in),
+    0u,
   ), receiveShadows);
   color += evaluateStandardDirect(in.worldPos, in.ndc.xyz, standardViewZ(in),
     physicalNormal, v, diffuseAlbedo, transmissionAlbedo, metallic, a, f0, directionalShadow,
-    receiveShadows);
+    receiveShadows, in.surfaceData.z);
 // CLUSTER_FORWARD_AVAILABLE
 #ifdef SHEEN_AVAILABLE
   var sheenColor = material.sheenColor;
@@ -1216,19 +1275,16 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
     vec3<f32>(0.04),
     vec3<f32>(0.0),
   );
-  let directionalClearcoat = cloud_apply_direct_solar(
-    clearcoatDirect,
-    in.worldPos,
-    view.cloudShadowOrigin.xyz,
-    view.cloudShadowRight.xyz,
-    view.cloudShadowUp.xyz,
-    view.cloudShadowProjection,
-  );
+  let directionalClearcoat = select(vec3<f32>(0.0), view_apply_direct_solar(view, clearcoatDirect, in.worldPos),
+    lightingChannelsMatch(view.lightingChannels, in.surfaceData.z));
   var clearcoatEnvironment = clearcoatIbl * specularEnvironmentScale * ao;
 #ifdef CLUSTER_FORWARD_AVAILABLE
   clearcoatEnvironment *= sampleStandardAmbientOcclusion(in.worldPos, view.worldViewProj,
     ssaoBlurredTexture, ssaoBlurredSampler);
 #endif
+  let baseAttenuation=1.0-evaluateClearcoatFresnel(dot(clearcoatNormalValue,v),clearcoatFactor);
+  transmittedContribution*=baseAttenuation;
+  transmittedCoefficient*=baseAttenuation;
   color = evaluateClearcoatLayer(
     color,
     clearcoatEnvironment + directionalClearcoat,
@@ -1236,12 +1292,31 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
     clearcoatFactor,
   );
 #endif
-  var output : StandardPbrOutput;
-  output.color = vec4<f32>(translucent_fog(view, in.worldPos, color, alpha), alpha);
+  var lit : StandardForwardLit;
+  lit.color = color;
+  lit.alpha = alpha;
+  lit.transmittedContribution = transmittedContribution;
+  lit.transmittedCoefficient = transmittedCoefficient;
 #ifdef REFLECTION_FALLBACK_AVAILABLE
-  output.reflectionFallback = vec4<f32>(reflectionFallback, standardSsrCoverage());
+  lit.reflectionFallback = vec4<f32>(reflectionFallback, standardSsrCoverage());
 #endif
-  return output;
+  return lit;
+}
+
+@fragment
+fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbrOutput {
+  return standardForwardFogged(in, standardSkinForwardLit(in, frontFacing));
+}
+
+// See the rigid Standard fs_opaque: identical to fs_main on the unfogged slot.
+@fragment
+fn fs_opaque(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbrOutput {
+  let lit = standardSkinForwardLit(in, frontFacing);
+#ifdef TRANSMISSION_AVAILABLE
+  return standardForwardFogged(in, lit);
+#else
+  return standardForwardOutput(lit, lit.color);
+#endif
 }
 
 // Keep the skinned Standard shader on the same multi-entry pass contract as
@@ -1250,8 +1325,39 @@ fn fs_main(in : VsOut, @builtin(front_facing) frontFacing : bool) -> StandardPbr
 // pass after these base surface facts are written to the shared G-buffer.
 @fragment
 fn fs_gbuffer(in : VsOut, @builtin(front_facing) frontFacing : bool) -> GBufferOutput {
+  return skinGBuffer(in, frontFacing);
+}
+
+// Deformed draws publish no visible-surface rows (their posed triangles have no
+// frame-stable raster address), so a visible-surface G-buffer pass writes row 0:
+// skinned pixels read as uncovered instead of keeping an occluded surface's row.
+struct SkinUncoveredGBufferOutput {
+  @location(0) scene_color : vec4<f32>,
+  @location(1) normal_roughness : u32,
+  @location(2) f0_occlusion : u32,
+  @location(3) albedo_metallic : u32,
+  @location(4) lighting_context : u32,
+  @location(5) receiver_geometry : vec2<u32>,
+  @location(6) visible_surface : vec4<u32>,
+  @location(7) scene_temporal : vec4<f32>,
+};
+
+@fragment
+fn fs_gbuffer_uncovered(in : VsOut, @builtin(front_facing) frontFacing : bool) -> SkinUncoveredGBufferOutput {
+  let g = skinGBuffer(in, frontFacing);
+  return SkinUncoveredGBufferOutput(g.scene_color, g.normal_roughness, g.f0_occlusion,
+    g.albedo_metallic, g.lighting_context, g.receiver_geometry, vec4<u32>(0u), g.scene_temporal);
+}
+
+fn skinGBuffer(in : VsOut, frontFacing : bool) -> GBufferOutput {
+  // Freeze actual triangle geometry before clipping or alpha discard. The
+  // receiver plane and offset cannot follow a BA gradient or normal map.
+  let rawGeometry = surfaceGeometryNormal(dpdx(in.worldPos), dpdy(in.worldPos), vec3<f32>(0.0));
+  let receiverNormal = select(in.worldNormal * select(-1.0, 1.0, frontFacing), rawGeometry,
+    dot(rawGeometry, rawGeometry) > 0.0);
+  let geometricNormal = receiverNormal * select(-1.0, 1.0, frontFacing);
   let normalSpread = geometricNormalSpread(in.worldNormal);
-  let surface = evaluateStandardSurface(in, frontFacing);
+  let surface = evaluateStandardSurface(in, frontFacing, geometricNormal);
   alphaTestSurface(surface);
   var probeRow = 0u;
 #ifdef PROBE_BLEND_AVAILABLE
@@ -1266,11 +1372,25 @@ fn fs_gbuffer(in : VsOut, @builtin(front_facing) frontFacing : bool) -> GBufferO
   if (header.z > 0.0) { probeRow = u32(header.x) + 1u; }
 #endif
 #endif
-  return encodeStandardGBuffer(surface.normalWS,
+  var output = encodeStandardGBuffer(surface.normalWS, receiverNormal,
     specularAntiAliasedRoughness(clamp(surface.roughness, 0.04, 1.0), normalSpread),
     surface.baseColor, clamp(surface.metallic, 0.0, 1.0), standardSurfaceF0(in, surface),
     surface.occlusion, surface.emissive, surface.opacity, u32(skylight.diffuseScale.w), probeRow,
-    standardReceivesShadows(in));
+    standardReceivesShadows(in), in.surfaceData.z);
+  // The vertex lane retains the canonical validity/reactivity encoding;
+  // coverage and opacity come from the same evaluated surface as GBuffer.
+  let temporal = unpackSceneTemporalV1(vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(in.surfaceData.y)));
+  // Alpha hashing already commits a binary Surface mask; its sampling alpha
+  // must not become source reactivity. Share the standalone producer policy.
+  var reactive = resolvePbrTemporalReactive(temporal.reactive, surface.opacity, 1.0);
+#ifdef ALPHA_HASH_AVAILABLE
+  if (material.alphaHash > 0.5) { reactive = temporal.reactive; }
+#endif
+  let currentClip = view.temporalCurrentViewProj * vec4<f32>(in.worldPos, 1.0);
+  output.scene_temporal = packSceneTemporalV1WithValidity(
+    currentClip, currentClip - in.clipDelta,
+    view.temporalProjection, reactive, temporal.motionValid);
+  return output;
 }
 
 struct TemporalVsOut {

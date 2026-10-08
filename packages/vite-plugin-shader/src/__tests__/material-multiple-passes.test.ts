@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as naga from '@forgeax/engine-naga';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { forgeaxShader } from '../index.js';
 
 function shader(module: string, factor: number): string {
@@ -21,6 +22,7 @@ interface MaterialManifest {
 interface MultiPassScenario {
   root: string;
   baseline: MaterialManifest;
+  baselineCompositions: number;
   transformedCode: string | undefined;
   invalidPassError: unknown;
   retainedAfterInvalidPass: MaterialManifest;
@@ -85,7 +87,14 @@ async function runMultiPassScenario(): Promise<MultiPassScenario> {
       return JSON.parse(output.source) as MaterialManifest;
     };
 
-    await plugin.buildStart.call(ctx as never);
+    const compose = vi.spyOn(naga, 'composeShader');
+    let baselineCompositions = 0;
+    try {
+      await plugin.buildStart.call(ctx as never);
+      baselineCompositions = compose.mock.calls.length;
+    } finally {
+      compose.mockRestore();
+    }
     const baseline = manifest();
     const transformed = await plugin.transform.call(ctx as never, second, secondPath);
     const invalid = second.replace('return material.tint * 2.0;', 'return ;');
@@ -114,6 +123,7 @@ async function runMultiPassScenario(): Promise<MultiPassScenario> {
     return {
       root,
       baseline,
+      baselineCompositions,
       transformedCode: transformed?.code,
       invalidPassError,
       retainedAfterInvalidPass,
@@ -139,6 +149,7 @@ describe('authored multi-pass Vite material publication', () => {
   });
 
   it('publishes each module once while deduplicating shared entries', () => {
+    expect(scenario.baselineCompositions).toBe(2);
     expect(scenario.baseline.materialShaders.map((row) => row.identifier)).toEqual([
       'game::first',
       'game::second',

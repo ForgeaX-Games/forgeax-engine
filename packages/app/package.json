@@ -60,7 +60,7 @@
   "devDependencies": {
     "@forgeax/engine-rhi-null": "workspace:*",
     "@forgeax/engine-skinning": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "@types/ws": "^8.5.10",
     "ws": "^8.20.0",
     "@forgeax/engine-graphics-extras": "workspace:*"

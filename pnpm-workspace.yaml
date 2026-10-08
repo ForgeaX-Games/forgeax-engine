@@ -9,10 +9,13 @@ packages:
   - "apps/parity/*"
   - "apps/learn-render/*/*"
   - "apps/learn-render/*/*/*"
+  - "tools/view"
+  - "tools/view/packages/*"
   - "templates/empty"
   - "templates/game-3d"
 
 allowBuilds:
+  '@forgeax/engine-dawn-node': true
   esbuild: true
   simple-git-hooks: true
   webgpu: true
@@ -28,3 +31,9 @@ supportedArchitectures:
   libc:
     - glibc
     - musl
+
+linkWorkspacePackages: true
+minimumReleaseAgeExclude:
+  - "@forgeax/*"
+overrides:
+  fast-uri: 3.1.7

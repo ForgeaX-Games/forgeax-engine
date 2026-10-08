@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { buildFrameModel, decodeTape } from '../../../packages/rhi-debug/dist/index.mjs';
+import { sdfStorageCode } from './sdf-storage.mjs';
 
 const output = resolve(process.argv[2]),
   prior = resolve(process.argv[3]);
@@ -118,7 +119,7 @@ for (let wi = 0; wi < model.works.length; wi += 4) {
         for (let x = 0; x < 2; x++) {
           const at = ((cell[2] + z) * dims[1] + cell[1] + y) * dims[0] + cell[0] + x;
           const v = packed
-            ? Math.max(-1, fields.getInt16(offset * 4 + at * 2, true) / 32767) * band
+            ? Math.max(-1, sdfStorageCode(fields, offset, dims, at) / 32767) * band
             : fields.getFloat32((offset + at) * 4, true);
           value += v * [x, y, z].reduce((w, b, a) => w * (b ? f[a] : 1 - f[a]), 1);
         }

@@ -15,6 +15,7 @@ describe('SSAO parameter authority', () => {
       intensity: SSAO_DEFAULT_INTENSITY,
       quality: 'high',
       algorithm: 'ssao',
+      directLightingStrength: 0,
     });
   });
 
@@ -25,6 +26,7 @@ describe('SSAO parameter authority', () => {
       intensity: 1.4,
       quality: 'high',
       algorithm: 'ssao',
+      directLightingStrength: 0,
     });
   });
 
@@ -53,5 +55,25 @@ it('selects GTAO and rejects unknown AO algorithms', () => {
   expect(invalid).toMatchObject({
     ok: false,
     error: { code: 'ssao-parameter-invalid', detail: { paramName: 'algorithm' } },
+  });
+});
+
+it.each([
+  -0.01,
+  1.01,
+  NaN,
+  Infinity,
+  -Infinity,
+])('rejects direct AO strength outside [0, 1] (%s)', (value) => {
+  expect(resolveSsaoParameters({ directLightingStrength: value })).toMatchObject({
+    ok: false,
+    error: { code: 'ssao-parameter-invalid', detail: { paramName: 'directLightingStrength' } },
+  });
+});
+
+it.each([0, 0.5, 1])('preserves valid direct AO strength (%s)', (directLightingStrength) => {
+  expect(resolveSsaoParameters({ directLightingStrength })).toMatchObject({
+    ok: true,
+    value: { directLightingStrength },
   });
 });

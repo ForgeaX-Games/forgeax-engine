@@ -225,7 +225,7 @@ try {
     '--enable-unsafe-webgpu',
     '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
     '--ignore-gpu-blocklist',
-    '--disable-dawn-features=disallow_unsafe_apis',
+    '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
   ];
   // The self-hosted Linux path uses the same lavapipe/SwiftShader combination
   // as the Vitest browser gate. Without these flags Chrome Beta destroys the

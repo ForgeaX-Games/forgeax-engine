@@ -3,7 +3,6 @@ import {
   deriveReflectionFallbackProjection,
   type ReflectionFallbackProjectionInput,
   reflectionFallbackProjectionSignature,
-  validateReflectionFallbackCompatibility,
 } from '../reflection/projection';
 
 const sample = (
@@ -41,20 +40,6 @@ describe('Reflection fallback projection', () => {
     if (!result.ok) return;
     expect(result.value.source).toBe('neutral');
     expect(result.value.linearHdr).toEqual([0, 0, 0, 0]);
-  });
-
-  it.each([
-    ['source', sample({ source: 'skylight' })],
-    ['coverage', sample({ coverage: 0.5 })],
-    ['extent', sample({ extent: [5, 3, 2] })],
-    ['BRDF', sample({ brdfSignature: 'standard-pbr-ibl-v2' })],
-  ] as const)('rejects a %s mismatch before projection is consumed', (kind, candidate) => {
-    const compatibility = validateReflectionFallbackCompatibility(sample(), candidate);
-
-    expect(compatibility).toMatchObject({
-      ok: false,
-      error: { code: `reflection-fallback-${kind.toLowerCase()}-mismatch` },
-    });
   });
 
   it('keeps equivalent semantic inputs stable and changes signature on source switch', () => {

@@ -25,7 +25,7 @@ describe('taa-resolve.wgsl', () => {
   it('contains every v1 rejection and adaptive weighting term', () => {
     expect(source).toContain('in.uv + params.currentJitterUv');
     expect(source).toContain('in.uv - temporal.xy');
-    expect(source).toContain('closestCurrentTemporal(pixel, dimensions)');
+    expect(source).toContain('closestCurrentTemporal(pixel, temporalDimensions)');
     expect(source).toContain('historyInBounds');
     expect(source).toContain('depthDelta > depthThreshold');
     expect(source).toContain('taaNeighborhood');
@@ -42,7 +42,7 @@ describe('taa-resolve.wgsl', () => {
     );
     expect(source).toContain('progressiveWeight');
     expect(source).toContain('let dimensions = vec2<i32>(textureDimensions(currentColor, 0));');
-    expect(source).toContain('closestCurrentTemporal(pixel, dimensions)');
+    expect(source).toContain('closestCurrentTemporal(pixel, temporalDimensions)');
     expect(source).toContain('vec2<f32>(dimensions)');
   });
 

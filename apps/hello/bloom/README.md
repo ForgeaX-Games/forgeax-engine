@@ -33,6 +33,9 @@ pnpm --filter @forgeax/hello-bloom smoke:falsify # expected red Bloom contributi
 pnpm --filter @forgeax/hello-bloom smoke:all # complete Dawn + Browser carrier gate
 ```
 
+Ordinary CI retains the initial 60-frame lifecycle receipt and every resize/recovery pixel check, but uses eight post-resize frames with `FORGEAX_DAWN_LIGHTWEIGHT=1` or `FORGEAX_BROWSER_CI_LIGHTWEIGHT=1`. GPU timing mode and full local runs retain sixty post-resize frames.
+
+
 ## Scene
 
 An emissive sphere (baseColor=[1.0,0.85,0.55], emissive=[1.0,0.7,0.3], emissiveIntensity=2.0) on the left and a non-emissive reference cube on the right, under a slant directional light. The sphere's > 1.0 HDR pixels feed Bloom extraction; the cube stays below the threshold as a visual anchor.
@@ -78,9 +81,11 @@ deltas must be zero, while probe-observed live payload and resize-overlap
 peaks are recorded at every intercepted create boundary and frame snapshot.
 `residentChildBytes` reports active logical Bloom texture bytes; parameter
 buffers, labeled native resources, and in-flight retirement are reported
-separately in the performance artifact. The primary Bloom timing is the
-percentile of each frame's summed ten-pass durations; summing individual pass
-p95 values is retained only as a non-percentile diagnostic. WebGPU does not expose driver-private
+separately in the performance artifact. `measurement.status` admits timing completeness and resource stability only;
+`budget.status` is `not-evaluated` because this carrier declares no elapsed-time
+budget or physical-adapter admission. The ten-pass sum is a diagnostic with
+repeated interval coverage, never exclusive Bloom cost, frame latency or FPS.
+Summing individual pass p95 values is retained only as a non-percentile diagnostic. WebGPU does not expose driver-private
 pipeline memory or allocator alignment, so those remain explicitly unavailable.
 
 `scripts/smoke-browser.mjs` runs the same lifecycle on a real Browser WebGPU

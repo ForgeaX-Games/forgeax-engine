@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "baselineSourceHead": "287897f75b1a6b222989e058dcd471b425afd071",
+  "nodeVersion": "22.22.3",
+  "originalFiveFileRecovery": {
+    "files": 5,
+    "tests": 26,
+    "passed": 25,
+    "failed": 1,
+    "originalBudgetMs": 5000,
+    "failedCase": "does not expand packaged publications while discovering unselected projects",
+    "observedMs": 5140,
+    "logSha256": "860b90b676d28483bbaef80c519db2093b9e4806de2a8904f1f9f70cd719513e"
+  },
+  "owningRed": {
+    "passed": 2,
+    "failed": 2,
+    "constructionRevisionCallCount": 100,
+    "logSha256": "67d9141bc154ed369984982c52cf3588f393189d88421ec81d9dff5ff830ec39"
+  },
+  "owningAndOriginalFilesGreen": {
+    "files": 6,
+    "tests": 30,
+    "passed": 30,
+    "failed": 0,
+    "typeErrors": 0,
+    "elapsedSeconds": 19.77,
+    "logSha256": "821082df91fc7e6a610dce5dc50e4bb2c0d6045d1d820eec692c598097882ac2"
+  },
+  "actualBuiltProductionBefore": {
+    "node": "v22.22.3",
+    "kind": "actual built plugin with counting wrapper delegating to real git; no GPU or isolated timing claim",
+    "construction": {
+      "milliseconds": 4163.0615,
+      "revisionProcessCount": 100
+    },
+    "load": {
+      "revisionProcessCount": 0,
+      "emitsBuildRevision": true
+    },
+    "compiledIndexSha256": "0b3df997902c18b09e18eb59a40be0622dbdfaebb21e74c31c65990d59d65efe"
+  },
+  "actualBuiltProductionAfter": {
+    "node": "v22.22.3",
+    "kind": "actual built plugin with counting wrapper delegating to real git; no GPU or isolated timing claim",
+    "construction": {
+      "milliseconds": 13.561542000000031,
+      "revisionProcessCount": 0
+    },
+    "load": {
+      "revisionProcessCount": 1,
+      "emitsBuildRevision": true
+    },
+    "compiledIndexSha256": "d5a28571acc0720ccb56adf1c5a438a89ef1bc5704711230f0b93292cb67abf3"
+  },
+  "actualCountControls": "Wrapper delegates to real execFileSync; source and GitHub override variables unset; 100 real factory calls and one real virtual load in each process.",
+  "preservedControls": [
+    "source revision precedes GitHub revision",
+    "configured revisions require no git",
+    "unknown/nonvirtual loads require no git",
+    "outside-git virtual load preserves undefined revision",
+    "every original unit assertion and deadline retained"
+  ],
+  "buildAndTypes": {
+    "pluginBuildExitCode": 0,
+    "owningTypecheckExitCode": 0,
+    "buildLogSha256": "460ad03cad2a14ed93debe3f44b0f1d0ef31a7cf0a8120cb5532795cf4368f14",
+    "typeLogSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "limits": [
+    "Counts qualify this unconfigured-revision startup path; wall observations are not isolated ABBA or a CI/GPU performance claim.",
+    "Configured GitHub CI already avoids git through GITHUB_SHA.",
+    "Plugin built bytes changed; regenerate current strict base/point/shared receipts before final CI freeze.",
+    "Earlier local and cloud failures remain; no original budget/roster/native/frame/pixel changes."
+  ]
+}

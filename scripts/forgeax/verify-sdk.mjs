@@ -15,22 +15,41 @@ import {
   SDK_MANIFEST_VERSION,
   SDK_SOURCE_EXCLUDED_PATHS,
   SDK_SOURCE_FORMAT,
-  SDK_SOURCE_GIT_DEPENDENCIES,
   SDK_TEMPLATES,
   sdkResourceManifest,
   sdkTemplateResourceManifest,
   sha256,
+  verifySdkViewRuntime,
 } from './sdk-lib.mjs';
+import { SDK_ARCHIVE_VERIFY_GROUPS } from './sdk-pr-preflight.mjs';
+import { assertSourceDependencyInventory } from './sdk-source.mjs';
 import { sdkStage } from './sdk-stage.mjs';
 
 const execute = promisify(execFile);
-const execFileAsync = (file, args, options) =>
-  sdkStage([file, ...args].join(' ').slice(0, 240), () => execute(file, args, options));
+const execFileAsync = (file, args, { streamOutput = false, ...options } = {}) =>
+  sdkStage([file, ...args].join(' ').slice(0, 240), () => {
+    const pending = execute(file, args, options);
+    if (streamOutput) {
+      // Preserve progress before an Actions job deadline kills the parent.
+      // Keep the verifier's final JSON as the only stdout result.
+      pending.child.stdout.on('data', (chunk) => process.stderr.write(chunk));
+      pending.child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+    }
+    return pending;
+  });
 const args = process.argv.slice(2);
 const index = args.indexOf('--archive');
 if (index < 0 || args[index + 1] === undefined)
   throw new Error('Usage: pnpm sdk:verify --archive <path>');
 const archive = resolve(args[index + 1]);
+const groupIndex = args.indexOf('--group');
+const group = groupIndex < 0 ? 'all' : args[groupIndex + 1];
+if (group !== 'all' && !SDK_ARCHIVE_VERIFY_GROUPS.includes(group))
+  throw new Error(`sdk-verify-unknown-group:${group}`);
+const selected = (owner) => group === 'all' || group === owner;
+let projectEvidence = {};
+let sourceTemplateEvidence;
+
 const CLEANUP_TIMEOUT_MS = 10_000;
 const BROWSER_CLEANUP_TIMEOUT_MS = 30_000;
 // Keep SDK live-start polling aligned with the DevKit's bounded cold-project
@@ -104,6 +123,26 @@ for (const entry of manifest.packages) {
   )
     throw new Error(`sdk-package-artifact-closure: ${entry.name}`);
 }
+const tool = manifest.packages.find((entry) => entry.name === '@forgeax/view');
+if (
+  !tool ||
+  tool.role !== 'tool' ||
+  manifest.packages.filter((entry) => entry.role === 'tool').length !== 1
+)
+  throw new Error('sdk-view-tool-inventory');
+const viewSource = manifest.source.gitDependencies.find((entry) => entry.root === 'tools/view');
+if (viewSource?.commit !== manifest.viewCommit) throw new Error('sdk-view-source-identity');
+const toolInputs = JSON.parse(
+  await readFile(resolve(sdkRoot, 'toolchain/cli-runtime/package.json'), 'utf8'),
+);
+if (
+  JSON.stringify(Object.keys(toolInputs.dependencies).sort()) !==
+  JSON.stringify(['@forgeax/engine', '@forgeax/view'])
+)
+  throw new Error('sdk-tool-runtime-inputs');
+for (const version of Object.values(toolInputs.dependencies))
+  if (version !== manifest.sdkVersion) throw new Error('sdk-tool-runtime-version');
+await readFile(resolve(sdkRoot, tool.root, 'LICENSE'));
 const archivedSkillIds = (await readdir(resolve(sdkRoot, 'skills'), { withFileTypes: true }))
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
@@ -163,26 +202,7 @@ if (
   )
 )
   throw new Error('sdk-source-private-dependency');
-if (
-  JSON.stringify(manifest.source.gitDependencies.map((entry) => entry.root)) !==
-  JSON.stringify(SDK_SOURCE_GIT_DEPENDENCIES)
-)
-  throw new Error('sdk-source-git-dependencies');
-for (const dependency of manifest.source.gitDependencies) {
-  for (const path of [
-    'Cargo.toml',
-    'LICENSE.MIT',
-    'LICENSE.APACHE',
-    'wgpu/Cargo.toml',
-    'wgpu/src/lib.rs',
-    'naga/Cargo.toml',
-  ]) {
-    if (
-      !sourceArtifacts.some((entry) => entry.path === `${sourcePrefix}${dependency.root}/${path}`)
-    )
-      throw new Error(`sdk-source-git-dependency-incomplete: ${dependency.root}/${path}`);
-  }
-}
+assertSourceDependencyInventory(manifest.source, manifest.artifacts);
 
 function contained(parent, child) {
   const childPath = relative(parent, child);
@@ -358,11 +378,9 @@ delete sourceEnv.FORGEAX_SDK_ROOT;
 delete sourceEnv.npm_config_offline;
 const sourcePnpm = (args, options) =>
   execFileAsync('corepack', [sourcePackageManager, ...args], options);
-// Building the source snapshot touches only `sourceRoot`, whose archive
-// integrity is already verified, and its own package store. Start it now so
-// it overlaps the archive consumer journeys; the lowered priority lets their
-// browser frame deadlines preempt the build. The source browser smoke itself
-// still runs after them on a fresh X server.
+// Finish source preparation before consumer tests and native browser probes.
+// A rejected consumer must not retire the unpack directory beneath a live
+// source build. Source browser smoke still runs later on a fresh X server.
 const niceSourceBuild = process.platform === 'linux';
 const sourceBuildPnpm = (args) =>
   niceSourceBuild
@@ -372,11 +390,14 @@ const sourceBuildPnpm = (args) =>
         maxBuffer: 128 * 1024 * 1024,
       })
     : sourcePnpm(args, { cwd: sourceRoot, env: sourceEnv, maxBuffer: 128 * 1024 * 1024 });
-const sourceBuild = sdkStage('buildSourceSnapshot', async () => {
-  await sourceBuildPnpm(['install', '--frozen-lockfile', '--ignore-scripts']);
-  await sourceBuildPnpm(['build:engine']);
-  await sourceBuildPnpm(['build:app', 'preview']);
-});
+if (selected('source')) {
+  await sdkStage('buildSourceSnapshot', async () => {
+    await sourceBuildPnpm(['install', '--frozen-lockfile', '--ignore-scripts']);
+    await sourceBuildPnpm(['build:engine']);
+    await sourceBuildPnpm(['build:tools']);
+    await sourceBuildPnpm(['build:app', 'preview']);
+  });
+}
 const initializedSdk = await execFileAsync(
   'node',
   [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'project', 'init', '--json'],
@@ -397,569 +418,556 @@ if (
 ) {
   throw new Error('sdk-init-agent-onboarding');
 }
-const forbiddenProject = resolve(sdkRoot, 'game');
-let forbiddenResult;
-try {
-  await execFileAsync(
+if (selected('project')) {
+  const forbiddenProject = resolve(sdkRoot, 'game');
+  let forbiddenResult;
+  try {
+    await execFileAsync(
+      'node',
+      [
+        resolve(sdkRoot, 'bin', 'forgeax.mjs'),
+        'project',
+        'new',
+        '--root',
+        forbiddenProject,
+        '--template',
+        'empty',
+        '--json',
+      ],
+      { env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
+    );
+  } catch (cause) {
+    const stdout =
+      typeof cause === 'object' && cause !== null && 'stdout' in cause ? String(cause.stdout) : '';
+    try {
+      forbiddenResult = JSON.parse(stdout.trim());
+    } catch {
+      throw new Error(`sdk-project-target-guard-output: ${stdout}`);
+    }
+  }
+  const forbiddenCode = forbiddenResult?.error?.detail?.code ?? forbiddenResult?.error?.code;
+  if (forbiddenCode !== 'project-target-inside-sdk')
+    throw new Error(`sdk-project-target-guard: ${JSON.stringify(forbiddenResult)}`);
+  let forbiddenProjectExists = true;
+  try {
+    await access(forbiddenProject);
+  } catch {
+    forbiddenProjectExists = false;
+  }
+  if (forbiddenProjectExists) throw new Error('sdk-project-target-guard-mutated-sdk');
+  const createdProject = await execFileAsync(
     'node',
     [
       resolve(sdkRoot, 'bin', 'forgeax.mjs'),
       'project',
       'new',
-      '--root',
-      forbiddenProject,
+      project,
       '--template',
       'empty',
       '--json',
     ],
-    { env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
-  );
-} catch (cause) {
-  const stdout =
-    typeof cause === 'object' && cause !== null && 'stdout' in cause ? String(cause.stdout) : '';
-  try {
-    forbiddenResult = JSON.parse(stdout.trim());
-  } catch {
-    throw new Error(`sdk-project-target-guard-output: ${stdout}`);
-  }
-}
-const forbiddenCode = forbiddenResult?.error?.detail?.code ?? forbiddenResult?.error?.code;
-if (forbiddenCode !== 'project-target-inside-sdk')
-  throw new Error(`sdk-project-target-guard: ${JSON.stringify(forbiddenResult)}`);
-let forbiddenProjectExists = true;
-try {
-  await access(forbiddenProject);
-} catch {
-  forbiddenProjectExists = false;
-}
-if (forbiddenProjectExists) throw new Error('sdk-project-target-guard-mutated-sdk');
-const createdProject = await execFileAsync(
-  'node',
-  [
-    resolve(sdkRoot, 'bin', 'forgeax.mjs'),
-    'project',
-    'new',
-    project,
-    '--template',
-    'empty',
-    '--json',
-  ],
-  {
-    env: offlineEnv,
-    maxBuffer: 64 * 1024 * 1024,
-  },
-);
-const createdProjectEnvelope = JSON.parse(createdProject.stdout.trim());
-if (
-  createdProjectEnvelope.value?.onboarding?.read?.join('\n') !==
-  [
-    resolve(project, 'AGENTS.md'),
-    resolve(project, 'skills/forgeax-engine-sdk/SKILL.md'),
-    resolve(project, 'skills/forgeax-engine-sdk/references/feature-catalog.md'),
-  ].join('\n')
-) {
-  throw new Error('sdk-new-agent-onboarding');
-}
-if (createdProjectEnvelope.value?.sdkUpdate?.status !== 'skipped')
-  throw new Error('sdk-new-update-check-offline');
-await readFile(resolve(project, 'skills/forgeax-engine-sdk/references/feature-catalog.md'));
-const projectWorkspace = await readFile(resolve(project, 'pnpm-workspace.yaml'), 'utf8');
-if (!projectWorkspace.includes('trustLockfile: true'))
-  throw new Error('sdk-game-lockfile-trust-missing');
-if (!projectWorkspace.includes('verifyDepsBeforeRun: warn'))
-  throw new Error('sdk-game-run-install-policy-missing');
-if (!projectWorkspace.includes('enableGlobalVirtualStore: false'))
-  throw new Error('sdk-game-virtual-store-policy-missing');
-const projectManifestPath = resolve(project, 'forge.json');
-const projectManifest = JSON.parse(await readFile(projectManifestPath, 'utf8'));
-const inspectedPlugins = await execFileAsync(
-  'pnpm',
-  ['exec', 'forgeax', 'asset', 'plugin', 'inspect', '--json'],
-  { cwd: project, env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
-);
-const pluginDefinitions = JSON.parse(inspectedPlugins.stdout.trim()).value.assets;
-const sceneOwner = pluginDefinitions.find(({ guid }) => guid === projectManifest.roots.engine);
-const defaultSceneGuid = sceneOwner?.asset.config?.scene;
-const projectScopeId = projectManifest.id;
-const projectPackagePath = resolve(project, 'package.json');
-const projectPackage = JSON.parse(await readFile(projectPackagePath, 'utf8'));
-if (
-  typeof defaultSceneGuid !== 'string' ||
-  projectScopeId !== 'game' ||
-  projectManifest.name !== 'game' ||
-  projectPackage.name !== '@local/game'
-)
-  throw new Error('sdk-template-manifest-identity');
-if (
-  projectManifest.entry !== undefined ||
-  projectManifest.schemaVersion !== '3.0.0' ||
-  typeof projectManifest.roots?.engine !== 'string'
-) {
-  throw new Error('sdk-empty-source-layout-manifest');
-}
-const emptyScenePackage = JSON.parse(
-  await readFile(resolve(project, 'assets', 'world', 'world.scene.pack.json'), 'utf8'),
-);
-const emptySceneAsset = Array.isArray(emptyScenePackage.assets)
-  ? emptyScenePackage.assets.find(
-      (asset) => asset?.guid === defaultSceneGuid && asset?.kind === 'scene',
-    )
-  : undefined;
-const emptySceneEntities = emptyScenePackage.assets?.[0]?.payload?.entities;
-const emptySceneEntityValues =
-  emptySceneEntities !== null &&
-  typeof emptySceneEntities === 'object' &&
-  !Array.isArray(emptySceneEntities)
-    ? Object.values(emptySceneEntities)
-    : [];
-if (
-  !Array.isArray(emptyScenePackage.assets) ||
-  emptyScenePackage.assets.length !== 1 ||
-  emptySceneAsset === undefined ||
-  emptySceneAsset.refs?.length !== 0 ||
-  emptySceneEntities === null ||
-  typeof emptySceneEntities !== 'object' ||
-  Array.isArray(emptySceneEntities) ||
-  emptySceneEntityValues.length !== 0
-) {
-  throw new Error('sdk-empty-authored-scene-not-empty');
-}
-await readFile(resolve(project, 'assets', '__tests__', 'empty-project.test.ts'));
-for (const retiredPath of ['src', 'src/main.ts', 'src/__tests__']) {
-  let exists = true;
-  try {
-    await access(resolve(project, retiredPath));
-  } catch (cause) {
-    if (cause?.code === 'ENOENT') exists = false;
-    else throw cause;
-  }
-  if (exists) throw new Error(`sdk-empty-source-layout-retired: ${retiredPath}`);
-}
-projectPackage.name = '@acceptance/renamed-game';
-await writeFile(projectPackagePath, `${JSON.stringify(projectPackage, null, 2)}\n`);
-const interactiveLocalEnv = { ...offlineEnv, CI: '' };
-const renamedProjectDoctor = await execFileAsync(
-  'pnpm',
-  ['exec', 'forgeax', 'project', 'check', '--json'],
-  {
-    cwd: project,
-    env: interactiveLocalEnv,
-    maxBuffer: 64 * 1024 * 1024,
-  },
-);
-if (renamedProjectDoctor.stderr.includes('node_modules are out of sync'))
-  throw new Error('sdk-game-first-command-dependency-drift');
-const helpResult = await execFileAsync(
-  'node',
-  [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'help', 'dev'],
-  {
-    cwd: project,
-    env: interactiveLocalEnv,
-    maxBuffer: 64 * 1024 * 1024,
-  },
-);
-if (!helpResult.stdout.includes('forgeax dev') || !helpResult.stdout.includes('capture'))
-  throw new Error('sdk-dev-help-output');
-await execFileAsync('pnpm', ['exec', 'forgeax', 'project', 'skill', 'verify', '--json'], {
-  cwd: project,
-  env: offlineEnv,
-  maxBuffer: 64 * 1024 * 1024,
-});
-for (const script of ['doctor', 'test', 'build']) {
-  await execFileAsync('pnpm', ['run', script, '--json'], {
-    cwd: project,
-    env: offlineEnv,
-    maxBuffer: 128 * 1024 * 1024,
-  });
-}
-await execFileAsync('pnpm', ['run', 'typecheck', '--pretty', 'false'], {
-  cwd: project,
-  env: offlineEnv,
-  maxBuffer: 128 * 1024 * 1024,
-});
-
-const staticOutput = resolve(unpackRoot, 'static-game');
-await execFileAsync(
-  'pnpm',
-  ['run', 'build', '--base', '/games/forgeax-sdk-game/', '--out-dir', staticOutput, '--json'],
-  {
-    cwd: project,
-    env: offlineEnv,
-    maxBuffer: 128 * 1024 * 1024,
-  },
-);
-const staticManifest = JSON.parse(
-  await readFile(resolve(staticOutput, 'forgeax-dist.json'), 'utf8'),
-);
-if (
-  staticManifest.base !== '/games/forgeax-sdk-game/' ||
-  staticManifest.project?.id !== projectScopeId ||
-  !Array.isArray(staticManifest.artifacts) ||
-  !staticManifest.artifacts.some((entry) => entry.path === 'index.html') ||
-  !staticManifest.artifacts.some((entry) => entry.path === 'pack-index.json') ||
-  !staticManifest.artifacts.some((entry) => entry.path === 'shaders/manifest.json')
-) {
-  throw new Error('sdk-static-build-output-closure');
-}
-
-async function verifyGamePackage(projectRoot, output) {
-  const packageResult = await execFileAsync(
-    'pnpm',
-    ['exec', 'forgeax', 'project', 'package', '--output', output, '--json'],
     {
-      cwd: projectRoot,
       env: offlineEnv,
-      maxBuffer: 128 * 1024 * 1024,
+      maxBuffer: 64 * 1024 * 1024,
     },
   );
-  const entries = (await execFileAsync('unzip', ['-Z1', output])).stdout
-    .split(/\r?\n/)
-    .filter((entry) => entry.length > 0);
-  const documents = ['README.md', 'docs/feedback.md'];
-  for (const document of documents) {
-    if (!entries.includes(document)) throw new Error(`sdk-game-package-document: ${document}`);
-    const source = await readFile(resolve(projectRoot, document), 'utf8');
-    const archived = await execFileAsync('unzip', ['-p', output, document], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    if (archived.stdout !== source) throw new Error(`sdk-game-package-document-drift: ${document}`);
-  }
-  const envelope = JSON.parse(packageResult.stdout.trim().split(/\r?\n/).at(-1) ?? '{}');
-  if (JSON.stringify(envelope.value?.documents) !== JSON.stringify(documents))
-    throw new Error('sdk-game-package-document-report');
-  return { output, documents };
-}
-
-const packagedProject = await verifyGamePackage(project, resolve(unpackRoot, 'empty-game-web.zip'));
-
-const builtCatalog = JSON.parse(
-  await readFile(resolve(project, 'dist', 'pack-index.json'), 'utf8'),
-);
-const defaultSceneEntry = Array.isArray(builtCatalog)
-  ? builtCatalog.find((entry) => entry.guid === defaultSceneGuid)
-  : undefined;
-if (
-  defaultSceneEntry?.kind !== 'scene' ||
-  defaultSceneEntry.lifecycle !== 'current' ||
-  typeof defaultSceneEntry.packageUrl !== 'string'
-) {
-  throw new Error('sdk-scriptable-pack-build-closure');
-}
-const defaultScenePackage = JSON.parse(
-  await readFile(
-    resolve(project, 'dist', defaultSceneEntry.packageUrl.replace(/^\/+/, '')),
-    'utf8',
-  ),
-);
-if (
-  !Array.isArray(defaultScenePackage.assets) ||
-  !defaultScenePackage.assets.some(
-    (asset) => asset.guid === defaultSceneGuid && asset.kind === 'scene',
-  )
-) {
-  throw new Error('sdk-scriptable-pack-package');
-}
-const generatedHost = await readFile(resolve(project, '.forgeax', 'generated', 'main.ts'), 'utf8');
-if (!generatedHost.includes('activateExecutionRoot') || !generatedHost.includes('createPrograms')) {
-  throw new Error('sdk-plugin-root-runtime-closure');
-}
-const pluginInventory = JSON.parse(
-  await readFile(resolve(project, 'dist/plugin-program-inventory.json'), 'utf8'),
-);
-if (!pluginInventory) throw new Error('sdk-plugin-program-inventory-missing');
-
-function spawnProjectServer(command, cwd) {
-  const detached = process.platform !== 'win32';
-  const args =
-    command === 'dev' ? ['run', command, '--json'] : ['run', command, '--json', '--port', '0'];
-  return spawn('pnpm', args, {
-    cwd,
-    env: offlineEnv,
-    detached,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-}
-
-async function liveProjectUrl(value) {
-  const direct = value?.urls?.local?.[0] ?? value?.urls?.network?.[0] ?? value?.url;
-  if (typeof direct === 'string') return direct;
-  const endpoint = value?.endpoint;
-  if (typeof endpoint !== 'string') return undefined;
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${endpoint}/status`);
-      if (response.ok) {
-        const status = await response.json();
-        const url = status?.value?.url;
-        if (typeof url === 'string') return url;
-      }
-    } catch {}
-    await new Promise((accept) => setTimeout(accept, 100));
-  }
-  return undefined;
-}
-
-async function stopLiveProject(value) {
-  const endpoint = value?.endpoint;
-  if (typeof endpoint !== 'string') return;
-  try {
-    await fetch(`${endpoint}/stop`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-  } catch {}
-}
-
-async function verifyDev() {
-  const detached = process.platform !== 'win32';
-  const child = spawnProjectServer('dev', project);
-  const exited = new Promise((accept) => child.once('exit', accept));
-  let stdout = '';
-  let stderr = '';
-  let liveValue;
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
-  });
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
-  });
-  try {
-    const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
-    let envelope;
-    while (Date.now() < deadline) {
-      for (const line of stdout.split('\n')) {
-        if (!line.startsWith('{')) continue;
-        try {
-          const candidate = JSON.parse(line);
-          if (candidate.command === 'dev' || candidate.command === 'dev start')
-            envelope = candidate;
-        } catch {}
-      }
-      if (envelope !== undefined) break;
-      if (child.exitCode !== null) throw new Error(`sdk-dev-exited: ${stdout}\n${stderr}`);
-      await new Promise((accept) => setTimeout(accept, 100));
-    }
-    if (envelope?.ok !== true) throw new Error(`sdk-dev-not-ready: ${stdout}\n${stderr}`);
-    liveValue = envelope.value?.value ?? envelope.value;
-    const url = await liveProjectUrl(liveValue);
-    if (typeof url !== 'string') throw new Error(`sdk-dev-url-missing: ${stdout}\n${stderr}`);
-    const catalogUrl = new URL(
-      `/__pack/scopes/${encodeURIComponent(projectScopeId)}/1/catalog.json`,
-      url,
-    ).toString();
-    const catalogDeadline = Date.now() + 30_000;
-    let snapshot;
-    while (Date.now() < catalogDeadline) {
-      try {
-        const response = await fetch(catalogUrl);
-        if (response.ok) {
-          const candidate = await response.json();
-          if (candidate.authority === 'authoritative') {
-            snapshot = candidate;
-            break;
-          }
-        }
-      } catch {}
-      await new Promise((accept) => setTimeout(accept, 100));
-    }
-    if (
-      snapshot === undefined ||
-      !Array.isArray(snapshot.entries) ||
-      !snapshot.entries.some((entry) => entry.guid === defaultSceneGuid && entry.kind === 'scene')
-    ) {
-      throw new Error(`sdk-scriptable-pack-dev-catalog: ${catalogUrl}`);
-    }
-    return { url, catalogUrl, defaultSceneGuid };
-  } finally {
-    await stopLiveProject(liveValue);
-    if (child.exitCode === null) {
-      if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-      else child.kill('SIGTERM');
-    }
-    await exited;
-  }
-}
-
-const devEvidence = await sdkStage('verifyDev', () => verifyDev());
-
-async function verifyPreview() {
-  const detached = process.platform !== 'win32';
-  const child = spawnProjectServer('preview', project);
-  const exited = new Promise((accept) => child.once('exit', accept));
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
-  });
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
-  });
-  try {
-    const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
-    let envelope;
-    while (Date.now() < deadline) {
-      for (const line of stdout.split('\n')) {
-        if (!line.startsWith('{')) continue;
-        try {
-          const candidate = JSON.parse(line);
-          if (candidate.command === 'preview' || candidate.command === 'project preview')
-            envelope = candidate;
-        } catch {}
-      }
-      if (envelope !== undefined) break;
-      if (child.exitCode !== null) throw new Error(`sdk-preview-exited: ${stdout}\n${stderr}`);
-      await new Promise((accept) => setTimeout(accept, 100));
-    }
-    if (envelope?.ok !== true) throw new Error(`sdk-preview-not-ready: ${stdout}\n${stderr}`);
-    const previewValue = envelope.value?.value ?? envelope.value;
-    const url = previewValue?.urls?.local?.[0] ?? previewValue?.urls?.network?.[0];
-    if (typeof url !== 'string') throw new Error(`sdk-preview-url-missing: ${stdout}\n${stderr}`);
-    const response = await fetch(url);
-    const html = await response.text();
-    if (!response.ok || !html.includes('<canvas id="app"'))
-      throw new Error('sdk-preview-static-closure');
-    return url;
-  } finally {
-    if (child.exitCode === null) {
-      if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-      else child.kill('SIGTERM');
-    }
-    await exited;
-  }
-}
-
-const previewUrl = await sdkStage('verifyPreview', () => verifyPreview());
-
-async function verifySelectedTemplate() {
-  const selectedProject = resolve(unpackRoot, 'game-3d');
-  await execFileAsync(
-    'node',
-    [
-      resolve(sdkRoot, 'bin', 'forgeax.mjs'),
-      'project',
-      'new',
-      selectedProject,
-      '--template',
-      'game-3d',
-      '--json',
-    ],
-    { env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
-  );
-  const selectedManifest = JSON.parse(
-    await readFile(resolve(selectedProject, 'forge.json'), 'utf8'),
-  );
-  const selectedPackage = JSON.parse(
-    await readFile(resolve(selectedProject, 'package.json'), 'utf8'),
-  );
+  const createdProjectEnvelope = JSON.parse(createdProject.stdout.trim());
   if (
-    selectedManifest.id !== 'game-3d' ||
-    selectedManifest.name !== 'game-3d' ||
-    selectedPackage.name !== '@local/game-3d'
+    createdProjectEnvelope.value?.onboarding?.read?.join('\n') !==
+    [
+      resolve(project, 'AGENTS.md'),
+      resolve(project, 'skills/forgeax-engine-sdk/SKILL.md'),
+      resolve(project, 'skills/forgeax-engine-sdk/references/feature-catalog.md'),
+    ].join('\n')
   ) {
-    throw new Error('sdk-template-selection');
+    throw new Error('sdk-new-agent-onboarding');
   }
+  if (createdProjectEnvelope.value?.sdkUpdate?.status !== 'skipped')
+    throw new Error('sdk-new-update-check-offline');
+  await readFile(resolve(project, 'skills/forgeax-engine-sdk/references/feature-catalog.md'));
+  const projectWorkspace = await readFile(resolve(project, 'pnpm-workspace.yaml'), 'utf8');
+  if (!projectWorkspace.includes('trustLockfile: true'))
+    throw new Error('sdk-game-lockfile-trust-missing');
+  if (!projectWorkspace.includes('verifyDepsBeforeRun: warn'))
+    throw new Error('sdk-game-run-install-policy-missing');
+  if (!projectWorkspace.includes('enableGlobalVirtualStore: false'))
+    throw new Error('sdk-game-virtual-store-policy-missing');
+  const projectManifestPath = resolve(project, 'forge.json');
+  const projectManifest = JSON.parse(await readFile(projectManifestPath, 'utf8'));
+  const inspectedPlugins = await execFileAsync(
+    'pnpm',
+    ['exec', 'forgeax', 'asset', 'plugin', 'inspect', '--json'],
+    { cwd: project, env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
+  );
+  const pluginDefinitions = JSON.parse(inspectedPlugins.stdout.trim()).value.assets;
+  const sceneOwner = pluginDefinitions.find(({ guid }) => guid === projectManifest.roots.engine);
+  const defaultSceneGuid = sceneOwner?.asset.config?.scene;
+  const projectScopeId = projectManifest.id;
+  const projectPackagePath = resolve(project, 'package.json');
+  const projectPackage = JSON.parse(await readFile(projectPackagePath, 'utf8'));
+  if (
+    typeof defaultSceneGuid !== 'string' ||
+    projectScopeId !== 'game' ||
+    projectManifest.name !== 'game' ||
+    projectPackage.name !== '@local/game'
+  )
+    throw new Error('sdk-template-manifest-identity');
+  if (
+    projectManifest.entry !== undefined ||
+    projectManifest.schemaVersion !== '3.0.0' ||
+    typeof projectManifest.roots?.engine !== 'string'
+  ) {
+    throw new Error('sdk-empty-source-layout-manifest');
+  }
+  const emptyScenePackage = JSON.parse(
+    await readFile(resolve(project, 'assets', 'world', 'world.scene.pack.json'), 'utf8'),
+  );
+  const emptySceneAsset = Array.isArray(emptyScenePackage.assets)
+    ? emptyScenePackage.assets.find(
+        (asset) => asset?.guid === defaultSceneGuid && asset?.kind === 'scene',
+      )
+    : undefined;
+  const emptySceneEntities = emptyScenePackage.assets?.[0]?.payload?.entities;
+  const emptySceneEntityValues =
+    emptySceneEntities !== null &&
+    typeof emptySceneEntities === 'object' &&
+    !Array.isArray(emptySceneEntities)
+      ? Object.values(emptySceneEntities)
+      : [];
+  if (
+    !Array.isArray(emptyScenePackage.assets) ||
+    emptyScenePackage.assets.length !== 1 ||
+    emptySceneAsset === undefined ||
+    emptySceneAsset.refs?.length !== 0 ||
+    emptySceneEntities === null ||
+    typeof emptySceneEntities !== 'object' ||
+    Array.isArray(emptySceneEntities) ||
+    emptySceneEntityValues.length !== 0
+  ) {
+    throw new Error('sdk-empty-authored-scene-not-empty');
+  }
+  await readFile(resolve(project, 'assets', '__tests__', 'empty-project.test.ts'));
+  for (const retiredPath of ['src', 'src/main.ts', 'src/__tests__']) {
+    let exists = true;
+    try {
+      await access(resolve(project, retiredPath));
+    } catch (cause) {
+      if (cause?.code === 'ENOENT') exists = false;
+      else throw cause;
+    }
+    if (exists) throw new Error(`sdk-empty-source-layout-retired: ${retiredPath}`);
+  }
+  projectPackage.name = '@acceptance/renamed-game';
+  await writeFile(projectPackagePath, `${JSON.stringify(projectPackage, null, 2)}\n`);
+  const interactiveLocalEnv = { ...offlineEnv, CI: '' };
+  const renamedProjectDoctor = await execFileAsync(
+    'pnpm',
+    ['exec', 'forgeax', 'project', 'check', '--json'],
+    {
+      cwd: project,
+      env: interactiveLocalEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
+  if (renamedProjectDoctor.stderr.includes('node_modules are out of sync'))
+    throw new Error('sdk-game-first-command-dependency-drift');
+  const helpResult = await execFileAsync(
+    'node',
+    [resolve(sdkRoot, 'bin', 'forgeax.mjs'), 'help', 'dev'],
+    {
+      cwd: project,
+      env: interactiveLocalEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
+  if (!helpResult.stdout.includes('forgeax dev') || !helpResult.stdout.includes('capture'))
+    throw new Error('sdk-dev-help-output');
   await execFileAsync('pnpm', ['exec', 'forgeax', 'project', 'skill', 'verify', '--json'], {
-    cwd: selectedProject,
+    cwd: project,
     env: offlineEnv,
     maxBuffer: 64 * 1024 * 1024,
   });
   for (const script of ['doctor', 'test', 'build']) {
     await execFileAsync('pnpm', ['run', script, '--json'], {
-      cwd: selectedProject,
+      cwd: project,
       env: offlineEnv,
       maxBuffer: 128 * 1024 * 1024,
     });
   }
   await execFileAsync('pnpm', ['run', 'typecheck', '--pretty', 'false'], {
-    cwd: selectedProject,
+    cwd: project,
     env: offlineEnv,
     maxBuffer: 128 * 1024 * 1024,
   });
-  const packageEvidence = await verifyGamePackage(
-    selectedProject,
-    resolve(unpackRoot, 'game-3d-web.zip'),
-  );
-  const browser = await verifyProjectBrowser(selectedProject, selectedManifest.id);
-  return {
-    id: 'game-3d',
-    project: selectedProject,
-    commands: [
-      'project new',
-      'project skill verify',
-      'project check',
-      'project test',
-      'typecheck',
-      'project build',
-      'project package',
-      'dev start',
-    ],
-    package: packageEvidence,
-    browser,
-  };
-}
 
-async function verifyProjectBrowser(projectRoot, scopeId) {
-  const detached = process.platform !== 'win32';
-  const child = spawnProjectServer('dev', projectRoot);
-  const exited = new Promise((accept) => child.once('exit', accept));
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
-  });
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk.toString();
-  });
-  let browser;
-  let page;
-  let operationError;
-  let result;
-  let cleanupFailure;
-  let liveValue;
-  try {
-    const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
-    let envelope;
+  const staticOutput = resolve(unpackRoot, 'static-game');
+  await execFileAsync(
+    'pnpm',
+    ['run', 'build', '--base', '/games/forgeax-sdk-game/', '--out-dir', staticOutput, '--json'],
+    {
+      cwd: project,
+      env: offlineEnv,
+      maxBuffer: 128 * 1024 * 1024,
+    },
+  );
+  const staticManifest = JSON.parse(
+    await readFile(resolve(staticOutput, 'forgeax-dist.json'), 'utf8'),
+  );
+  if (
+    staticManifest.base !== '/games/forgeax-sdk-game/' ||
+    staticManifest.project?.id !== projectScopeId ||
+    !Array.isArray(staticManifest.artifacts) ||
+    !staticManifest.artifacts.some((entry) => entry.path === 'index.html') ||
+    !staticManifest.artifacts.some((entry) => entry.path === 'pack-index.json') ||
+    !staticManifest.artifacts.some((entry) => entry.path === 'shaders/manifest.json')
+  ) {
+    throw new Error('sdk-static-build-output-closure');
+  }
+
+  async function verifyGamePackage(projectRoot, output) {
+    const packageResult = await execFileAsync(
+      'pnpm',
+      ['exec', 'forgeax', 'project', 'package', '--output', output, '--json'],
+      {
+        cwd: projectRoot,
+        env: offlineEnv,
+        maxBuffer: 128 * 1024 * 1024,
+      },
+    );
+    const entries = (await execFileAsync('unzip', ['-Z1', output])).stdout
+      .split(/\r?\n/)
+      .filter((entry) => entry.length > 0);
+    const documents = ['README.md', 'docs/feedback.md'];
+    for (const document of documents) {
+      if (!entries.includes(document)) throw new Error(`sdk-game-package-document: ${document}`);
+      const source = await readFile(resolve(projectRoot, document), 'utf8');
+      const archived = await execFileAsync('unzip', ['-p', output, document], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      if (archived.stdout !== source)
+        throw new Error(`sdk-game-package-document-drift: ${document}`);
+    }
+    const envelope = JSON.parse(packageResult.stdout.trim().split(/\r?\n/).at(-1) ?? '{}');
+    if (JSON.stringify(envelope.value?.documents) !== JSON.stringify(documents))
+      throw new Error('sdk-game-package-document-report');
+    return { output, documents };
+  }
+
+  const packagedProject = await verifyGamePackage(
+    project,
+    resolve(unpackRoot, 'empty-game-web.zip'),
+  );
+
+  // Resolve the public import from the installed candidate project, rather than
+  // the verifier checkout (the package has an ESM-only public entry).
+  const catalogRead = await execFileAsync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { readFile } from 'node:fs/promises'; import { decodeCatalogWire } from '@forgeax/engine/pack'; console.log(JSON.stringify(decodeCatalogWire(JSON.parse(await readFile('dist/pack-index.json', 'utf8'))).unwrap()));",
+    ],
+    { cwd: project },
+  );
+  const builtCatalog = JSON.parse(catalogRead.stdout);
+  const defaultSceneEntry = Array.isArray(builtCatalog)
+    ? builtCatalog.find((entry) => entry.guid === defaultSceneGuid)
+    : undefined;
+  if (
+    defaultSceneEntry?.kind !== 'scene' ||
+    defaultSceneEntry.lifecycle !== 'current' ||
+    typeof defaultSceneEntry.packageUrl !== 'string'
+  ) {
+    throw new Error('sdk-scriptable-pack-build-closure');
+  }
+  const defaultScenePackage = JSON.parse(
+    await readFile(
+      resolve(project, 'dist', defaultSceneEntry.packageUrl.replace(/^\/+/, '')),
+      'utf8',
+    ),
+  );
+  if (
+    !Array.isArray(defaultScenePackage.assets) ||
+    !defaultScenePackage.assets.some(
+      (asset) => asset.guid === defaultSceneGuid && asset.kind === 'scene',
+    )
+  ) {
+    throw new Error('sdk-scriptable-pack-package');
+  }
+  const generatedHost = await readFile(
+    resolve(project, '.forgeax', 'generated', 'main.ts'),
+    'utf8',
+  );
+  if (
+    !generatedHost.includes('activateExecutionRoot') ||
+    !generatedHost.includes('createPrograms')
+  ) {
+    throw new Error('sdk-plugin-root-runtime-closure');
+  }
+  const pluginInventory = JSON.parse(
+    await readFile(resolve(project, 'dist/plugin-program-inventory.json'), 'utf8'),
+  );
+  if (!pluginInventory) throw new Error('sdk-plugin-program-inventory-missing');
+
+  function spawnProjectServer(command, cwd) {
+    const detached = process.platform !== 'win32';
+    const args =
+      command === 'dev' ? ['run', command, '--json'] : ['run', command, '--json', '--port', '0'];
+    return spawn('pnpm', args, {
+      cwd,
+      env: offlineEnv,
+      detached,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+
+  async function liveProjectUrl(value) {
+    const direct = value?.urls?.local?.[0] ?? value?.urls?.network?.[0] ?? value?.url;
+    if (typeof direct === 'string') return direct;
+    const endpoint = value?.endpoint;
+    if (typeof endpoint !== 'string') return undefined;
+    const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      for (const line of stdout.split('\n')) {
-        if (!line.startsWith('{')) continue;
-        try {
-          const candidate = JSON.parse(line);
-          if (candidate.command === 'dev' || candidate.command === 'dev start')
-            envelope = candidate;
-        } catch {}
-      }
-      if (envelope !== undefined) break;
-      if (child.exitCode !== null) throw new Error(`sdk-selected-dev-exited: ${stderr}`);
+      try {
+        const response = await fetch(`${endpoint}/status`);
+        if (response.ok) {
+          const status = await response.json();
+          const url = status?.value?.url;
+          if (typeof url === 'string') return url;
+        }
+      } catch {}
       await new Promise((accept) => setTimeout(accept, 100));
     }
-    if (envelope?.ok !== true) throw new Error(`sdk-selected-dev-not-ready: ${stdout}\n${stderr}`);
-    liveValue = envelope.value?.value ?? envelope.value;
-    const url = await liveProjectUrl(liveValue);
-    if (typeof url !== 'string')
-      throw new Error(`sdk-selected-dev-url-missing: ${stdout}\n${stderr}`);
-    await waitForProjectPackCatalog(url, scopeId);
-    const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome';
-    const chromeArgs = [
-      '--disable-features=MacAppCodeSignClone',
-      '--enable-unsafe-webgpu',
-      '--ignore-gpu-blocklist',
-    ];
-    // Hosted Linux runners have no physical display/GPU. Match the repository's
-    // proven Chrome Beta + lavapipe/Xvfb lane so the SDK template smoke checks
-    // the real WebGPU compositor instead of silently accepting a static canvas.
-    if (chromeChannel === 'chrome-beta') {
-      chromeArgs.push(
-        '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
-        '--use-vulkan=swiftshader',
-        '--use-angle=swiftshader',
-        '--enable-pointer-lock',
-        '--disable-gpu-driver-bug-workarounds',
-        '--disable-dawn-features=disallow_unsafe_apis',
-        '--autoplay-policy=no-user-gesture-required',
-      );
+    return undefined;
+  }
+
+  async function stopLiveProject(value) {
+    const endpoint = value?.endpoint;
+    if (typeof endpoint !== 'string') return;
+    try {
+      await fetch(`${endpoint}/stop`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+    } catch {}
+  }
+
+  async function verifyDev() {
+    const detached = process.platform !== 'win32';
+    const child = spawnProjectServer('dev', project);
+    const exited = new Promise((accept) => child.once('exit', accept));
+    let stdout = '';
+    let stderr = '';
+    let liveValue;
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    try {
+      const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
+      let envelope;
+      while (Date.now() < deadline) {
+        for (const line of stdout.split('\n')) {
+          if (!line.startsWith('{')) continue;
+          try {
+            const candidate = JSON.parse(line);
+            if (candidate.command === 'dev' || candidate.command === 'dev start')
+              envelope = candidate;
+          } catch {}
+        }
+        if (envelope !== undefined) break;
+        if (child.exitCode !== null) throw new Error(`sdk-dev-exited: ${stdout}\n${stderr}`);
+        await new Promise((accept) => setTimeout(accept, 100));
+      }
+      if (envelope?.ok !== true) throw new Error(`sdk-dev-not-ready: ${stdout}\n${stderr}`);
+      liveValue = envelope.value?.value ?? envelope.value;
+      const url = await liveProjectUrl(liveValue);
+      if (typeof url !== 'string') throw new Error(`sdk-dev-url-missing: ${stdout}\n${stderr}`);
+      const catalogUrl = new URL(
+        `/__pack/scopes/${encodeURIComponent(projectScopeId)}/1/catalog.json`,
+        url,
+      ).toString();
+      const catalogDeadline = Date.now() + 30_000;
+      let snapshot;
+      while (Date.now() < catalogDeadline) {
+        try {
+          const response = await fetch(catalogUrl);
+          if (response.ok) {
+            const candidate = await response.json();
+            if (candidate.authority === 'authoritative') {
+              snapshot = candidate;
+              break;
+            }
+          }
+        } catch {}
+        await new Promise((accept) => setTimeout(accept, 100));
+      }
+      if (
+        snapshot === undefined ||
+        !Array.isArray(snapshot.entries) ||
+        !snapshot.entries.some((entry) => entry.guid === defaultSceneGuid && entry.kind === 'scene')
+      ) {
+        throw new Error(`sdk-scriptable-pack-dev-catalog: ${catalogUrl}`);
+      }
+      return { url, catalogUrl, defaultSceneGuid };
+    } finally {
+      await stopLiveProject(liveValue);
+      if (child.exitCode === null) {
+        if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
+        else child.kill('SIGTERM');
+      }
+      await exited;
     }
+  }
+
+  const devEvidence = await sdkStage('verifyDev', () => verifyDev());
+
+  async function verifyPreview() {
+    const detached = process.platform !== 'win32';
+    const child = spawnProjectServer('preview', project);
+    const exited = new Promise((accept) => child.once('exit', accept));
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    try {
+      const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
+      let envelope;
+      while (Date.now() < deadline) {
+        for (const line of stdout.split('\n')) {
+          if (!line.startsWith('{')) continue;
+          try {
+            const candidate = JSON.parse(line);
+            if (candidate.command === 'preview' || candidate.command === 'project preview')
+              envelope = candidate;
+          } catch {}
+        }
+        if (envelope !== undefined) break;
+        if (child.exitCode !== null) throw new Error(`sdk-preview-exited: ${stdout}\n${stderr}`);
+        await new Promise((accept) => setTimeout(accept, 100));
+      }
+      if (envelope?.ok !== true) throw new Error(`sdk-preview-not-ready: ${stdout}\n${stderr}`);
+      const previewValue = envelope.value?.value ?? envelope.value;
+      const url = previewValue?.urls?.local?.[0] ?? previewValue?.urls?.network?.[0];
+      if (typeof url !== 'string') throw new Error(`sdk-preview-url-missing: ${stdout}\n${stderr}`);
+      const response = await fetch(url);
+      const html = await response.text();
+      if (!response.ok || !html.includes('<canvas id="app"'))
+        throw new Error('sdk-preview-static-closure');
+      return url;
+    } finally {
+      if (child.exitCode === null) {
+        if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
+        else child.kill('SIGTERM');
+      }
+      await exited;
+    }
+  }
+
+  const previewUrl = await sdkStage('verifyPreview', () => verifyPreview());
+
+  async function verifySelectedTemplate() {
+    const selectedProject = resolve(unpackRoot, 'game-3d');
+    await execFileAsync(
+      'node',
+      [
+        resolve(sdkRoot, 'bin', 'forgeax.mjs'),
+        'project',
+        'new',
+        selectedProject,
+        '--template',
+        'game-3d',
+        '--json',
+      ],
+      { env: offlineEnv, maxBuffer: 64 * 1024 * 1024 },
+    );
+    if (process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1') {
+      // Only the disposable consumer project changes; the exact SDK archive and
+      // extracted template stay immutable. Keep all three shadow cascades.
+      const scenePath = resolve(selectedProject, 'assets/scene.pack.ts');
+      const scene = await readFile(scenePath, 'utf8');
+      if (!scene.includes('mapSize: 2048,')) throw new Error('sdk-ci-shadow-fixture-changed');
+      await writeFile(scenePath, scene.replace('mapSize: 2048,', 'mapSize: 256,'));
+      console.log('[sdk] CI consumer: three 256-square shadow cascades');
+    }
+    const selectedManifest = JSON.parse(
+      await readFile(resolve(selectedProject, 'forge.json'), 'utf8'),
+    );
+    const selectedPackage = JSON.parse(
+      await readFile(resolve(selectedProject, 'package.json'), 'utf8'),
+    );
+    if (
+      selectedManifest.id !== 'game-3d' ||
+      selectedManifest.name !== 'game-3d' ||
+      selectedPackage.name !== '@local/game-3d'
+    ) {
+      throw new Error('sdk-template-selection');
+    }
+    await execFileAsync('pnpm', ['exec', 'forgeax', 'project', 'skill', 'verify', '--json'], {
+      cwd: selectedProject,
+      env: offlineEnv,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const script of ['doctor', 'test', 'build']) {
+      await execFileAsync('pnpm', ['run', script, '--json'], {
+        cwd: selectedProject,
+        env: offlineEnv,
+        maxBuffer: 128 * 1024 * 1024,
+      });
+    }
+    await execFileAsync('pnpm', ['run', 'typecheck', '--pretty', 'false'], {
+      cwd: selectedProject,
+      env: offlineEnv,
+      maxBuffer: 128 * 1024 * 1024,
+    });
+    const packageEvidence = await verifyGamePackage(
+      selectedProject,
+      resolve(unpackRoot, 'game-3d-web.zip'),
+    );
+    const browser = await verifyProjectBrowser(selectedProject, selectedManifest.id);
+    return {
+      id: 'game-3d',
+      project: selectedProject,
+      commands: [
+        'project new',
+        'project skill verify',
+        'project check',
+        'project test',
+        'typecheck',
+        'project build',
+        'project package',
+        'dev start',
+      ],
+      package: packageEvidence,
+      browser,
+    };
+  }
+
+  async function verifyProjectBrowser(projectRoot, scopeId) {
+    const detached = process.platform !== 'win32';
+    const child = spawnProjectServer('dev', projectRoot);
+    const exited = new Promise((accept) => child.once('exit', accept));
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    let browser;
+    let page;
+    let operationError;
+    let result;
+    let cleanupFailure;
+    let liveValue;
     const pageErrors = [];
     const consoleErrors = [];
     const failedResponses = [];
@@ -969,392 +977,513 @@ async function verifyProjectBrowser(projectRoot, scopeId) {
       failedResponses,
       serverOutput: () => ({ stdout: boundedTail(stdout), stderr: boundedTail(stderr) }),
     };
-    browser = await launchSelectedBrowser(chromeChannel, chromeArgs);
-    page = await openReadyProjectPage(browser, url, diagnostics, 'movement');
-    const runtime = await page.evaluate(() => {
-      const canvas = document.querySelector('canvas');
-      const frameId = Number(document.documentElement.dataset.forgeaxFrameSubmitted);
-      return {
-        canvas: { width: canvas?.width ?? 0, height: canvas?.height ?? 0 },
-        engineFrameId: Number.isSafeInteger(frameId) && frameId > 0 ? frameId : null,
-      };
-    });
-    const before = await readSelectedPlayerProjection(page);
-    // Match the real game smoke route: click the rendered canvas center so the
-    // activation cannot land on a full-screen UI mount or an unrelated overlay.
-    // A locator-relative top-left click is not a reliable gameplay gesture for
-    // the generated game-3d host, whose guide UI is mounted above the canvas.
-    const canvas = page.locator('canvas').first();
-    const canvasBox = await canvas.boundingBox();
-    if (canvasBox === null || canvasBox.width <= 0 || canvasBox.height <= 0) {
-      throw new Error(`sdk-selected-canvas-bounds-missing: ${JSON.stringify(canvasBox)}`);
-    }
-    await page.bringToFront();
-    const centerX = canvasBox.x + canvasBox.width / 2;
-    const centerY = canvasBox.y + canvasBox.height / 2;
-    await page.mouse.move(centerX, centerY);
-    await page.waitForTimeout(100);
-    await page.mouse.click(centerX, centerY);
-    let after;
-    await page.keyboard.down('KeyW');
     try {
-      // Poll from Node so the asynchronous game-owned read is awaited before
-      // deciding whether to release KeyW. A Promise-returning waitForFunction
-      // predicate can be accepted as a truthy handle before its value resolves.
-      // The game-owned position and FixedTick are the semantic witnesses: a
-      // software-GPU renderer can stop publishing new submission ids while
-      // the ECS simulation and selected player continue to advance correctly.
-      const movementDeadline = Date.now() + 120_000;
-      let lastWitness;
-      while (Date.now() < movementDeadline) {
-        await page.waitForTimeout(100);
-        const candidate = await readSelectedPlayerProjection(page);
-        lastWitness = candidate;
-        if (
-          candidate.position[2] < before.position[2] - 0.01 &&
-          candidate.fixedTick > before.fixedTick
-        ) {
-          after = candidate;
-          break;
+      const deadline = Date.now() + LIVE_DEV_STARTUP_TIMEOUT_MS;
+      let envelope;
+      while (Date.now() < deadline) {
+        for (const line of stdout.split('\n')) {
+          if (!line.startsWith('{')) continue;
+          try {
+            const candidate = JSON.parse(line);
+            if (candidate.command === 'dev' || candidate.command === 'dev start')
+              envelope = candidate;
+          } catch {}
         }
+        if (envelope !== undefined) break;
+        if (child.exitCode !== null) throw new Error(`sdk-selected-dev-exited: ${stderr}`);
+        await new Promise((accept) => setTimeout(accept, 100));
       }
-      if (after === undefined) {
-        throw new Error(
-          `sdk-selected-third-person-movement-timeout: ${JSON.stringify({ before, lastWitness })}`,
+      if (envelope?.ok !== true)
+        throw new Error(`sdk-selected-dev-not-ready: ${stdout}\n${stderr}`);
+      liveValue = envelope.value?.value ?? envelope.value;
+      const url = await sdkStage('selectedBrowser.liveUrl', () => liveProjectUrl(liveValue));
+      if (typeof url !== 'string')
+        throw new Error(`sdk-selected-dev-url-missing: ${stdout}\n${stderr}`);
+      await sdkStage('selectedBrowser.catalog', () => waitForProjectPackCatalog(url, scopeId));
+      const chromeChannel = process.env.FORGEAX_CHROME_CHANNEL ?? 'chrome';
+      const chromeArgs = [
+        '--disable-features=MacAppCodeSignClone',
+        '--enable-unsafe-webgpu',
+        '--ignore-gpu-blocklist',
+      ];
+      // Hosted Linux runners have no physical display/GPU. Match the repository's
+      // proven Chrome Beta + lavapipe/Xvfb lane so the SDK template smoke checks
+      // the real WebGPU compositor instead of silently accepting a static canvas.
+      if (process.platform === 'linux' && chromeChannel === 'chrome-beta') {
+        chromeArgs.push(
+          '--enable-features=Vulkan,UseSkiaRenderer,SharedArrayBuffer',
+          '--use-vulkan=swiftshader',
+          '--use-angle=swiftshader',
+          '--enable-pointer-lock',
+          '--disable-gpu-driver-bug-workarounds',
+          '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
+          '--autoplay-policy=no-user-gesture-required',
         );
       }
-    } finally {
-      await page.keyboard.up('KeyW');
-    }
-    const movementDelta = after.position.map((value, index) => value - before.position[index]);
-    const movementDistance = Math.hypot(...movementDelta);
-    if (
-      movementDelta[2] >= -0.01 ||
-      movementDistance < 0.01 ||
-      after.fixedTick <= before.fixedTick
-    ) {
-      throw new Error(
-        `sdk-selected-third-person-static: ${JSON.stringify({ before, after, movementDelta, movementDistance })}`,
+      browser = await sdkStage('selectedBrowser.launch', () =>
+        launchSelectedBrowser(chromeChannel, chromeArgs),
       );
-    }
-    let renderer = await page.evaluate(() => globalThis.__forgeaxGameInspection?.renderer());
-    if (renderer?.state === 'device-lost') {
-      // Hosted Chrome Beta + lavapipe can lose the external GPU instance after
-      // a valid gameplay journey. Match the source-template verifier's
-      // fresh-process viability proof before attributing that runner teardown
-      // to the archived SDK runtime.
-      await closeSelectedBrowser(browser);
-      browser = undefined;
-      browser = await launchSelectedBrowser(chromeChannel, chromeArgs);
-      page = await openReadyProjectPage(browser, url, diagnostics, 'fresh-process-recovery');
-      renderer = await page.evaluate(() => globalThis.__forgeaxGameInspection?.renderer());
-    }
-    if (renderer?.state !== 'alive' || !Number.isSafeInteger(renderer.frameId)) {
-      throw new Error(`sdk-selected-renderer-not-alive: ${JSON.stringify(renderer)}`);
-    }
-    if (pageErrors.length > 0 || consoleErrors.length > 0 || failedResponses.length > 0) {
-      throw new Error(
-        `sdk-selected-browser-errors: ${JSON.stringify({ pageErrors, consoleErrors, failedResponses })}`,
+      page = await createProjectPage(browser, 'movement');
+      await waitForProjectPage(page, url, diagnostics, 'movement');
+      const runtime = await sdkStage('selectedBrowser.runtimeProbe', () =>
+        page.evaluate(() => {
+          const canvas = document.querySelector('canvas');
+          const frameId = Number(document.documentElement.dataset.forgeaxFrameSubmitted);
+          return {
+            canvas: { width: canvas?.width ?? 0, height: canvas?.height ?? 0 },
+            engineFrameId: Number.isSafeInteger(frameId) && frameId > 0 ? frameId : null,
+          };
+        }),
       );
-    }
-    result = {
-      url,
-      runtime,
-      movement: { before, after, delta: movementDelta, distance: movementDistance },
-      renderer,
-      pageErrors: 0,
-      consoleErrors: 0,
-    };
-  } catch (cause) {
-    operationError = cause;
-  } finally {
-    const cleanupErrors = [];
-    const attemptCleanup = async (label, cleanup) => {
+      const before = await readSelectedPlayerProjection(page);
+      // Match the real game smoke route: click the rendered canvas center so the
+      // activation cannot land on a full-screen UI mount or an unrelated overlay.
+      // A locator-relative top-left click is not a reliable gameplay gesture for
+      // the generated game-3d host, whose guide UI is mounted above the canvas.
+      const canvas = page.locator('canvas').first();
+      const canvasBox = await sdkStage('selectedBrowser.canvasBounds', () => canvas.boundingBox());
+      if (canvasBox === null || canvasBox.width <= 0 || canvasBox.height <= 0) {
+        throw new Error(`sdk-selected-canvas-bounds-missing: ${JSON.stringify(canvasBox)}`);
+      }
+      const centerX = canvasBox.x + canvasBox.width / 2;
+      const centerY = canvasBox.y + canvasBox.height / 2;
+      await sdkStage('selectedBrowser.pointerMove', () => page.mouse.move(centerX, centerY));
+      await sdkStage('selectedBrowser.inputSettle', () => page.waitForTimeout(100));
+      await sdkStage('selectedBrowser.pointerClick', () => page.mouse.click(centerX, centerY));
+      let after;
+      await sdkStage('selectedBrowser.keyDown', () => page.keyboard.down('KeyW'));
       try {
-        await cleanup();
-      } catch (cause) {
-        cleanupErrors.push(new Error(`${label} cleanup failed`, { cause }));
+        // Poll from Node so the asynchronous game-owned read is awaited before
+        // deciding whether to release KeyW. A Promise-returning waitForFunction
+        // predicate can be accepted as a truthy handle before its value resolves.
+        // The game-owned position and FixedTick are the semantic witnesses: a
+        // software-GPU renderer can stop publishing new submission ids while
+        // the ECS simulation and selected player continue to advance correctly.
+        const movementDeadline = Date.now() + 120_000;
+        let lastWitness;
+        while (Date.now() < movementDeadline) {
+          await sdkStage('selectedBrowser.inputSettle', () => page.waitForTimeout(100));
+          const candidate = await readSelectedPlayerProjection(page, movementDeadline);
+          lastWitness = candidate;
+          if (
+            candidate.position[2] < before.position[2] - 0.01 &&
+            candidate.fixedTick > before.fixedTick
+          ) {
+            after = candidate;
+            break;
+          }
+        }
+        if (after === undefined) {
+          throw new Error(
+            `sdk-selected-third-person-movement-timeout: ${JSON.stringify({ before, lastWitness })}`,
+          );
+        }
+      } finally {
+        await sdkStage('selectedBrowser.keyUp', () => page.keyboard.up('KeyW'));
       }
-    };
-    // Each resource owns an independent teardown attempt. A page/context
-    // rejection must never prevent Chromium, the Vite child, or its exit
-    // receipt from being drained before the source-template phase starts.
-    await attemptCleanup('page', () => closeSelectedPage(page));
-    await attemptCleanup('browser', () => closeSelectedBrowser(browser));
-    await attemptCleanup('live daemon', () => stopLiveProject(liveValue));
-    if (child.exitCode === null) {
-      await attemptCleanup('server signal', () => {
-        if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-        else child.kill('SIGTERM');
-      });
-    }
-    await attemptCleanup('server exit', () => exited);
-    if (cleanupErrors.length > 0) {
-      cleanupFailure = new AggregateError(cleanupErrors, 'SDK browser cleanup failed');
-    }
-  }
-  if (operationError !== undefined) {
-    if (cleanupFailure !== undefined) {
-      throw new AggregateError([operationError, cleanupFailure], String(operationError), {
-        cause: operationError,
-      });
-    }
-    throw operationError;
-  }
-  if (cleanupFailure !== undefined) throw cleanupFailure;
-  return result;
-}
-
-async function waitForProjectPackCatalog(url, scopeId) {
-  const catalogUrl = new URL(`/__pack/scopes/${encodeURIComponent(scopeId)}/1/catalog.json`, url);
-  const deadline = Date.now() + 30_000;
-  let lastFailure = 'no response';
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(catalogUrl, { cache: 'no-store' });
-      if (response.ok) {
-        const catalog = await response.json();
-        if (catalog.authority === 'authoritative') return;
-        lastFailure = `catalog-authority: ${String(catalog.authority)}`;
-      } else {
-        lastFailure = `${response.status}: ${await response.text()}`;
+      const movementDelta = after.position.map((value, index) => value - before.position[index]);
+      const movementDistance = Math.hypot(...movementDelta);
+      if (
+        movementDelta[2] >= -0.01 ||
+        movementDistance < 0.01 ||
+        after.fixedTick <= before.fixedTick
+      ) {
+        throw new Error(
+          `sdk-selected-third-person-static: ${JSON.stringify({ before, after, movementDelta, movementDistance })}`,
+        );
       }
+      let renderer = await sdkStage('selectedBrowser.rendererHealth', () =>
+        page.evaluate(() => globalThis.__forgeaxGameInspection?.renderer()),
+      );
+      if (renderer?.state === 'device-lost') {
+        // Hosted Chrome Beta + lavapipe can lose the external GPU instance after
+        // a valid gameplay journey. Match the source-template verifier's
+        // fresh-process viability proof before attributing that runner teardown
+        // to the archived SDK runtime.
+        await sdkStage('selectedBrowser.recovery.closeBrowser', () =>
+          closeSelectedBrowser(browser),
+        );
+        browser = undefined;
+        browser = await sdkStage('selectedBrowser.launch', () =>
+          launchSelectedBrowser(chromeChannel, chromeArgs),
+        );
+        page = await createProjectPage(browser, 'fresh-process-recovery');
+        await waitForProjectPage(page, url, diagnostics, 'fresh-process-recovery');
+        renderer = await sdkStage('selectedBrowser.rendererHealth', () =>
+          page.evaluate(() => globalThis.__forgeaxGameInspection?.renderer()),
+        );
+      }
+      if (renderer?.state !== 'alive' || !Number.isSafeInteger(renderer.frameId)) {
+        throw new Error(`sdk-selected-renderer-not-alive: ${JSON.stringify(renderer)}`);
+      }
+      if (pageErrors.length > 0 || consoleErrors.length > 0 || failedResponses.length > 0) {
+        throw new Error(
+          `sdk-selected-browser-errors: ${JSON.stringify({ pageErrors, consoleErrors, failedResponses })}`,
+        );
+      }
+      result = {
+        url,
+        runtime,
+        movement: { before, after, delta: movementDelta, distance: movementDistance },
+        renderer,
+        pageErrors: 0,
+        consoleErrors: 0,
+      };
     } catch (cause) {
-      lastFailure = cause instanceof Error ? cause.message : String(cause);
+      const evidence = await frameTimeoutDiagnostics(page, diagnostics, 'gameplay');
+      operationError = new Error(`sdk-selected-gameplay-failed: ${JSON.stringify(evidence)}`, {
+        cause,
+      });
+    } finally {
+      const cleanupErrors = [];
+      const attemptCleanup = async (label, cleanup) => {
+        try {
+          await sdkStage(`selectedBrowser.cleanup.${label}`, () => cleanup());
+        } catch (cause) {
+          cleanupErrors.push(new Error(`${label} cleanup failed`, { cause }));
+        }
+      };
+      // Each resource owns an independent teardown attempt. A page/context
+      // rejection must never prevent Chromium, the Vite child, or its exit
+      // receipt from being drained before the source-template phase starts.
+      await attemptCleanup('page', () => closeSelectedPage(page));
+      await attemptCleanup('browser', () => closeSelectedBrowser(browser));
+      await attemptCleanup('live daemon', () => stopLiveProject(liveValue));
+      if (child.exitCode === null) {
+        await attemptCleanup('server signal', () => {
+          if (detached && child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
+          else child.kill('SIGTERM');
+        });
+      }
+      await attemptCleanup('server exit', () => exited);
+      if (cleanupErrors.length > 0) {
+        cleanupFailure = new AggregateError(cleanupErrors, 'SDK browser cleanup failed');
+      }
     }
-    await sleep(100);
+    if (operationError !== undefined) {
+      if (cleanupFailure !== undefined) {
+        throw new AggregateError([operationError, cleanupFailure], String(operationError), {
+          cause: operationError,
+        });
+      }
+      throw operationError;
+    }
+    if (cleanupFailure !== undefined) throw cleanupFailure;
+    return result;
   }
-  throw new Error(`sdk-selected-pack-catalog-not-ready: ${lastFailure}`);
-}
 
-async function closeSelectedPage(page) {
-  if (page === undefined || page.isClosed()) return;
-  await closeSelectedResource('page', () => page.close());
-}
+  async function waitForProjectPackCatalog(url, scopeId) {
+    const catalogUrl = new URL(`/__pack/scopes/${encodeURIComponent(scopeId)}/1/catalog.json`, url);
+    const deadline = Date.now() + 30_000;
+    let lastFailure = 'no response';
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(catalogUrl, { cache: 'no-store' });
+        if (response.ok) {
+          const catalog = await response.json();
+          if (catalog.authority === 'authoritative') return;
+          lastFailure = `catalog-authority: ${String(catalog.authority)}`;
+        } else {
+          lastFailure = `${response.status}: ${await response.text()}`;
+        }
+      } catch (cause) {
+        lastFailure = cause instanceof Error ? cause.message : String(cause);
+      }
+      await sleep(100);
+    }
+    throw new Error(`sdk-selected-pack-catalog-not-ready: ${lastFailure}`);
+  }
 
-async function closeSelectedResource(label, close, timeoutMs = CLEANUP_TIMEOUT_MS) {
-  const closed = await Promise.race([
-    Promise.resolve()
-      .then(close)
-      .then(() => true),
-    sleep(timeoutMs).then(() => false),
-  ]);
-  if (!closed) throw new Error(`${label} cleanup incomplete after ${timeoutMs}ms`);
-}
+  async function closeSelectedPage(page) {
+    if (page === undefined || page.isClosed()) return;
+    await closeSelectedResource('page', () => page.close());
+  }
 
-/**
- * Drain every explicitly-created context before closing Chromium. Playwright
- * normally folds this into browser.close(), but headed Chrome's GPU process
- * can outlive that promise on the hosted lavapipe runner. The explicit
- * context/page barrier prevents the next SDK verification phase from sharing
- * stale WebGPU work with the previous project.
- */
-async function closeSelectedBrowser(browser) {
-  if (browser === undefined) return;
-  const errors = [];
-  for (const context of browser.contexts()) {
+  async function closeSelectedResource(label, close, timeoutMs = CLEANUP_TIMEOUT_MS) {
+    const closed = await Promise.race([
+      Promise.resolve()
+        .then(close)
+        .then(() => true),
+      sleep(timeoutMs).then(() => false),
+    ]);
+    if (!closed) throw new Error(`${label} cleanup incomplete after ${timeoutMs}ms`);
+  }
+
+  /**
+   * Drain every explicitly-created context before closing Chromium. Playwright
+   * normally folds this into browser.close(), but headed Chrome's GPU process
+   * can outlive that promise on the hosted lavapipe runner. The explicit
+   * context/page barrier prevents the next SDK verification phase from sharing
+   * stale WebGPU work with the previous project.
+   */
+  async function closeSelectedBrowser(browser) {
+    if (browser === undefined) return;
+    const errors = [];
+    for (const context of browser.contexts()) {
+      try {
+        await closeSelectedResource('context', () => context.close());
+      } catch (cause) {
+        errors.push(cause);
+      }
+    }
     try {
-      await closeSelectedResource('context', () => context.close());
+      await closeSelectedResource('browser', () => browser.close(), BROWSER_CLEANUP_TIMEOUT_MS);
     } catch (cause) {
       errors.push(cause);
     }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'browser/context cleanup failed');
+    }
   }
-  try {
-    await closeSelectedResource('browser', () => browser.close(), BROWSER_CLEANUP_TIMEOUT_MS);
-  } catch (cause) {
-    errors.push(cause);
+
+  async function launchSelectedBrowser(channel, args) {
+    return chromium.launch({
+      headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
+      channel,
+      args,
+    });
   }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, 'browser/context cleanup failed');
+
+  const MAX_DIAGNOSTIC_ITEMS = 32;
+  const DIAGNOSTIC_TEXT_LIMIT = 4_000;
+
+  function appendDiagnostic(values, value) {
+    if (values.length < MAX_DIAGNOSTIC_ITEMS) values.push(value);
   }
-}
 
-async function launchSelectedBrowser(channel, args) {
-  return chromium.launch({
-    headless: process.env.FORGEAX_BROWSER_HEADLESS !== '0',
-    channel,
-    args,
-  });
-}
+  function boundedTail(value) {
+    return value.length <= DIAGNOSTIC_TEXT_LIMIT ? value : value.slice(-DIAGNOSTIC_TEXT_LIMIT);
+  }
 
-const MAX_DIAGNOSTIC_ITEMS = 32;
-const DIAGNOSTIC_TEXT_LIMIT = 4_000;
+  async function frameTimeoutDiagnostics(page, diagnostics, phase) {
+    let runtime;
+    try {
+      runtime = await sdkStage(
+        `selectedPage.${phase}.frameDiagnostics`,
+        () =>
+          page.evaluate(() => {
+            const fatal = document.querySelector('#forgeax-fatal');
+            const style = fatal === null ? undefined : getComputedStyle(fatal);
+            const inspection = globalThis.__forgeaxGameInspection;
+            let renderer;
+            let rendererError;
+            try {
+              renderer = inspection?.renderer?.() ?? null;
+            } catch (error) {
+              rendererError = String(error);
+            }
+            return {
+              fatal: {
+                visible:
+                  fatal !== null &&
+                  style?.display !== 'none' &&
+                  style?.visibility !== 'hidden' &&
+                  fatal.getClientRects().length > 0,
+                text: fatal?.textContent?.slice(0, 4_000) ?? null,
+              },
+              forgeaxFrameSubmitted: document.documentElement.dataset.forgeaxFrameSubmitted ?? null,
+              renderer,
+              ...(rendererError === undefined ? {} : { rendererError }),
+            };
+          }),
+        10_000,
+      );
+    } catch (error) {
+      runtime = { evaluationError: String(error) };
+    }
+    return {
+      phase,
+      pageErrors: diagnostics.pageErrors,
+      consoleErrors: diagnostics.consoleErrors,
+      failedResponses: diagnostics.failedResponses,
+      ...runtime,
+      serverOutput: diagnostics.serverOutput(),
+    };
+  }
 
-function appendDiagnostic(values, value) {
-  if (values.length < MAX_DIAGNOSTIC_ITEMS) values.push(value);
-}
+  async function createProjectPage(browser, phase) {
+    return sdkStage(`selectedPage.${phase}.newPage`, () =>
+      browser.newPage(
+        process.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1'
+          ? { viewport: { width: 320, height: 180 } }
+          : {},
+      ),
+    );
+  }
 
-function boundedTail(value) {
-  return value.length <= DIAGNOSTIC_TEXT_LIMIT ? value : value.slice(-DIAGNOSTIC_TEXT_LIMIT);
-}
-
-async function frameTimeoutDiagnostics(page, diagnostics, phase) {
-  let runtime;
-  try {
-    runtime = await page.evaluate(() => {
-      const fatal = document.querySelector('#forgeax-fatal');
-      const style = fatal === null ? undefined : getComputedStyle(fatal);
-      const inspection = globalThis.__forgeaxGameInspection;
-      let renderer;
-      let rendererError;
-      try {
-        renderer = inspection?.renderer?.() ?? null;
-      } catch (error) {
-        rendererError = String(error);
+  async function waitForProjectPage(page, url, diagnostics, phase) {
+    const { pageErrors, consoleErrors, failedResponses } = diagnostics;
+    // Worker inspections are admitted at a live frame boundary. Activate the
+    // actual page before startup and baseline reads, without synthesizing ticks.
+    await sdkStage(`selectedPage.${phase}.focus`, () => page.bringToFront());
+    page.on('pageerror', (error) => appendDiagnostic(pageErrors, error.stack ?? String(error)));
+    page.on('console', (message) => {
+      if (message.type() === 'error') appendDiagnostic(consoleErrors, message.text());
+    });
+    page.on('response', (response) => {
+      if (response.status() >= 400) {
+        appendDiagnostic(failedResponses, { status: response.status(), url: response.url() });
       }
-      return {
-        fatal: {
-          visible:
-            fatal !== null &&
-            style?.display !== 'none' &&
-            style?.visibility !== 'hidden' &&
-            fatal.getClientRects().length > 0,
-          text: fatal?.textContent?.slice(0, 4_000) ?? null,
-        },
-        forgeaxFrameSubmitted: document.documentElement.dataset.forgeaxFrameSubmitted ?? null,
-        renderer,
-        ...(rendererError === undefined ? {} : { rendererError }),
-      };
     });
-  } catch (error) {
-    runtime = { evaluationError: String(error) };
-  }
-  return {
-    phase,
-    pageErrors: diagnostics.pageErrors,
-    consoleErrors: diagnostics.consoleErrors,
-    failedResponses: diagnostics.failedResponses,
-    ...runtime,
-    serverOutput: diagnostics.serverOutput(),
-  };
-}
-
-async function openReadyProjectPage(browser, url, diagnostics, phase) {
-  const { pageErrors, consoleErrors, failedResponses } = diagnostics;
-  const page = await browser.newPage();
-  page.on('pageerror', (error) => appendDiagnostic(pageErrors, error.stack ?? String(error)));
-  page.on('console', (message) => {
-    if (message.type() === 'error') appendDiagnostic(consoleErrors, message.text());
-  });
-  page.on('response', (response) => {
-    if (response.status() >= 400) {
-      appendDiagnostic(failedResponses, { status: response.status(), url: response.url() });
+    await sdkStage(`selectedPage.${phase}.navigate`, () =>
+      page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }),
+    );
+    try {
+      await sdkStage(`selectedPage.${phase}.canvasReady`, () =>
+        page.waitForFunction(
+          () => {
+            const canvas = document.querySelector('canvas');
+            return (canvas?.width ?? 0) > 0 && (canvas?.height ?? 0) > 0;
+          },
+          undefined,
+          { timeout: 30_000, polling: 100 },
+        ),
+      );
+    } catch (cause) {
+      throw new Error(
+        `sdk-selected-browser-not-ready: ${JSON.stringify({ phase, pageErrors, consoleErrors, failedResponses })}`,
+        { cause },
+      );
     }
-  });
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  try {
-    await page.waitForFunction(
-      () => {
-        const canvas = document.querySelector('canvas');
-        return (canvas?.width ?? 0) > 0 && (canvas?.height ?? 0) > 0;
-      },
-      undefined,
-      { timeout: 30_000, polling: 100 },
-    );
-  } catch (cause) {
-    throw new Error(
-      `sdk-selected-browser-not-ready: ${JSON.stringify({ phase, pageErrors, consoleErrors, failedResponses })}`,
-      { cause },
-    );
+    try {
+      await sdkStage(`selectedPage.${phase}.firstFrame`, () =>
+        page.waitForFunction(
+          () => Number(document.documentElement.dataset.forgeaxFrameSubmitted) > 0,
+          undefined,
+          { timeout: 120_000, polling: 100 },
+        ),
+      );
+    } catch (cause) {
+      const evidence = await frameTimeoutDiagnostics(page, diagnostics, phase);
+      throw new Error(`sdk-selected-render-frame-not-submitted: ${JSON.stringify(evidence)}`, {
+        cause,
+      });
+    }
+    try {
+      // The generated host can submit its first clear frame while the selected
+      // game's async plugin is still loading its scene UI and gameplay assets.
+      // The game-3d guide mount is the template-owned readiness witness for both
+      // independently launched browser runs.
+      await sdkStage(`selectedPage.${phase}.gameReady`, () =>
+        page.waitForFunction(
+          () => (document.querySelector('#game-ui')?.childElementCount ?? 0) > 0,
+          undefined,
+          { timeout: 120_000, polling: 100 },
+        ),
+      );
+    } catch (cause) {
+      throw new Error(`sdk-selected-game-not-ready: ${phase}`, { cause });
+    }
+    try {
+      const projectionDeadline = Date.now() + 120_000;
+      while (
+        !(await sdkStage(
+          `selectedPage.${phase}.inspectionList`,
+          () =>
+            page.evaluate(
+              async () =>
+                (
+                  await globalThis.__forgeaxGameInspection?.list()
+                )?.reads.includes('game-3d.player') === true,
+            ),
+          Math.max(1, projectionDeadline - Date.now()),
+        ))
+      ) {
+        if (Date.now() >= projectionDeadline) throw new Error('game projection deadline exceeded');
+        await sleep(100);
+      }
+    } catch (cause) {
+      throw new Error(`sdk-selected-game-projection-not-ready: ${phase}`, { cause });
+    }
+    try {
+      // The first ready receipt starts the generated page's short fade. Keep the
+      // gameplay gesture behind that boundary so the startup input gate cannot
+      // intentionally discard a keydown that the smoke then expects to move the
+      // selected player.
+      await sdkStage(`selectedPage.${phase}.startupEntered`, () =>
+        page.waitForFunction(
+          () => {
+            const loading = document.querySelector('#forgeax-loading');
+            if (!(loading instanceof HTMLElement)) return true;
+            const style = getComputedStyle(loading);
+            return style.display === 'none' && loading.getAttribute('data-fading') !== 'true';
+          },
+          undefined,
+          { timeout: 120_000, polling: 50 },
+        ),
+      );
+    } catch (cause) {
+      const evidence = await frameTimeoutDiagnostics(page, diagnostics, phase);
+      throw new Error(`sdk-selected-startup-not-entered: ${JSON.stringify(evidence)}`, { cause });
+    }
   }
-  try {
-    await page.waitForFunction(
-      () => Number(document.documentElement.dataset.forgeaxFrameSubmitted) > 0,
-      undefined,
-      { timeout: 120_000, polling: 100 },
+
+  async function readSelectedPlayerProjection(page, deadline = Date.now() + 120_000) {
+    const value = await sdkStage(
+      'selectedBrowser.playerRead',
+      () => page.evaluate(() => globalThis.__forgeaxGameInspection?.read('game-3d.player')),
+      Math.max(1, deadline - Date.now()),
     );
-  } catch (cause) {
-    const evidence = await frameTimeoutDiagnostics(page, diagnostics, phase);
-    throw new Error(`sdk-selected-render-frame-not-submitted: ${JSON.stringify(evidence)}`, {
-      cause,
-    });
-  }
-  try {
-    // The generated host can submit its first clear frame while the selected
-    // game's async plugin is still loading its scene UI and gameplay assets.
-    // The game-3d guide mount is the template-owned readiness witness for both
-    // independently launched browser runs.
-    await page.waitForFunction(
-      () => (document.querySelector('#game-ui')?.childElementCount ?? 0) > 0,
-      undefined,
-      { timeout: 120_000, polling: 100 },
-    );
-  } catch (cause) {
-    throw new Error(`sdk-selected-game-not-ready: ${phase}`, { cause });
-  }
-  try {
-    const projectionDeadline = Date.now() + 120_000;
-    while (
-      !(await page.evaluate(
-        async () =>
-          (await globalThis.__forgeaxGameInspection?.list())?.reads.includes('game-3d.player') ===
-          true,
-      ))
+    const position = value?.position;
+    const fixedTick = value?.simulation?.fixedTick;
+    if (
+      !Array.isArray(position) ||
+      position.length !== 3 ||
+      !position.every(Number.isFinite) ||
+      !Number.isSafeInteger(fixedTick) ||
+      fixedTick < 0
     ) {
-      if (Date.now() >= projectionDeadline) throw new Error('game projection deadline exceeded');
-      await sleep(100);
+      throw new Error(`sdk-selected-game-projection-invalid: ${JSON.stringify(value)}`);
     }
-  } catch (cause) {
-    throw new Error(`sdk-selected-game-projection-not-ready: ${phase}`, { cause });
+    return { position, fixedTick };
   }
-  try {
-    // The first ready receipt starts the generated page's short fade. Keep the
-    // gameplay gesture behind that boundary so the startup input gate cannot
-    // intentionally discard a keydown that the smoke then expects to move the
-    // selected player.
-    await page.waitForFunction(
-      () => {
-        const loading = document.querySelector('#forgeax-loading');
-        if (!(loading instanceof HTMLElement)) return true;
-        const style = getComputedStyle(loading);
-        return style.display === 'none' && loading.getAttribute('data-fading') !== 'true';
-      },
-      undefined,
-      { timeout: 120_000, polling: 50 },
-    );
-  } catch (cause) {
-    throw new Error(`sdk-selected-startup-not-entered: ${phase}`, { cause });
-  }
-  return page;
-}
 
-async function readSelectedPlayerProjection(page) {
-  const value = await page.evaluate(() =>
-    globalThis.__forgeaxGameInspection?.read('game-3d.player'),
+  const selectedTemplateEvidence = await sdkStage('verifySelectedTemplate', () =>
+    verifySelectedTemplate(),
   );
-  const position = value?.position;
-  const fixedTick = value?.simulation?.fixedTick;
-  if (
-    !Array.isArray(position) ||
-    position.length !== 3 ||
-    !position.every(Number.isFinite) ||
-    !Number.isSafeInteger(fixedTick) ||
-    fixedTick < 0
-  ) {
-    throw new Error(`sdk-selected-game-projection-invalid: ${JSON.stringify(value)}`);
-  }
-  return { position, fixedTick };
-}
 
-const selectedTemplateEvidence = await sdkStage('verifySelectedTemplate', () =>
-  verifySelectedTemplate(),
-);
-for (const expected of manifest.artifacts.filter((entry) => entry.path.startsWith('store/'))) {
-  const actual = await artifact(sdkRoot, resolve(sdkRoot, expected.path));
-  // pnpm 11's SQLite store index is a runtime cache, not package content. A
-  // first offline install can update its journal/normalised metadata even
-  // when every package file and integrity record remains unchanged. Keep the
-  // immutable archive check for the store payloads, but do not reject that
-  // expected consumer-side index hydration.
-  if (expected.path.endsWith('/index.db')) continue;
-  if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) {
-    throw new Error(`sdk-consumer-mutated-store: ${expected.path}`);
-  }
+  projectEvidence = {
+    offlineProject: project,
+    projectTargetProtection: {
+      code: forbiddenResult.error.code,
+      sdkRoot,
+      rejectedTarget: forbiddenProject,
+    },
+    projectLayout: {
+      roots: projectManifest.roots,
+      starterTest: 'assets/__tests__/empty-project.test.ts',
+      authoredScene: 'assets/world/world.scene.pack.json',
+      retiredRootPaths: ['src', 'src/main.ts', 'src/__tests__'],
+    },
+    commands: [
+      'project new',
+      'project skill verify',
+      'project check',
+      'project test',
+      'typecheck',
+      'project build',
+      'project package',
+      'dev start',
+      'project preview',
+    ],
+    package: packagedProject,
+    scriptablePack: {
+      defaultSceneGuid,
+      build: { packageUrl: defaultSceneEntry.packageUrl },
+      dev: devEvidence,
+    },
+    selectedTemplate: selectedTemplateEvidence,
+    staticBuild: {
+      output: staticOutput,
+      base: staticManifest.base,
+      artifacts: staticManifest.artifacts.length,
+    },
+    previewUrl,
+  };
 }
 
 async function verifySourceTemplate() {
   const sourceSmokeDir = resolve(unpackRoot, 'source-template-smoke');
-  await sourceBuild;
   const sourceSmokeArgs = ['--filter', '@forgeax/preview', 'smoke:templates'];
   const sourceSmokeOptions = {
     cwd: sourceRoot,
@@ -1403,126 +1532,215 @@ async function verifySourceTemplate() {
   return JSON.parse(await readFile(resolve(sourceSmokeDir, 'report.json'), 'utf8'));
 }
 
-const sourceTemplateEvidence = await sdkStage('verifySourceTemplate', () => verifySourceTemplate());
-for (const entry of SDK_TEMPLATES) {
-  const slug = basename(entry.sourceRoot);
-  const evidence = sourceTemplateEvidence.templates?.find((template) => template.slug === slug);
-  const expectedStatus = slug === 'game-3d' ? 'passed-with-omissions' : 'passed';
-  const unexpectedConsoleErrors = evidence?.consoleErrors.filter(
-    (message) => !evidence.expectedConsoleErrors.includes(message),
-  );
+if (selected('source')) {
+  sourceTemplateEvidence = await sdkStage('verifySourceTemplate', () => verifySourceTemplate());
+  for (const entry of SDK_TEMPLATES) {
+    const slug = basename(entry.sourceRoot);
+    const evidence = sourceTemplateEvidence.templates?.find((template) => template.slug === slug);
+    const expectedStatus = slug === 'game-3d' ? 'passed-with-omissions' : 'passed';
+    const unexpectedConsoleErrors = evidence?.consoleErrors.filter(
+      (message) => !evidence.expectedConsoleErrors.includes(message),
+    );
+    if (
+      evidence === undefined ||
+      evidence.status !== expectedStatus ||
+      unexpectedConsoleErrors.length !== 0 ||
+      evidence.pageErrors.length !== 0 ||
+      evidence.badResponses.length !== 0
+    ) {
+      throw new Error(`sdk-template-browser-errors:${slug}: ${JSON.stringify(evidence)}`);
+    }
+  }
+  if (sourceTemplateEvidence.status !== 'passed-with-omissions') {
+    throw new Error(`sdk-source-template-report-status:${sourceTemplateEvidence.status}`);
+  }
+  const sourceGame3dEvidence = sourceTemplateEvidence.templates?.find(
+    (template) => template.slug === 'game-3d',
+  )?.game3d;
+  const sourceGame3dCollision = sourceGame3dEvidence?.collision;
   if (
-    evidence === undefined ||
-    evidence.status !== expectedStatus ||
-    unexpectedConsoleErrors.length !== 0 ||
-    evidence.pageErrors.length !== 0 ||
-    evidence.badResponses.length !== 0
+    sourceGame3dCollision?.status !== 'omitted' ||
+    sourceGame3dCollision.reason !== 'sdk-source-distribution' ||
+    Object.keys(sourceGame3dCollision).sort().join(',') !== 'reason,status'
   ) {
-    throw new Error(`sdk-template-browser-errors:${slug}: ${JSON.stringify(evidence)}`);
+    throw new Error(
+      `sdk-source-template-collision-contract:${JSON.stringify(sourceGame3dCollision)}`,
+    );
+  }
+  const sourceHostGpuInstanceLoss = sourceGame3dEvidence?.hostGpuInstanceLoss;
+  const expectedHostGpuKeys =
+    sourceHostGpuInstanceLoss?.status === 'omitted'
+      ? 'eventPhase,eventSequence,fixedTick,freshProcessFrameId,journeyCompleteSequence,lastHealthyFrameId,message,phase,reason,status'
+      : 'fixedTick,lastHealthyFrameId,phase,status';
+  const sourceJourneyRendererHealth = sourceGame3dEvidence?.rendererHealth;
+  const sourceFreshProcessRendererHealth = sourceGame3dEvidence?.freshProcessRendererHealth;
+  if (
+    (sourceHostGpuInstanceLoss?.status !== 'omitted' &&
+      sourceHostGpuInstanceLoss?.status !== 'not-observed') ||
+    sourceHostGpuInstanceLoss.phase !== 'journey-complete' ||
+    typeof sourceHostGpuInstanceLoss.fixedTick !== 'number' ||
+    sourceHostGpuInstanceLoss.fixedTick <= 0 ||
+    typeof sourceHostGpuInstanceLoss.lastHealthyFrameId !== 'number' ||
+    sourceHostGpuInstanceLoss.lastHealthyFrameId <= 0 ||
+    Object.keys(sourceHostGpuInstanceLoss).sort().join(',') !== expectedHostGpuKeys ||
+    (sourceHostGpuInstanceLoss.status === 'not-observed'
+      ? sourceJourneyRendererHealth?.reason !== 'alive' ||
+        sourceFreshProcessRendererHealth !== undefined
+      : sourceHostGpuInstanceLoss.reason !== 'sdk-source-host-gpu-instance-loss' ||
+        sourceHostGpuInstanceLoss.message !==
+          'A valid external Instance reference no longer exists.' ||
+        sourceHostGpuInstanceLoss.eventPhase !== 'interaction' ||
+        typeof sourceHostGpuInstanceLoss.eventSequence !== 'number' ||
+        typeof sourceHostGpuInstanceLoss.journeyCompleteSequence !== 'number' ||
+        sourceHostGpuInstanceLoss.eventSequence >=
+          sourceHostGpuInstanceLoss.journeyCompleteSequence ||
+        sourceJourneyRendererHealth?.reason !== 'device-lost' ||
+        sourceFreshProcessRendererHealth?.reason !== 'alive' ||
+        typeof sourceHostGpuInstanceLoss.freshProcessFrameId !== 'number' ||
+        sourceHostGpuInstanceLoss.freshProcessFrameId <= 0 ||
+        sourceFreshProcessRendererHealth.frame?.frameId !==
+          sourceHostGpuInstanceLoss.freshProcessFrameId)
+  ) {
+    throw new Error(
+      `sdk-source-host-gpu-instance-loss-contract:${JSON.stringify(sourceHostGpuInstanceLoss)}`,
+    );
+  }
+  await sdkStage('preparePublicSourceViewProfile', () =>
+    sourceBuildPnpm([
+      'exec',
+      'node',
+      'scripts/forgeax/prepare-shader-release-inputs.mjs',
+      '--build',
+      '--profile',
+      'base-ssao',
+      '--shared-input-manifest',
+      'shared-build-inputs/manifest.json',
+    ]),
+  );
+  await sdkStage('verifyPublicSourceViewTool', () =>
+    execFileAsync(
+      process.execPath,
+      [resolve(sourceRoot, 'tools/view-plugins/integration/verify-diagnostic-pages.mjs')],
+      {
+        streamOutput: true,
+        cwd: sourceRoot,
+        env: {
+          ...sourceEnv,
+          FORGEAX_VIEW_TOOL_PACKAGE: resolve(sourceRoot, 'tools/view'),
+          FORGEAX_VIEW_ENGINE_PACKAGE: resolve(sourceRoot, 'packages/engine'),
+          FORGEAX_VIEW_TEMPLATE_ROOT: resolve(sourceRoot, 'templates/game-3d'),
+          FORGEAX_VIEW_EVIDENCE_ROOT: resolve(dirname(archive), 'view-source'),
+        },
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ),
+  );
+}
+
+if (selected('view')) {
+  await sdkStage('verifyIndependentRun', () =>
+    execFileAsync(
+      process.execPath,
+      [resolve(import.meta.dirname, '../../packages/devkit/scripts/verify-independent-run.mjs')],
+      {
+        cwd: sdkRoot,
+        env: {
+          ...offlineEnv,
+          FORGEAX_INDEPENDENT_ENGINE_PACKAGE: resolve(
+            sdkRoot,
+            '.forgeax/cli-runtime/node_modules/@forgeax/engine',
+          ),
+        },
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ).then((result) => {
+      console.error(result.stderr);
+      return result;
+    }),
+  );
+  await sdkStage('verifyPairedViewTool', () =>
+    execFileAsync(
+      process.execPath,
+      [
+        resolve(
+          import.meta.dirname,
+          '../../tools/view-plugins/integration/verify-diagnostic-pages.mjs',
+        ),
+      ],
+      {
+        cwd: sdkRoot,
+        env: {
+          ...offlineEnv,
+          FORGEAX_VIEW_TOOL_PACKAGE: resolve(
+            sdkRoot,
+            '.forgeax/cli-runtime/node_modules/@forgeax/view',
+          ),
+          FORGEAX_VIEW_ENGINE_PACKAGE: resolve(
+            sdkRoot,
+            '.forgeax/cli-runtime/node_modules/@forgeax/engine',
+          ),
+          FORGEAX_VIEW_TEMPLATE_ROOT: resolve(sdkRoot, 'templates/game-3d'),
+          FORGEAX_VIEW_EVIDENCE_ROOT: resolve(dirname(archive), 'view-zip'),
+        },
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    ),
+  );
+  if (group === 'view')
+    await sdkStage('verifyInstalledViewRuntimeJS', () =>
+      verifySdkViewRuntime({
+        sdkRoot,
+        evidenceRoot: resolve(dirname(archive), 'view-zip'),
+        env: offlineEnv,
+        group,
+      }),
+    );
+}
+
+// Keep each language's complete live-to-saved-to-cold chain on one Runner.
+// Default release qualification retains the original complete serial order.
+if (selected('project')) {
+  await sdkStage('verifyInstalledViewRuntime', () =>
+    verifySdkViewRuntime({
+      sdkRoot,
+      evidenceRoot: resolve(dirname(archive), 'view-zip'),
+      env: offlineEnv,
+      group,
+    }),
+  );
+}
+
+for (const expected of manifest.artifacts.filter((entry) => entry.path.startsWith('store/'))) {
+  const actual = await artifact(sdkRoot, resolve(sdkRoot, expected.path));
+  // pnpm 11's SQLite store index is a runtime cache, not package content. A
+  // first offline install can update its journal/normalised metadata even
+  // when every package file and integrity record remains unchanged. Keep the
+  // immutable archive check for the store payloads, but do not reject that
+  // expected consumer-side index hydration.
+  if (expected.path.endsWith('/index.db')) continue;
+  if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) {
+    throw new Error(`sdk-consumer-mutated-store: ${expected.path}`);
   }
 }
-if (sourceTemplateEvidence.status !== 'passed-with-omissions') {
-  throw new Error(`sdk-source-template-report-status:${sourceTemplateEvidence.status}`);
-}
-const sourceGame3dEvidence = sourceTemplateEvidence.templates?.find(
-  (template) => template.slug === 'game-3d',
-)?.game3d;
-const sourceGame3dCollision = sourceGame3dEvidence?.collision;
-if (
-  sourceGame3dCollision?.status !== 'omitted' ||
-  sourceGame3dCollision.reason !== 'sdk-source-distribution' ||
-  Object.keys(sourceGame3dCollision).sort().join(',') !== 'reason,status'
-) {
-  throw new Error(
-    `sdk-source-template-collision-contract:${JSON.stringify(sourceGame3dCollision)}`,
-  );
-}
-const sourceHostGpuInstanceLoss = sourceGame3dEvidence?.hostGpuInstanceLoss;
-const expectedHostGpuKeys =
-  sourceHostGpuInstanceLoss?.status === 'omitted'
-    ? 'eventPhase,eventSequence,fixedTick,freshProcessFrameId,journeyCompleteSequence,lastHealthyFrameId,message,phase,reason,status'
-    : 'fixedTick,lastHealthyFrameId,phase,status';
-const sourceJourneyRendererHealth = sourceGame3dEvidence?.rendererHealth;
-const sourceFreshProcessRendererHealth = sourceGame3dEvidence?.freshProcessRendererHealth;
-if (
-  (sourceHostGpuInstanceLoss?.status !== 'omitted' &&
-    sourceHostGpuInstanceLoss?.status !== 'not-observed') ||
-  sourceHostGpuInstanceLoss.phase !== 'journey-complete' ||
-  typeof sourceHostGpuInstanceLoss.fixedTick !== 'number' ||
-  sourceHostGpuInstanceLoss.fixedTick <= 0 ||
-  typeof sourceHostGpuInstanceLoss.lastHealthyFrameId !== 'number' ||
-  sourceHostGpuInstanceLoss.lastHealthyFrameId <= 0 ||
-  Object.keys(sourceHostGpuInstanceLoss).sort().join(',') !== expectedHostGpuKeys ||
-  (sourceHostGpuInstanceLoss.status === 'not-observed'
-    ? sourceJourneyRendererHealth?.reason !== 'alive' ||
-      sourceFreshProcessRendererHealth !== undefined
-    : sourceHostGpuInstanceLoss.reason !== 'sdk-source-host-gpu-instance-loss' ||
-      sourceHostGpuInstanceLoss.message !==
-        'A valid external Instance reference no longer exists.' ||
-      sourceHostGpuInstanceLoss.eventPhase !== 'interaction' ||
-      typeof sourceHostGpuInstanceLoss.eventSequence !== 'number' ||
-      typeof sourceHostGpuInstanceLoss.journeyCompleteSequence !== 'number' ||
-      sourceHostGpuInstanceLoss.eventSequence >=
-        sourceHostGpuInstanceLoss.journeyCompleteSequence ||
-      sourceJourneyRendererHealth?.reason !== 'device-lost' ||
-      sourceFreshProcessRendererHealth?.reason !== 'alive' ||
-      typeof sourceHostGpuInstanceLoss.freshProcessFrameId !== 'number' ||
-      sourceHostGpuInstanceLoss.freshProcessFrameId <= 0 ||
-      sourceFreshProcessRendererHealth.frame?.frameId !==
-        sourceHostGpuInstanceLoss.freshProcessFrameId)
-) {
-  throw new Error(
-    `sdk-source-host-gpu-instance-loss-contract:${JSON.stringify(sourceHostGpuInstanceLoss)}`,
-  );
-}
+
 const result = {
   ok: true,
+  group,
   archive,
   sha256: digest,
   sdkVersion: manifest.sdkVersion,
   engineCommit: manifest.engineCommit,
+  viewCommit: manifest.viewCommit,
   capabilities: manifest.capabilities,
   source: manifest.source,
-  offlineProject: project,
-  projectTargetProtection: {
-    code: forbiddenResult.error.code,
-    sdkRoot,
-    rejectedTarget: forbiddenProject,
-  },
-  projectLayout: {
-    roots: projectManifest.roots,
-    starterTest: 'assets/__tests__/empty-project.test.ts',
-    authoredScene: 'assets/world/world.scene.pack.json',
-    retiredRootPaths: ['src', 'src/main.ts', 'src/__tests__'],
-  },
-  commands: [
-    'project new',
-    'project skill verify',
-    'project check',
-    'project test',
-    'typecheck',
-    'project build',
-    'project package',
-    'dev start',
-    'project preview',
-  ],
-  package: packagedProject,
-  scriptablePack: {
-    defaultSceneGuid,
-    build: { packageUrl: defaultSceneEntry.packageUrl },
-    dev: devEvidence,
-  },
-  selectedTemplate: selectedTemplateEvidence,
-  sourceTemplate: sourceTemplateEvidence,
-  staticBuild: {
-    output: staticOutput,
-    base: staticManifest.base,
-    artifacts: staticManifest.artifacts.length,
-  },
-  previewUrl,
+  ...projectEvidence,
+  ...(sourceTemplateEvidence === undefined ? {} : { sourceTemplate: sourceTemplateEvidence }),
 };
 await writeFile(
-  resolve(dirname(archive), 'sdk-verify-result.json'),
+  resolve(
+    dirname(archive),
+    group === 'all' ? 'sdk-verify-result.json' : `sdk-verify-${group}-result.json`,
+  ),
   `${JSON.stringify(result, null, 2)}\n`,
 );
 process.stdout.write(`${JSON.stringify(result)}\n`);

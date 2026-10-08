@@ -72,6 +72,10 @@ describe('AnimationGraph POD in the Asset union (M2 / w12)', () => {
           return 'ies-profile';
         case 'plugin':
           return 'plugin';
+        case 'terrain':
+          return 'terrain';
+        case 'navigation-mesh':
+          return 'navigation-mesh';
         default: {
           const _exhaustive: never = a;
           return _exhaustive;

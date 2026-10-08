@@ -20,7 +20,12 @@ function value<T>(result: { ok: true; value: T } | { ok: false; error: unknown }
 }
 
 /** The production World -> Renderer path, including native depth and fresh-device replay. */
-export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttachment, save: Save) {
+export async function verifyReverseZ(
+  renderer: Renderer,
+  recorder: RecorderAttachment,
+  save: Save,
+  warmupFrames = 60,
+) {
   const world = new World();
   const errors: unknown[] = [];
   const unsubscribe = renderer.subscribe((event) => {
@@ -68,9 +73,9 @@ export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttac
   };
   const readColor = async (receipt: Awaited<ReturnType<typeof draw>>) => {
     const observations = value(
-      await renderer.observe(receipt, { include: ['final-srgb', 'linear-ldr'] }),
+      await renderer.observe(receipt, { include: ['final-display', 'linear-ldr'] }),
     ).observations;
-    const live = observations?.find((item) => item.domain === 'final-srgb');
+    const live = observations?.find((item) => item.domain === 'final-display');
     if (!live) throw new Error('missing live image');
     const rgba = new Uint8Array(64 * 64 * 4);
     for (let y = 0; y < 64; y++)
@@ -89,9 +94,9 @@ export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttac
     expect(Array.from(rgba.slice((32 * 64 + 8) * 4, (32 * 64 + 8) * 4 + 3))).toEqual([0, 255, 0]);
   };
   try {
-    for (let i = 0; i < 60; i++) await draw();
+    for (let i = 0; i < warmupFrames; i++) await draw();
     if (!renderer.requestObservation) throw new Error('observation unavailable');
-    value(renderer.requestObservation(['final-srgb', 'linear-ldr']));
+    value(renderer.requestObservation(['final-display', 'linear-ldr']));
     const pending = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
     const receipt = await draw();
@@ -188,10 +193,20 @@ export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttac
     }).unwrap();
     expect(changed).toBeGreaterThan(0);
     const falsified = await replayFrame(decodeTape(invalid).unwrap());
-    expect(Array.from(falsified.color.bytes)).not.toEqual(Array.from(replay.color.bytes));
-    expect(falsified.output.bytes.every((byte, index) => index % 4 === 3 || byte === 0)).toBe(true);
     await save('falsified.rgba', falsified.output.bytes);
+    await save('falsified-color.bin', falsified.color.bytes);
     await save('clear-falsifier.rhitape', invalid);
+    expect(Array.from(falsified.color.bytes)).not.toEqual(Array.from(replay.color.bytes));
+    // The depth falsifier is exact before final-output dither. A half-LSB tie
+    // may quantize to 1 on a native driver; it must never hide surviving color.
+    expect(falsified.color.format).toBe('rgba16float');
+    const linearWords = new Uint16Array(
+      falsified.color.bytes.buffer,
+      falsified.color.bytes.byteOffset,
+      falsified.color.bytes.byteLength / 2,
+    );
+    expect(linearWords.every((word, index) => index % 4 === 3 || word === 0)).toBe(true);
+    expect(falsified.output.bytes.every((byte, index) => index % 4 === 3 || byte <= 1)).toBe(true);
     await save(
       'report.json',
       new TextEncoder().encode(
@@ -200,7 +215,7 @@ export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttac
             digest: capture.digest,
             completedFrames: 61,
             maxPixelError: 0,
-            clearFalsifier: 'all RGB pixels black',
+            clearFalsifier: 'linear HDR RGB exactly zero; final-output dither at most one LSB',
             nearDepth,
             farDepth,
             workIndex: last.workIndex,
@@ -229,7 +244,7 @@ export async function verifyReverseZ(renderer: Renderer, recorder: RecorderAttac
       for (const antialias of [2, 3, 1, 0]) {
         world.set(camera, Camera, { projection, antialias }).unwrap();
         for (let i = 0; i < 3; i++) await draw();
-        value(renderer.requestObservation(['final-srgb', 'linear-ldr']));
+        value(renderer.requestObservation(['final-display', 'linear-ldr']));
         const pixels = await readColor(await draw());
         expectSurfaces(pixels);
         await save(`projection-${projection}-aa-${antialias}.rgba`, pixels);

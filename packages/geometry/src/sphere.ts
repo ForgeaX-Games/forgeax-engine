@@ -11,6 +11,7 @@
 import type { AssetError, MeshAsset } from '@forgeax/engine-types';
 import { err, type Result } from '@forgeax/engine-types';
 import { degenerate, FACTORY_FLOATS_PER_VERTEX, meshFromInterleaved } from './box';
+import { poleGridIndices } from './pole-grid-indices';
 
 export function createSphereGeometry(
   radius: number,
@@ -24,9 +25,7 @@ export function createSphereGeometry(
   if (hs < 2) return err(degenerate(`heightSegments=${hs}; minimum 2`));
 
   const vertexCount = (ws + 1) * (hs + 1);
-  const indexCount = ws * hs * 6;
   const vertices = new Float32Array(vertexCount * FACTORY_FLOATS_PER_VERTEX);
-  const indices = new Uint32Array(indexCount);
 
   let vIdx = 0;
   for (let iy = 0; iy <= hs; iy++) {
@@ -55,28 +54,5 @@ export function createSphereGeometry(
     }
   }
 
-  let iIdx = 0;
-  const stride = ws + 1;
-  for (let iy = 0; iy < hs; iy++) {
-    for (let ix = 0; ix < ws; ix++) {
-      const a = iy * stride + ix + 1;
-      const b = iy * stride + ix;
-      const c = (iy + 1) * stride + ix;
-      const d = (iy + 1) * stride + ix + 1;
-      if (iy !== 0) {
-        indices[iIdx++] = a;
-        indices[iIdx++] = b;
-        indices[iIdx++] = d;
-      }
-      if (iy !== hs - 1) {
-        indices[iIdx++] = b;
-        indices[iIdx++] = c;
-        indices[iIdx++] = d;
-      }
-    }
-  }
-
-  // trim unused tail (pole rows contribute fewer triangles than the prealloc estimate)
-  const trimmed = indices.slice(0, iIdx);
-  return meshFromInterleaved(vertices, trimmed);
+  return meshFromInterleaved(vertices, poleGridIndices(ws, hs + 1));
 }

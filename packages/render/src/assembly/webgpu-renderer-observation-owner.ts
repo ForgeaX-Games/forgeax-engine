@@ -1,14 +1,18 @@
 import type { Buffer } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-rhi';
 import { type RenderError, RendererContractFailureError } from '../errors/render';
-import type { FrameReceipt, RenderResult } from '../render-contract';
-import type { TypedFrameObservationCapture } from '../typed-render-graph-primitives';
+import type {
+  FrameReceipt,
+  RenderPipelineObservationCapture,
+  RenderPipelineObservationCaptureOwner,
+  RenderResult,
+} from '../render-contract';
 import { disposeObservationCaptureSet } from './webgpu-renderer-observation';
 
 export type ObservationCaptureRead = () => Promise<
   RenderResult<
     readonly {
-      readonly capture: TypedFrameObservationCapture;
+      readonly capture: RenderPipelineObservationCapture;
       readonly bytes: Uint8Array;
     }[],
     RenderError
@@ -16,11 +20,7 @@ export type ObservationCaptureRead = () => Promise<
 >;
 
 export interface RendererObservationCaptureOwner {
-  readonly observationCaptureOwner: {
-    register(capture: TypedFrameObservationCapture): void;
-    consume(frameNumber: number): readonly TypedFrameObservationCapture[];
-    drain(): readonly TypedFrameObservationCapture[];
-  };
+  readonly observationCaptureOwner: RenderPipelineObservationCaptureOwner;
   readonly stats: {
     allocationCount: number;
     liveCount: number;
@@ -31,18 +31,21 @@ export interface RendererObservationCaptureOwner {
   };
   expectedGraphGeneration: number | undefined;
   readonly receiptObservationCaptures: Map<FrameReceipt, ObservationCaptureRead>;
-  readonly receiptObservationBuffers: Map<FrameReceipt, readonly TypedFrameObservationCapture[]>;
+  readonly receiptObservationBuffers: Map<
+    FrameReceipt,
+    readonly RenderPipelineObservationCapture[]
+  >;
   readonly destroyedObservationBuffers: WeakSet<Buffer>;
   readonly observationBufferCleanupFailures: WeakMap<Buffer, RendererContractFailureError>;
-  readonly failedObservationCaptures: Map<Buffer, TypedFrameObservationCapture>;
+  readonly failedObservationCaptures: Map<Buffer, RenderPipelineObservationCapture>;
   readonly disposeObservationCaptures: (
-    captures: readonly TypedFrameObservationCapture[],
+    captures: readonly RenderPipelineObservationCapture[],
   ) => RendererContractFailureError | undefined;
   readonly disposeOwnedObservationCaptures: (
-    captures: readonly TypedFrameObservationCapture[],
+    captures: readonly RenderPipelineObservationCapture[],
   ) => RendererContractFailureError | undefined;
   readonly readObservationCapture: (
-    capture: TypedFrameObservationCapture,
+    capture: RenderPipelineObservationCapture,
   ) => Promise<RenderResult<Uint8Array, RenderError>>;
   readonly disposeReceiptObservationCaptures: () => RendererContractFailureError | undefined;
 }
@@ -58,9 +61,9 @@ export function createRendererObservationCaptureOwner(
     readbackCount: 0,
     liveByteLength: 0,
   };
-  const capturesByFrame = new Map<number, TypedFrameObservationCapture[]>();
+  const capturesByFrame = new Map<number, RenderPipelineObservationCapture[]>();
   const observationCaptureOwner = {
-    register(capture: TypedFrameObservationCapture): void {
+    register(capture: RenderPipelineObservationCapture): void {
       const captures = capturesByFrame.get(capture.frameNumber) ?? [];
       captures.push(capture);
       capturesByFrame.set(capture.frameNumber, captures);
@@ -69,12 +72,12 @@ export function createRendererObservationCaptureOwner(
       stats.peakLiveCount = Math.max(stats.peakLiveCount, stats.liveCount);
       stats.liveByteLength += capture.bytesPerRow * capture.height;
     },
-    consume(frameNumber: number): readonly TypedFrameObservationCapture[] {
+    consume(frameNumber: number): readonly RenderPipelineObservationCapture[] {
       const captures = capturesByFrame.get(frameNumber) ?? [];
       capturesByFrame.delete(frameNumber);
       return Object.freeze(captures);
     },
-    drain(): readonly TypedFrameObservationCapture[] {
+    drain(): readonly RenderPipelineObservationCapture[] {
       const captures = [...capturesByFrame.values()].flat();
       capturesByFrame.clear();
       return Object.freeze(captures);
@@ -82,9 +85,9 @@ export function createRendererObservationCaptureOwner(
   };
   const destroyedObservationBuffers = new WeakSet<Buffer>();
   const observationBufferCleanupFailures = new WeakMap<Buffer, RendererContractFailureError>();
-  const failedObservationCaptures = new Map<Buffer, TypedFrameObservationCapture>();
+  const failedObservationCaptures = new Map<Buffer, RenderPipelineObservationCapture>();
   const disposeObservationCaptures = (
-    captures: readonly TypedFrameObservationCapture[],
+    captures: readonly RenderPipelineObservationCapture[],
   ): RendererContractFailureError | undefined => {
     const wasDestroyed = new Set(
       captures
@@ -109,7 +112,7 @@ export function createRendererObservationCaptureOwner(
     return result;
   };
   const disposeOwnedObservationCaptures = (
-    captures: readonly TypedFrameObservationCapture[],
+    captures: readonly RenderPipelineObservationCapture[],
   ): RendererContractFailureError | undefined => {
     const failure = disposeObservationCaptures(captures);
     if (failure !== undefined) {
@@ -122,7 +125,7 @@ export function createRendererObservationCaptureOwner(
     return failure;
   };
   const readObservationCapture = async (
-    capture: TypedFrameObservationCapture,
+    capture: RenderPipelineObservationCapture,
   ): Promise<RenderResult<Uint8Array, RenderError>> => {
     try {
       if (typeof capture.buffer.mapAsync !== 'function') {
@@ -181,7 +184,7 @@ export function createRendererObservationCaptureOwner(
   const receiptObservationCaptures = new Map<FrameReceipt, ObservationCaptureRead>();
   const receiptObservationBuffers = new Map<
     FrameReceipt,
-    readonly TypedFrameObservationCapture[]
+    readonly RenderPipelineObservationCapture[]
   >();
   const owner: RendererObservationCaptureOwner = {
     observationCaptureOwner,

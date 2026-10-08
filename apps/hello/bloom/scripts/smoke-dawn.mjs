@@ -75,7 +75,7 @@ console.error = (...args) => {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   originalConsoleError(`[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
@@ -732,7 +732,8 @@ if (sharedDevice) {
   mockCanvas.height = RESIZE_H;
 }
 console.log(`[smoke] resize ${WIDTH}x${HEIGHT} -> ${RESIZE_W}x${RESIZE_H}`);
-const RESIZE_FRAMES = 60;
+const RESIZE_FRAMES =
+  process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1' && !CAPTURE_GPU_TIMINGS ? 8 : 60;
 const resizeFrames = await driveFrames(RESIZE_FRAMES);
 totalFrames += resizeFrames;
 await captureStage('resize', RESIZE_W, RESIZE_H, { resizeFrames });
@@ -883,7 +884,9 @@ const timingCompleteness = {
 const timingComplete = stableTimingObservations.length >= SMOKE_MIN_FRAMES && timingErrors.length === 0 && timingPassShapeFailures.length === 0 && timingValuesFinite && timingCompleteness.passSamplesComplete && timingCompleteness.resourcesStable;
 const performanceEvidence = CAPTURE_GPU_TIMINGS
   ? {
-      schemaVersion: 'hello-bloom-performance-dawn/1',
+      schemaVersion: 'hello-bloom-performance-dawn/2',
+      measurement: { status: timingComplete ? 'pass' : 'fail', scope: 'timing completeness and resource stability' },
+      budget: { status: 'not-evaluated', reason: 'this carrier declares no elapsed-time budget or physical-adapter admission' },
       sourceRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim(),
       source: {
         path: 'apps/hello/bloom/scripts/smoke-dawn.mjs',
@@ -912,7 +915,7 @@ const performanceEvidence = CAPTURE_GPU_TIMINGS
           median: nearestRank(bloomFrameTimingSamples, 0.5),
           p95: nearestRank(bloomFrameTimingSamples, 0.95),
           samples: bloomFrameTimingSamples.length,
-          definition: 'sum the ten Bloom pass durations per frame, then compute the percentile over those frame sums',
+          definition: 'diagnostic sum of ten Bloom pass intervals, including repeated coverage; never exclusive cost or frame latency',
         },
       },
       bloomPasses: Object.fromEntries(EXPECTED_BLOOM_TIMING_PASSES.map((passName) => {
@@ -945,10 +948,6 @@ const performanceEvidence = CAPTURE_GPU_TIMINGS
       },
       errors: timingErrors,
       raw: timingObservations,
-      verdict:
-        timingComplete
-          ? 'pass'
-          : 'fail',
     }
   : undefined;
 let timingFailure;
@@ -957,7 +956,7 @@ if (performanceEvidence !== undefined) {
   mkdirSync(resolve(here, '..', 'evidence'), { recursive: true });
   writeFileSync(performancePath, `${JSON.stringify(performanceEvidence, null, 2)}\n`);
   console.log(`[smoke] performance evidence=${performancePath}`);
-  if (performanceEvidence.verdict !== 'pass') {
+  if (performanceEvidence.measurement.status !== 'pass') {
     timingFailure = `(k) requested GPU timing capture was incomplete: ${JSON.stringify({ status: performanceEvidence.status, observed: performanceEvidence.observedStableFrames, completeness: performanceEvidence.completeness, errors: performanceEvidence.errors.slice(0, 3) })}`;
   }
 }
@@ -1063,7 +1062,7 @@ writeFileSync(
         roster: intensityZeroRoster,
         bloom: intensityZeroInspection,
       },
-      performance: performanceEvidence === undefined ? { status: 'not-requested' } : { status: performanceEvidence.status, observedStableFrames: performanceEvidence.observedStableFrames },
+      performance: performanceEvidence === undefined ? { status: 'not-requested' } : { status: performanceEvidence.status, measurement: performanceEvidence.measurement, budget: performanceEvidence.budget, observedStableFrames: performanceEvidence.observedStableFrames },
       stages: evidenceStages,
       structuredErrors: onErrorEvents,
       verdict: failures.length === 0 ? 'pass' : 'fail',

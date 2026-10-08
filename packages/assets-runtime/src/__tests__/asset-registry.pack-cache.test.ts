@@ -93,4 +93,70 @@ describe('asset registry cache cleanup', () => {
     release?.();
     await loading;
   });
+
+  it('re-reads the pack-index after a no-row import instead of adopting an in-flight pre-import fetch', async () => {
+    let releaseImport: ((value: { ok: true }) => void) | undefined;
+    let importStarted: (() => void) | undefined;
+    const importCalled = new Promise<void>((resolve) => {
+      importStarted = resolve;
+    });
+    const registry = new AssetRegistry({} as never, {
+      fetchPack: () => {
+        importStarted?.();
+        return new Promise((resolve) => {
+          releaseImport = resolve;
+        });
+      },
+    });
+    registry.loaders.register({
+      kind: 'host-blob',
+      load: (payload) => ({ kind: 'host-blob', ...payload }),
+    });
+    registry.configurePackIndex('/pack-index.json');
+    const imported = [
+      { guid: GUID, packageUrl: '/asset.pack.json', kind: 'host-blob', sourcePath: 'asset' },
+    ];
+    let releaseStaleIndex: (() => void) | undefined;
+    let indexReads = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url.endsWith('pack-index.json')) {
+          indexReads += 1;
+          const read = indexReads;
+          if (read === 2) {
+            await new Promise<void>((resolve) => {
+              releaseStaleIndex = resolve;
+            });
+          }
+          return new Response(JSON.stringify(read <= 2 ? [] : imported));
+        }
+        return new Response(
+          JSON.stringify({
+            schemaVersion: '2.0.0',
+            kind: 'internal-text-package',
+            assets: [
+              { guid: GUID, kind: 'host-blob', payload: { value: 1 }, refs: [], artifacts: {} },
+            ],
+          }),
+        );
+      }),
+    );
+
+    const loading = registry.loadByGuid(registry.parseGuid(GUID));
+    await importCalled;
+    // A pre-import catalog read is in flight when the import completes.
+    const refreshing = registry.refreshCatalog();
+    releaseImport?.({ ok: true });
+    // Drain microtasks so the no-row fallback observes the still-pending read.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(indexReads).toBe(2);
+    releaseStaleIndex?.();
+
+    const result = await loading;
+    await refreshing;
+    expect(result.ok ? 'ok' : result.error.code).toBe('ok');
+    expect(indexReads).toBe(3);
+    expect(registry.listCatalog().some((entry) => entry.guid === GUID)).toBe(true);
+  });
 });

@@ -10,6 +10,7 @@ import type {
   Texture,
   TextureFormat,
   TextureView,
+  Tlas,
 } from '@forgeax/engine-rhi';
 import type { RenderGraphError, Result } from './errors.js';
 import type { ColorValueDomain } from './pipeline/color-value-domain.js';
@@ -17,6 +18,7 @@ import type { ColorValueDomain } from './pipeline/color-value-domain.js';
 declare const graphTextureBrand: unique symbol;
 declare const graphTextureViewBrand: unique symbol;
 declare const graphBufferBrand: unique symbol;
+declare const graphAccelerationStructureBrand: unique symbol;
 
 export interface GraphTexture {
   readonly [graphTextureBrand]: true;
@@ -30,10 +32,18 @@ export interface GraphBuffer {
   readonly [graphBufferBrand]: true;
 }
 
-export type GraphResource = GraphTexture | GraphTextureView | GraphBuffer;
+/** A host-owned top-level acceleration structure; import-only, never graph-allocated. */
+export interface GraphAccelerationStructure {
+  readonly [graphAccelerationStructureBrand]: true;
+}
+
+export type GraphResource =
+  | GraphTexture
+  | GraphTextureView
+  | GraphBuffer
+  | GraphAccelerationStructure;
 export type GraphResourceOrigin = 'created' | 'imported';
-export type GraphResourceKind = 'texture' | 'buffer';
-export type GraphPassKind = 'raster' | 'compute' | 'copy';
+export type GraphResourceKind = 'texture' | 'buffer' | 'acceleration-structure';
 
 export type GraphExtent =
   | 'surface'
@@ -83,6 +93,19 @@ export interface ImportedBufferDescriptor extends GraphBufferDescriptor {
   readonly usage: number;
 }
 
+export interface ImportedAccelerationStructureDescriptor {
+  /** The TLAS capacity, retained in compiled graph facts. */
+  readonly maxInstances: number;
+}
+
+/**
+ * `build` encodes BLAS/TLAS builds on the frame encoder (copy passes only);
+ * `read` binds the TLAS to a Ray Query shader. Both require `caps.rayQuery`.
+ */
+export type GraphAccelerationStructureAccess =
+  | 'acceleration-structure-build'
+  | 'acceleration-structure-read';
+
 export type GraphBufferAccess =
   | 'uniform-read'
   | 'storage-read'
@@ -110,12 +133,19 @@ export type GraphTextureAccess =
 
 export type GraphAccess =
   | { readonly resource: GraphBuffer; readonly usage: GraphBufferAccess }
-  | { readonly resource: GraphTextureView; readonly usage: GraphTextureAccess };
+  | { readonly resource: GraphTextureView; readonly usage: GraphTextureAccess }
+  | {
+      readonly resource: GraphAccelerationStructure;
+      readonly usage: GraphAccelerationStructureAccess;
+    };
+
+export type GraphAccessUsage = GraphAccess['usage'];
 
 export interface GraphResourceResolver {
   buffer(resource: GraphBuffer): Result<Buffer, RenderGraphError>;
   texture(resource: GraphTexture): Result<Texture, RenderGraphError>;
   textureView(resource: GraphTextureView): Result<TextureView, RenderGraphError>;
+  accelerationStructure(resource: GraphAccelerationStructure): Result<Tlas, RenderGraphError>;
 }
 
 export interface RasterColorAttachment<FrameCtx> {
@@ -181,9 +211,11 @@ export type GraphPass<FrameCtx> =
   | { readonly kind: 'compute'; readonly descriptor: ComputeGraphPass<FrameCtx> }
   | { readonly kind: 'copy'; readonly descriptor: CopyGraphPass<FrameCtx> };
 
+export type GraphPassKind = GraphPass<unknown>['kind'];
+
 export interface GraphAccessInfo {
   readonly resource: string;
-  readonly usage: GraphBufferAccess | GraphTextureAccess;
+  readonly usage: GraphAccessUsage;
 }
 
 export type CompiledResourceByteSizeUnknownReason =
@@ -209,6 +241,10 @@ export type CompiledResourceDescriptor =
   | {
       readonly kind: 'buffer';
       readonly size: number;
+    }
+  | {
+      readonly kind: 'acceleration-structure';
+      readonly maxInstances: number;
     };
 
 export interface CompiledRenderGraphInfo {

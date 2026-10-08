@@ -32,9 +32,11 @@ describe('Standard reflection probe sampling contract', () => {
       'var reflectionFallback = environment.specular * (vec3<f32>(1.0) - coatF) * ao;',
     );
     expect(lightingSource).toContain('kD * irradiance * albedo * diffuseScale');
+    // The lit tail carries the fallback; every forward entry copies it out.
     expect(standardSource).toContain(
-      'output.reflectionFallback = vec4<f32>(reflectionFallback, standardSsrCoverage());',
+      'lit.reflectionFallback = vec4<f32>(reflectionFallback, standardSsrCoverage());',
     );
+    expect(standardSource).toContain('output.reflectionFallback = lit.reflectionFallback;');
     expect(standardSource).not.toContain('output.reflectionFallback = vec4<f32>(ambient, 1.0);');
   });
 

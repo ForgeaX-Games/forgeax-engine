@@ -22,6 +22,7 @@ export async function prepareBrowserPackProgramScope(workerUrl: string): Promise
   const scope = new URL('./', script).href;
   return new Promise<string>((resolve, reject) => {
     let finished = false;
+    let stage = 'registration lookup';
     const stop = () => {
       finished = true;
       clearTimeout(timeout);
@@ -38,7 +39,7 @@ export async function prepareBrowserPackProgramScope(workerUrl: string): Promise
       resolve(scope);
     };
     const timeout = setTimeout(
-      () => failed(new Error('Pack service worker preparation timed out')),
+      () => failed(new Error(`Pack service worker preparation timed out during ${stage}`)),
       10000,
     );
     void (async () => {
@@ -48,8 +49,10 @@ export async function prepareBrowserPackProgramScope(workerUrl: string): Promise
         throw new TypeError(
           'Host must integrate Pack program delivery into its existing service worker',
         );
+      stage = 'registration';
       await navigator.serviceWorker.register(script.href, { scope, type: 'module' });
       if (finished) return;
+      stage = 'page control';
       navigator.serviceWorker.addEventListener('controllerchange', changed);
       changed();
     })().catch(failed);

@@ -139,7 +139,7 @@ axiom declaration; this package does not overstate the slimming it delivers).
 | `VIDEO_SOURCE_PROVIDER_KEY` | const | World Resource key for the host bridge |
 | `VideoSourceProvider` | interface | `getSource(entity, clip)` returns an `HTMLVideoElement` or decoded `VideoFrame`; the provider retains the source lifetime |
 | `videoLoader` | const | `Loader<VideoAsset>`; wired by assets-runtime defaults |
-| `probeVideoHighPerfUpload(device)` | function | AC-09 capability probe; accepts a structural device shape with `caps.backendKind` and optional `importExternalTexture` |
+| `probeVideoHighPerfUpload(device)` | function | Zero-copy probe; reads only `caps.externalTexture` (RHI owns the media-realm and `importExternalTexture` detection) |
 
 `videoLoader` accepts a non-empty browser-resolvable URL descriptor without
 normalizing it: root-relative (`/cutscene.webm`), path-relative
@@ -148,6 +148,12 @@ The policy rejects whitespace, C0/DEL control characters, protocol-relative
 URLs, non-string values, empty values, and every other URL scheme. Relative
 values are checked with a sentinel `https:` origin only for browser URL
 grammar; that origin is never published or fetched.
+
+A `VideoPlayer` frame bound to a material parameter declared `texture_external`
+is imported zero-copy every frame when the probe is true; ordinary 2D slots and
+devices with `caps.externalTexture === false` copy the frame instead. Arbitrary
+caller video or GPU textures use the Renderer's `importTexture` external-source
+entry (`packages/render/README.md` §External textures), not this component.
 
 ### Error codes
 
@@ -163,3 +169,5 @@ a component, not an error carrier.
 - tile-bit codec -- `src/tile-bits.ts`
 - video component / host bridge / loader / probe -- `src/video-player.ts`,
   `src/video-source-provider.ts`, `src/video-loader.ts`, `src/video-player-system.ts`
+
+Glyph mesh attributes contain the actual uploaded positions, normals, UVs and tangents. The separate `MeshAsset.aabb` retains the conservative cube for rotated text. Initial bake and dirty text updates use `buildGlyphMeshAsset` so picking and GPU upload observe the same geometry.

@@ -24,9 +24,25 @@ export async function shaderCheckCommand(
   try {
     process.chdir(facts.value.root);
     const config = await createViteConfig(facts.value, 'build');
+    // The project build compiles only reachable shaders; the named file joins
+    // as an extra entry so an unreferenced module still reaches the compiler.
+    const input = config.build?.rollupOptions?.input;
     await viteBuild({
       ...config,
-      build: { ...config.build, outDir: temporary, emptyOutDir: true, write: true },
+      build: {
+        ...config.build,
+        outDir: temporary,
+        emptyOutDir: true,
+        write: true,
+        ...(target === undefined || typeof input !== 'object' || Array.isArray(input)
+          ? {}
+          : {
+              rollupOptions: {
+                ...config.build?.rollupOptions,
+                input: { ...input, 'shader-check': target },
+              },
+            }),
+      },
     });
     return { ok: true, value: { root: facts.value.root, path: target ?? null } };
   } catch (cause) {

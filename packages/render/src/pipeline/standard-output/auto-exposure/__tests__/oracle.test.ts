@@ -4,28 +4,10 @@ import {
   autoExposureTarget,
   bradfordAdaptD65,
   centerWeight,
-  ciede2000,
-  histogramPercentile,
-  linearRgbToLab,
-  luminanceHistogram,
   weightedLuminanceHistogram,
 } from '../oracle';
 
 describe('auto-exposure and color oracle', () => {
-  it('clips finite luminance into deterministic logarithmic histogram bins', () => {
-    const histogram = luminanceHistogram(
-      [
-        [0, 0, 0, 0],
-        [0.18, 0.18, 0.18, 1],
-        [4, 4, 4, 0.1],
-        [Number.NaN, 1, 1, 1],
-      ],
-      256,
-    );
-    expect(histogram.reduce((sum, value) => sum + value, 0)).toBe(2);
-    expect(histogramPercentile(histogram, 0.5)).toBeGreaterThan(0);
-  });
-
   it('uses time-based adaptation independent of frame rate', () => {
     const thirtyHz = Array.from({ length: 30 }, () => 1 / 30).reduce(
       (value, dt) => adaptExposure(value, 2, dt, 3, 1),
@@ -99,10 +81,5 @@ describe('auto-exposure and color oracle', () => {
 
   it('keeps D65 Bradford adaptation identity and alpha outside color math', () => {
     expect(bradfordAdaptD65([0.25, 0.5, 0.75], 6504)).toEqual([0.25, 0.5, 0.75]);
-  });
-
-  it('matches the Lab/CIEDE2000 identity oracle', () => {
-    const lab = linearRgbToLab([0.18, 0.18, 0.18]);
-    expect(ciede2000(lab, lab)).toBeCloseTo(0, 10);
   });
 });

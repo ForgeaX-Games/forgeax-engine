@@ -67,3 +67,5 @@ The domain files are deliberately separate so each subject can reject its own
 fallback and binding substitutions. They share only the lexical host helpers;
 they do not create a second registry, executor, World, Renderer, or authoring
 session.
+
+Resource domain execution consumes the mechanisms from one PreviewHost session. Material and Mesh read readiness from that session's Renderer, as Texture and VFX do; callers do not supply a second readiness projection. All four subject kinds share GUID loading and owner-failure projection before their own inspection and render oracle.

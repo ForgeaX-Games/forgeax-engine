@@ -392,7 +392,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         const sample = sampleForAction({ downKeys: [' '] });
         // prev has 'jump' already pressed
         const prev: ActionState[] = [
-          { action: 'jump', pressed: true, justPressed: true, justReleased: false, strength: 1.0, raw: 1.0 },
+          { deadzone: 0.2,  action: 'jump', pressed: true, justPressed: true, justReleased: false, strength: 1.0, raw: 1.0 },
         ];
         const states = deriveActionStates(sample, map, prev);
         expect(pressedOf(states, 'jump')).toBe(true);
@@ -406,7 +406,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         const sample = sampleForAction({ downKeys: [] });
         // prev has 'jump' pressed
         const prev: ActionState[] = [
-          { action: 'jump', pressed: true, justPressed: false, justReleased: false, strength: 1.0, raw: 1.0 },
+          { deadzone: 0.2,  action: 'jump', pressed: true, justPressed: false, justReleased: false, strength: 1.0, raw: 1.0 },
         ];
         const states = deriveActionStates(sample, map, prev);
         expect(pressedOf(states, 'jump')).toBe(false);
@@ -420,7 +420,7 @@ type __MergedKeep = ActionConfig | ActionState | BindState | Capabilities | Fake
         const sample = sampleForAction({ downKeys: [] });
         // prev was already released (pressed=false)
         const prev: ActionState[] = [
-          { action: 'jump', pressed: false, justPressed: false, justReleased: true, strength: 0, raw: 0 },
+          { deadzone: 0.2,  action: 'jump', pressed: false, justPressed: false, justReleased: true, strength: 0, raw: 0 },
         ];
         const states = deriveActionStates(sample, map, prev);
         expect(justReleasedOf(states, 'jump')).toBe(false);

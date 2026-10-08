@@ -6,14 +6,14 @@ async function readShader(name: string): Promise<string> {
 }
 
 describe('DirectLightSlot WGSL ABI', () => {
-  it('declares the canonical five-row 80-byte slot', async () => {
+  it('declares the canonical six-row 96-byte slot', async () => {
     const common = await readShader('common.wgsl');
     const match = common.match(/struct DirectLightSlot\s*\{([\s\S]*?)\};/);
 
     expect(match).not.toBeNull();
     const struct = match?.[1] ?? '';
     expect(struct.match(/vec4<f32>/g)).toHaveLength(4);
-    expect(struct.match(/vec4<u32>/g)).toHaveLength(1);
+    expect(struct.match(/vec4<u32>/g)).toHaveLength(2);
     expect(struct).toContain('row0');
     expect(struct).toContain('row1');
     expect(struct).toContain('row2');

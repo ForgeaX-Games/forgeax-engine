@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import type { MaterialParticleInput } from '@forgeax/engine-types';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type {
-  ParticleRendererSortingV3,
   ParticleRendererSourceV3,
   VfxDataInterfaceRequirement,
   VfxEffectReflection,
@@ -15,30 +14,22 @@ import type {
 import {
   defaultParticleRendererAttributes,
   deriveVfxCustomLayout,
+  isParticleRendererSortingV3,
+  isParticleTopologyRenderer,
   PARTICLE_RENDERER_SEMANTICS,
   VFX_PARTICLE_CORE_LAYOUT,
 } from '@forgeax/engine-vfx';
 
-export interface ParticleRendererReflection {
-  readonly topology: ParticleRendererSourceV3['kind'];
-  readonly resource: string;
-  readonly capacity: number;
-  readonly overflow: 'drop-newest' | 'drop-oldest';
-  readonly enabled: boolean;
-  readonly shaderInputs: readonly string[];
-  readonly textureSheet?: {
-    readonly columns: number;
-    readonly rows: number;
-    readonly frameRate: number;
-    readonly frameCount: number;
-  };
-  readonly pivot?: readonly [number, number];
-  readonly softParticle?: { readonly fadeDistance: number; readonly requiresDepth: true };
-  readonly sorting?: ParticleRendererSortingV3;
-  readonly stripKey?: 'alive-index';
-  readonly historyLength?: number;
-  readonly endpointField?: 'velocity';
-}
+/** Kind-derived renderer facts, before material inputs, attributes and lighting are reflected. */
+export type ParticleRendererReflection = Omit<
+  VfxGpuRendererReflectionV3,
+  | 'attributes'
+  | 'materialInputs'
+  | 'materialInputDefinitions'
+  | 'lighting'
+  | 'castShadows'
+  | 'receiveShadows'
+>;
 
 export interface VfxReflectionInput {
   readonly root: string;
@@ -490,12 +481,17 @@ export function reflectVfxRenderer(
         `renderers[${index}]`,
       );
     const renderer = candidate as ParticleRendererSourceV3;
-    const capacity =
-      renderer.kind === 'billboard' || renderer.kind === 'mesh'
-        ? renderer.kind === 'billboard'
-          ? (renderer.capacity ?? 64)
-          : 1
-        : renderer.capacity;
+    if (!Object.hasOwn(PARTICLE_RENDERER_SEMANTICS, renderer.kind))
+      return rendererFailure(
+        'a billboard, mesh, ribbon, trail, or beam renderer kind',
+        'repair the renderer kind and recook',
+        `renderers[${index}].kind`,
+      );
+    const capacity = isParticleTopologyRenderer(renderer)
+      ? renderer.capacity
+      : renderer.kind === 'billboard'
+        ? (renderer.capacity ?? 64)
+        : 1;
     if (!Number.isInteger(capacity) || capacity <= 0 || capacity > 65536) {
       return rendererFailure(
         'a renderer capacity in the range 1..65536',
@@ -507,14 +503,8 @@ export function reflectVfxRenderer(
       topology: renderer.kind,
       resource: `vfx-renderer-${renderer.kind}-${index}`,
       capacity,
-      overflow:
-        renderer.kind === 'billboard' ||
-        renderer.kind === 'ribbon' ||
-        renderer.kind === 'trail' ||
-        renderer.kind === 'beam'
-          ? (renderer.overflow ?? 'drop-newest')
-          : 'drop-newest',
-      enabled: renderer.kind === 'mesh' ? (renderer.enabled ?? true) : (renderer.enabled ?? true),
+      overflow: renderer.kind === 'mesh' ? 'drop-newest' : (renderer.overflow ?? 'drop-newest'),
+      enabled: renderer.enabled ?? true,
       shaderInputs: [] as readonly string[],
     } satisfies Omit<
       ParticleRendererReflection,
@@ -526,121 +516,115 @@ export function reflectVfxRenderer(
       | 'historyLength'
       | 'endpointField'
     >;
-    if (renderer.kind === 'billboard') {
-      const sheet = renderer.textureSheet;
-      if (
-        sheet !== undefined &&
-        (!Number.isInteger(sheet.columns) ||
-          sheet.columns <= 0 ||
-          sheet.columns > 64 ||
-          !Number.isInteger(sheet.rows) ||
-          sheet.rows <= 0 ||
-          sheet.rows > 64 ||
-          !Number.isFinite(sheet.frameRate) ||
-          sheet.frameRate < 0 ||
-          (sheet.frameCount !== undefined &&
-            (!Number.isInteger(sheet.frameCount) ||
-              sheet.frameCount <= 0 ||
-              sheet.frameCount > sheet.columns * sheet.rows)))
-      )
-        return rendererFailure(
-          'a bounded texture sheet declaration',
-          'repair the texture sheet dimensions and recook',
-          `renderers[${index}].textureSheet`,
-        );
-      if (
-        renderer.pivot !== undefined &&
-        (renderer.pivot.length !== 2 ||
-          renderer.pivot.some((value) => !Number.isFinite(value) || value < -1 || value > 1))
-      )
-        return rendererFailure(
-          'a pivot with two finite values in the -1..1 range',
-          'repair the billboard pivot and recook',
-          `renderers[${index}].pivot`,
-        );
-      if (
-        renderer.softParticle !== undefined &&
-        (!Number.isFinite(renderer.softParticle.fadeDistance) ||
-          renderer.softParticle.fadeDistance <= 0)
-      )
-        return rendererFailure(
-          'a positive soft-particle fade distance',
-          'provide scene depth and a positive fade distance',
-          `renderers[${index}].softParticle`,
-        );
-      if (
-        renderer.sorting !== undefined &&
-        renderer.sorting !== 'none' &&
-        renderer.sorting !== 'view-depth' &&
-        renderer.sorting !== 'view-distance' &&
-        renderer.sorting !== 'custom-ascending' &&
-        renderer.sorting !== 'custom-descending'
-      )
-        return rendererFailure(
-          'none, view-depth, view-distance, or an explicitly dispatched custom sort',
-          'repair the billboard sorting mode and recook',
-          `renderers[${index}].sorting`,
-        );
-      const frameCount =
-        sheet?.frameCount ?? (sheet === undefined ? 1 : sheet.columns * sheet.rows);
-      const shaderInputs = [
-        ...(sheet === undefined ? [] : ['textureSheet']),
-        ...(renderer.pivot === undefined ? [] : ['pivot']),
-        ...(renderer.softParticle === undefined ? [] : ['softParticleDepth']),
-        ...(renderer.sorting === undefined || renderer.sorting === 'none' ? [] : ['sorting']),
-      ];
-      reflected.push({
-        ...base,
-        shaderInputs: Object.freeze(shaderInputs),
-        ...(sheet === undefined ? {} : { textureSheet: { ...sheet, frameCount } }),
-        ...(renderer.pivot === undefined ? {} : { pivot: renderer.pivot }),
-        ...(renderer.softParticle === undefined
-          ? {}
-          : {
-              softParticle: {
-                fadeDistance: renderer.softParticle.fadeDistance,
-                requiresDepth: true as const,
-              },
-            }),
-        ...(renderer.sorting === undefined ? {} : { sorting: renderer.sorting }),
-      });
-      continue;
+    switch (renderer.kind) {
+      case 'billboard': {
+        const sheet = renderer.textureSheet;
+        if (
+          sheet !== undefined &&
+          (!Number.isInteger(sheet.columns) ||
+            sheet.columns <= 0 ||
+            sheet.columns > 64 ||
+            !Number.isInteger(sheet.rows) ||
+            sheet.rows <= 0 ||
+            sheet.rows > 64 ||
+            !Number.isFinite(sheet.frameRate) ||
+            sheet.frameRate < 0 ||
+            (sheet.frameCount !== undefined &&
+              (!Number.isInteger(sheet.frameCount) ||
+                sheet.frameCount <= 0 ||
+                sheet.frameCount > sheet.columns * sheet.rows)))
+        )
+          return rendererFailure(
+            'a bounded texture sheet declaration',
+            'repair the texture sheet dimensions and recook',
+            `renderers[${index}].textureSheet`,
+          );
+        if (
+          renderer.pivot !== undefined &&
+          (renderer.pivot.length !== 2 ||
+            renderer.pivot.some((value) => !Number.isFinite(value) || value < -1 || value > 1))
+        )
+          return rendererFailure(
+            'a pivot with two finite values in the -1..1 range',
+            'repair the billboard pivot and recook',
+            `renderers[${index}].pivot`,
+          );
+        if (
+          renderer.softParticle !== undefined &&
+          (!Number.isFinite(renderer.softParticle.fadeDistance) ||
+            renderer.softParticle.fadeDistance <= 0)
+        )
+          return rendererFailure(
+            'a positive soft-particle fade distance',
+            'provide scene depth and a positive fade distance',
+            `renderers[${index}].softParticle`,
+          );
+        if (renderer.sorting !== undefined && !isParticleRendererSortingV3(renderer.sorting))
+          return rendererFailure(
+            'none, view-depth, view-distance, or an explicitly dispatched custom sort',
+            'repair the billboard sorting mode and recook',
+            `renderers[${index}].sorting`,
+          );
+        const frameCount =
+          sheet?.frameCount ?? (sheet === undefined ? 1 : sheet.columns * sheet.rows);
+        const shaderInputs = [
+          ...(sheet === undefined ? [] : ['textureSheet']),
+          ...(renderer.pivot === undefined ? [] : ['pivot']),
+          ...(renderer.softParticle === undefined ? [] : ['softParticleDepth']),
+          ...(renderer.sorting === undefined || renderer.sorting === 'none' ? [] : ['sorting']),
+        ];
+        reflected.push({
+          ...base,
+          shaderInputs: Object.freeze(shaderInputs),
+          ...(sheet === undefined ? {} : { textureSheet: { ...sheet, frameCount } }),
+          ...(renderer.pivot === undefined ? {} : { pivot: renderer.pivot }),
+          ...(renderer.softParticle === undefined
+            ? {}
+            : {
+                softParticle: {
+                  fadeDistance: renderer.softParticle.fadeDistance,
+                  requiresDepth: true as const,
+                },
+              }),
+          ...(renderer.sorting === undefined ? {} : { sorting: renderer.sorting }),
+        });
+        break;
+      }
+      case 'mesh':
+        reflected.push({ ...base, shaderInputs: Object.freeze(['mesh']) });
+        break;
+      case 'ribbon':
+        reflected.push({
+          ...base,
+          shaderInputs: Object.freeze(['stripKey']),
+          stripKey: renderer.stripKey,
+        });
+        break;
+      case 'trail':
+        if (
+          !Number.isInteger(renderer.historyLength) ||
+          renderer.historyLength <= 0 ||
+          renderer.historyLength > 256
+        )
+          return rendererFailure(
+            'a trail historyLength in the range 1..256',
+            'bound trail history memory and recook',
+            `renderers[${index}].historyLength`,
+          );
+        reflected.push({
+          ...base,
+          shaderInputs: Object.freeze(['history']),
+          historyLength: renderer.historyLength,
+        });
+        break;
+      case 'beam':
+        reflected.push({
+          ...base,
+          shaderInputs: Object.freeze(['endpoint']),
+          endpointField: renderer.endpointField,
+        });
+        break;
     }
-    if (renderer.kind === 'ribbon') {
-      reflected.push({
-        ...base,
-        shaderInputs: Object.freeze(['stripKey']),
-        stripKey: renderer.stripKey,
-      });
-      continue;
-    }
-    if (renderer.kind === 'trail') {
-      if (
-        !Number.isInteger(renderer.historyLength) ||
-        renderer.historyLength <= 0 ||
-        renderer.historyLength > 256
-      )
-        return rendererFailure(
-          'a trail historyLength in the range 1..256',
-          'bound trail history memory and recook',
-          `renderers[${index}].historyLength`,
-        );
-      reflected.push({
-        ...base,
-        shaderInputs: Object.freeze(['history']),
-        historyLength: renderer.historyLength,
-      });
-      continue;
-    }
-    if (renderer.kind === 'beam') {
-      reflected.push({
-        ...base,
-        shaderInputs: Object.freeze(['endpoint']),
-        endpointField: renderer.endpointField,
-      });
-      continue;
-    }
-    reflected.push({ ...base, shaderInputs: Object.freeze(['mesh']) });
   }
   return ok(Object.freeze(reflected));
 }
@@ -744,7 +728,7 @@ export function reflectVfxRendererV3(
       ...(renderer.attributes ?? {}),
     };
     if (
-      (renderer.kind === 'billboard' || renderer.kind === 'mesh') &&
+      !isParticleTopologyRenderer(renderer) &&
       (renderer.sorting === 'custom-ascending' || renderer.sorting === 'custom-descending')
     ) {
       const sort = attributes.sort;
@@ -820,8 +804,7 @@ export function reflectVfxRendererV3(
       ...(materialInputDefinitions === undefined
         ? {}
         : { materialInputDefinitions: Object.freeze([...materialInputDefinitions]) }),
-      ...((renderer.kind === 'billboard' || renderer.kind === 'mesh') &&
-      renderer.sorting !== undefined
+      ...(!isParticleTopologyRenderer(renderer) && renderer.sorting !== undefined
         ? { sorting: renderer.sorting }
         : {}),
       ...(renderer.kind === 'mesh'

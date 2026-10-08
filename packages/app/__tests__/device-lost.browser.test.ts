@@ -337,7 +337,8 @@ describe('device-lost path 4 -- explicit dispose owns cleanup (R-4)', () => {
     unsubscribe();
   });
 
-  it('canvas dispose lets the input Fiber remove its scan system exactly once', async () => {
+  // This path cold-starts a real software-GPU renderer before exercising disposal.
+  it('canvas dispose lets the input Fiber remove its scan system exactly once', { timeout: 60_000 }, async () => {
     const removeSpy = vi.spyOn(World.prototype, 'removeSystem');
 
     try {

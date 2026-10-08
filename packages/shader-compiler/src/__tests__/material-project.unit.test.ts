@@ -96,15 +96,20 @@ describe('MaterialAsset runtime and module projection', () => {
     if (!context.ok) return;
     expect(lowerMaterialVariantContext(context.value)).toEqual({
       STORAGE_BUFFER_AVAILABLE: true,
+      ATMOSPHERE_AVAILABLE: false,
       CLUSTER_FORWARD_AVAILABLE: true,
       PROBE_BLEND_AVAILABLE: true,
       WEBGL2_COMPAT: false,
       PER_INSTANCE_REGION: false,
       SKINNING_DISABLED: true,
+      TERRAIN_GEOMETRY_AVAILABLE: false,
       POINT_SHADOW_AVAILABLE: false,
       MATERIAL_VALIDATION_ENABLED: false,
       VISIBLE_SURFACE_AVAILABLE: false,
     });
+    expect(
+      lowerMaterialVariantContext({ ...context.value, capability: 'storage-buffer-atmosphere' }),
+    ).toMatchObject({ STORAGE_BUFFER_AVAILABLE: true, ATMOSPHERE_AVAILABLE: true });
     expect(
       lowerMaterialVariantContext({ ...context.value, capability: 'uniform-fallback' }),
     ).toMatchObject({

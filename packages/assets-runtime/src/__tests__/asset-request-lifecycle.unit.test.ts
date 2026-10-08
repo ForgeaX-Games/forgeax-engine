@@ -1,4 +1,4 @@
-import { type AssetLoadError, ok, type Result } from '@forgeax/engine-types';
+import { type AssetLoadError, err, ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import { ArtifactCache } from '../internal/artifact-cache.js';
 import { AssetGraph } from '../internal/asset-graph.js';
@@ -226,4 +226,96 @@ it('invalidates pending dependency parents and keeps late traversal from changin
   expect(graph.snapshot().ready).toEqual(['dependency', 'root']);
   expect(graph.invalidate('dependency')).toEqual(['dependency', 'root']);
   graph.dispose();
+});
+
+describe('asset dependency closure promotion', () => {
+  it('reads shared and cyclic edges once, records each SCC, and invalidates reverse parents', async () => {
+    const refs: Record<string, string[]> = {
+      root: ['a', 'a', 'self', 'shared'],
+      a: ['b', 'shared'],
+      b: ['a', 'c'],
+      c: ['d'],
+      d: ['c', 'shared'],
+      self: ['self'],
+      shared: [],
+    };
+    const read = vi.fn(async (guid: string) => value(1, refs[guid] ?? []));
+    const graph = new AssetGraph({ read });
+    expect(await graph.load('ROOT')).toMatchObject({ ok: true });
+    expect(read.mock.calls.map(([guid]) => guid)).toEqual([
+      'root',
+      'a',
+      'b',
+      'c',
+      'd',
+      'shared',
+      'self',
+    ]);
+    expect(graph.snapshot()).toMatchObject({
+      ready: ['a', 'b', 'c', 'd', 'root', 'self', 'shared'],
+      resources: 7,
+      pending: 0,
+      sccs: [['c', 'd'], ['a', 'b'], ['self']],
+    });
+    expect(await graph.load('b')).toMatchObject({ ok: true });
+    expect(read).toHaveBeenCalledTimes(7);
+    expect(graph.invalidate('c')).toEqual(['a', 'b', 'c', 'd', 'root']);
+    expect(graph.snapshot()).toMatchObject({ ready: ['self', 'shared'], sccs: [] });
+    expect(await graph.load('root')).toMatchObject({ ok: true });
+    expect(read).toHaveBeenCalledTimes(12);
+    expect(graph.snapshot().sccs).toEqual([['self'], ['c', 'd'], ['a', 'b']]);
+    graph.dispose();
+  });
+
+  it('publishes no provisional member when a later dependency fails, then retries the closure', async () => {
+    let fails = true;
+    const read = vi.fn(async (guid: string): Promise<Result<Value, AssetLoadError>> => {
+      if (guid === 'missing' && fails)
+        return err({
+          code: 'asset-decode-failed',
+          expected: 'a decodable dependency',
+          hint: 'repair the publication',
+          detail: { guid, kind: 'test' },
+        });
+      return value(1, guid === 'root' ? ['cycle', 'missing'] : guid === 'cycle' ? ['root'] : []);
+    });
+    const graph = new AssetGraph({ read });
+    expect(await graph.load('root')).toMatchObject({
+      ok: false,
+      error: {
+        code: 'asset-dependency-failed',
+        detail: { guid: 'root', dependencyGuid: 'missing' },
+      },
+    });
+    expect(graph.snapshot()).toMatchObject({ ready: [], resources: 0, sccs: [] });
+    expect(graph.lookup('cycle')).toBeUndefined();
+    fails = false;
+    expect(await graph.load('root')).toMatchObject({ ok: true });
+    expect(graph.snapshot()).toMatchObject({
+      ready: ['cycle', 'missing', 'root'],
+      sccs: [['cycle', 'root']],
+    });
+    expect(read).toHaveBeenCalledTimes(6);
+    graph.dispose();
+  });
+
+  it('retains deferred edges for SCC and invalidation without eagerly reading them', async () => {
+    type DeferredValue = Value & { references?: 'deferred' };
+    const read = vi.fn(
+      async (guid: string): Promise<Result<DeferredValue, AssetLoadError>> =>
+        ok({
+          value: { revision: 1 },
+          refs: guid === 'root' ? ['root', 'child'] : [],
+          references: 'deferred',
+        }),
+    );
+    const graph = new AssetGraph({ read });
+    expect(await graph.load('root')).toMatchObject({ ok: true });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(graph.snapshot()).toMatchObject({ ready: ['root'], resources: 1, sccs: [['root']] });
+    expect(graph.lookup('child')).toBeUndefined();
+    expect(graph.invalidate('child')).toEqual(['child', 'root']);
+    expect(graph.snapshot().ready).toEqual([]);
+    graph.dispose();
+  });
 });

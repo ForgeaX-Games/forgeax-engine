@@ -34,6 +34,7 @@ function makeModel(): ViewerModel {
         commandIndices: [],
         colorAttachmentViewHandleIds: [],
         colorAttachmentResolveViewHandleIds: [],
+        colorAttachmentDepthSlices: [],
         depthStencilViewHandleId: null,
       },
     ],

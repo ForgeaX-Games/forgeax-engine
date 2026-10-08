@@ -1,6 +1,6 @@
 import { vec3 } from '@forgeax/engine-math';
 import type { DerivedPhysicsCandidateInput } from '@forgeax/engine-physics';
-import { err, ok } from '@forgeax/engine-types';
+import { err, ok, toShared } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { createRapier3DPhysicsWorld } from '../rapier-physics-world-3d';
 import { loadRapier3D, type Rapier3DModule } from '../wasm-loader';
@@ -63,13 +63,14 @@ function addBody(
     },
     {
       shape: 0,
+      mesh: toShared<'MeshAsset'>(0),
       halfExtents: [0.25, 0.25, 0.25],
       radius: 0.25,
       halfHeight: 0.25,
       friction: 0.5,
       restitution: 0,
       density: 1,
-      isSensor: 0,
+      isSensor: false,
       collisionGroups: 0xffffffff,
       solverGroups: 0xffffffff,
     },

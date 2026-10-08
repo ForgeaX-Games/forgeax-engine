@@ -2,6 +2,7 @@
 
 /// <reference types="@webgpu/types" />
 
+import { type BindingAccess, layoutEntryAccess, wgslBindingAccess } from './binding-access';
 import { type UnseededResource, unseededResources } from './initial-contents';
 import {
   EVENT_SEMANTICS,
@@ -13,7 +14,7 @@ import type { TapeWorkEntry } from './protocol/tape-index';
 import { buildTapeIndex } from './protocol/tape-index';
 import type { Tape as V7Tape } from './protocol/types';
 import { computeTextureLayout } from './texel-layout';
-import type { HandleId, RhiCallEvent } from './types';
+import type { HandleId, RecordedTlasInstance, RhiCallEvent } from './types';
 
 type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -45,6 +46,8 @@ export interface FramePass {
    * `colorAttachmentViewHandleIds`; `null` for a single-sample attachment.
    */
   colorAttachmentResolveViewHandleIds: readonly (string | null)[];
+  /** `3d` attachment depth slice per color attachment, index-aligned; `null` otherwise. */
+  colorAttachmentDepthSlices: readonly (number | null)[];
   depthStencilViewHandleId: string | null;
 }
 
@@ -78,6 +81,20 @@ export interface WorkBinding {
   readonly bufferSize: number | null;
   /** Offset applied by `setBindGroup` dynamic offsets; null for a static binding. */
   readonly dynamicOffset: number | null;
+  /** From the explicit layout entry, else the pipeline's WGSL declaration. */
+  readonly access: BindingAccess;
+  /** Present for an acceleration-structure entry: the bound TLAS as of this work. */
+  readonly accelerationStructure?: WorkAccelerationStructure;
+}
+
+export interface WorkAccelerationStructure {
+  readonly tlasHandleId: string;
+  readonly label: string | null;
+  readonly status: 'built' | 'unbuilt';
+  /** Instance count of the last build; 0 while unbuilt. */
+  readonly instanceCount: number;
+  /** BLAS handle ids referenced by the last build's instances, deduplicated in order. */
+  readonly blasHandleIds: readonly string[];
 }
 
 export interface WorkPipeline {
@@ -115,6 +132,8 @@ export interface WorkEntry extends TapeWorkEntry {
     readonly colorViewHandleIds: readonly string[];
     /** Index-aligned with `colorViewHandleIds`; `null` without a resolve target. */
     readonly colorResolveViewHandleIds: readonly (string | null)[];
+    /** Index-aligned with `colorViewHandleIds`; the written `3d` slice or `null`. */
+    readonly colorDepthSlices: readonly (number | null)[];
     readonly depthStencilViewHandleId: string | null;
   } | null;
 }
@@ -126,6 +145,31 @@ export interface FrameModel {
   readonly resources: readonly ResourceEntry[];
   readonly resourceLifecycle: ResourceLifecycleSummary;
   readonly works: readonly WorkEntry[];
+}
+
+function tlasState(
+  tlasHandleId: string,
+  label: string | null,
+  instances: readonly RecordedTlasInstance[] | undefined,
+): WorkAccelerationStructure {
+  return {
+    tlasHandleId,
+    label,
+    status: instances === undefined ? 'unbuilt' : 'built',
+    instanceCount: instances?.length ?? 0,
+    blasHandleIds: [...new Set(instances?.map((instance) => instance.blasHandleId))],
+  };
+}
+
+function accelerationStructureBinding(
+  resourceKind: string | undefined,
+  resourceId: string | null | undefined,
+  tlasStates: ReadonlyMap<string, WorkAccelerationStructure>,
+): { readonly accelerationStructure?: WorkAccelerationStructure } {
+  if (resourceKind !== 'accelerationStructure' || resourceId == null) return {};
+  return {
+    accelerationStructure: tlasStates.get(resourceId) ?? tlasState(resourceId, null, undefined),
+  };
 }
 
 function jsonValue(value: unknown): JsonValue {
@@ -171,6 +215,18 @@ function dynamicOffsetsByBinding(
     if (offset !== undefined) result.set(binding, offset);
   }
   return result;
+}
+
+function bindingAccess(
+  layout: Extract<RhiCallEvent, { kind: 'createBindGroupLayout' }> | undefined,
+  binding: number,
+  declared: () => BindingAccess | undefined,
+): BindingAccess {
+  const entry =
+    layout === undefined
+      ? undefined
+      : [...layout.desc.entries].find((candidate) => candidate.binding === binding);
+  return entry === undefined ? (declared() ?? 'unknown') : layoutEntryAccess(entry);
 }
 
 function workPipeline(
@@ -231,6 +287,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       commandIndices: [],
       colorAttachmentViewHandleIds: [],
       colorAttachmentResolveViewHandleIds: [],
+      colorAttachmentDepthSlices: [],
       depthStencilViewHandleId: null,
     });
     const begin = events[pass.beginEventIndex];
@@ -239,13 +296,18 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       if (attachment !== undefined) {
         const color: string[] = [];
         const resolve: (string | null)[] = [];
+        const slices: (number | null)[] = [];
+        const descriptors = Array.from(begin.desc.colorAttachments);
         for (const [slot, id] of begin.colorAttachmentViewHandleIds.entries()) {
           if (typeof id !== 'string') continue;
           color.push(id);
           resolve.push(begin.colorAttachmentResolveTargetHandleIds?.[slot] ?? null);
+          const depthSlice = descriptors[slot]?.depthSlice;
+          slices.push(typeof depthSlice === 'number' ? depthSlice : null);
         }
         attachment.colorAttachmentViewHandleIds = color;
         attachment.colorAttachmentResolveViewHandleIds = resolve;
+        attachment.colorAttachmentDepthSlices = slices;
         attachment.depthStencilViewHandleId = begin.depthStencilViewHandleId ?? null;
       }
     }
@@ -287,15 +349,30 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
   const workByEvent = new Map<number, number>();
   for (const work of index.works) workByEvent.set(work.eventIndex, work.workIndex);
 
+  // Bootstrap creates and in-frame creates feed the same handle indexes.
+  const indexCreateEvent = (event: RhiCallEvent): void => {
+    if (event.kind === 'createRenderPipeline' || event.kind === 'createComputePipeline')
+      pipelineEvents.set(event.handleId, event);
+    if (event.kind === 'createShaderModule') shaderEvents.set(event.handleId, event);
+    if (event.kind === 'createBindGroup') bindGroups.set(event.handleId, event);
+    if (event.kind === 'createBindGroupLayout') bindGroupLayouts.set(event.handleId, event);
+  };
+
+  const tlasStates = new Map<string, WorkAccelerationStructure>();
+  const indexTlasCreate = (event: RhiCallEvent): void => {
+    if (event.kind !== 'createTlas') return;
+    tlasStates.set(
+      event.handleId,
+      tlasState(event.handleId, event.desc.label ?? null, event.build?.instances),
+    );
+  };
+
   for (const bootstrap of tape.bootstrap) {
     // Strict v7 decoding validates each bootstrap create record against the same
     // RhiCallEvent union before FrameModel construction.
     const create = bootstrap.create as unknown as RhiCallEvent;
-    if (create.kind === 'createRenderPipeline' || create.kind === 'createComputePipeline')
-      pipelineEvents.set(create.handleId, create);
-    if (create.kind === 'createShaderModule') shaderEvents.set(create.handleId, create);
-    if (create.kind === 'createBindGroup') bindGroups.set(create.handleId, create);
-    if (create.kind === 'createBindGroupLayout') bindGroupLayouts.set(create.handleId, create);
+    indexCreateEvent(create);
+    indexTlasCreate(create);
     resourceRecords.set(bootstrap.handleId, {
       resourceId: bootstrap.handleId,
       kind: bootstrap.kind,
@@ -308,23 +385,10 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     });
   }
   for (const [eventIndex, event] of events.entries()) {
-    if (event.kind === 'createRenderPipeline' || event.kind === 'createComputePipeline')
-      pipelineEvents.set(event.handleId, event);
-    if (event.kind === 'createShaderModule') shaderEvents.set(event.handleId, event);
-    if (event.kind === 'createBindGroup') bindGroups.set(event.handleId, event);
-    if (event.kind === 'createBindGroupLayout') bindGroupLayouts.set(event.handleId, event);
+    indexCreateEvent(event);
     const kind = resourceKindForEvent(event.kind);
-    const handleId =
-      kind === undefined
-        ? undefined
-        : event.kind === 'createTextureView'
-          ? event.resultHandleId
-          : event.kind === 'createCommandEncoder'
-            ? event.cmdHandleId
-            : 'handleId' in event
-              ? event.handleId
-              : undefined;
-    if (kind !== undefined && handleId !== undefined) {
+    if (kind === undefined) continue;
+    for (const handleId of EVENT_SEMANTICS[event.kind].created(event)) {
       resourceRecords.set(handleId, {
         resourceId: handleId,
         kind,
@@ -376,6 +440,13 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
   const workByEventEntry = new Map(index.works.map((work) => [work.eventIndex, work]));
   for (const [eventIndex, event] of events.entries()) {
     if (event === undefined) continue;
+    indexTlasCreate(event);
+    if (event.kind === 'buildAccelerationStructures')
+      for (const { tlasHandleId, instances } of event.tlas)
+        tlasStates.set(
+          tlasHandleId,
+          tlasState(tlasHandleId, tlasStates.get(tlasHandleId)?.label ?? null, instances),
+        );
     const passHandleId = 'passHandleId' in event ? event.passHandleId : '';
     if (event.kind === 'resetRenderState') {
       currentPipeline.delete(passHandleId);
@@ -415,6 +486,8 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
     const pipelineId = currentPipeline.get(passHandleId);
     const groups = currentBindGroups.get(passHandleId) ?? new Map();
     const bindings: WorkBinding[] = [];
+    const pipeline = workPipeline(pipelineId, pipelineEvents, shaderEvents);
+    let declared: ReadonlyMap<string, BindingAccess> | undefined;
     for (const [groupIndex, { bindGroupId, dynamicOffsets }] of groups) {
       const bindGroup = bindGroups.get(bindGroupId);
       const layout =
@@ -431,6 +504,11 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
           bufferOffset: entry?.bufferOffset ?? null,
           bufferSize: entry?.bufferSize ?? null,
           dynamicOffset: dynamicOffsetByBinding.get(entry?.binding ?? entryIndex) ?? null,
+          access: bindingAccess(layout, entry?.binding ?? entryIndex, () => {
+            declared ??= wgslBindingAccess(pipeline.shaders.map((shader) => shader.source));
+            return declared.get(`${groupIndex}:${entry?.binding ?? entryIndex}`);
+          }),
+          ...accelerationStructureBinding(entry?.resourceKind, resourceId, tlasStates),
         });
       }
     }
@@ -439,7 +517,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       ...work,
       commandIndex: commands.findIndex((command) => command.eventIndex === work.eventIndex),
       drawCall: eventDescriptor(event),
-      pipeline: workPipeline(pipelineId, pipelineEvents, shaderEvents),
+      pipeline,
       bindings,
       vertexBuffers: [...(currentVertexBuffers.get(passHandleId)?.entries() ?? [])].map(
         ([slot, buffer]) => ({ slot, ...buffer }),
@@ -451,6 +529,7 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
           : {
               colorViewHandleIds: attachment.colorAttachmentViewHandleIds,
               colorResolveViewHandleIds: attachment.colorAttachmentResolveViewHandleIds,
+              colorDepthSlices: attachment.colorAttachmentDepthSlices,
               depthStencilViewHandleId: attachment.depthStencilViewHandleId,
             },
     });
@@ -464,6 +543,8 @@ export function buildFrameModel(tape: V7Tape): FrameModel {
       passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentViewHandleIds ?? [],
     colorAttachmentResolveViewHandleIds:
       passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentResolveViewHandleIds ?? [],
+    colorAttachmentDepthSlices:
+      passAttachmentByIndex.get(pass.passIndex)?.colorAttachmentDepthSlices ?? [],
     depthStencilViewHandleId:
       passAttachmentByIndex.get(pass.passIndex)?.depthStencilViewHandleId ?? null,
   }));
@@ -524,6 +605,8 @@ export interface ResourceLifecycleSummary {
     readonly created: number;
     readonly destroyed: number;
     readonly live: number;
+    /** Maximum API-observed live resources within this captured closure. */
+    readonly peakLive: number;
     readonly destroyEvents: number;
     readonly unknownDestroyEvents: number;
   };
@@ -531,9 +614,12 @@ export interface ResourceLifecycleSummary {
     readonly knownCreated: number;
     readonly knownDestroyed: number;
     readonly knownLive: number;
+    /** Maximum simultaneously live descriptor payload; excludes unknown driver bytes. */
+    readonly knownPeak: number;
     readonly unavailableCreated: number;
     readonly unavailableDestroyed: number;
     readonly unavailableLive: number;
+    readonly unavailablePeak: number;
   };
   readonly originBreakdown: Readonly<
     Record<
@@ -629,27 +715,33 @@ function estimateBytes(event: RhiCallEvent): ResourceByteEstimate {
 function resourceIdentity(
   event: RhiCallEvent,
 ): { readonly kind: ResourceKind; readonly handleId: HandleId } | undefined {
-  switch (event.kind) {
+  const kind = lifecycleResourceKind(event.kind);
+  const [handleId] = EVENT_SEMANTICS[event.kind].created(event);
+  return kind === undefined || handleId === undefined ? undefined : { kind, handleId };
+}
+
+function lifecycleResourceKind(kind: RhiCallEvent['kind']): ResourceKind | undefined {
+  switch (kind) {
     case 'createBuffer':
-      return { kind: 'buffer', handleId: event.handleId };
+      return 'buffer';
     case 'createTexture':
-      return { kind: 'texture', handleId: event.handleId };
+      return 'texture';
     case 'createTextureView':
-      return { kind: 'texture-view', handleId: event.resultHandleId };
+      return 'texture-view';
     case 'createSampler':
-      return { kind: 'sampler', handleId: event.handleId };
+      return 'sampler';
     case 'createBindGroupLayout':
-      return { kind: 'bind-group-layout', handleId: event.handleId };
+      return 'bind-group-layout';
     case 'createBindGroup':
-      return { kind: 'bind-group', handleId: event.handleId };
+      return 'bind-group';
     case 'createPipelineLayout':
-      return { kind: 'pipeline-layout', handleId: event.handleId };
+      return 'pipeline-layout';
     case 'createRenderPipeline':
-      return { kind: 'render-pipeline', handleId: event.handleId };
+      return 'render-pipeline';
     case 'createComputePipeline':
-      return { kind: 'compute-pipeline', handleId: event.handleId };
+      return 'compute-pipeline';
     case 'createShaderModule':
-      return { kind: 'shader-module', handleId: event.handleId };
+      return 'shader-module';
     default:
       return undefined;
   }
@@ -681,6 +773,12 @@ export function buildResourceLifecycle(
   const origins = new Map<HandleId, ResourceOrigin>();
   let destroyEvents = 0;
   let unknownDestroyEvents = 0;
+  let liveCount = 0;
+  let peakLive = 0;
+  let knownLive = 0;
+  let knownPeak = 0;
+  let unavailableLive = 0;
+  let unavailablePeak = 0;
 
   const recordCreate = (event: RhiCallEvent, eventIndex: number | null): boolean => {
     const identity = resourceIdentity(event);
@@ -692,12 +790,19 @@ export function buildResourceLifecycle(
           ? (origins.get(event.sourceHandleId) ?? 'engine')
           : 'engine';
     origins.set(identity.handleId, origin);
+    const byteEstimate = estimateBytes(event);
     records.set(identity.handleId, {
       kind: identity.kind,
       origin,
       createdEventIndex: eventIndex,
-      byteEstimate: estimateBytes(event),
+      byteEstimate,
     });
+    liveCount++;
+    if (byteEstimate.status === 'known') knownLive += byteEstimate.bytes;
+    else unavailableLive++;
+    peakLive = Math.max(peakLive, liveCount);
+    knownPeak = Math.max(knownPeak, knownLive);
+    unavailablePeak = Math.max(unavailablePeak, unavailableLive);
     return true;
   };
   for (const resource of tape.bootstrap) {
@@ -720,6 +825,9 @@ export function buildResourceLifecycle(
       continue;
     }
     record.destroyedEventIndex = eventIndex;
+    liveCount--;
+    if (record.byteEstimate.status === 'known') knownLive -= record.byteEstimate.bytes;
+    else unavailableLive--;
   }
 
   const resources: ResourceLifecycleEntry[] = [];
@@ -802,6 +910,7 @@ export function buildResourceLifecycle(
       created: resources.length,
       destroyed,
       live: resources.length - destroyed,
+      peakLive,
       destroyEvents,
       unknownDestroyEvents,
     },
@@ -809,9 +918,11 @@ export function buildResourceLifecycle(
       knownCreated: createdBytes.known,
       knownDestroyed: destroyedBytes.known,
       knownLive: liveBytes.known,
+      knownPeak,
       unavailableCreated: createdBytes.unavailable,
       unavailableDestroyed: destroyedBytes.unavailable,
       unavailableLive: liveBytes.unavailable,
+      unavailablePeak,
     },
     originBreakdown,
     availability: {

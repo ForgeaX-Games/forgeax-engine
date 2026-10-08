@@ -31,6 +31,29 @@ import { ASSET_ERROR_HINTS, AssetError, err, ok, type Result } from '@forgeax/en
 
 const EPSILON = 1e-8;
 
+/** Write a finite unit tangent in the normal plane; leave output unchanged on failure.
+ * Writes xyz only, so the producer retains its own handedness policy.
+ */
+export function writeNormalPlaneTangent(
+  out: Float32Array,
+  offset: number,
+  nx: number,
+  ny: number,
+  nz: number,
+): boolean {
+  if (!Number.isInteger(offset) || offset < 0 || offset > out.length - 3) return false;
+  if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) return false;
+  const tx = Math.abs(nx) > Math.abs(nz) ? -ny : 0;
+  const ty = Math.abs(nx) > Math.abs(nz) ? nx : -nz;
+  const tz = Math.abs(nx) > Math.abs(nz) ? 0 : ny;
+  const length = Math.hypot(tx, ty, tz);
+  if (!(length > 0) || !Number.isFinite(length)) return false;
+  out[offset] = tx / length;
+  out[offset + 1] = ty / length;
+  out[offset + 2] = tz / length;
+  return true;
+}
+
 function tangentInputError(field: string, value: number, reason: string): AssetError {
   return new AssetError({
     code: 'asset-parse-failed',

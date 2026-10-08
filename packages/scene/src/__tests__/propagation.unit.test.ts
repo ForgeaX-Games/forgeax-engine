@@ -2,10 +2,10 @@ import { type EntityHandle, FixedUpdate, Update, World } from '@forgeax/engine-e
 import { describe, expect, it } from 'vitest';
 import { ChangeEpochExhaustedError } from '../../../ecs/src/errors';
 import { ChildOf, GlobalTransform, propagateTransforms, Transform } from '../index';
-import { registerPropagateTransforms } from '../systems';
 import {
   beginTransformPropagationTrace,
   endTransformPropagationTrace,
+  registerPropagateTransforms,
 } from '../systems/propagate-transforms';
 import { setMalformedParentEdge } from './fixtures/malformed-hierarchy-edge';
 

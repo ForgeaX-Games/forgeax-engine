@@ -1,3 +1,4 @@
+import { isStripTopology } from '@forgeax/engine-types';
 // pipeline-builder.ts -- runtime-internal helper for building per-MaterialShader
 // render pipelines (feat-20260523-shader-template-instance-split M9-T01).
 //
@@ -412,7 +413,7 @@ export function buildPipelineForMaterialShader(
     },
     geometry: {
       topology: geometry?.topology ?? 'triangle-list',
-      ...(geometry?.topology === 'line-strip' || geometry?.topology === 'triangle-strip'
+      ...(geometry?.topology !== undefined && isStripTopology(geometry.topology)
         ? { stripIndexFormat: geometry.stripIndexFormat }
         : {}),
       vertexLayout: {}, // vertexLayout not used at this layer; caller provides vertexBuffers

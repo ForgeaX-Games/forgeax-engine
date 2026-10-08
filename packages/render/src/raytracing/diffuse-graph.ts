@@ -1,13 +1,14 @@
 import type {
-  GraphTexture,
   GraphTextureView,
   RenderGraphBuilder,
+  RenderGraphError,
 } from '@forgeax/engine-render-graph';
-import type { Texture, TextureView } from '@forgeax/engine-rhi';
+import type { Result } from '@forgeax/engine-types';
 import { VIEW_UNIFORM_BYTES } from '../record/view-ubo';
 import type { RenderPipelineFrame, RenderPipelineTarget } from '../render-pipeline';
-import { DIFFUSE_HISTORY_BYTES } from './diffuse-reconstruction';
 import { RAY_PATH_STRIDE } from './path-tracer';
+import { addRayReconstructionPasses, importRayMaterialTextures } from './ray-graph-shared';
+import { addRayReflectionPasses } from './reflections-graph';
 import type { PreparedRayDiffuse } from './renderer-diffuse';
 
 export interface RayDiffuseTargets {
@@ -18,6 +19,14 @@ export interface RayDiffuseTargets {
   readonly f0: RenderPipelineTarget;
   readonly identity: RenderPipelineTarget;
   readonly motion: RenderPipelineTarget;
+  /** The view's shared closest-depth pyramid, created on first request. */
+  readonly depthPyramid?: () => Result<GraphTextureView, RenderGraphError>;
+  /** Deferred split-sum response and the SSR-replaceable fallback; present when any
+   * reflection consumer is admitted. Lite reflections add world specular into both. */
+  readonly reflection?: {
+    readonly fallback: RenderPipelineTarget;
+    readonly response: RenderPipelineTarget;
+  };
 }
 
 /** Declare the actual G-buffer -> receiver -> raw D -> additive HDR dependency chain. */
@@ -82,41 +91,7 @@ export function addRayDiffusePasses(
     },
   });
   if (!generated.ok) return generated;
-  const textures = new Map<TextureView, GraphTextureView>();
-  const allocations = new Map<Texture, GraphTexture>();
-  for (const material of prepared.textures) {
-    for (const resident of material.textures.values()) {
-      if (textures.has(resident.view)) continue;
-      const receipt = resident.receipt;
-      if (receipt.view !== '2d') throw new Error('ray material expects a 2D resident texture');
-      let allocation = allocations.get(resident.texture);
-      if (allocation === undefined) {
-        allocation = graph
-          .importTexture(
-            `ray-diffuse.material.${allocations.size}`,
-            {
-              format: receipt.format,
-              size: receipt.extent,
-              mipLevelCount: receipt.mipLevelCount,
-              usage: 4,
-            },
-            () => resident.texture,
-          )
-          .unwrap();
-        allocations.set(resident.texture, allocation);
-      }
-      textures.set(
-        resident.view,
-        graph
-          .importView(
-            allocation,
-            { dimension: '2d', mipLevelCount: receipt.mipLevelCount },
-            () => resident.view,
-          )
-          .unwrap(),
-      );
-    }
-  }
+  const textures = importRayMaterialTextures(graph, prepared.textures);
   const accumulation = prepared.transport
     .addSampleToGraph(graph, {
       label: 'ray-diffuse.transport',
@@ -127,90 +102,26 @@ export function addRayDiffusePasses(
       reset: true,
     })
     .unwrap();
+  const shared = {
+    records,
+    recordBytes: prepared.recordBytes,
+    view,
+    pixelCount: prepared.pixelCount,
+  };
   let irradiance = accumulation;
-  const reconstruction = prepared.reconstruction;
-  if (reconstruction !== undefined) {
-    const previous = graph
-      .importBuffer(
-        'ray-diffuse.history.previous',
-        { size: prepared.pixelCount * DIFFUSE_HISTORY_BYTES, usage: 128 | 12 },
-        () => reconstruction.previous,
-      )
-      .unwrap();
-    const current = graph
-      .importBuffer(
-        'ray-diffuse.history.current',
-        { size: prepared.pixelCount * DIFFUSE_HISTORY_BYTES, usage: 128 | 12 },
-        () => reconstruction.current,
-      )
-      .unwrap();
-    const signal = graph
-      .importBuffer(
-        'ray-diffuse.signal',
-        { size: prepared.pixelCount * 16, usage: 128 | 12 },
-        () => reconstruction.signal,
-      )
-      .unwrap();
-    const diagnostics = graph
-      .importBuffer(
-        'ray-diffuse.diagnostics',
-        { size: prepared.pixelCount * 16, usage: 128 | 12 },
-        () => reconstruction.diagnostics,
-      )
-      .unwrap();
-    const config = graph
-      .importBuffer(
-        'ray-diffuse.reconstruction-config',
-        { size: 48, usage: 64 | 8 },
-        () => reconstruction.config,
-      )
-      .unwrap();
-    for (const stage of reconstruction.mode === 'temporal'
-      ? (['temporal'] as const)
-      : (['temporal', 'spatial'] as const)) {
-      const added = graph.addComputePass(`ray-diffuse.${stage}`, {
-        accesses: [
-          { resource: accumulation, usage: 'storage-read' },
-          { resource: records, usage: 'storage-read' },
-          { resource: previous, usage: 'storage-read' },
-          { resource: current, usage: stage === 'temporal' ? 'storage-write' : 'storage-read' },
-          { resource: signal, usage: 'storage-write' },
-          { resource: diagnostics, usage: 'storage-write' },
-          { resource: target.depth, usage: 'sampled-read' },
-          { resource: target.normal.view, usage: 'sampled-read' },
-          { resource: target.identity.view, usage: 'sampled-read' },
-          { resource: target.motion.view, usage: 'sampled-read' },
-          { resource: view, usage: 'uniform-read' },
-          { resource: config, usage: 'uniform-read' },
-        ],
-        encode: ({ pass, resources }) =>
-          reconstruction.kernel
-            .record(
-              pass,
-              {
-                raw: resources.buffer(accumulation).unwrap(),
-                records: { buffer: resources.buffer(records).unwrap(), size: prepared.recordBytes },
-                previous: resources.buffer(previous).unwrap(),
-                current: resources.buffer(current).unwrap(),
-                signal: resources.buffer(signal).unwrap(),
-                diagnostics: resources.buffer(diagnostics).unwrap(),
-                depth: resources.textureView(target.depth).unwrap(),
-                normal: resources.textureView(target.normal.view).unwrap(),
-                identity: resources.textureView(target.identity.view).unwrap(),
-                motion: resources.textureView(target.motion.view).unwrap(),
-                view: { buffer: resources.buffer(view).unwrap(), size: VIEW_UNIFORM_BYTES },
-                config: resources.buffer(config).unwrap(),
-              },
-              prepared.pixelCount,
-              stage,
-            )
-            .unwrap(),
-      });
-      if (!added.ok) return added;
-    }
-    irradiance = signal;
+  if (prepared.reconstruction !== undefined) {
+    const reconstructed = addRayReconstructionPasses(
+      graph,
+      'ray-diffuse',
+      prepared.reconstruction,
+      accumulation,
+      shared,
+      target,
+    );
+    if (!reconstructed.ok) return reconstructed;
+    irradiance = reconstructed.value;
   }
-  return graph.addRasterPass('ray-diffuse.composite', {
+  const composited = graph.addRasterPass('ray-diffuse.composite', {
     accesses: [
       { resource: target.scene.view, usage: 'color-attachment' },
       { resource: irradiance, usage: 'storage-read' },
@@ -238,4 +149,13 @@ export function addRayDiffusePasses(
         .unwrap();
     },
   });
+  if (!composited.ok || prepared.reflections === undefined || target.reflection === undefined)
+    return composited;
+  return addRayReflectionPasses(
+    graph,
+    prepared.reflections,
+    { ...shared, textures, fence: prepared.fence, generation: prepared.generation },
+    target,
+    target.reflection,
+  );
 }

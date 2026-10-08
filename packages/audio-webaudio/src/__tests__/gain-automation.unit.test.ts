@@ -58,10 +58,11 @@ function makeBuffer(): AudioBuffer {
 }
 
 function installAudioContext() {
-  const gains = [makeGain(1), makeGain(1), makeGain(1), makeGain(1)];
+  const gains = Array.from({ length: 16 }, () => makeGain(1));
   let gainIndex = 0;
   const source = {
     buffer: null,
+    playbackRate: { value: 1, setValueAtTime: vi.fn() },
     loop: false,
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -105,9 +106,9 @@ describe('WebAudioEngine live gain automation', () => {
     const engine = new WebAudioEngine();
     engine.play(1, makeBuffer(), { loop: true, volume: 0.5, spatialBlend: 0, bus: 'sfx' });
 
-    const sourceGain = gains[3]?.param;
-    const sfxGain = gains[1]?.param;
-    const musicGain = gains[2]?.param;
+    const sourceGain = gains[15]?.param;
+    const sfxGain = gains[9]?.param;
+    const musicGain = gains[14]?.param;
     expect(sourceGain).toBeDefined();
     expect(sfxGain).toBeDefined();
     expect(musicGain).toBeDefined();
@@ -134,10 +135,12 @@ describe('WebAudioEngine live gain automation', () => {
     expect(sfxGain.valueSets).not.toHaveBeenCalled();
     expect(musicGain.valueSets).not.toHaveBeenCalled();
 
+    const musicMute = gains[13]?.param;
+    if (!musicMute) throw new Error('missing music mute gain');
     engine.setBusMute('music', true);
-    expectTransition(musicGain, 12.51, 2, 0);
+    expectTransition(musicMute, 12.51, 1, 0);
     engine.setBusMute('music', false);
-    expectTransition(musicGain, 12.51, 0, 2);
+    expectTransition(musicMute, 12.51, 0, 1);
 
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
     expect(ctx.createBufferSource).toHaveBeenCalledTimes(1);
@@ -150,8 +153,8 @@ describe('WebAudioEngine live gain automation', () => {
     const engine = new WebAudioEngine();
     engine.play(1, makeBuffer(), { loop: true, volume: 0.5, spatialBlend: 0, bus: 'sfx' });
 
-    const sourceGain = gains[3]?.param;
-    const musicGain = gains[2]?.param;
+    const sourceGain = gains[15]?.param;
+    const musicGain = gains[14]?.param;
     expect(sourceGain).toBeDefined();
     expect(musicGain).toBeDefined();
     if (!sourceGain || !musicGain) return;
@@ -167,7 +170,11 @@ describe('WebAudioEngine live gain automation', () => {
     engine.setBusMute('music', false);
 
     expect(sourceGain.linearRampToValueAtTime).toHaveBeenCalledTimes(sourceRamps);
-    expect(musicGain.linearRampToValueAtTime).toHaveBeenCalledTimes(musicRamps + 2);
+    expect(musicGain.linearRampToValueAtTime).toHaveBeenCalledTimes(musicRamps);
     expect(musicGain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0.4, ctx.currentTime + 0.01);
+    expect(gains[13]?.param.linearRampToValueAtTime).toHaveBeenLastCalledWith(
+      1,
+      ctx.currentTime + 0.01,
+    );
   });
 });

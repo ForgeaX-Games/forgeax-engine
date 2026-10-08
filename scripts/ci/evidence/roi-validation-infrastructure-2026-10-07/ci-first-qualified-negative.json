@@ -1,0 +1,515 @@
+{
+  "qualification": "failed-first-attempt-retained",
+  "head": "e4065eac6cb3be0e88bce4009139f34715f487ad",
+  "main": {
+    "runId": 37580668216,
+    "url": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37580668216",
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-10-07T06:17:02Z",
+    "lastJobCompletedAt": "2026-10-07T07:02:33Z",
+    "jobs": [
+      {
+        "name": "ci-core",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:17:06Z",
+        "completedAt": "2026-10-07T06:20:45Z"
+      },
+      {
+        "name": "shared-app-inputs",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:17:07Z",
+        "completedAt": "2026-10-07T06:21:59Z"
+      },
+      {
+        "name": "shared-evidence-probe",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:17:04Z",
+        "completedAt": "2026-10-07T06:17:03Z"
+      },
+      {
+        "name": "post-merge-gate",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:17:04Z",
+        "completedAt": "2026-10-07T06:17:03Z"
+      },
+      {
+        "name": "coverage-perf",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:20:51Z",
+        "completedAt": "2026-10-07T06:23:00Z"
+      },
+      {
+        "name": "publish-fbx-wasm-release",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:20:46Z",
+        "completedAt": "2026-10-07T06:20:46Z"
+      },
+      {
+        "name": "publish-wgpu-wasm-release",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:20:46Z",
+        "completedAt": "2026-10-07T06:20:46Z"
+      },
+      {
+        "name": "publish-basis-wasm-release",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:20:46Z",
+        "completedAt": "2026-10-07T06:20:46Z"
+      },
+      {
+        "name": "primary-pnpm",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:06Z",
+        "completedAt": "2026-10-07T06:33:28Z"
+      },
+      {
+        "name": "app-shard-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:25:16Z",
+        "completedAt": "2026-10-07T06:32:45Z"
+      },
+      {
+        "name": "app-shard-0",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:10Z",
+        "completedAt": "2026-10-07T06:26:39Z"
+      },
+      {
+        "name": "app-shard-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:23:05Z",
+        "completedAt": "2026-10-07T06:35:17Z"
+      },
+      {
+        "name": "coverage-pnpm-shard-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:07Z",
+        "completedAt": "2026-10-07T06:36:34Z"
+      },
+      {
+        "name": "coverage-pnpm-shard-0",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:25:12Z",
+        "completedAt": "2026-10-07T06:46:53Z"
+      },
+      {
+        "name": "vitest-browser-shard-0",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:45Z",
+        "completedAt": "2026-10-07T06:39:54Z"
+      },
+      {
+        "name": "coverage-pnpm-shard-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:25:06Z",
+        "completedAt": "2026-10-07T06:38:42Z"
+      },
+      {
+        "name": "webkit-fallback",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:26:41Z",
+        "completedAt": "2026-10-07T06:29:03Z"
+      },
+      {
+        "name": "vitest-browser-shard-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:31Z",
+        "completedAt": "2026-10-07T06:59:15Z"
+      },
+      {
+        "name": "shared-inputs-browser",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:25:13Z",
+        "completedAt": "2026-10-07T06:36:03Z"
+      },
+      {
+        "name": "directional-csm-browser",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:23:08Z",
+        "completedAt": "2026-10-07T06:25:15Z"
+      },
+      {
+        "name": "vitest-browser-shard-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:23:01Z",
+        "completedAt": "2026-10-07T06:45:55Z"
+      },
+      {
+        "name": "multithread-browser-benchmark",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:23:08Z",
+        "completedAt": "2026-10-07T06:27:48Z"
+      },
+      {
+        "name": "gpu-pass-timing-contract",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:22:03Z",
+        "completedAt": "2026-10-07T06:23:52Z"
+      },
+      {
+        "name": "view-integration-3",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:27:40Z",
+        "completedAt": "2026-10-07T06:36:47Z"
+      },
+      {
+        "name": "view-integration-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:28:27Z",
+        "completedAt": "2026-10-07T06:40:09Z"
+      },
+      {
+        "name": "view-integration-0",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:27:51Z",
+        "completedAt": "2026-10-07T06:36:18Z"
+      },
+      {
+        "name": "vitest-dawn-1-of-4",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:26:30Z",
+        "completedAt": "2026-10-07T06:41:01Z"
+      },
+      {
+        "name": "view-integration-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:26:42Z",
+        "completedAt": "2026-10-07T06:39:55Z"
+      },
+      {
+        "name": "vitest-dawn-4-of-4",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:25:43Z",
+        "completedAt": "2026-10-07T06:40:14Z"
+      },
+      {
+        "name": "bevy-smoke-fleet-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:24:43Z",
+        "completedAt": "2026-10-07T06:31:37Z"
+      },
+      {
+        "name": "bevy-smoke-fleet-0",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:24:49Z",
+        "completedAt": "2026-10-07T06:34:32Z"
+      },
+      {
+        "name": "vitest-dawn-3-of-4",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:26:06Z",
+        "completedAt": "2026-10-07T06:43:15Z"
+      },
+      {
+        "name": "bevy-smoke-fleet-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:23:39Z",
+        "completedAt": "2026-10-07T06:31:45Z"
+      },
+      {
+        "name": "vitest-dawn-2-of-4",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:26:13Z",
+        "completedAt": "2026-10-07T06:46:12Z"
+      },
+      {
+        "name": "vitest-browser-shard-3",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:28:36Z",
+        "completedAt": "2026-10-07T07:01:42Z"
+      },
+      {
+        "name": "metrics-validate-browser",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:29:07Z",
+        "completedAt": "2026-10-07T06:36:31Z"
+      },
+      {
+        "name": "bevy-smoke-fleet",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:34:35Z",
+        "completedAt": "2026-10-07T06:34:46Z"
+      },
+      {
+        "name": "metrics-validate-runtime",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:34:36Z",
+        "completedAt": "2026-10-07T06:36:31Z"
+      },
+      {
+        "name": "build-artifacts",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:22Z",
+        "completedAt": "2026-10-07T06:35:52Z"
+      },
+      {
+        "name": "cache-warm",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:35:18Z",
+        "completedAt": "2026-10-07T06:35:18Z"
+      },
+      {
+        "name": "collectathon-boot-e2e",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:57Z",
+        "completedAt": "2026-10-07T06:38:03Z"
+      },
+      {
+        "name": "portability-bun",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:58Z",
+        "completedAt": "2026-10-07T06:38:02Z"
+      },
+      {
+        "name": "smoke-fleet-0",
+        "conclusion": "failure",
+        "startedAt": "2026-10-07T06:35:58Z",
+        "completedAt": "2026-10-07T06:45:55Z"
+      },
+      {
+        "name": "smoke-fleet-1",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:58Z",
+        "completedAt": "2026-10-07T06:44:34Z"
+      },
+      {
+        "name": "smoke-fleet-2",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:55Z",
+        "completedAt": "2026-10-07T06:46:33Z"
+      },
+      {
+        "name": "smoke-fleet-3",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:35:57Z",
+        "completedAt": "2026-10-07T06:48:12Z"
+      },
+      {
+        "name": "auto-exposure-feature-evidence",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T06:35:53Z",
+        "completedAt": "2026-10-07T06:35:53Z"
+      },
+      {
+        "name": "metrics-validate",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:36:35Z",
+        "completedAt": "2026-10-07T06:39:25Z"
+      },
+      {
+        "name": "view-integration",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:40:14Z",
+        "completedAt": "2026-10-07T06:40:35Z"
+      },
+      {
+        "name": "vitest-dawn",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:46:19Z",
+        "completedAt": "2026-10-07T06:46:29Z"
+      },
+      {
+        "name": "coverage-pnpm",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T06:46:59Z",
+        "completedAt": "2026-10-07T06:49:13Z"
+      },
+      {
+        "name": "smoke-fleet",
+        "conclusion": "failure",
+        "startedAt": "2026-10-07T06:48:23Z",
+        "completedAt": "2026-10-07T06:48:59Z"
+      },
+      {
+        "name": "vitest-browser",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T07:01:46Z",
+        "completedAt": "2026-10-07T07:01:57Z"
+      },
+      {
+        "name": "sticky-comment",
+        "conclusion": "success",
+        "startedAt": "2026-10-07T07:02:02Z",
+        "completedAt": "2026-10-07T07:02:32Z"
+      },
+      {
+        "name": "cost-reporter",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T07:01:57Z",
+        "completedAt": "2026-10-07T07:01:57Z"
+      },
+      {
+        "name": "cleanup-transient-artifacts",
+        "conclusion": "skipped",
+        "startedAt": "2026-10-07T07:02:33Z",
+        "completedAt": "2026-10-07T07:02:33Z"
+      }
+    ],
+    "workflowUpdatedAt": "2026-10-07T07:02:34Z",
+    "elapsedSecondsCreatedToLastJobIncludingQueue": 2731,
+    "elapsedSecondsCreatedToTerminalUpdateIncludingQueue": 2732
+  },
+  "sdk": {
+    "runId": 37580668228,
+    "url": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37580668228",
+    "status": "completed",
+    "conclusion": "failure",
+    "consumers": [
+      {
+        "name": "sdk-seed",
+        "conclusion": "success"
+      },
+      {
+        "name": "sdk-consumer-project",
+        "conclusion": "success"
+      },
+      {
+        "name": "sdk-consumer-npm",
+        "conclusion": "failure"
+      },
+      {
+        "name": "sdk-consumer-source",
+        "conclusion": "success"
+      },
+      {
+        "name": "sdk-consumer-view",
+        "conclusion": "success"
+      },
+      {
+        "name": "sdk-build",
+        "conclusion": "failure"
+      }
+    ],
+    "workflowUpdatedAt": "2026-10-07T06:45:27Z",
+    "elapsedSecondsCreatedToLastJobIncludingQueue": 1705
+  },
+  "gizmo": {
+    "sourceArtifactId": 11465896324,
+    "sourceArtifactUrl": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37580668216/artifacts/11465896324",
+    "sourceShardSha256": "bf37ee53285a8a1a800cdd2f2613d1854787740f35bc4488ccd65964ebacbfeb",
+    "rosterDigest": "842fa1157cb2970204e21745a0c3f0859796d03e1b7ab1388b61a8446fcbcb08",
+    "framesExpected": 60,
+    "selectedOriginalEntry": {
+      "package": "@forgeax/hello-transform-gizmo",
+      "path": "apps/hello/transform-gizmo/package.json",
+      "gateId": "hello-transform-gizmo/browser",
+      "commandId": "smoke:browser",
+      "shardIndex": 0,
+      "command": "pnpm --filter @forgeax/hello-transform-gizmo smoke:browser",
+      "exitCode": null,
+      "signal": "SIGTERM",
+      "timedOut": true,
+      "unavailable": false,
+      "skipped": true,
+      "framesObserved": null,
+      "framesExpected": 60,
+      "status": "fail",
+      "result": "fail",
+      "unavailableOrSkipped": true,
+      "logPath": "logs/8725ddb3f3eaf4d93886bdbed4861f752b473b58c167ad14b2ea6d2144ca28e4.log",
+      "logSha256": "b03ea68c7ea26813435bf25029e0adbbae4bd8114e098bd6bfd87d546a468d1e",
+      "logBytes": 8017,
+      "receipt": null,
+      "commandResults": [
+        {
+          "commandId": "smoke:browser",
+          "command": "pnpm --filter @forgeax/hello-transform-gizmo smoke:browser",
+          "exitCode": null,
+          "signal": "SIGTERM",
+          "timedOut": true,
+          "status": "fail"
+        }
+      ],
+      "failureReason": "timeout"
+    }
+  },
+  "commonIntegrationRoute": {
+    "qualification": "tested-gizmo-route-only-not-final-acceptance-or-causal-speedup",
+    "head": "06c613cee7ce12f2b0f95fb1fe214ee9adfd04fa",
+    "runId": 37582350656,
+    "artifactId": 11466855358,
+    "artifactUrl": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37582350656/artifacts/11466855358",
+    "sameRosterDigest": true,
+    "sameDeclaredGates": true,
+    "sameAssignedGates": true,
+    "sameFrameRequirement": true,
+    "selectedOriginalEntry": {
+      "package": "@forgeax/hello-transform-gizmo",
+      "path": "apps/hello/transform-gizmo/package.json",
+      "gateId": "hello-transform-gizmo/browser",
+      "commandId": "smoke:browser",
+      "shardIndex": 0,
+      "command": "pnpm --filter @forgeax/hello-transform-gizmo smoke:browser",
+      "exitCode": 0,
+      "signal": null,
+      "timedOut": false,
+      "unavailable": false,
+      "skipped": false,
+      "framesObserved": 332,
+      "framesExpected": 60,
+      "status": "pass",
+      "result": "pass",
+      "unavailableOrSkipped": false,
+      "logPath": "logs/8725ddb3f3eaf4d93886bdbed4861f752b473b58c167ad14b2ea6d2144ca28e4.log",
+      "logSha256": "7bda2ff49ab3082358520c3d7bdc5e59475208dfeb0adb460145d4eb322e6270",
+      "logBytes": 69317,
+      "receipt": {
+        "schemaVersion": 1,
+        "gateId": "hello-transform-gizmo/browser",
+        "commandId": "smoke:browser",
+        "framesObserved": 332,
+        "completed": true,
+        "rawLine": "[forgeax-smoke-receipt] {\"schemaVersion\":1,\"gateId\":\"hello-transform-gizmo/browser\",\"commandId\":\"smoke:browser\",\"framesObserved\":332,\"completed\":true}",
+        "rawLineSha256": "17563ace10eb5bb081826f08576a10d4b299c6b4e907ab7a606cbd0bd229e1a4",
+        "parserId": "forgeax-smoke-receipt-v1"
+      },
+      "commandResults": [
+        {
+          "commandId": "smoke:browser",
+          "command": "pnpm --filter @forgeax/hello-transform-gizmo smoke:browser",
+          "exitCode": 0,
+          "signal": null,
+          "timedOut": false,
+          "status": "pass"
+        }
+      ],
+      "failureReason": null
+    }
+  },
+  "rawFiles": [
+    {
+      "path": "ci-first-gizmo.log",
+      "bytes": 8017,
+      "sha256": "b03ea68c7ea26813435bf25029e0adbbae4bd8114e098bd6bfd87d546a468d1e"
+    },
+    {
+      "path": "ci-first-sdk-npm.log",
+      "bytes": 86801,
+      "sha256": "22f3cb2245e2e398edd82c5ef5002bc80a8fd20331e44426122f5a56ba2e98b2"
+    },
+    {
+      "path": "ci-first-sdk-npm-failure.log",
+      "bytes": 4709,
+      "sha256": "8ea5b48004f8a879676ba87466d039e6e576234f1894f990f2ef72bc32c67422"
+    },
+    {
+      "path": "ci-first-sdk-restored-preview.png",
+      "bytes": 322245,
+      "sha256": "d81d7b612a79b3a211049813396a29fde24562514f8e3eca5d600ca48f071cbd",
+      "storage": "external; untracked Engine file retained until owned cleanup",
+      "artifactUrl": "https://github.com/ForgeaX-Games/forgeax-engine/actions/runs/37580668228/artifacts/11465485991",
+      "artifactMember": "view-registry/runtime-js/live/failure.png",
+      "retainedLocalPath": "/private/tmp/roi-validation-infrastructure-20261007/sdk-npm-first-artifact/view-registry/runtime-js/live/failure.png"
+    }
+  ],
+  "limits": [
+    "No target-specific failing restored-preview tape was captured. A prior successful-target tape does not qualify it.",
+    "The restored world4 failure directly reports no adapter. SwiftShader is only evidenced by the pinned launch configuration.",
+    "App throttledTicks measures frame-credit backpressure, not Linux CPU quota throttling.",
+    "Independent failure-diagnostics.json observes resident world1/frame0, not failing restored world4.",
+    "Common 60-ready-frame startup failure differs from this 10-second fresh-ready-frame failure.",
+    "No matched CPU pressure/RSS/critical-path proof or aggregate speedup.",
+    "Mac native Chromium watchdog exit2 remains unqualified as healthy shutdown."
+  ]
+}

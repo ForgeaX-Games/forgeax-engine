@@ -1,11 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { AssetCodec, CookReceipt } from '@forgeax/engine-types';
+import type { ArtifactDescriptor, CookReceipt, ImportedArtifactBody } from '@forgeax/engine-types';
 
-export interface PackageArtifactBody {
-  readonly mediaType: string;
-  readonly assetCodec?: AssetCodec;
-  readonly bytes: Uint8Array;
-}
+export type PackageArtifactBody = ImportedArtifactBody;
 
 export interface PackageProductAsset {
   readonly guid: string;
@@ -24,10 +20,7 @@ export interface PackageProduct {
   readonly sourceKey?: string;
 }
 
-export interface PackageDocumentArtifact {
-  readonly path: string;
-  readonly mediaType: string;
-  readonly assetCodec?: AssetCodec;
+export interface PackageDocumentArtifact extends ArtifactDescriptor {
   readonly byteLength: number;
   readonly integrity: { readonly algorithm: 'sha256'; readonly digest: string };
 }
@@ -97,7 +90,13 @@ function failure(
 
 function sorted(value: unknown): unknown {
   if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
-  if (Array.isArray(value)) return value.map(sorted);
+  if (Array.isArray(value)) {
+    // Serialized shader/mesh bytes are already canonical scalar sequences.
+    // Hashing never mutates them; avoid retaining another full numeric copy.
+    if (!Object.hasOwn(value, 'toJSON') && value.every((item) => typeof item === 'number'))
+      return value;
+    return value.map(sorted);
+  }
   if (value !== null && typeof value === 'object') {
     const output: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
@@ -136,6 +135,7 @@ function digest(assets: readonly PackageProductAsset[]): string {
               key,
               {
                 mediaType: artifact.mediaType,
+                ...(artifact.delivery === undefined ? {} : { delivery: artifact.delivery }),
                 ...(artifact.assetCodec === undefined ? {} : { assetCodec: artifact.assetCodec }),
                 byteLength: artifact.bytes.byteLength,
               },
@@ -177,6 +177,7 @@ function packageDocument(
           {
             path: artifactPath(asset.guid, key),
             mediaType: artifact.mediaType,
+            ...(artifact.delivery === undefined ? {} : { delivery: artifact.delivery }),
             ...(artifact.assetCodec === undefined ? {} : { assetCodec: artifact.assetCodec }),
             contentEncoding: 'identity' as const,
             byteLength: artifact.bytes.byteLength,
@@ -202,6 +203,7 @@ function transportArtifacts(
         localKey,
         path: artifactPath(asset.guid, localKey),
         mediaType: artifact.mediaType,
+        ...(artifact.delivery === undefined ? {} : { delivery: artifact.delivery }),
         ...(artifact.assetCodec === undefined ? {} : { assetCodec: artifact.assetCodec }),
         bytes: artifact.bytes,
       },
@@ -360,7 +362,11 @@ function revisionStable(value: unknown, digestBytes: (bytes: Uint8Array) => stri
       digest: digestBytes(value),
     };
   }
-  if (Array.isArray(value)) return value.map((item) => revisionStable(item, digestBytes));
+  if (Array.isArray(value)) {
+    if (!Object.hasOwn(value, 'toJSON') && value.every((item) => typeof item === 'number'))
+      return value;
+    return value.map((item) => revisionStable(item, digestBytes));
+  }
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)

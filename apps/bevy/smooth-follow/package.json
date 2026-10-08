@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Reproduction of Bevy's `smooth_follow` example (a red sphere smoothly chasing a moving blue target) — a MOTION demo exercising createApp's managed frame-loop + auto-Time resource + chained world.addSystem Update systems driving vec3.smoothDamp, the new frame-rate-independent damping helper mapping Bevy's Vec3::smooth_nudge.",
+  "description": "Reproduction of Bevy's `smooth_follow` example (a red sphere smoothly chasing a moving blue target) \u2014 a MOTION demo exercising createApp's managed frame-loop + auto-Time resource + chained world.addSystem Update systems driving vec3.smoothDamp, the new frame-rate-independent damping helper mapping Bevy's Vec3::smooth_nudge.",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -53,8 +53,8 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

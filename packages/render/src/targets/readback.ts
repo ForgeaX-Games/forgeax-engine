@@ -12,7 +12,7 @@ export interface RenderTargetReadbackTicketInput {
   readonly frameId?: number;
   deviceGeneration: number;
   readonly mipLevel: number;
-  readonly face?: number;
+  readonly layer?: number;
   readonly width: number;
   readonly height: number;
   readonly bytesPerPixel: number;
@@ -23,7 +23,7 @@ export interface RenderTargetReadbackTicket {
   frameId: number | undefined;
   deviceGeneration: number;
   readonly mipLevel: number;
-  readonly face?: number;
+  readonly layer?: number;
   readonly width: number;
   readonly height: number;
   readonly bytesPerRow: number;
@@ -36,7 +36,7 @@ export interface RenderTargetReadbackResult {
   readonly frameId: number;
   readonly deviceGeneration: number;
   readonly mipLevel: number;
-  readonly face?: number;
+  readonly layer?: number;
 }
 
 function invalidTicket(
@@ -104,7 +104,7 @@ export function createRenderTargetReadbackTicket(
       frameId: input.frameId,
       deviceGeneration: input.deviceGeneration,
       mipLevel: input.mipLevel,
-      ...(input.face === undefined ? {} : { face: input.face }),
+      ...(input.layer === undefined ? {} : { layer: input.layer }),
       width: input.width,
       height: input.height,
       bytesPerRow,
@@ -147,7 +147,7 @@ export function completeRenderTargetReadback(
       frameId: ticket.frameId,
       deviceGeneration: ticket.deviceGeneration,
       mipLevel: ticket.mipLevel,
-      ...(ticket.face === undefined ? {} : { face: ticket.face }),
+      ...(ticket.layer === undefined ? {} : { layer: ticket.layer }),
     },
   };
 }

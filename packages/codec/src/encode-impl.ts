@@ -23,8 +23,6 @@ const defaultImporter: ZstdImporter = () => zstdRequire('@bokuweb/zstd-wasm');
 
 let importer: ZstdImporter = defaultImporter;
 
-/** Lazy-init singleton handle for the build-time zstd WASM encoder. @internal */
-let _zstd: ZstdWasm | null = null;
 /**
  * Shared while the encoder WASM is initializing; cleared after a failed attempt.
  * The dependency mutates module-level emscripten exports and memory views on
@@ -32,25 +30,16 @@ let _zstd: ZstdWasm | null = null;
  * @internal
  */
 let _initPromise: Promise<ZstdWasm> | null = null;
-/** Test-only count of encoder WASM initialization attempts. @internal */
-let initCount = 0;
 
 function getZstd(): Promise<ZstdWasm> {
-  if (_zstd !== null) {
-    return Promise.resolve(_zstd);
-  }
   if (_initPromise !== null) {
     return _initPromise;
   }
 
-  initCount++;
   _initPromise = Promise.resolve()
     .then(() => {
       const mod = importer();
-      return mod.init().then(() => {
-        _zstd = mod;
-        return mod;
-      });
+      return mod.init().then(() => mod);
     })
     .catch((cause: unknown) => {
       // Clear cached failure so a later import can retry (do not permanently cache).
@@ -61,22 +50,12 @@ function getZstd(): Promise<ZstdWasm> {
 }
 
 /**
- * Test-only: number of zstd encoder WASM initialization attempts.
- * @internal
- */
-export function _zstdEncodeInitCount(): number {
-  return initCount;
-}
-
-/**
  * Test-only: reset the encoder singleton and optionally override its importer.
  * @internal
  */
 export function _setZstdEncoderImporter(next?: ZstdImporter): void {
   importer = next ?? defaultImporter;
-  _zstd = null;
   _initPromise = null;
-  initCount = 0;
 }
 
 /**

@@ -10,12 +10,11 @@ describe('HostAudioState bus name owner', () => {
     }>();
   });
 
-  it('preserves the exact closed bus vocabulary', () => {
-    expectTypeOf<BusName>().toEqualTypeOf<'sfx' | 'music'>();
+  it('uses the configured bus ID directly', () => {
+    expectTypeOf<BusName>().toEqualTypeOf<string>();
     const acceptBusName = (busName: BusName): BusName => busName;
     expect(acceptBusName('sfx')).toBe('sfx');
     expect(acceptBusName('music')).toBe('music');
-    // @ts-expect-error BusName intentionally excludes additional buses.
     acceptBusName('voice');
   });
 });

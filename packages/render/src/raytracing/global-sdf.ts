@@ -2,13 +2,20 @@ import type { FieldVec3 } from '@forgeax/engine-geometry';
 import type {
   Buffer,
   RhiCommandEncoder,
+  RhiComputePassEncoder,
   RhiDevice,
-  RhiError,
   ShaderModule,
 } from '@forgeax/engine-rhi';
-import { ok, type Result } from '@forgeax/engine-types';
+import { RhiError } from '@forgeax/engine-rhi';
+import { err, ok, type Result } from '@forgeax/engine-types';
 import { type RayReferenceError, rayGeometryKey, rayReferenceFailure } from './scene';
-import { packSdfScene, SDF_SAMPLE_WGSL, type SdfMeshInstance, sdfInstanceKey } from './sdf-query';
+import {
+  packSdfScene,
+  SDF_INSTANCE_STRIDE,
+  SDF_SAMPLE_WGSL,
+  type SdfMeshInstance,
+  sdfInstanceKey,
+} from './sdf-query';
 
 export const GlobalSdfVoxelStatus = { unwritten: 0, complete: 1, missingField: 2 } as const;
 export interface GlobalSdfGrid {
@@ -34,13 +41,13 @@ export interface GlobalSdfComposition {
     settings: Buffer;
     voxels: Buffer;
   }>;
-  record(encoder: RhiCommandEncoder): Result<void, RayReferenceError>;
+  record(encoder: RhiCommandEncoder): Result<void, RayReferenceError | RhiError>;
   dispose(): void;
 }
 // The output is a diagnostic composition, not a triangle hit or Card identity.
 // Each voxel is { distance: f32, coverage: f32, status: u32, nearestInstance: u32 }.
 export const GLOBAL_SDF_VOXEL_STRIDE = 16;
-const GLOBAL_SDF_COMPOSE_WGSL = `
+export const GLOBAL_SDF_COMPOSE_WGSL = `
 ${SDF_SAMPLE_WGSL}
 struct ObjectBounds { lo: vec4f, hi: vec4f, scale: vec4f }
 struct Settings { originSpacing: vec4f, dimensionsCount: vec4u, ranges: vec4f }
@@ -53,8 +60,20 @@ struct GlobalVoxel { distance: f32, coverage: f32, status: u32, nearestInstance:
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let dims=settings.dimensionsCount.xyz;
-  let count=dims.x*dims.y*dims.z;if(gid.x>=count){return;}
-  let cell=vec3u(gid.x%dims.x,(gid.x/dims.x)%dims.y,gid.x/(dims.x*dims.y));
+  let count=dims.x*dims.y*dims.z;
+  // ranges.zw: optional edit box as exact f32 integers, x|y<<8|z<<16 (lo, extent).
+  let boxExtent=u32(settings.ranges.w);var cell:vec3u;
+  if(boxExtent==0u){
+    if(gid.x>=count){return;}
+    cell=vec3u(gid.x%dims.x,(gid.x/dims.x)%dims.y,gid.x/(dims.x*dims.y));
+  }else{
+    let boxLo=u32(settings.ranges.z);
+    let e=vec3u(boxExtent&255u,(boxExtent>>8u)&255u,boxExtent>>16u);
+    if(gid.x>=e.x*e.y*e.z){return;}
+    cell=vec3u(boxLo&255u,(boxLo>>8u)&255u,boxLo>>16u)+vec3u(gid.x%e.x,(gid.x/e.x)%e.y,gid.x/(e.x*e.y));
+    if(any(cell>=dims)){return;}
+  }
+  let index=cell.x+cell.y*dims.x+cell.z*dims.x*dims.y;
   let world=settings.originSpacing.xyz+vec3f(cell)*settings.originSpacing.w;
   var distance=settings.ranges.x;var nearest=0xffffffffu;var missing=false;
   var oneSided=false;var twoSided=false;
@@ -75,20 +94,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   let coverage=select(1.0,0.0,twoSided&&!oneSided);
-  voxels[gid.x]=GlobalVoxel(clamp(distance,-settings.ranges.x,settings.ranges.x),coverage,select(${GlobalSdfVoxelStatus.complete}u,${GlobalSdfVoxelStatus.missingField}u,missing),nearest);
+  voxels[index]=GlobalVoxel(clamp(distance,-settings.ranges.x,settings.ranges.x),coverage,select(${GlobalSdfVoxelStatus.complete}u,${GlobalSdfVoxelStatus.missingField}u,missing),nearest);
 }
 `;
 
-/** Frozen, single-region mesh-to-world composition. No residency, ray tracing, or GI publication. */
-export async function createGlobalSdfComposition(
-  device: RhiDevice,
-  compile: (
-    device: RhiDevice,
-    desc: { code: string; label?: string },
-  ) => Promise<Result<ShaderModule, RhiError>>,
-  source: readonly SdfMeshInstance[],
-  grid: GlobalSdfGrid,
-): Promise<Result<GlobalSdfComposition, RayReferenceError | RhiError>> {
+/** Validate the canonical f32 grid without allocating field or GPU storage. */
+export function normalizeGlobalSdfGrid(grid: GlobalSdfGrid) {
+  if (!grid || !Array.isArray(grid.origin) || !Array.isArray(grid.dimensions))
+    return rayReferenceFailure('global SDF requires origin and dimension triples');
   const numeric = [...grid.origin, grid.spacing, grid.maxDistance, grid.coverageDistance];
   if (
     grid.origin.length !== 3 ||
@@ -119,6 +132,21 @@ export async function createGlobalSdfComposition(
       previous = center;
     }
   }
+  const frozen: GlobalSdfGrid = {
+    origin: [Math.fround(grid.origin[0]), Math.fround(grid.origin[1]), Math.fround(grid.origin[2])],
+    dimensions: [grid.dimensions[0], grid.dimensions[1], grid.dimensions[2]],
+    spacing: Math.fround(grid.spacing),
+    maxDistance: Math.fround(grid.maxDistance),
+    coverageDistance: Math.fround(grid.coverageDistance),
+  };
+  return ok(frozen);
+}
+
+/** Canonical frozen scene/grid projection shared by reference and Renderer owners. */
+export function packGlobalSdfComposition(source: readonly SdfMeshInstance[], grid: GlobalSdfGrid) {
+  const normalized = normalizeGlobalSdfGrid(grid);
+  if (!normalized.ok) return normalized;
+  const frozen = normalized.value;
   const packed = packSdfScene(source, 1024);
   if (!packed.ok) return packed;
   const sources = source.map((m) => ({
@@ -172,13 +200,6 @@ export async function createGlobalSdfComposition(
       view.setFloat32(i * 48 + k * 4, v, true);
     });
   }
-  const frozen: GlobalSdfGrid = {
-    origin: [Math.fround(grid.origin[0]), Math.fround(grid.origin[1]), Math.fround(grid.origin[2])],
-    dimensions: [...grid.dimensions],
-    spacing: Math.fround(grid.spacing),
-    maxDistance: Math.fround(grid.maxDistance),
-    coverageDistance: Math.fround(grid.coverageDistance),
-  };
   const count = grid.dimensions[0] * grid.dimensions[1] * grid.dimensions[2];
   const settings = new Uint8Array(48),
     sv = new DataView(settings.buffer);
@@ -197,6 +218,22 @@ export async function createGlobalSdfComposition(
     settings,
     voxels: new Uint8Array(count * GLOBAL_SDF_VOXEL_STRIDE),
   };
+  return ok({ grid: frozen, voxelCount: count, sources, data });
+}
+
+/** Frozen, single-region mesh-to-world composition. No residency, ray tracing, or GI publication. */
+export async function createGlobalSdfComposition(
+  device: RhiDevice,
+  compile: (
+    device: RhiDevice,
+    desc: { code: string; label?: string },
+  ) => Promise<Result<ShaderModule, RhiError>>,
+  source: readonly SdfMeshInstance[],
+  grid: GlobalSdfGrid,
+): Promise<Result<GlobalSdfComposition, RayReferenceError | RhiError>> {
+  const prepared = packGlobalSdfComposition(source, grid);
+  if (!prepared.ok) return prepared;
+  const { grid: frozen, voxelCount: count, sources, data } = prepared.value;
   const buffers = {} as Record<keyof typeof data, Buffer>,
     owned: Buffer[] = [];
   let disposed = false;
@@ -233,41 +270,17 @@ export async function createGlobalSdfComposition(
     dispose();
     return shader;
   }
-  const bgl = device.createBindGroupLayout({
-    entries: [0, 1, 2, 3, 4].map((binding) => ({
-      binding,
-      visibility: 4,
-      buffer: { type: binding === 3 ? 'uniform' : binding === 4 ? 'storage' : 'read-only-storage' },
-    })),
-  });
-  if (!bgl.ok) {
+  const recorder = createGlobalSdfCompositionRecorder(device, shader.value);
+  if (!recorder.ok) {
     dispose();
-    return bgl;
+    return recorder;
   }
-  const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl.value] });
-  if (!layout.ok) {
-    dispose();
-    return layout;
-  }
-  const group = device.createBindGroup({
-    layout: bgl.value,
-    entries: Object.values(buffers).map((buffer, binding) => ({
-      binding,
-      resource: { kind: 'buffer' as const, value: { buffer } },
-    })),
-  });
-  if (!group.ok) {
-    dispose();
-    return group;
-  }
-  const pipeline = device.createComputePipeline({
-    layout: layout.value,
-    compute: { module: shader.value, entryPoint: 'main' },
-  });
-  if (!pipeline.ok) {
-    dispose();
-    return pipeline;
-  }
+  const input = Object.fromEntries(
+    (Object.keys(data) as (keyof typeof data)[]).map((name) => [
+      name,
+      { buffer: buffers[name], size: data[name].byteLength },
+    ]),
+  ) as GlobalSdfCompositionInputs;
   return ok({
     grid: frozen,
     voxelCount: count,
@@ -276,12 +289,203 @@ export async function createGlobalSdfComposition(
     record(encoder) {
       if (disposed) return rayReferenceFailure('global SDF composition is disposed');
       const pass = encoder.beginComputePass({ label: 'global-sdf.compose' });
-      pass.setPipeline(pipeline.value);
-      pass.setBindGroup(0, group.value);
-      pass.dispatchWorkgroups(Math.ceil(count / 64));
-      pass.end();
-      return ok(undefined);
+      try {
+        return recorder.value.record(pass, input, count);
+      } finally {
+        pass.end();
+      }
     },
     dispose,
   });
+}
+
+/** Exact borrowed ranges in the unchanged reference composition ABI. The caller
+ * initializes inputs, orders their producers and retains buffers through submission
+ * completion. Settings must describe the supplied voxelCount and instance count;
+ * instances/bounds contain max(1, instanceCount) matching rows (one padding row for
+ * an empty scene). The admitted scene/grid producer owns input-content validation.
+ * RHI validates actual allocation capacity, usage and device ownership. */
+export type GlobalSdfCompositionInputs = Readonly<
+  Record<
+    keyof GlobalSdfComposition['buffers'],
+    { readonly buffer: Buffer; readonly offset?: number; readonly size: number }
+  >
+>;
+
+/** Borrowed compute-pass composition. The producer supplies the already validated
+ * packed scene and matching grid settings; this recorder checks resource ranges,
+ * not their GPU contents. It owns no buffers, uploads, pass boundaries or submission. */
+export function createGlobalSdfCompositionRecorder(device: RhiDevice, module: ShaderModule) {
+  const failure = (expected: string, code: RhiError['code'] = 'rhi-descriptor-invalid') =>
+    err(
+      new RhiError({
+        code,
+        expected,
+        hint: 'Supply supported limits and exact borrowed ranges from the admitted Global SDF scene/grid producer.',
+      }),
+    );
+  if (!device.caps.compute || !device.caps.storageBuffer)
+    return failure(
+      'compute and storage-buffer support for Global SDF composition',
+      'rhi-not-available',
+    );
+  for (const [name, required] of [
+    ['maxBindGroups', 1],
+    ['maxBindingsPerBindGroup', 5],
+    ['maxStorageBuffersPerShaderStage', 4],
+    ['maxUniformBuffersPerShaderStage', 1],
+    ['maxUniformBufferBindingSize', 48],
+    ['maxComputeWorkgroupSizeX', 64],
+    ['maxComputeInvocationsPerWorkgroup', 64],
+  ] as const)
+    if (!(device.limits[name] >= required))
+      return failure(`Global SDF composition requires ${name} >= ${required}`, 'limit-exceeded');
+  const layout = device.createBindGroupLayout({
+    entries: [SDF_INSTANCE_STRIDE, 4, 48, 48, GLOBAL_SDF_VOXEL_STRIDE].map(
+      (minBindingSize, binding) => ({
+        binding,
+        visibility: 4,
+        buffer: {
+          type: binding === 3 ? 'uniform' : binding === 4 ? 'storage' : 'read-only-storage',
+          minBindingSize,
+        },
+      }),
+    ),
+  });
+  if (!layout.ok) return layout;
+  const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout.value] });
+  if (!pipelineLayout.ok) return pipelineLayout;
+  const pipeline = device.createComputePipeline({
+    label: 'global-sdf.compose',
+    layout: pipelineLayout.value,
+    compute: { module, entryPoint: 'main' },
+  });
+  if (!pipeline.ok) return pipeline;
+  return ok({
+    record(
+      pass: RhiComputePassEncoder,
+      input: GlobalSdfCompositionInputs,
+      voxelCount: number,
+      /** Invocations for an edit box encoded in settings; defaults to every voxel. */
+      dispatchCount = voxelCount,
+    ): Result<void, RhiError> {
+      if (
+        !Number.isSafeInteger(voxelCount) ||
+        voxelCount < 1 ||
+        voxelCount > 128 ** 3 ||
+        !(Math.ceil(voxelCount / 64) <= device.limits.maxComputeWorkgroupsPerDimension)
+      )
+        return failure(
+          'Global SDF voxel count in 1..128^3 within dispatch limits',
+          'limit-exceeded',
+        );
+      const rows = input.instances.size / SDF_INSTANCE_STRIDE;
+      if (
+        !Number.isInteger(rows) ||
+        rows < 1 ||
+        rows > 1024 ||
+        input.bounds.size !== rows * 48 ||
+        input.settings.size !== 48 ||
+        input.voxels.size !== voxelCount * GLOBAL_SDF_VOXEL_STRIDE ||
+        !Number.isSafeInteger(input.fields.size) ||
+        input.fields.size < 4 ||
+        input.fields.size % 4 !== 0
+      )
+        return failure(
+          'matching packed instance/bounds rows, u32 field words and exact grid/voxel ranges',
+        );
+      for (const name of ['instances', 'fields', 'bounds', 'settings', 'voxels'] as const) {
+        const range = input[name],
+          offset = range.offset ?? 0;
+        const uniform = name === 'settings';
+        if (
+          !Number.isSafeInteger(offset) ||
+          offset < 0 ||
+          offset %
+            (uniform
+              ? device.limits.minUniformBufferOffsetAlignment
+              : device.limits.minStorageBufferOffsetAlignment) !==
+            0
+        )
+          return failure(`device-aligned nonnegative ${name} offset`);
+        if (
+          !Number.isSafeInteger(offset + range.size) ||
+          !(offset + range.size <= device.limits.maxBufferSize) ||
+          !(
+            range.size <=
+            (uniform
+              ? device.limits.maxUniformBufferBindingSize
+              : device.limits.maxStorageBufferBindingSize)
+          )
+        )
+          return failure(`${name} range within device buffer limits`, 'limit-exceeded');
+      }
+      if (
+        (['instances', 'fields', 'bounds', 'settings'] as const).some(
+          (name) => input[name].buffer === input.voxels.buffer,
+        )
+      )
+        return failure('Global SDF composition voxels must not alias any borrowed input');
+      const group = device.createBindGroup({
+        layout: layout.value,
+        entries: [input.instances, input.fields, input.bounds, input.settings, input.voxels].map(
+          (value, binding) => ({
+            binding,
+            resource: { kind: 'buffer' as const, value },
+          }),
+        ),
+      });
+      if (!group.ok) return group;
+      pass.setPipeline(pipeline.value);
+      pass.setBindGroup(0, group.value);
+      if (!Number.isSafeInteger(dispatchCount) || dispatchCount < 1 || dispatchCount > voxelCount)
+        return failure('Global SDF edit dispatch within 1..voxelCount', 'limit-exceeded');
+      pass.dispatchWorkgroups(Math.ceil(dispatchCount / 64));
+      return ok(undefined);
+    },
+  });
+}
+
+/** Voxel box touched by moving bounds, in cells; `undefined` means the whole grid. */
+export interface GlobalSdfEditBox {
+  readonly lo: readonly [number, number, number];
+  readonly extent: readonly [number, number, number];
+}
+
+/**
+ * Cells whose composed distance can change when the given world AABBs gain or lose
+ * geometry: each box grows by the composition range plus one cell. Returns
+ * `undefined` when the union covers the whole grid.
+ */
+export function globalSdfEditBox(
+  grid: GlobalSdfGrid,
+  bounds: readonly { readonly min: readonly number[]; readonly max: readonly number[] }[],
+): GlobalSdfEditBox | undefined {
+  if (bounds.length === 0) return undefined;
+  const lo = [Infinity, Infinity, Infinity],
+    hi = [-Infinity, -Infinity, -Infinity];
+  const pad = grid.maxDistance + grid.spacing;
+  for (const box of bounds)
+    for (let a = 0; a < 3; a++) {
+      const d = grid.dimensions[a] ?? 1,
+        o = grid.origin[a] ?? 0;
+      const first = Math.floor(((box.min[a] ?? 0) - pad - o) / grid.spacing);
+      const last = Math.ceil(((box.max[a] ?? 0) + pad - o) / grid.spacing);
+      lo[a] = Math.min(lo[a] ?? 0, Math.max(0, first));
+      hi[a] = Math.max(hi[a] ?? 0, Math.min(d - 1, last));
+    }
+  const extent = [0, 1, 2].map((a) => Math.max(0, (hi[a] ?? 0) - (lo[a] ?? 0) + 1));
+  if (extent.some((e) => e === 0)) return { lo: [0, 0, 0], extent: [0, 0, 0] };
+  if (extent.every((e, a) => e >= (grid.dimensions[a] ?? 0))) return undefined;
+  return {
+    lo: [lo[0] ?? 0, lo[1] ?? 0, lo[2] ?? 0],
+    extent: [extent[0] ?? 0, extent[1] ?? 0, extent[2] ?? 0],
+  };
+}
+
+/** The settings `ranges.zw` words for an edit box (zeros select the whole grid). */
+export function packGlobalSdfEditBox(box: GlobalSdfEditBox | undefined): Float32Array {
+  if (box === undefined) return new Float32Array(2);
+  const pack = (v: readonly number[]) => (v[0] ?? 0) | ((v[1] ?? 0) << 8) | ((v[2] ?? 0) << 16);
+  return new Float32Array([pack(box.lo), pack(box.extent)]);
 }

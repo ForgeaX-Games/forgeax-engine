@@ -12,6 +12,13 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const VITEST = resolve(ROOT, 'node_modules/vitest/vitest.mjs');
 
 export function validateDawnGateRoster(root = ROOT) {
+  const ids = DAWN_GATE_SHARDS.flat();
+  if (
+    ids.length !== DAWN_GATE_GROUPS.length ||
+    new Set(ids).size !== ids.length ||
+    ids.some((id) => !DAWN_GATE_GROUPS.some((group) => group.id === id))
+  )
+    throw new Error('each Dawn group must belong to exactly one configured lane');
   const owners = new Map();
   for (const group of DAWN_GATE_GROUPS) {
     if (group.vitestShard === undefined && group.files.length === 0) {
@@ -86,14 +93,15 @@ export async function runDawnGate({ group: selectedGroup, shard } = {}) {
         process.execPath,
         'scripts/forgeax/prepare-shader-release-inputs.mjs',
         '--build',
-        '--profile',
-        'point-ssao',
+        // Only the renderer's disabled-shadow control needs a separate base
+        // fleet. Other lanes consume the shared point projection unchanged.
+        ...(groups.some(({ id }) => id === 'renderer') ? [] : ['--profile', 'point-ssao']),
         '--input',
         'node_modules/.cache/forgeax-build/dawn-shaders',
         '--shared-input-manifest',
         environment.FORGEAX_SHARED_APP_INPUTS_MANIFEST,
       ],
-      { cwd: ROOT, env: environment, label: 'Dawn point-shadow shader producer' },
+      { cwd: ROOT, env: environment, label: 'Dawn shader profile producer' },
     );
     if (prepared.status !== 0)
       throw new Error(`Dawn shader preparation failed; ${prepared.failure}`);
@@ -113,6 +121,7 @@ export async function runDawnGate({ group: selectedGroup, shard } = {}) {
             cwd: ROOT,
             env,
             label: `Dawn ${group.id}`,
+            gpuLease: true,
             ...(group.isolate === false ? { timeoutMs: 6 * 60_000 } : {}),
           });
         let result = await run();

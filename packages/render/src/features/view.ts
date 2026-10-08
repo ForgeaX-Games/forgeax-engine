@@ -3,10 +3,18 @@ import { computeProjectionMatrix, computeViewMatrix } from '../record/helpers';
 import type { CameraSnapshot } from '../render-contract';
 import type { RenderFeatureExtractView } from './types';
 
+/** Per-view feature identity; stereo eyes of one Camera are distinct views. */
+export function renderFeatureViewIdentity(
+  camera: Pick<CameraSnapshot, 'entityKey' | 'eye'> | undefined,
+): string {
+  const base = `camera:${camera?.entityKey ?? 0}`;
+  return camera?.eye === undefined ? base : `${base}:${camera.eye.side}`;
+}
+
 /** All feature consumers use the exact extracted camera, including publication. */
 export function renderFeatureCameraView(camera: CameraSnapshot): RenderFeatureExtractView {
   return {
-    identity: `camera:${camera.entityKey ?? 0}`,
+    identity: renderFeatureViewIdentity(camera),
     render: camera.view?.enabled ?? true,
     selectedCamera: camera,
     selectedView: {

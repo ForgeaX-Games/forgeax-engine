@@ -2,24 +2,26 @@ import { type Buffer, RhiError, type Sampler } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
 import type { RendererGenerationFence } from '../assembly/renderer-frame-transaction';
 import { ResidencyLifetime } from '../device/residency-lifetime';
-import type { StandardDiffuseGi } from '../pipeline/standard-profile';
+import type { StandardExactDiffuseGi } from '../pipeline/standard-profile';
 import type { RenderResourceScope } from '../publication/resource-scope';
 import type { RenderSystemInternals } from '../record/render-context';
 import type { LightSnapshot } from '../render-system-extract';
 import type { PersistentGpuDrivenState } from '../scene/render-scene';
 import { createRayDiffuseComposite } from './diffuse-composite';
-import { prepareRayMaterialTextures } from './material-residency';
+import { prepareSurfaceMaterialTextures } from './material-residency';
 import { packLights } from './path-input';
 import { createSubmittedRayPathTracer, RAY_PATH_STRIDE, type RayPathTracer } from './path-tracer';
 import { createRasterRayGenerator } from './raster-source';
+import { type PreparedRayReflections, prepareRayReflections } from './reflections-prepare';
 import {
   prepareRendererDiffuseReconstruction,
   type RendererDiffuseReconstruction,
 } from './renderer-diffuse-reconstruction';
+import { rayReferenceFailure } from './scene';
 import { projectRayScene } from './scene-projection';
 
 type TexturePreparation = Extract<
-  ReturnType<typeof prepareRayMaterialTextures>,
+  ReturnType<typeof prepareSurfaceMaterialTextures>,
   { ok: true }
 >['value'];
 
@@ -29,7 +31,7 @@ export interface RayDiffuseFrameInput {
   readonly worlds: readonly RenderResourceScope[];
   readonly lights: readonly LightSnapshot[];
   readonly sampler: Sampler;
-  readonly profile: StandardDiffuseGi;
+  readonly profile: StandardExactDiffuseGi;
   readonly width: number;
   readonly height: number;
 }
@@ -41,6 +43,8 @@ export interface RayDiffuseInspection {
   readonly pixelCount: number;
   readonly error?: Pick<RhiError, 'code' | 'expected' | 'hint' | 'detail'>;
   readonly reconstruction?: ReturnType<RendererDiffuseReconstruction['inspect']>;
+  /** Lite reflections denoise history, present when they are reconstructed. */
+  readonly reflectionReconstruction?: ReturnType<RendererDiffuseReconstruction['inspect']>;
 }
 
 /** A frozen content snapshot; the ordinary graph supplies this frame's G-buffer/View. */
@@ -57,9 +61,12 @@ export interface PreparedRayDiffuse {
   readonly generate: Extract<ReturnType<typeof createRasterRayGenerator>, { ok: true }>['value'];
   readonly composite: Extract<ReturnType<typeof createRayDiffuseComposite>, { ok: true }>['value'];
   readonly reconstruction?: RendererDiffuseReconstruction;
+  /** Lite reflections: world specular lane sharing this content snapshot. */
+  readonly reflections?: PreparedRayReflections;
   /** Upload the seed/sample index for this attempted frame. Failed submits do not advance it. */
   writeSample(): void;
   track(completed: Promise<unknown>): void;
+  commit(): void;
   retire(): void;
 }
 
@@ -90,6 +97,9 @@ export class RendererRayDiffuse {
       ...(this.ready?.reconstruction === undefined
         ? {}
         : { reconstruction: this.ready.reconstruction.inspect() }),
+      ...(this.ready?.reflections?.reconstruction === undefined
+        ? {}
+        : { reflectionReconstruction: this.ready.reflections.reconstruction.inspect() }),
       ...(this.#error === undefined
         ? {}
         : {
@@ -223,8 +233,10 @@ export class RendererRayDiffuse {
     const owned: Buffer[] = [];
     const textures: TexturePreparation[] = [];
     let transport: RayPathTracer | undefined;
+    let reflectionTransport: RayPathTracer | undefined;
     const destroy = () => {
       transport?.dispose();
+      reflectionTransport?.dispose();
       for (const buffer of owned) device.destroyBuffer(buffer);
       for (const texture of textures) void texture.release();
     };
@@ -242,11 +254,15 @@ export class RendererRayDiffuse {
       for (const material of projected.materials) {
         const world = input.worlds[material.worldId];
         if (world === undefined) throw new Error('missing transport material World');
+        const selected = material.snapshot.materialSurfacePrograms?.['ray-hit'];
+        if (selected === undefined)
+          return rayReferenceFailure('material has no accepted ray program').unwrap();
+        const shader = shaders.findMaterialArtifact(selected.programKey).unwrap();
         textures.push(
-          prepareRayMaterialTextures(
+          prepareSurfaceMaterialTextures(
             runtime.gpuStore,
             input.sampler,
-            shaders,
+            shader.paramSchema,
             world,
             material.snapshot,
           ).unwrap(),
@@ -267,25 +283,28 @@ export class RendererRayDiffuse {
         compositeModule,
         profile.reconstruction === undefined ? 'raw' : 'reconstructed',
       ).unwrap();
-      transport = (
-        await createSubmittedRayPathTracer(device, compile, {
-          kernel: transportSource,
-          scene: projected.scene,
-          shaders,
-          lights: input.lights,
-          settings: { ...profile, width, height, rayBuffer: rays },
-          generationFence: fence,
-          materials: projected.materials.map((material, id) => ({
-            id,
-            snapshot: material.snapshot,
-          })),
-          resolveTexture: (id, parameter) => {
-            const value = textures[id]?.textures.get(parameter);
-            if (value === undefined) throw new Error(`missing accepted texture ${id}:${parameter}`);
-            return ok(value);
-          },
-        })
-      ).unwrap();
+      const transportFor = async (rayBuffer: Buffer, seed: number) =>
+        (
+          await createSubmittedRayPathTracer(device, compile, {
+            kernel: transportSource,
+            scene: projected.scene,
+            shaders,
+            lights: input.lights,
+            settings: { ...profile, seed, width, height, rayBuffer },
+            generationFence: fence,
+            materials: projected.materials.map((material, id) => ({
+              id,
+              snapshot: material.snapshot,
+            })),
+            resolveTexture: (id, parameter) => {
+              const value = textures[id]?.textures.get(parameter);
+              if (value === undefined)
+                throw new Error(`missing accepted texture ${id}:${parameter}`);
+              return ok(value);
+            },
+          })
+        ).unwrap();
+      transport = await transportFor(rays, profile.seed);
       const lifetime = new ResidencyLifetime(destroy);
       let samples = 0;
       const reconstruction =
@@ -304,6 +323,23 @@ export class RendererRayDiffuse {
               buffer,
               () => samples,
             );
+      const reflectionProfile = profile.reflections;
+      const reflections =
+        reflectionProfile === undefined
+          ? undefined
+          : await prepareRayReflections({
+              device,
+              profile: { ...profile, reflections: reflectionProfile },
+              pixelCount,
+              compile: async (label, entryPoint) =>
+                (await compile(device, { label, code: source(entryPoint) })).unwrap(),
+              allocate: buffer,
+              transport: async (rayBuffer, seed) => {
+                reflectionTransport = await transportFor(rayBuffer, seed);
+                return reflectionTransport;
+              },
+              submittedSamples: () => samples,
+            });
       return {
         generation: fence.capturedGeneration,
         fence,
@@ -317,6 +353,7 @@ export class RendererRayDiffuse {
         generate,
         composite,
         ...(reconstruction === undefined ? {} : { reconstruction }),
+        ...(reflections === undefined ? {} : { reflections }),
         writeSample: () =>
           device.queue
             .writeBuffer(sample, 0, new Uint32Array([profile.seed, samples, 0, 0]))
@@ -324,7 +361,10 @@ export class RendererRayDiffuse {
         track: (completed) => {
           lifetime.track(completed);
           for (const texture of textures) texture.track(completed);
+        },
+        commit: () => {
           reconstruction?.commit();
+          reflections?.reconstruction?.commit();
           samples++;
           if (this.#ready?.generation === fence.capturedGeneration) this.#submitted++;
         },

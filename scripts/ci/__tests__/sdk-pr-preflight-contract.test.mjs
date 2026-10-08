@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -15,8 +25,13 @@ const collisionScript = readFileSync(
 const ciPaths = JSON.parse(readFileSync(resolve('scripts/ci/paths.json'), 'utf8'));
 const ciWorkflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8');
 const buildJob = workflow.slice(workflow.indexOf('  build-sdk:\n'));
-const consumerJob = buildJob;
-const archiveJob = buildJob;
+const evidenceStart = buildJob.indexOf('name: Preserve SDK consumer evidence');
+const mandatoryBuildJob = buildJob.slice(0, evidenceStart);
+const consumerJob = workflow.slice(
+  workflow.indexOf('  consumers:\n'),
+  workflow.indexOf('  aggregate:\n'),
+);
+const archiveJob = consumerJob;
 const candidateArchiveJob = candidateWorkflow.slice(
   candidateWorkflow.indexOf('  archive-browser:\n'),
   candidateWorkflow.indexOf('  reproducibility:\n'),
@@ -51,6 +66,9 @@ test('SDK candidate pins an ancestor source and records a separate collision wit
     candidateWorkflow,
     /git show "\$WITNESS_COMMIT:apps\/preview\/scripts\/smoke-templates\.mjs"/,
   );
+  assert.match(candidateWorkflow, /await attemptClose\('Preview'/);
+  assert.match(candidateWorkflow, /witness_commit="\$source_commit"/);
+  assert.match(candidateWorkflow, /cross-version witness must never change lifecycle/);
   assert.match(candidateWorkflow, /collision-witness\.json/);
 });
 
@@ -84,14 +102,29 @@ test('SDK PR build and consumers share the self-hosted heavy pool', () => {
   assert.match(buildJob, /Verify heavy runner capacity[\s\S]*--pool heavy/);
 });
 
-test('SDK PR consumers reuse the local exact build without artifact transfer', () => {
-  const build = buildJob.indexOf('name: Build exact PR SDK and npm tarballs once');
-  const identity = buildJob.indexOf('name: Verify exact SDK build for local consumers');
-  const npm = buildJob.indexOf('name: Install Engine and SDK through the exact PR consumer route');
-  const browser = buildJob.indexOf('name: Verify exact SDK archive through real browser');
-  assert.ok(build >= 0 && build < identity && identity < npm && npm < browser);
-  assert.doesNotMatch(workflow, /upload-artifact|download-artifact/);
-  assert.doesNotMatch(workflow, /sdk-pr-seed/);
+test('SDK PR consumers conserve four independent groups from one byte-verified seed', () => {
+  assert.match(workflow, /permissions:\n {2}contents: read\n {2}actions: read/);
+  assert.equal((workflow.match(/pnpm sdk:build --/g) ?? []).length, 1);
+  assert.match(consumerJob, /group: \[npm, project, source, view\]/);
+  assert.match(consumerJob, /fail-fast: false/);
+  assert.match(buildJob, /compression-level: 0/);
+  assert.match(consumerJob, /--artifact-pattern "sdk-pr-seed-\$GITHUB_RUN_ID" --expected-count 1/);
+  assert.match(consumerJob, /--check-seed artifacts\/sdk --expected-head/);
+  assert.match(consumerJob, /--group "\$\{\{ matrix\.group \}\}"/);
+  const aggregate = workflow.slice(workflow.indexOf('  aggregate:\n'));
+  assert.match(aggregate, /needs: \[build-sdk, consumers\]/);
+  assert.match(aggregate, /if: always\(\)/);
+  assert.match(aggregate, /name: sdk-build/);
+  assert.match(aggregate, /test "\$SEED_RESULT" = success && test "\$CONSUMERS_RESULT" = success/);
+  assert.match(
+    aggregate,
+    /--artifact-pattern 'sdk-pr-result-\*' --expected-count 4 --merge-multiple/,
+  );
+  assert.match(aggregate, /--aggregate artifacts\/sdk-results/);
+  assert.match(
+    consumerJob.slice(consumerJob.indexOf('name: Preserve SDK consumer evidence')),
+    /if: always\(\)/,
+  );
 });
 
 test('SDK preflight ensures release artifacts before conditional source fallback', () => {
@@ -106,7 +139,19 @@ test('SDK preflight ensures release artifacts before conditional source fallback
   assert.match(buildJob, /test -f packages\/wgpu-wasm\/pkg\/wgpu_wasm_bg\.wasm/);
   assert.match(buildJob, /test -f packages\/wgpu-wasm\/pkg\/provenance\.json/);
   assert.match(buildJob, /verifyProvenance/);
-  assert.doesNotMatch(buildJob, /continue-on-error/);
+  const cache =
+    / {6}- name: Cache verified SDK shader profile inputs\n[\s\S]*?(?=\n {6}- name:)/.exec(
+      mandatoryBuildJob,
+    )?.[0];
+  assert.ok(cache);
+  assert.match(cache, /uses: actions\/cache@v4/);
+  assert.match(cache, /restore-keys: sdk-shader-profiles-v2-/);
+  assert.match(
+    cache,
+    /path: \|\n {12}shared-build-inputs-release\/\*\/manifest\.json\n {12}shared-build-inputs-release\/\*\/shaders\/manifest\.json\n/,
+  );
+  assert.doesNotMatch(cache, /\n {8}(?:run|if):/);
+  assert.doesNotMatch(mandatoryBuildJob, /continue-on-error/);
   assert.doesNotMatch(buildJob, /build:wasm[^\n]*\|\| true/);
 });
 
@@ -148,7 +193,10 @@ test('SDK preflight uses the canonical source-build action when FBX release is a
     buildJob,
     /Rehydrate SDK dependencies after FBX source fallback[\s\S]*?rm -rf node_modules[\s\S]*?pnpm install --frozen-lockfile --ignore-scripts/,
   );
-  assert.doesNotMatch(buildJob, /upload-artifact|download-artifact/);
+  assert.doesNotMatch(
+    buildJob.slice(0, buildJob.indexOf('name: Build exact PR SDK')),
+    /upload-artifact|download-artifact/,
+  );
   assert.doesNotMatch(buildJob, /gh release upload|contents:\s*write/);
 });
 
@@ -176,7 +224,7 @@ test('SDK npm consumer pins and asserts the known-good npm CLI before checking t
 test('headed SDK archive gates use the capacity-checked Heavy WebGPU pool', () => {
   const heavySelector =
     /runs-on: \$\{\{ fromJSON\('\["self-hosted", "Linux", "X64", "heavy"\]'\) \}\}/;
-  assert.match(archiveJob, heavySelector);
+  assert.match(archiveJob, /runs-on: \[self-hosted, Linux, X64, heavy\]/);
   assert.match(archiveJob, /node scripts\/ci\/verify-runner-pool-capacity\.mjs --pool heavy/);
   assert.match(candidateArchiveJob, heavySelector);
   assert.match(
@@ -212,3 +260,199 @@ test('SDK collision smoke publishes evidence at the repository root', () => {
   );
   assert.match(collisionJob, /artifacts\/sdk-release-template-smoke\/report\.json/);
 });
+
+test('paired View source changes trigger SDK consumers before publication', () => {
+  for (const path of [
+    "- 'tools/view'",
+    "- 'tools/view-plugins/**'",
+    "- 'scripts/forgeax/sdk-view.mjs'",
+  ])
+    assert.ok(workflow.includes(path), path);
+  const restore = buildJob.indexOf('name: Restore pinned View tool source');
+  const install = buildJob.indexOf('name: Install dependencies');
+  assert.ok(restore >= 0 && restore < install);
+  const browser = consumerJob.indexOf('name: Install Playwright Chrome Beta');
+  const consumer = consumerJob.indexOf(
+    'name: Install Engine and SDK through the exact PR consumer route',
+  );
+  assert.ok(browser >= 0 && browser < consumer);
+  assert.match(
+    consumerJob,
+    /xvfb-run -a node scripts\/ci\/run-with-runner-cpu-affinity\.mjs -- pnpm sdk:check:npm/,
+  );
+  for (const name of ['npm-consumer', 'archive-browser']) {
+    const start = candidateWorkflow.indexOf(`  ${name}:\n`);
+    const end = candidateWorkflow.indexOf('\n  ', start + 3);
+    // Job-local ordering is bounded by the next top-level job, not nested steps.
+    const section = candidateWorkflow.slice(start).split(/\n {2}[a-z][a-z-]*:\n/)[0];
+    assert.ok(start >= 0 && end >= 0);
+    assert.ok(
+      section.indexOf('Restore pinned View tool source') < section.indexOf('Install dependencies'),
+    );
+    assert.match(section, /Restore pinned View tool source/);
+  }
+});
+
+test('every SDK browser owner inherits the existing cgroup CPU-affinity envelope', () => {
+  for (const command of ['pnpm sdk:check:npm -- --version', 'pnpm sdk:verify --']) {
+    assert.ok(workflow.includes(`node scripts/ci/run-with-runner-cpu-affinity.mjs -- ${command}`));
+  }
+  assert.equal(
+    (workflow.match(/node scripts\/ci\/run-with-runner-cpu-affinity\.mjs -- /g) ?? []).length,
+    2,
+  );
+  assert.match(workflow, /- 'scripts\/ci\/run-with-runner-cpu-affinity\.mjs'/);
+  assert.match(workflow, /- 'scripts\/lib\/runner-resources\.mjs'/);
+  assert.match(consumerJob, /FORGEAX_BROWSER_HEADLESS=0/);
+});
+
+test('the complete independent run is owned by the verified View consumer, not the seed barrier', () => {
+  assert.doesNotMatch(
+    workflow.slice(workflow.indexOf('  build-sdk:\n'), workflow.indexOf('  consumers:\n')),
+    /verify-independent-run|Install Playwright|Install Mesa/,
+  );
+  const verifier = readFileSync(resolve('scripts/forgeax/verify-sdk.mjs'), 'utf8');
+  const view = verifier.slice(
+    verifier.lastIndexOf("if (selected('view'))"),
+    verifier.indexOf("if (selected('project'))", verifier.lastIndexOf("if (selected('view'))")),
+  );
+  assert.match(view, /sdkStage\('verifyIndependentRun'/);
+  assert.match(view, /packages\/devkit\/scripts\/verify-independent-run\.mjs/);
+  assert.match(
+    view,
+    /FORGEAX_INDEPENDENT_ENGINE_PACKAGE:[\s\S]*\.forgeax\/cli-runtime\/node_modules\/@forgeax\/engine/,
+  );
+});
+
+for (const jobName of ['build-sdk', 'reproducibility', 'collision']) {
+  for (const staleMetadata of [false, true]) {
+    test(`SDK Candidate ${jobName} normalizes a standalone View checkout${staleMetadata ? ' with stale submodule metadata' : ''} before recursive checkout`, () => {
+      const sandbox = realpathSync(mkdtempSync(resolve(tmpdir(), 'sdk-checkout-regression-')));
+      try {
+        const workspace = resolve(sandbox, 'engine');
+        const view = resolve(workspace, 'tools/view');
+        mkdirSync(view, { recursive: true });
+        const git = (cwd, ...args) =>
+          execFileSync('git', args, {
+            cwd,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          }).trim();
+        git(workspace, 'init', '-q');
+        git(view, 'init', '-q');
+        git(view, 'config', 'remote.origin.url', 'https://github.com/ForgeaX-Games/forgeax-view.git');
+        writeFileSync(resolve(view, 'LICENSE'), 'fixture license\n');
+        git(view, 'add', 'LICENSE');
+        git(
+          view,
+          '-c',
+          'user.name=fixture',
+          '-c',
+          'user.email=fixture@example.test',
+          'commit',
+          '-qm',
+          'fixture',
+        );
+        writeFileSync(
+          resolve(workspace, '.gitmodules'),
+          '[submodule "tools/view"]\n\tpath = tools/view\n\turl = https://github.com/ForgeaX-Games/forgeax-view.git\n',
+        );
+        git(
+          workspace,
+          'config',
+          'submodule.tools/view.url',
+          'https://github.com/ForgeaX-Games/forgeax-view.git',
+        );
+        git(workspace, 'add', '.gitmodules');
+        git(
+          workspace,
+          'update-index',
+          '--add',
+          '--cacheinfo',
+          `160000,${git(view, 'rev-parse', 'HEAD')},tools/view`,
+        );
+        const staleHead = git(view, 'rev-parse', 'HEAD');
+        if (staleMetadata) {
+          git(workspace, 'submodule', 'absorbgitdirs', 'tools/view');
+          rmSync(view, { recursive: true, force: true });
+          git(workspace, 'clone', '-q', resolve(workspace, '.git/modules/tools/view'), view);
+          git(
+            view,
+            'config',
+            'remote.origin.url',
+            'https://github.com/ForgeaX-Games/forgeax-view.git',
+          );
+          git(
+            view,
+            '-c',
+            'user.name=fixture',
+            '-c',
+            'user.email=fixture@example.test',
+            'commit',
+            '--allow-empty',
+            '-qm',
+            'standalone replacement',
+          );
+        }
+        const runnerTemp = resolve(sandbox, 'runner-temp');
+        mkdirSync(runnerTemp);
+        const before = git(view, 'rev-parse', 'HEAD');
+        if (staleMetadata) assert.notEqual(before, staleHead);
+        assert.match(
+          git(
+            workspace,
+            'submodule',
+            'foreach',
+            '--quiet',
+            'git config --local --show-origin --name-only --get-regexp remote.origin.url',
+          ),
+          /^file:\.git\/config/,
+        );
+        const jobStart = candidateWorkflow.indexOf(`  ${jobName}:\n`);
+        const job = candidateWorkflow.slice(jobStart).split(/\n {2}\S/)[0];
+        const preparation = job.slice(0, job.indexOf('uses: actions/checkout@v5'));
+        const shell = preparation.match(/ {8}run: \|\n((?: {10}.*\n)+)/)?.[1];
+        assert.ok(shell, 'recursive checkout needs workspace preparation');
+        execFileSync('bash', ['-c', shell.replace(/^ {10}/gm, '')], {
+          env: {
+            ...process.env,
+            GITHUB_WORKSPACE: workspace,
+            RUNNER_TEMP: runnerTemp,
+            GIT_CONFIG_GLOBAL: resolve(sandbox, 'global-config'),
+          },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const origin = git(
+          workspace,
+          'submodule',
+          'foreach',
+          '--quiet',
+          'git config --local --show-origin --name-only --get-regexp remote.origin.url',
+        );
+        assert.ok(origin.startsWith(`file:${workspace}/.git/modules/tools/view/config`), origin);
+        assert.equal(git(view, 'rev-parse', 'HEAD'), before);
+        assert.equal(git(view, 'status', '--porcelain'), '');
+        assert.equal(readFileSync(resolve(view, 'LICENSE'), 'utf8'), 'fixture license\n');
+        const backups = readdirSync(runnerTemp);
+        assert.equal(backups.length, staleMetadata ? 1 : 0);
+        if (staleMetadata) {
+          assert.equal(
+            git(
+              sandbox,
+              '--git-dir',
+              resolve(runnerTemp, backups[0], 'view.git'),
+              '--work-tree',
+              view,
+              'rev-parse',
+              'HEAD',
+            ),
+            staleHead,
+          );
+        }
+      } finally {
+        rmSync(sandbox, { recursive: true, force: true });
+      }
+    });
+  }
+}

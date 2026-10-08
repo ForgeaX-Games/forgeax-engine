@@ -87,7 +87,16 @@ describe('ScriptablePack and Pack source scanner', () => {
         schemaVersion: '3.0.0',
         packageId: INSTANCE_PACKAGE,
         parent: SOURCE_PACKAGE,
-        values: { count: 2 },
+        values: { count: 2, label: 'parent' },
+      }),
+    );
+    await writeFile(
+      join(root, 'grandchild.pack.json'),
+      JSON.stringify({
+        schemaVersion: '3.0.0',
+        packageId: DIRECT_PACKAGE,
+        parent: INSTANCE_PACKAGE,
+        values: { count: 3 },
       }),
     );
 
@@ -98,6 +107,15 @@ describe('ScriptablePack and Pack source scanner', () => {
     const declaration = result.value.declarations.get(join(root, 'source.pack.ts'));
     expect(declaration?.format).toBe('pack.ts');
     expect(result.value.inventory).toEqual([]);
+    const rootSourcePath = join(root, 'source.pack.ts');
+    expect(result.value.instances.get(join(root, 'instance.pack.json'))).toMatchObject({
+      root: { sourcePath: rootSourcePath },
+      values: { count: 2, label: 'parent' },
+    });
+    expect(result.value.instances.get(join(root, 'grandchild.pack.json'))).toMatchObject({
+      root: { sourcePath: rootSourcePath },
+      values: { count: 3, label: 'parent' },
+    });
   });
 
   it('fails closed when an instance parent is missing', async () => {

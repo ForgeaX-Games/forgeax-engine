@@ -334,7 +334,7 @@ if (!app.ok) {
       throw new Error('[hello-multi-uv] inheritance cooked records are not runtime-ready');
     }
     if (
-      root.artifactDigest !== derived.artifactDigest ||
+      root.record.artifactDigest !== derived.record.artifactDigest ||
       root.record.receipt.identity.programIdentity !==
         derived.record.receipt.identity.programIdentity ||
       root.record.resolved.passes[0]?.program.module !== DEMO_MATERIAL_SHADER_PATH ||
@@ -774,8 +774,8 @@ if (!app.ok) {
       afterComponentMaterialHandle: null,
       sourceRootGuid: inheritedMaterialPair?.root.record.guid ?? null,
       sourceDerivedGuid: inheritedMaterialPair?.derived.record.guid ?? null,
-      sourceRootArtifactDigest: inheritedMaterialPair?.root.artifactDigest ?? null,
-      sourceArtifactDigest: inheritedMaterialPair?.derived.artifactDigest ?? null,
+      sourceRootArtifactDigest: inheritedMaterialPair?.root.record.artifactDigest ?? null,
+      sourceArtifactDigest: inheritedMaterialPair?.derived.record.artifactDigest ?? null,
       sourceRootCookInputDigest:
         inheritedMaterialPair?.root.record.receipt.identity.cookIdentity ?? null,
       sourceCookInputDigest:

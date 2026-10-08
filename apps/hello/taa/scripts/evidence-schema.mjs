@@ -21,7 +21,7 @@ const fixture = {
   stages: [
     { id: 'linear-hdr', domain: 'linear-HDR', readback: { rawHash: 'd'.repeat(64), frame: 59 } },
     { id: 'linear-ldr', domain: 'linear-LDR', readback: { rawHash: 'e'.repeat(64), frame: 59 } },
-    { id: 'final-srgb', domain: 'final-sRGB', readback: { rawHash: 'f'.repeat(64), frame: 59 } },
+    { id: 'final-display', domain: 'final-sRGB', readback: { rawHash: 'f'.repeat(64), frame: 59 } },
   ],
   exposure: { mode: 'auto', ev: { first: 0, last: 0, generation: 1 } },
   lut: { generation: 1, strength: 0, sourceKey: 'none' },

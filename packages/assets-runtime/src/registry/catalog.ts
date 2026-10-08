@@ -1,3 +1,4 @@
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { err, ok, type Result } from '@forgeax/engine-rhi';
 import {
   ASSET_ERROR_HINTS,
@@ -9,10 +10,8 @@ import {
   type AssetRelation,
   authoringCapabilityForAssetKind,
   type CatalogDiagnostic,
-  type CatalogLifecycle,
+  type CatalogEntry,
   type CatalogProjection,
-  type CatalogSubject,
-  type CookExecution,
   type ProviderProvenance,
   type ResourceRevision,
   type RuntimeAssetBinding,
@@ -22,32 +21,13 @@ import {
 import type { AssetRegistry } from '../asset-registry';
 import { jsonOf, type PackageFetcher, readPackage } from '../internal/package-read.js';
 
-/** Runtime catalog row parsed from the shared pack-index POD shape. */
-export interface CatalogRecord {
-  readonly packageUrl: string;
-  readonly kind: string;
-  readonly authoring?: import('@forgeax/engine-types').AssetAuthoringCapability;
-  readonly name?: string;
-  readonly refs?: readonly string[];
+/**
+ * Runtime catalog row parsed from the shared pack-index POD shape. GUID is the
+ * catalog key, and inline assets have no source declaration to navigate.
+ */
+export type CatalogRecord = Omit<CatalogEntry, 'guid' | 'sourcePath'> & {
   readonly sourcePath?: string;
-  readonly cookReceiptUrl?: string;
-  readonly packageId?: string;
-  readonly provenance?: ProviderProvenance;
-  readonly revision?: ResourceRevision;
-  readonly sourceKey?: string;
-  readonly sourceIndex?: number;
-  readonly sourceOverrides?: SourceOverrideMap;
-  readonly sourceOverrideDescriptors?: readonly SourceOverrideDescriptor[];
-  readonly relations?: readonly AssetRelation[];
-  readonly diagnostics?: readonly CatalogDiagnostic[];
-  /** Producer-owned projection axes; never infer these from locators. */
-  readonly subject?: CatalogSubject;
-  readonly execution?: CookExecution;
-  readonly lifecycle?: CatalogLifecycle;
-  readonly projection?: CatalogProjection;
-  /** Complete producer publication tuple used by Scene publication fences. */
-  readonly publication?: AssetPublicationEnvelope;
-}
+};
 
 /** Build the canonical row for an inline asset without inventing producer facts. */
 export function createInlineCatalogRecord(
@@ -177,10 +157,10 @@ export function parseCatalog(
       );
     }
     rows = snapshot.entries;
-  } else if (Array.isArray(raw)) {
-    rows = raw;
   } else {
-    return err(parseError('pack-index.json to be a JSON array'));
+    const decoded = decodeCatalogWire(raw);
+    if (!decoded.ok) return decoded;
+    rows = decoded.value;
   }
 
   const catalog = new Map<string, CatalogRecord>();

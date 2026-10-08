@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { build, createServer, type Plugin, preview, type ViteDevServer } from 'vite';
 import { describe, expect, it } from 'vitest';
 import { defined } from '../../__tests__/assert-defined.js';
+import { type BrowserCaptureSession, createBrowserCapture } from '../../software-capture.js';
 import { executionWorkerEntries } from '../execution-workers.js';
 import { runtimePacksSource } from '../runtime-packs-source.js';
 
@@ -12,12 +13,14 @@ describe('native Pack modules in the browser graph', () => {
   it.each([
     'build',
     'dev',
+    'live-browser',
   ] as const)('%s executes new cyclic JS, shares Engine tokens in main and Worker, and recovers offline', async (mode) => {
     const root = await mkdtemp(resolve(tmpdir(), 'forgeax-program-browser-'));
     const base = '/games/runtime/';
     let server: Awaited<ReturnType<typeof preview>> | undefined;
     let dev: ViteDevServer | undefined;
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    let liveSession: BrowserCaptureSession | undefined;
     try {
       const repository = resolve(import.meta.dirname, '../../../../..');
       await mkdir(resolve(root, 'node_modules/@forgeax'), { recursive: true });
@@ -36,7 +39,17 @@ describe('native Pack modules in the browser graph', () => {
       );
       await writeFile(
         resolve(root, 'index.html'),
-        '<script type="module" src="/main.js"></script>',
+        '<canvas width="16" height="16"></canvas><script type="module" src="/main.js"></script>',
+      );
+      await writeFile(resolve(root, 'package.json'), JSON.stringify({ name: 'program-browser' }));
+      await writeFile(
+        resolve(root, 'forge.json'),
+        JSON.stringify({
+          id: 'program-browser',
+          name: 'Program browser',
+          schemaVersion: '3.0.0',
+          roots: {},
+        }),
       );
       await writeFile(
         resolve(root, 'main.js'),
@@ -124,7 +137,7 @@ describe('native Pack modules in the browser graph', () => {
         },
         load(id) {
           if (id !== '\0worker-probe') return null;
-          if (mode === 'dev')
+          if (mode !== 'build')
             return `export default new URL(${JSON.stringify(`${base}worker.js`)}, globalThis.location.origin).href;`;
           const ref = this.emitFile({
             type: 'chunk',
@@ -160,15 +173,27 @@ describe('native Pack modules in the browser graph', () => {
         });
         await dev.listen();
       }
-      browser = await chromium.launch({
-        ...(process.env.FORGEAX_CHROME_CHANNEL !== undefined
-          ? { channel: process.env.FORGEAX_CHROME_CHANNEL }
-          : {}),
-        headless: true,
-        args: ['--no-sandbox', '--disable-gpu'],
-      });
-      const context = await browser.newContext();
-      const page = await context.newPage();
+      const serverUrl = defined(defined(defined(server ?? dev).resolvedUrls).local[0]);
+      if (mode === 'live-browser') {
+        // The live project owner must deliver the same native module graph as
+        // ordinary browser consumers, including Engine Worker requests.
+        liveSession = await createBrowserCapture(root).open({
+          serverUrl,
+          backend: 'software',
+          headless: true,
+          width: 16,
+          height: 16,
+        });
+      } else {
+        browser = await chromium.launch({
+          ...(process.env.FORGEAX_CHROME_CHANNEL !== undefined
+            ? { channel: process.env.FORGEAX_CHROME_CHANNEL }
+            : {}),
+          headless: true,
+          args: ['--no-sandbox', '--disable-gpu'],
+        });
+      }
+      const page = liveSession?.page ?? (await defined(browser).newPage());
       const errors: string[] = [];
       const failedRequests: string[] = [];
       page.on('requestfailed', (request) =>
@@ -177,7 +202,7 @@ describe('native Pack modules in the browser graph', () => {
       page.setDefaultTimeout(10000);
       page.setDefaultNavigationTimeout(10000);
       page.on('pageerror', (error) => errors.push(error.message));
-      await page.goto(defined(defined(defined(server ?? dev).resolvedUrls).local[0]));
+      if (liveSession === undefined) await page.goto(serverUrl);
       await page.waitForFunction(() => 'fixture' in globalThis);
       expect(
         await page.evaluate(() =>
@@ -237,7 +262,9 @@ describe('native Pack modules in the browser graph', () => {
         ),
       );
       expect(errors).toEqual([]);
-      await browser.close();
+      await liveSession?.close();
+      liveSession = undefined;
+      await browser?.close();
       browser = await chromium.launch({
         ...(process.env.FORGEAX_CHROME_CHANNEL !== undefined
           ? { channel: process.env.FORGEAX_CHROME_CHANNEL }
@@ -316,6 +343,7 @@ describe('native Pack modules in the browser graph', () => {
       ).toBe(true);
       expect(errors).toEqual([]);
     } finally {
+      await liveSession?.close();
       await browser?.close();
       await dev?.close();
       await new Promise<void>((done) => (server ? server.httpServer.close(() => done()) : done()));

@@ -8,6 +8,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  parseObservedFrameReceipt,
+  readRoster,
+  resolveRunnableEntries,
+} from './ci/run-dawn-smoke-roster.mjs';
 
 function workspaces(root) {
   if (!existsSync(root)) return [];
@@ -149,6 +154,51 @@ function smokeDeclaration(root, workspace) {
       ],
     };
   }
+  // This app has bounded assertion and frame owners in the canonical roster.
+  // Keep its public manifest command as the complete direct-use aggregate.
+  if (packageName === '@forgeax/app-learn-render-6-pbr-4-transmission-refraction') {
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+    if (resolve(root) !== resolve(repoRoot, 'apps/learn-render')) {
+      return {
+        entries: [],
+        unavailable: [
+          {
+            workspace: workspaceName,
+            package: packageName,
+            reason:
+              'transmission canonical Smoke owners require this Engine checkout apps/learn-render root',
+          },
+        ],
+      };
+    }
+    const owners = resolveRunnableEntries({ repoRoot, roster: readRoster() }).runnable.filter(
+      (entry) => entry.package === packageName,
+    );
+    if (owners.length === 0) throw new Error('transmission has no canonical Smoke owners');
+    return {
+      entries: owners.map((owner) => {
+        const parsedOwner = parseInvocation(owner.command);
+        const ownerCommand = manifest.scripts?.[parsedOwner.script];
+        if (typeof ownerCommand !== 'string')
+          throw new Error(`undeclared transmission Smoke owner: ${parsedOwner.script}`);
+        return {
+          workspace: workspaceName,
+          package: packageName,
+          script: parsedOwner.script,
+          invocation: owner.command,
+          tokens: parsedOwner.tokens,
+          command: owner.command,
+          declaredCommand: ownerCommand,
+          gateId: owner.gateId,
+          commandId: owner.commandId,
+          oracle: owner.oracle,
+          frames: owner.oracle.kind === 'frameReceipt' ? 60 : null,
+          status: 'declared',
+        };
+      }),
+      unavailable: [],
+    };
+  }
   return {
     entries: [
       {
@@ -193,7 +243,10 @@ export function buildSmokeRoster(appsRoot, learnRoot, frames = 60) {
         'This roster resolves declared commands; each command must run separately for runtime evidence.',
     },
     roots,
-    entries: entries.map((entry) => ({ ...entry, frames })),
+    entries: entries.map((entry) => ({
+      ...entry,
+      frames: entry.oracle?.kind === 'assertion' ? null : frames,
+    })),
     unavailable,
     status: entries.length === 0 || unavailable.length > 0 ? 'unavailable' : 'ready',
   };
@@ -224,11 +277,29 @@ export function executeSmokeRoster(roster, { cwd = process.cwd(), timeoutMs = 30
       cwd,
       encoding: 'utf8',
       timeout: timeoutMs,
-      env: process.env,
+      env:
+        entry.oracle === undefined
+          ? process.env
+          : { ...process.env, SMOKE_MIN_FRAMES: String(roster.frameCount) },
     });
+    let receipt = null;
+    let receiptFailure = null;
+    if (entry.oracle?.kind === 'frameReceipt') {
+      try {
+        receipt = parseObservedFrameReceipt(result.stdout ?? '', {
+          gateId: entry.gateId,
+          commandId: entry.commandId,
+          frames: roster.frameCount,
+        });
+      } catch (error) {
+        receiptFailure = error instanceof Error ? error.message : String(error);
+      }
+    }
     const stdout = truncate(result.stdout);
-    const stderr = truncate(result.stderr ?? result.error?.message ?? '');
-    const passed = result.status === 0 && result.error === undefined;
+    const stderr = truncate(
+      [result.stderr ?? result.error?.message, receiptFailure].filter(Boolean).join('\n'),
+    );
+    const passed = result.status === 0 && result.error === undefined && receiptFailure === null;
     return {
       ...entry,
       status: passed ? 'passed' : 'failed',
@@ -237,7 +308,13 @@ export function executeSmokeRoster(roster, { cwd = process.cwd(), timeoutMs = 30
       stdout,
       stderr,
       backend: backendFor(entry, stdout, stderr),
-      frames: entry.frames,
+      frames:
+        entry.oracle === undefined
+          ? entry.frames
+          : passed
+            ? (receipt?.framesObserved ?? null)
+            : null,
+      ...(entry.oracle === undefined ? {} : { receipt: passed ? receipt : null, receiptFailure }),
     };
   });
   const failed = entries.filter((entry) => entry.status !== 'passed');

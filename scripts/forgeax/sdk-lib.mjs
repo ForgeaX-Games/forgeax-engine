@@ -1,16 +1,93 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync, readFileSync } from 'node:fs';
-import { chmod, cp, lstat, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
+import { sdkStage } from './sdk-stage.mjs';
 
-export const SDK_MANIFEST_VERSION = '1.8.0';
+export const SDK_MANIFEST_VERSION = '1.9.0';
 export const SDK_SOURCE_ROOT = 'source/engine';
 export const SDK_SOURCE_FORMAT = 'git-archive-public-snapshot';
 
 const SDK_REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+/** Retain the installed-package View journeys separately from contributor source tests. */
+export async function verifySdkViewRuntime({ sdkRoot, evidenceRoot, env, group = 'all' }) {
+  if (!['all', 'project', 'view'].includes(group))
+    throw new Error(`sdk-view-runtime-unknown-group:${group}`);
+  const execute = promisify(execFile);
+  const view = resolve(sdkRoot, '.forgeax/cli-runtime/node_modules/@forgeax/view');
+  const independentEnv = { ...env };
+  for (const key of [
+    'NODE_PATH',
+    'FORGEAX_SHARED_APP_INPUTS_MANIFEST',
+    'FORGEAX_ENGINE_CHECKOUT',
+    'FORGEAX_LOCAL_ENGINE',
+    'FORGEAX_RUNTIME_PACK_DIRECT',
+    'FORGEAX_RUNTIME_PACK_DIAGNOSTIC',
+  ])
+    delete independentEnv[key];
+  const stages = [];
+  for (const language of ['js', 'ts'])
+    if (group === 'all' || language === (group === 'view' ? 'js' : 'ts'))
+      for (const cold of [false, true]) {
+        const evidence = resolve(evidenceRoot, `runtime-${language}`, cold ? 'cold' : 'live');
+        stages.push([
+          `runtime-${language}-${cold ? 'cold' : 'live'}`,
+          'verify-runtime-content-engine.mjs',
+          {
+            FORGEAX_RUNTIME_PACK_LANGUAGE: language,
+            FORGEAX_EVIDENCE_DIR: evidence,
+            FORGEAX_RUNTIME_PACK_SNAPSHOT: cold
+              ? resolve(evidenceRoot, `runtime-${language}/live/saved-content.json`)
+              : '',
+          },
+        ]);
+      }
+  // The template comes from the SDK; the Engine remains the installed package.
+  if (group !== 'view')
+    stages.push([
+      'game3d-installed',
+      'verify-game3d-workspace.mjs',
+      { FORGEAX_ENGINE_CHECKOUT: sdkRoot },
+    ]);
+  await mkdir(evidenceRoot, { recursive: true });
+  for (const [stage, probe, additionalEnv] of stages) {
+    console.info(`[sdk-view] start ${stage}`);
+    let stdout = '';
+    let stderr = '';
+    try {
+      ({ stdout, stderr } = await sdkStage(`installedView.${stage}`, () =>
+        execute(process.execPath, [resolve(view, 'scripts', probe)], {
+          cwd: sdkRoot,
+          env: { ...independentEnv, ...additionalEnv },
+          maxBuffer: 64 * 1024 * 1024,
+        }),
+      ));
+      console.info(`[sdk-view] complete ${stage}`);
+    } catch (cause) {
+      stdout = cause.stdout ?? '';
+      stderr = cause.stderr ?? '';
+      throw cause;
+    } finally {
+      await writeFile(resolve(evidenceRoot, `${stage}.log`), stdout + stderr);
+    }
+  }
+}
 
 /** Discover distributable templates from their required template.json files. */
 export function discoverSdkTemplates(templatesRoot = resolve(SDK_REPOSITORY_ROOT, 'templates')) {
@@ -65,7 +142,7 @@ export function discoverSdkTemplates(templatesRoot = resolve(SDK_REPOSITORY_ROOT
 
 export const SDK_TEMPLATES = discoverSdkTemplates();
 export const SDK_SOURCE_EXCLUDED_PATHS = Object.freeze(['.gitmodules', 'forgeax-engine-assets']);
-export const SDK_SOURCE_GIT_DEPENDENCIES = Object.freeze(['third_party/wgpu']);
+export const SDK_SOURCE_GIT_DEPENDENCIES = Object.freeze(['third_party/wgpu', 'tools/view']);
 export const SDK_RETIRED_PACKAGE_FILES = Object.freeze({
   '@forgeax/engine-vite-plugin-pack': Object.freeze([
     'dist/runtime.d.ts',
@@ -499,7 +576,11 @@ export async function writePackageArchive(root, path, options = {}) {
       if (dependencies === null || typeof dependencies !== 'object' || Array.isArray(dependencies))
         continue;
       for (const name of Object.keys(dependencies)) {
-        if (name === '@forgeax/engine-runtime' || name.startsWith('@forgeax/engine-')) {
+        if (
+          name === '@forgeax/engine' ||
+          name.startsWith('@forgeax/engine-') ||
+          name === '@forgeax/view'
+        ) {
           dependencies[name] = options.releaseVersion;
         }
       }
@@ -572,6 +653,15 @@ function withoutEmptySideEffects(value) {
     return withoutSideEffects;
   }
   return { ...value, sideEffects: retained };
+}
+
+/** Keep package integrity while allowing the consumer's selected registry. */
+export function normalizeSdkRegistryLockfile(lockfile, ownedTarballUrls) {
+  for (const url of ownedTarballUrls) {
+    lockfile = lockfile.replaceAll(`, tarball: ${url}`, '');
+    if (lockfile.includes(url)) throw new Error('sdk-registry-lockfile-shape');
+  }
+  return lockfile;
 }
 
 export async function normalizePnpmStore(storeRoot, storeFormat = 'v11') {

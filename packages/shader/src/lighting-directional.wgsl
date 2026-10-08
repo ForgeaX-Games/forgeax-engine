@@ -122,17 +122,53 @@ fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
 fn _directionalReceiverDepthBias(layer : u32, normal : vec3<f32>, l : vec3<f32>, radius : f32) -> f32 {
   let nDotL = dot(normal, l);
   let depthSpan = view.splitPlanes[layer].z;
-  if (!(nDotL > 0.01 && depthSpan > 0.0)) {
+  // Every front-facing receiver needs its filter footprint, including grazing
+  // angles. A fixed cosine cutoff creates a discontinuity in self-shadowing.
+  if (!(nDotL > 0.0 && depthSpan > 0.0)) {
     return view.depthBias;
   }
   let matrix = _cascadeLightViewProj(layer);
   let right = normalize(vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x));
   let up = normalize(vec3<f32>(matrix[0].y, matrix[1].y, matrix[2].y));
-  let slope = (abs(dot(normal, right)) + abs(dot(normal, up))) / nDotL;
-  let footprint = view.splitPlanes[layer].y * radius * slope;
+  let footprint = view.splitPlanes[layer].y * radius * (abs(dot(normal, right)) + abs(dot(normal, up)));
   // The authored world normal offset already separates the receiver plane.
   // Add only the missing footprint coverage, in this cascade's depth units.
-  return view.depthBias + max(0.0, footprint - view.normalBias / nDotL) / depthSpan;
+  let missingCoverage = max(0.0, footprint - view.normalBias);
+  if (!(missingCoverage > 0.0)) {
+    return view.depthBias;
+  }
+  // Receiver depths are nonnegative and stored depths are at most one. The
+  // sampler uses strict greater, so bound total bias by the next f32 above
+  // one, after adding the authored floor. This preserves zero/negative floors
+  // and every comparison while making an overflowed positive bias finite.
+  return min(1.00000011920928955078125, view.depthBias + missingCoverage / nDotL / depthSpan);
+}
+
+// Receiver-plane depth gradient (Isidoro 2006): normalized light depth change
+// per shadow texel along +u / +v on the receiver's tangent plane. PCF taps
+// compare against the plane depth at their own offset, so the receiver depth
+// bias only covers one texel of bilinear footprint instead of the whole
+// kernel radius. Zero where the plane is not a valid lit receiver.
+fn _directionalReceiverPlaneGradient(layer : u32, normal : vec3<f32>, l : vec3<f32>) -> vec2<f32> {
+  if (!(dot(normal, l) > 0.01)) {
+    return vec2<f32>(0.0);
+  }
+  let matrix = _cascadeLightViewProj(layer);
+  let row0 = vec3<f32>(matrix[0].x, matrix[1].x, matrix[2].x);
+  let row1 = vec3<f32>(matrix[0].y, matrix[1].y, matrix[2].y);
+  let row2 = vec3<f32>(matrix[0].z, matrix[1].z, matrix[2].z);
+  let sx = length(row0);
+  let sy = length(row1);
+  let sz = length(row2);
+  let nz = dot(row2, normal) / sz;
+  if (!(abs(nz) > 0.01 && sx > 0.0 && sy > 0.0)) {
+    return vec2<f32>(0.0);
+  }
+  let texels = vec2<f32>(textureDimensions(shadowMap, 0));
+  // Clip x grows with +u and clip y with -v; one texel spans 2 / size in clip.
+  let dzdx = -(dot(row0, normal) / sx) * sz / (nz * sx);
+  let dzdy = -(dot(row1, normal) / sy) * sz / (nz * sy);
+  return vec2<f32>(dzdx * 2.0 / texels.x, -dzdy * 2.0 / texels.y);
 }
 
 #ifdef DIRECTIONAL_PCSS_AVAILABLE
@@ -252,13 +288,14 @@ fn _sampleShadowForCascade(
   layer    : u32,
   normal   : vec3<f32>,
   l        : vec3<f32>,
+  layerBase : u32,
 ) -> f32 {
   let lvp = _cascadeLightViewProj(layer);
   let lightClip = lvp * vec4<f32>(worldPos, 1.0);
   let projCoords = lightClip.xyz / lightClip.w;
   let tileUv = vec2<f32>(projCoords.x * 0.5 + 0.5, -projCoords.y * 0.5 + 0.5);
   let uv = tileUv;
-  let shadowLayer = i32(layer);
+  let shadowLayer = i32(layer + layerBase);
   let currentDepth = projCoords.z;
   // NaN-safe bounds: relational < and > do not reject NaN (NaN < 0 is
   // false), so a zero / degenerate lightViewProj matrix that produces
@@ -285,7 +322,8 @@ fn _sampleShadowForCascade(
   }
   #endif
   let kernel = select(select(3u, 5u, filterProfile == 3u), 1u, filterProfile == 1u);
-  let adjustedDepth = currentDepth + _directionalReceiverDepthBias(layer, normal, l, f32(kernel / 2u + 1u));
+  let adjustedDepth = currentDepth + _directionalReceiverDepthBias(layer, normal, l, 1.0);
+  let planeGradient = _directionalReceiverPlaneGradient(layer, normal, l);
   if (kernel == 1u) {
     let lit = textureSampleCompareLevel(shadowMap, shadowSampler, clamp(uv, tileLo, tileHi), shadowLayer, adjustedDepth);
     return lit;
@@ -293,42 +331,13 @@ fn _sampleShadowForCascade(
 
   var blocked = 0.0;
   if (kernel == 3u) {
-    // A linear comparison sample is already the bilinear average of four
-    // depth comparisons. Three adjacent samples on one axis therefore have
-    // the separable texel weights [1-f, 1, 1, f]. Pairing those four weights
-    // into two bilinear samples is exact, reducing the 3x3 path from 9 samples
-    // to 4. Keep the original 9-sample form at cascade-tile edges where the
-    // per-tap clamp intentionally duplicates edge samples.
-    let interior = all(uv >= tileLo + texel) && all(uv <= tileHi - texel);
-    if (interior) {
-      let pcfFraction = fract(uv / texel - vec2<f32>(0.5));
-      let loWeight = vec2<f32>(2.0) - pcfFraction;
-      let hiWeight = vec2<f32>(1.0) + pcfFraction;
-      let loOffset = vec2<f32>(-1.0) - pcfFraction + vec2<f32>(1.0) / loWeight;
-      let hiOffset = vec2<f32>(1.0) - pcfFraction + pcfFraction / hiWeight;
-      let litLoLo = textureSampleCompareLevel(
-        shadowMap, shadowSampler, uv + vec2<f32>(loOffset.x, loOffset.y) * texel, shadowLayer, adjustedDepth,
-      );
-      let litHiLo = textureSampleCompareLevel(
-        shadowMap, shadowSampler, uv + vec2<f32>(hiOffset.x, loOffset.y) * texel, shadowLayer, adjustedDepth,
-      );
-      let litLoHi = textureSampleCompareLevel(
-        shadowMap, shadowSampler, uv + vec2<f32>(loOffset.x, hiOffset.y) * texel, shadowLayer, adjustedDepth,
-      );
-      let litHiHi = textureSampleCompareLevel(
-        shadowMap, shadowSampler, uv + vec2<f32>(hiOffset.x, hiOffset.y) * texel, shadowLayer, adjustedDepth,
-      );
-      return (
-        litLoLo * loWeight.x * loWeight.y +
-        litHiLo * hiWeight.x * loWeight.y +
-        litLoHi * loWeight.x * hiWeight.y +
-        litHiHi * hiWeight.x * hiWeight.y
-      ) / 9.0;
-    }
+    // Each tap compares its own receiver-plane depth. Combining bilinear
+    // weights before these nonlinear comparisons changes shadow coverage.
     for (var x = -1; x <= 1; x++) {
       for (var y = -1; y <= 1; y++) {
         let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
-        let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, shadowLayer, adjustedDepth);
+        let tapDepth = adjustedDepth + dot(planeGradient, (offsetUv - uv) / texel);
+        let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, shadowLayer, tapDepth);
         blocked = blocked + (1.0 - lit);
       }
     }
@@ -338,7 +347,8 @@ fn _sampleShadowForCascade(
   for (var x = -i32(MAX_PCF_HALF); x <= i32(MAX_PCF_HALF); x++) {
     for (var y = -i32(MAX_PCF_HALF); y <= i32(MAX_PCF_HALF); y++) {
       let offsetUv = clamp(uv + vec2<f32>(f32(x), f32(y)) * texel, tileLo, tileHi);
-      let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, shadowLayer, adjustedDepth);
+      let tapDepth = adjustedDepth + dot(planeGradient, (offsetUv - uv) / texel);
+      let lit = textureSampleCompareLevel(shadowMap, shadowSampler, offsetUv, shadowLayer, tapDepth);
       blocked = blocked + (1.0 - lit);
     }
   }
@@ -388,10 +398,13 @@ fn evalDirectionalNoShadow(
   return brdf * view.lightColor * nDotL + transmitted * view.lightColor;
 }
 
+// Surface callers supply the actual receiver plane normal, independently of
+// their BRDF normal. Volume receivers use the separate normal-free path.
 fn evalDirectionalShadowFactor(
   normal   : vec3<f32>,
   worldPos : vec3<f32>,
   viewZ    : f32,
+  layerBase : u32,
 ) -> f32 {
   // `cascadeCount == 0` is the host-side sentinel for DirectionalLight
   // `castShadow:false`.  A non-shadow-casting light must stay fully lit: the
@@ -413,7 +426,7 @@ fn evalDirectionalShadowFactor(
   let layer = _pickCascadeLayer(viewDepth, count);
   // normalBias is a world-space distance, independent of cascade depth span.
   let receiverPosition = worldPos + normal * view.normalBias;
-  let shadowCurr = _sampleShadowForCascade(receiverPosition, layer, normal, l);
+  let shadowCurr = _sampleShadowForCascade(receiverPosition, layer, normal, l, layerBase);
 
   var shadow = shadowCurr;
   if (view.cascadeBlend > 0.0 && layer + 1u < count) {
@@ -423,7 +436,7 @@ fn evalDirectionalShadowFactor(
       let dist = spCurr - viewDepth;
       let t = clamp(1.0 - dist / blendWidth, 0.0, 1.0);
       if (t > 0.0) {
-        let shadowNext = _sampleShadowForCascade(receiverPosition, layer + 1u, normal, l);
+        let shadowNext = _sampleShadowForCascade(receiverPosition, layer + 1u, normal, l, layerBase);
         shadow = mix(shadowCurr, shadowNext, t);
       }
     }
@@ -445,7 +458,7 @@ fn evalDirectionalVolumeShadowFactor(
   let count = u32(max(view.cascadeCount, 1.0));
   let layer = _pickCascadeLayer(viewDepth, count);
   let lightDirection = normalize(-view.lightDir);
-  let current = _sampleShadowForCascade(worldPos, layer, vec3<f32>(0.0), lightDirection);
+  let current = _sampleShadowForCascade(worldPos, layer, vec3<f32>(0.0), lightDirection, 0u);
   if (view.cascadeBlend <= 0.0 || layer + 1u >= count) {
     return current;
   }
@@ -454,7 +467,7 @@ fn evalDirectionalVolumeShadowFactor(
     return current;
   }
   let blend = clamp(1.0 - (view.splitPlanes[layer].x - viewDepth) / blendWidth, 0.0, 1.0);
-  let next = _sampleShadowForCascade(worldPos, layer + 1u, vec3<f32>(0.0), lightDirection);
+  let next = _sampleShadowForCascade(worldPos, layer + 1u, vec3<f32>(0.0), lightDirection, 0u);
   return mix(current, next, blend);
 }
 
@@ -493,5 +506,5 @@ fn evalDirectional(
   // entry shape doesn't fit (it expects pre-projected light-space coords;
   // CSM derives them per-cascade after dispatch). F-J-1 future-tracks the
   // dedup once `forgeax_view::cascade` lands as its own module (post-#387).
-  return lit * evalDirectionalShadowFactor(normal, worldPos, viewZ);
+  return lit * evalDirectionalShadowFactor(normal, worldPos, viewZ, 0u);
 }

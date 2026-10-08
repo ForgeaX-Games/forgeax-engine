@@ -14,7 +14,7 @@ import type {
   MaterialValue,
   ParamSchemaEntry,
 } from '@forgeax/engine-types';
-import { createMaterialError } from '@forgeax/engine-types';
+import { projectMaterialParameterSchema } from '@forgeax/engine-types';
 import type { MaterialLoadError, MaterialReady } from './loader';
 
 export interface MaterialRenderPassProjection {
@@ -53,6 +53,7 @@ export function selectMaterialPassProgram(
   passName: string,
   context: MaterialCookProgramContext,
   address: MaterialProgramAddress = 'direct',
+  vertexColorAvailable = false,
 ): MaterialRenderPassProjection['programs'][number] {
   const key = materialProgramContextKey(context);
   const modernPublication = projection.passes.some((pass) =>
@@ -62,7 +63,7 @@ export function selectMaterialPassProgram(
         (program.address !== undefined || program.entry !== undefined || program.abi !== undefined),
     ),
   );
-  const matches = projection.passes
+  const candidates = projection.passes
     .filter((pass) => pass.name === passName)
     .flatMap((pass) =>
       pass.programs.filter(
@@ -75,6 +76,12 @@ export function selectMaterialPassProgram(
               : (program.address ?? 'direct') === address),
       ),
     );
+  // Extra mesh attributes need no shader input. Prefer the color variant when
+  // published; shaders that do not consume color can still draw colored meshes.
+  const hasColor = (program: MaterialRenderPassProjection['programs'][number]) =>
+    program.abi?.vertexInputs.some((input) => input.semantic === 'color') === true;
+  const selectColor = vertexColorAvailable && candidates.some(hasColor);
+  const matches = candidates.filter((program) => hasColor(program) === selectColor);
   if (matches.length !== 1 || matches[0] === undefined) {
     throw Object.assign(
       new Error(
@@ -92,6 +99,7 @@ export function selectMaterialPassProgram(
           pass: passName,
           context,
           address,
+          vertexColorAvailable,
           matches: matches.length,
         },
       } satisfies MaterialLoadError['error'],
@@ -105,42 +113,9 @@ export function materialParametersToParamSchema(
   parameters: readonly MaterialParameter[],
   material = '<runtime>',
 ): readonly ParamSchemaEntry[] {
-  return parameters.flatMap((parameter): ParamSchemaEntry[] => {
-    if (parameter.type === 'bool') {
-      const error = createMaterialError('material-parameter-type-unsupported', {
-        code: 'material-parameter-type-unsupported',
-        stage: 'runtime',
-        material,
-        parameter: parameter.name,
-        type: parameter.type,
-        action: 'use-supported-type',
-      });
-      throw Object.assign(new Error(error.message), error);
-    }
-    if (parameter.type === 'texture' || parameter.type === 'texture_cube') {
-      return [
-        {
-          name: parameter.name,
-          type: parameter.type === 'texture_cube' ? 'texture_cube' : 'texture2d',
-          ...(parameter.sampleType === undefined ? {} : { sampleType: parameter.sampleType }),
-        },
-      ];
-    }
-    const defaultValue = parameter.default;
-    const numericDefault =
-      typeof defaultValue === 'number' ||
-      (Array.isArray(defaultValue) && defaultValue.every((item) => typeof item === 'number'))
-        ? { default: defaultValue }
-        : {};
-    return [
-      {
-        name: parameter.name,
-        type: parameter.type,
-        ...(parameter.colorSpace === undefined ? {} : { colorSpace: parameter.colorSpace }),
-        ...numericDefault,
-      },
-    ];
-  });
+  const schema = projectMaterialParameterSchema(parameters, material, 'runtime');
+  if (!schema.ok) throw Object.assign(new Error(schema.error.message), schema.error);
+  return schema.value;
 }
 
 /** Project authored pass module ids onto the renderer's canonical ids. */
@@ -215,14 +190,14 @@ export function installMaterialReadyShaders(
 ): MaterialRenderProjection {
   // Defaults belong to the root value contract, not an immutable shared program.
   const paramSchema = materialParametersToParamSchema(
-    readiness.parameterContract.parameters,
-    readiness.guid,
+    readiness.record.parameterContract.parameters,
+    readiness.record.guid,
   ).map(({ default: _default, ...parameter }) => parameter);
-  const entries = readiness.programs.map((program) => {
+  const entries = readiness.record.programs.map((program) => {
     const source = new TextDecoder().decode(program.artifact.bytes);
     if (source.length === 0)
       throw new Error(
-        `MaterialReady ${readiness.guid} contains an empty shader program ${program.specializationKey}`,
+        `MaterialReady ${readiness.record.guid} contains an empty shader program ${program.specializationKey}`,
       );
     const pass = readiness.record.resolved.passes.find((pass) =>
       program.selections.some((selection) => selection.pass === pass.name),

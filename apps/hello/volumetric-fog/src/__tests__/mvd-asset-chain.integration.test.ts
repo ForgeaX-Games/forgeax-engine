@@ -7,7 +7,7 @@ import {
   validateVolumetricFog,
 } from '@forgeax/engine-render';
 import { parsePackV2 } from '@forgeax/engine-pack/runtime';
-import type { DecodedImage, ImageMeta, TextureAsset } from '@forgeax/engine-types';
+import type { ImageMeta, TextureAsset } from '@forgeax/engine-types';
 import {
   volumetricDensityLoader,
   VOLUMETRIC_DENSITY_KIND,
@@ -36,12 +36,6 @@ describe('public volumetric fog MVD asset chain', () => {
   it('preserves one GUID, body digest, generation, shape and recovery evidence', async () => {
     const payload = texture();
     const bodyDigest = digest(payload.data);
-    const decoded = {
-      width: 64,
-      height: 64,
-      channels: 1,
-      bytes: payload.data,
-    } as unknown as DecodedImage;
     const meta = {
       guid: GUID,
       sourceKey: SOURCE_KEY,
@@ -51,7 +45,7 @@ describe('public volumetric fog MVD asset chain', () => {
       filterMode: 'linear',
     } as ImageMeta;
 
-    const authored = toAssetPack(decoded, meta);
+    const authored = toAssetPack(meta);
     expect(authored.subAssets[0]?.guid).toBe(GUID);
     const pack = {
       schemaVersion: '2.0.0',

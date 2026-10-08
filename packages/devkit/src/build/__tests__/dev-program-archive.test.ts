@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -32,7 +32,7 @@ it.each([
   ['raw text', "import text from './image.svg?raw'; export default text;", false],
   ['plain string', "export default '/fake.svg';", false],
 ] as const)('uses actual producer evidence for %s', async (_name, source, resource) => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-dev-resource-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-dev-resource-')));
   let server: ViteDevServer | undefined;
   try {
     await writeFile(resolve(root, 'entry.js'), source);
@@ -72,7 +72,7 @@ it.each([
   false,
   true,
 ])('protects shared Engine modules with Host HMR and resource URL present: %s', async (resource) => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-dev-engine-shared-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-dev-engine-shared-')));
   let server: ViteDevServer | undefined;
   try {
     for (const name of ['@forgeax/engine-extra', 'shared-lib']) {

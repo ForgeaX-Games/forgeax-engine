@@ -276,6 +276,7 @@ describe('Materials.unlit forward-only (w14)', () => {
       { name: 'baseColor', type: 'color', colorSpace: 'linear' },
       { name: 'alphaCutoff', type: 'f32', optional: true },
       { name: 'alphaHash', type: 'f32', optional: true },
+      { name: 'shading', type: 'f32', optional: true },
       { name: 'baseColorTexture', type: 'texture', optional: true },
     ]);
   });

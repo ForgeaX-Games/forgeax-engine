@@ -36,6 +36,11 @@ release units inside the Engine repository. They are published automatically at
 the same version because the umbrella depends on them, but game authors do not
 need to discover or install them individually.
 
+The facade build stages the complete forwarding inventory before publishing each
+changed file by atomic rename. Existing imports remain readable during a rebuild;
+obsolete paths retire afterward. This is a per-file publication guarantee, not an
+atomic rebuild of the physical Engine packages behind those forwarding modules.
+
 ## SDK
 
 The ordinary npm package is the connected, incremental development path. The

@@ -114,6 +114,8 @@ const mockCaps: RhiCaps = {
   rgba16floatRenderable: true,
   rg11b10ufloatRenderable: false,
   float32Filterable: false,
+  textureImport: false,
+  externalTexture: false,
   maxColorAttachments: 8,
 };
 
@@ -264,9 +266,14 @@ describe('cow-survivor long-session steady-state bounded (AC-11) [w18]', () => {
     expect(sf.textureGpuHandles.size).toBe(1);
     expect(sf.meshGpuHandles.size).toBe(1);
 
-    // Destroy path fired for all spawned non-survivor resources.
-    expect(probe.destroyedTexs).toBeGreaterThanOrEqual(140);
-    expect(probe.destroyedBufs).toBeGreaterThanOrEqual(190);
+    // Equal vertex bytes share one VBO. Only the survivor texture, shared
+    // vertex buffer and survivor index buffer may remain allocated.
+    expect(probe.texs - probe.destroyedTexs).toBe(1);
+    expect(probe.bufs - probe.destroyedBufs).toBe(2);
+    store.evictTexture(survivorTexHandle);
+    store.evictMesh(survivorMeshHandle);
+    expect(probe.destroyedTexs).toBe(probe.texs);
+    expect(probe.destroyedBufs).toBe(probe.bufs);
   });
 
   it('no monotonic growth: second half slope ~ 0', () => {

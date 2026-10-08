@@ -16,20 +16,38 @@
     "resources",
     "templateResources",
     "source",
-    "artifacts"
+    "artifacts",
+    "viewCommit"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.8.0" },
-    "sdkVersion": { "type": "string", "minLength": 1 },
-    "engineCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "schemaVersion": {
+      "const": "1.9.0"
+    },
+    "sdkVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "engineCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
     "requirements": {
       "type": "object",
       "additionalProperties": false,
       "required": ["node", "pnpm", "pnpmStoreFormat"],
       "properties": {
-        "node": { "type": "string", "minLength": 1 },
-        "pnpm": { "type": "string", "minLength": 1 },
-        "pnpmStoreFormat": { "type": "string", "minLength": 1 }
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pnpm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pnpmStoreFormat": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "capabilities": {
@@ -42,32 +60,50 @@
     "packages": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/package" }
+      "items": {
+        "$ref": "#/$defs/package"
+      }
     },
     "templates": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/template" }
+      "items": {
+        "$ref": "#/$defs/template"
+      }
     },
     "skills": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/skill" }
+      "items": {
+        "$ref": "#/$defs/skill"
+      }
     },
     "resources": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/resource" }
+      "items": {
+        "$ref": "#/$defs/resource"
+      }
     },
     "templateResources": {
       "type": "array",
-      "items": { "$ref": "#/$defs/templateResource" }
+      "items": {
+        "$ref": "#/$defs/templateResource"
+      }
     },
-    "source": { "$ref": "#/$defs/source" },
+    "source": {
+      "$ref": "#/$defs/source"
+    },
     "artifacts": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/artifact" }
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "viewCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     }
   },
   "$defs": {
@@ -84,8 +120,12 @@
         "prebuiltWasm"
       ],
       "properties": {
-        "root": { "const": "source/engine" },
-        "format": { "const": "git-archive-public-snapshot" },
+        "root": {
+          "const": "source/engine"
+        },
+        "format": {
+          "const": "git-archive-public-snapshot"
+        },
         "excluded": {
           "type": "array",
           "minItems": 1,
@@ -94,8 +134,14 @@
             "enum": [".gitmodules", "forgeax-engine-assets"]
           }
         },
-        "fileCount": { "type": "integer", "minimum": 1 },
-        "byteCount": { "type": "integer", "minimum": 1 },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1
+        },
         "gitDependencies": {
           "type": "array",
           "minItems": 1,
@@ -104,15 +150,22 @@
             "additionalProperties": false,
             "required": ["root", "commit"],
             "properties": {
-              "root": { "const": "third_party/wgpu" },
-              "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+              "root": {
+                "enum": ["third_party/wgpu", "tools/view"]
+              },
+              "commit": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              }
             }
           }
         },
         "prebuiltWasm": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/sourceWasm" }
+          "items": {
+            "$ref": "#/$defs/sourceWasm"
+          }
         }
       }
     },
@@ -121,13 +174,22 @@
       "additionalProperties": false,
       "required": ["package", "root", "files"],
       "properties": {
-        "package": { "type": "string", "pattern": "^@forgeax/engine-.+$" },
-        "root": { "type": "string", "minLength": 1 },
+        "package": {
+          "type": "string",
+          "pattern": "^@forgeax/engine-.+$"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
         "files": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
@@ -136,21 +198,48 @@
       "additionalProperties": false,
       "required": ["path", "bytes", "sha256"],
       "properties": {
-        "path": { "type": "string", "minLength": 1 },
-        "bytes": { "type": "integer", "minimum": 0 },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
     "package": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "root", "fileCount", "byteCount"],
+      "required": ["name", "version", "root", "fileCount", "byteCount", "role"],
       "properties": {
-        "name": { "type": "string", "pattern": "^@forgeax/engine(?:-.+)?$" },
-        "version": { "type": "string", "minLength": 1 },
-        "root": { "type": "string", "pattern": "^packages/[A-Za-z0-9._-]+$" },
-        "fileCount": { "type": "integer", "minimum": 1 },
-        "byteCount": { "type": "integer", "minimum": 1 }
+        "name": {
+          "type": "string",
+          "pattern": "^@forgeax/(?:engine(?:-.+)?|view)$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^packages/[A-Za-z0-9._-]+$"
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "enum": ["runtime", "tool"]
+        }
       }
     },
     "template": {
@@ -158,8 +247,14 @@
       "additionalProperties": false,
       "required": ["id", "root"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-        "root": { "type": "string", "pattern": "^templates/[A-Za-z0-9._-]+$" }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^templates/[A-Za-z0-9._-]+$"
+        }
       }
     },
     "skill": {
@@ -167,10 +262,22 @@
       "additionalProperties": false,
       "required": ["id", "root", "fileCount", "byteCount"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-        "root": { "type": "string", "pattern": "^skills/[a-z0-9][a-z0-9-]*$" },
-        "fileCount": { "type": "integer", "minimum": 1 },
-        "byteCount": { "type": "integer", "minimum": 1 }
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^skills/[a-z0-9][a-z0-9-]*$"
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "byteCount": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "resource": {
@@ -178,15 +285,30 @@
       "additionalProperties": false,
       "required": ["id", "package", "sourceRoot", "packageRoot", "files"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-        "package": { "type": "string", "pattern": "^@forgeax/engine-.+$" },
-        "sourceRoot": { "type": "string", "pattern": "^packages/[A-Za-z0-9._/-]+$" },
-        "packageRoot": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "package": {
+          "type": "string",
+          "pattern": "^@forgeax/engine-.+$"
+        },
+        "sourceRoot": {
+          "type": "string",
+          "pattern": "^packages/[A-Za-z0-9._/-]+$"
+        },
+        "packageRoot": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._/-]+$"
+        },
         "files": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" }
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._/-]+$"
+          }
         }
       }
     },
@@ -195,13 +317,22 @@
       "additionalProperties": false,
       "required": ["id", "root", "files"],
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-        "root": { "type": "string", "pattern": "^templates/[A-Za-z0-9._-]+/assets/" },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^templates/[A-Za-z0-9._-]+/assets/"
+        },
         "files": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" }
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._/-]+$"
+          }
         }
       }
     }

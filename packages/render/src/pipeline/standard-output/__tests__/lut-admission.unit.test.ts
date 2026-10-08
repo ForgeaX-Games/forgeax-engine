@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   admitStandardColorLut,
   createStandardLutSamplerDescriptor,
-  lutTexelCenter,
   type StandardColorLutAdmissionInput,
 } from '../lut-admission';
 
@@ -88,9 +87,7 @@ describe('Standard output 3D LUT admission', () => {
     expect(result.error.code).toBe('standard-lut-bind-failed');
   });
 
-  it('uses texel centers and clamp-to-edge linear filtering', () => {
-    expect(lutTexelCenter(0, 16)).toBe(0.5 / 16);
-    expect(lutTexelCenter(15, 16)).toBe(15.5 / 16);
+  it('uses clamp-to-edge linear filtering', () => {
     expect(createStandardLutSamplerDescriptor()).toEqual({
       addressModeU: 'clamp-to-edge',
       addressModeV: 'clamp-to-edge',

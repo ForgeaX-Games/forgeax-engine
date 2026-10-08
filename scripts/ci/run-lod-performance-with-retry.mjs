@@ -31,7 +31,7 @@ export function isRetryableLodPerformanceEvidence(evidence) {
     evidence?.verdict !== 'not-production-ready' ||
     metrics?.timestampAvailable !== true ||
     !Array.isArray(falsification) ||
-    falsification.length !== 6 ||
+    falsification.length !== 5 ||
     falsification.some((entry) => entry?.verdict !== 'pass')
   ) {
     return false;

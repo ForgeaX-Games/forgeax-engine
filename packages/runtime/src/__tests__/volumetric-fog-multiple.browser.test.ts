@@ -16,6 +16,9 @@ import { page } from 'vitest/browser';
 import { createRenderer } from '../createRenderer';
 
 it('renders overlapping local fog, independently removes owners, and retires the collection', async () => {
+  const lightweight = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1';
+  const retirementCycles = lightweight ? 3 : 12;
+  const retirementFrames = lightweight ? 8 : 25;
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 128;
@@ -131,10 +134,10 @@ it('renders overlapping local fog, independently removes owners, and retires the
       .elementLocator(canvas)
       .screenshot({ path: 'volume-multiple-clear.png', base64: true });
     expect(clear).not.toEqual(one);
-    for (let index = 0; index < 12; index++) {
+    for (let index = 0; index < retirementCycles; index++) {
       const a = spawn(-0.4, [0.8, 0.08, 0.01]);
       const b = spawn(0.4, [0.01, 0.1, 0.8]);
-      for (let frame = 0; frame < 25; frame++) await draw();
+      for (let frame = 0; frame < retirementFrames; frame++) await draw();
       expect(renderer.inspect().volumetricFog?.ownerCount).toBe(2);
       world.despawn(a).unwrap();
       world.despawn(b).unwrap();

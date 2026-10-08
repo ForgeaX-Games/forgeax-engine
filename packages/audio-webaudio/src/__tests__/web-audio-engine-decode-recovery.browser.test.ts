@@ -1,6 +1,6 @@
 import type { AudioPlayOptions } from '@forgeax/engine-audio';
 import type { AudioClipAsset } from '@forgeax/engine-types';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebAudioEngine } from '../index.js';
 
 const PLAY_OPTIONS: AudioPlayOptions = {
@@ -112,9 +112,17 @@ describe('M66 browser - direct clip decode failure recovery', () => {
         ...brokenClip,
         bytes: makeSilentWav(),
       };
+      // Observe admission synchronously: a 100 ms native one-shot can finish
+      // before a throttled browser timer samples it.
+      const play = engine.play.bind(engine);
+      const admittedCounts: number[] = [];
+      vi.spyOn(engine, 'play').mockImplementation((entityId, clip, options) => {
+        play(entityId, clip, options);
+        if (!('kind' in clip)) admittedCounts.push(engine?.getActiveSourceCount() ?? -1);
+      });
       engine.play(23, repairedClip, PLAY_OPTIONS);
 
-      await waitForSourceCount(engine, 1, 5000);
+      await expect.poll(() => admittedCounts, { timeout: 5000 }).toEqual([1]);
       expect(engine.getState().lastError).toBeNull();
       await waitForSourceCount(engine, 0, 5000);
       expect(unhandledRejections).toBe(0);

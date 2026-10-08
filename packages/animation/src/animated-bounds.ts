@@ -312,3 +312,24 @@ export function deriveConservativeAnimatedBounds(input: {
   const margin = Math.max(1, ...result.map(Math.abs)) * 1e-5;
   return Float32Array.from(result.map((value, index) => value + (index < 3 ? -margin : margin)));
 }
+
+/** Cubic Hermite intervals lie inside the convex hull of their Bezier control points. */
+export function cubicValueEnvelope(
+  input: ArrayLike<number>,
+  output: ArrayLike<number>,
+  width: number,
+): Float32Array {
+  const values = new Float32Array(input.length * width * 3);
+  for (let key = 0; key < input.length; key++) {
+    const before = key > 0 ? ((input[key] ?? NaN) - (input[key - 1] ?? NaN)) / 3 : 0;
+    const after = key + 1 < input.length ? ((input[key + 1] ?? NaN) - (input[key] ?? NaN)) / 3 : 0;
+    for (let c = 0; c < width; c++) {
+      const base = key * width * 3 + c,
+        value = output[base + width] ?? NaN;
+      values[base] = value - before * (output[base] ?? NaN);
+      values[base + width] = value;
+      values[base + width * 2] = value + after * (output[base + width * 2] ?? NaN);
+    }
+  }
+  return values;
+}

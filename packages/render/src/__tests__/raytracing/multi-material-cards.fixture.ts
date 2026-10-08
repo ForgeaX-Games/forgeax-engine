@@ -113,7 +113,11 @@ export async function verifyMultiMaterialCards(fixture: SdfCardsFixture) {
         [
           {
             ...sdfCubeInstance,
-            field: { ...fixture.field, values: Float32Array.from(fixture.field.values) },
+            field: {
+              ...fixture.field,
+              bricks: Uint32Array.from(fixture.field.bricks),
+              values: Float32Array.from(fixture.field.values),
+            },
           },
         ],
         [{ origin: [0, 0, 3], direction: [0, 0, -1], tMin: 0, tMax: 20, mask: 255 }],

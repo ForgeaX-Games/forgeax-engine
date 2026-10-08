@@ -832,6 +832,45 @@ test('accepts only an exact complete cache with the expected fingerprint', () =>
   });
 });
 
+for (const state of ['exact', 'partial', 'fingerprint-drift']) {
+  test(`archive fallback admits an existing cache only when exact: ${state}`, () => {
+    const fingerprint = cacheFingerprint();
+    const marker = {
+      complete: state !== 'partial',
+      compilerFingerprint:
+        state === 'fingerprint-drift'
+          ? { ...fingerprint, bootstrapInputDigest: 'stale' }
+          : fingerprint,
+    };
+    withCacheCase(marker, (paths) => {
+      const archivePath = join(paths.root, 'release.tar.xz');
+      const metadataPath = join(paths.root, 'release.json');
+      writeArchive(archivePath, [
+        { name: 'install/emscripten/emcc', data: 'rebuilt-compiler' },
+        { name: 'install/emscripten/emscripten-version.txt', data: '6.0.2' },
+      ]);
+      writeFileSync(metadataPath, JSON.stringify({ releaseIdentity: expectedReleaseIdentity }));
+      const result = runBootstrap(
+        metadataArgs(
+          { ...paths, archivePath, stagingDir: join(paths.root, 'staging') },
+          metadataPath,
+          archiveDigest(archivePath),
+        ),
+      );
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(result.json.cacheStatus, state === 'exact' ? 'exact-valid' : 'cold-created');
+      assert.equal(
+        readFileSync(join(paths.cacheDir, expectedToolchainLayout.installRoot, 'emcc'), 'utf8'),
+        state === 'exact' ? 'compiler' : 'rebuilt-compiler',
+      );
+      const admitted = runHelper(cacheArgs(paths));
+      assert.equal(admitted.status, 0, admitted.stderr);
+      assert.equal(admitted.json.cacheStatus, 'exact-valid');
+      assert.deepEqual(admitted.json.compilerFingerprint, fingerprint);
+    });
+  });
+}
+
 test('rejects partial, missing, and invalid compiler caches', () => {
   const fingerprint = cacheFingerprint();
   const cases = [

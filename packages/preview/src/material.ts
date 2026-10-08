@@ -127,16 +127,7 @@ export const materialPreview = defineTool(subjectDescriptor('material'), (args, 
   (async () => {
     const host = context.require(previewHostCapability);
     if (!host.ok) return host;
-    return host.value.withSession(async (mechanisms) =>
-      executeMaterialPreview(args, {
-        ...(mechanisms.assets === undefined ? {} : { assets: mechanisms.assets }),
-        ...(mechanisms.renderer === undefined ? {} : { renderer: mechanisms.renderer }),
-        rendererReady: mechanisms.renderer?.rendererReady === true,
-        worldReady: mechanisms.renderer?.worldReady === true,
-        runId: mechanisms.runId,
-        ...(mechanisms.artifacts === undefined ? {} : { artifacts: mechanisms.artifacts }),
-      }),
-    );
+    return host.value.withSession(async (mechanisms) => executeMaterialPreview(args, mechanisms));
   })(),
 );
 export const materialPreviewPlugin = nativePreviewPlugin('material', materialPreview);

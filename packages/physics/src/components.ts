@@ -5,7 +5,14 @@
 // CollidingEntities is the runtime set-query component for continuous
 // collision status (started/stopped model, no 'continued' event).
 
-import { type Component, defineComponent, type World } from '@forgeax/engine-ecs';
+import {
+  type Component,
+  defineComponent,
+  type SchemaOf,
+  type ShapeOf,
+  type World,
+} from '@forgeax/engine-ecs';
+import type { PhysicsVector } from './derived-physics.js';
 
 /**
  * RigidBody motion type — 3-state discriminant mirroring Rapier's
@@ -28,7 +35,7 @@ export type RigidBodyType = 'static' | 'dynamic' | 'kinematic';
  * Named `'sphere'` not `'ball'` per plan-strategy D-5: AI users see
  * the familiar geometric term; backend maps to Rapier `ColliderDesc.ball()`.
  */
-export type ColliderShape = 'cuboid' | 'sphere' | 'capsule';
+export type ColliderShape = keyof typeof ColliderShapeValue;
 
 // ─── D-3: numeric enum constants + narrowing helpers ─────────────────────
 //
@@ -73,9 +80,17 @@ export const ColliderShapeValue = {
   cuboid: COLLIDER_SHAPE_CUBOID,
   sphere: COLLIDER_SHAPE_SPHERE,
   capsule: COLLIDER_SHAPE_CAPSULE,
+  cylinder: 3,
+  cone: 4,
+  convexHull: 5,
+  trimesh: 6,
 } as const;
 
 export function colliderShapeFromF32(n: number): ColliderShape {
+  if (n === ColliderShapeValue.cylinder) return 'cylinder';
+  if (n === ColliderShapeValue.cone) return 'cone';
+  if (n === ColliderShapeValue.convexHull) return 'convexHull';
+  if (n === ColliderShapeValue.trimesh) return 'trimesh';
   if (n === COLLIDER_SHAPE_SPHERE) return 'sphere';
   if (n === COLLIDER_SHAPE_CAPSULE) return 'capsule';
   return 'cuboid';
@@ -123,8 +138,9 @@ export const RigidBody = defineComponent('RigidBody', {
  * |:--|:--|:--|:--|
  * | `shape` | `ColliderShape` | — | Shape discriminant |
  * | `halfExtents` | `[number, number, number]` | `[0.5, 0.5, 0.5]` | Cuboid half-width/height/depth |
- * | `radius` | `number` | `0.5` | Sphere / capsule radius |
- * | `halfHeight` | `number` | `0.5` | Capsule half-height |
+ * | `mesh` | `shared<MeshAsset>` | `0` | Cooked source for convexHull / trimesh |
+ * | `radius` | `number` | `0.5` | Sphere / capsule / cylinder / cone radius |
+ * | `halfHeight` | `number` | `0.5` | Capsule / cylinder / cone half-height |
  * | `friction` | `number` | `0.5` | Coulomb friction coefficient |
  * | `restitution` | `number` | `0.0` | Elasticity (1.0 = perfect bounce) |
  * | `density` | `number` | `1.0` | Mass density (alternative to mass) |
@@ -134,6 +150,8 @@ export const RigidBody = defineComponent('RigidBody', {
  */
 export const Collider = defineComponent('Collider', {
   shape: { type: 'enum', default: COLLIDER_SHAPE_CUBOID, labels: ColliderShapeValue },
+  /** ConvexHull/trimesh resolve this ordinary mesh asset; slot zero is unbound. */
+  mesh: { type: 'shared<MeshAsset>' },
   // feat-20260709 M4: cuboid half-extents collapsed from 3 per-axis scalar
   // columns into one inline array<f32,3> column. Explicit layer-2 default
   // (the array layer-3 fallback is all-zero, which would give a degenerate
@@ -149,6 +167,21 @@ export const Collider = defineComponent('Collider', {
   collisionGroups: { type: 'u32', default: 0x0001_ffff },
   solverGroups: { type: 'u32', default: 0xffff_ffff },
 });
+
+/** Read-side row of {@link Collider}; `halfExtents` is a zero-copy view into World storage. */
+export type ColliderData = ShapeOf<SchemaOf<typeof Collider>>;
+
+/** Owned copy of a {@link Collider} row that a physics backend may retain across frames. */
+export type ColliderSnapshot = Readonly<Omit<ColliderData, 'halfExtents'>> & {
+  readonly halfExtents: PhysicsVector;
+};
+
+export function snapshotCollider(data: ColliderData): ColliderSnapshot {
+  return {
+    ...data,
+    halfExtents: [data.halfExtents[0] ?? 0, data.halfExtents[1] ?? 0, data.halfExtents[2] ?? 0],
+  };
+}
 
 /**
  * ECS Component: kinematic character controller tuning + output state.
@@ -186,6 +219,9 @@ export const CharacterController = defineComponent('CharacterController', {
   snapToGroundDist: { type: 'f32', default: 0.2 },
   grounded: { type: 'bool', default: false, transient: true },
 });
+
+/** Read-side row of {@link CharacterController}; both Rapier adapters apply the same tuning. */
+export type CharacterControllerData = ShapeOf<SchemaOf<typeof CharacterController>>;
 
 /**
  * ECS Component: set of entities currently colliding with the holder entity.

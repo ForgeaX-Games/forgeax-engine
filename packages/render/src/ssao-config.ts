@@ -16,6 +16,7 @@ export const SSAO_SAMPLE_COUNTS = { low: 16, medium: 32, high: 64 } as const;
 
 export interface ResolvedSsaoParameters {
   readonly algorithm: 'ssao' | 'gtao';
+  readonly directLightingStrength: number;
   readonly radius: number;
   readonly bias: number;
   readonly intensity: number;
@@ -30,6 +31,7 @@ export interface ResolvedSsaoParameters {
 export function getSsaoParameters(config: SsaoParameterConfig | undefined): ResolvedSsaoParameters {
   return {
     algorithm: config?.algorithm ?? 'ssao',
+    directLightingStrength: config?.directLightingStrength ?? 0,
     radius: config?.radius ?? SSAO_DEFAULT_RADIUS,
     bias: config?.bias ?? SSAO_DEFAULT_BIAS,
     intensity: config?.intensity ?? SSAO_DEFAULT_INTENSITY,
@@ -81,6 +83,18 @@ export function resolveSsaoParameters(
       new PostProcessError({
         code: 'ssao-parameter-invalid',
         detail: { paramName, value: resolved[paramName] },
+      }),
+    );
+  }
+  if (
+    !Number.isFinite(resolved.directLightingStrength) ||
+    resolved.directLightingStrength < 0 ||
+    resolved.directLightingStrength > 1
+  ) {
+    return err(
+      new PostProcessError({
+        code: 'ssao-parameter-invalid',
+        detail: { paramName: 'directLightingStrength', value: resolved.directLightingStrength },
       }),
     );
   }

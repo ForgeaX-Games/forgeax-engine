@@ -10,6 +10,7 @@ import {
 describe('lighting authoring contracts', () => {
   it('exposes only the declared Rect, Spot modifier, and Probe fields', () => {
     expect(Object.keys(RectAreaLight.fields)).toEqual([
+      'lightingChannels',
       'color',
       'intensity',
       'width',

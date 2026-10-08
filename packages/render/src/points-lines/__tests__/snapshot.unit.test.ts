@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  comparePointsLinesSnapshots,
-  createPointsLinesSnapshot,
-  type PointsLinesRetainedSnapshot,
-} from '../snapshot';
+import { createPointsLinesSnapshot, type PointsLinesRetainedSnapshot } from '../snapshot';
 
 function snapshotInput(): Parameters<typeof createPointsLinesSnapshot>[0] {
   return {
@@ -48,45 +44,6 @@ describe('Points/Lines retained snapshot', () => {
     expect(snapshot).not.toHaveProperty('world');
     expect(snapshot.sourceBounds).not.toBe(source.sourceBounds);
     expect(snapshot.projection).not.toBe(source.projection);
-  });
-
-  it('classifies only owner generations and style as geometry invalidation', () => {
-    const base = createPointsLinesSnapshot(snapshotInput());
-
-    expect(
-      comparePointsLinesSnapshots(
-        base,
-        createPointsLinesSnapshot({ ...snapshotInput(), meshGeneration: 5 }),
-      ),
-    ).toBe('mesh');
-    expect(
-      comparePointsLinesSnapshots(
-        base,
-        createPointsLinesSnapshot({ ...snapshotInput(), materialGeneration: 9 }),
-      ),
-    ).toBe('material');
-    expect(
-      comparePointsLinesSnapshots(
-        base,
-        createPointsLinesSnapshot({
-          ...snapshotInput(),
-          style: { kind: 'points', sizePx: 8, shape: 'square' },
-        }),
-      ),
-    ).toBe('style');
-    expect(
-      comparePointsLinesSnapshots(
-        base,
-        createPointsLinesSnapshot({
-          ...snapshotInput(),
-          viewport: { width: 1600, height: 1200, dpr: 2 },
-        }),
-      ),
-    ).toBe('view');
-    expect(
-      comparePointsLinesSnapshots(base, createPointsLinesSnapshot({ ...snapshotInput() })),
-    ).toBe('none');
-    expect(base).not.toHaveProperty('derived');
   });
 
   it('records a dedicated-resource zero when the style component is absent', () => {

@@ -19,7 +19,11 @@
 // (B3) child world pos accumulates parent transform
 // (B6) camera detection via GltfNodeIr.camera field (not legacy nodes[1] heuristic)
 
-import { computeTangentVec4, packInterleavedVertexAttributes } from '@forgeax/engine-geometry';
+import {
+  computeTangentVec4,
+  packInterleavedVertexAttributes,
+  writeNormalPlaneTangent,
+} from '@forgeax/engine-geometry';
 import type { Mat4 } from '@forgeax/engine-math';
 import { box3, mat4, quat, vec3 } from '@forgeax/engine-math';
 import { AssetGuid as AssetGuidCodec } from '@forgeax/engine-pack/guid';
@@ -46,16 +50,33 @@ import {
   STANDARD_PHYSICAL_PARAMETER_NAMES,
   STANDARD_TRANSMISSION_PARAMETER_NAMES,
   standardMaterialParameters,
+  unlitMaterialParameters,
 } from '@forgeax/engine-types';
 import { createMaterialError, err, type GltfError, gltfErr, ok } from './errors.js';
+import {
+  GLTF_MATERIAL_TEXTURE_SLOTS,
+  type GltfMaterialTextureSlot,
+  materialTextureBinding,
+} from './material/parse-material.js';
 import type {
   GltfDoc,
   GltfMaterialIr,
   GltfMeshIr,
-  GltfNodeIr,
   GltfPunctualLightIr,
   GltfTextureInfoIr,
 } from './parse-gltf.js';
+import { GLTF_UV_SET_COUNT, gltfMeshUvSet } from './parse-gltf.js';
+
+function copyVertexStream(
+  target: Float32Array | Uint16Array,
+  source: Float32Array | Uint16Array,
+  offset: number,
+  count: number,
+): void {
+  // Keep the existing bounded typed-array conversion for short source lanes:
+  // undefined becomes NaN in float streams and zero in joint indices.
+  for (let i = 0; i < count; i++) target[offset + i] = source[i] as number;
+}
 
 /**
  * Convert one or more parsed `GltfMeshIr` primitives sharing the same glTF
@@ -131,9 +152,8 @@ export function meshIrToMeshAsset(
       );
     }
     // Count present UV sets in this primitive.
-    for (let k = 7; k >= 1; k--) {
-      const key = `texcoord${k}` as keyof GltfMeshIr;
-      if (p[key] !== undefined) {
+    for (let k = GLTF_UV_SET_COUNT - 1; k >= 1; k--) {
+      if (gltfMeshUvSet(p, k) !== undefined) {
         widestUvIndex = Math.max(widestUvIndex, k);
         break;
       }
@@ -275,9 +295,7 @@ export function meshIrToMeshAsset(
           ty = sourceTangents[i * 4 + 1] ?? 0,
           tz = sourceTangents[i * 4 + 2] ?? 0;
         if (Math.hypot(ny * tz - nz * ty, nz * tx - nx * tz, nx * ty - ny * tx) > 1e-8) continue;
-        const t = Math.abs(nx) > Math.abs(nz) ? [-ny, nx, 0] : [0, -nz, ny];
-        const length = Math.hypot(...t);
-        if (!(length > 0) || !Number.isFinite(length))
+        if (!writeNormalPlaneTangent(sourceTangents, i * 4, nx, ny, nz))
           return err(
             gltfErr('gltf-mesh-bridge-invalid', {
               reason: 'tangent-frame',
@@ -285,7 +303,6 @@ export function meshIrToMeshAsset(
               primitiveIndex: prims.indexOf(mesh),
             }),
           );
-        for (let axis = 0; axis < 3; axis++) sourceTangents[i * 4 + axis] = (t[axis] ?? 0) / length;
       }
     }
     if (mesh.colors0 !== undefined && mesh.colors0.length !== primVertexCount * 4) {
@@ -301,107 +318,52 @@ export function meshIrToMeshAsset(
         }),
       );
     }
-    for (let i = 0; i < primVertexCount; i++) {
-      const p = i * 3;
-      positionsCat[(vertexCursor + i) * 3 + 0] = mesh.positions[p + 0] as number;
-      positionsCat[(vertexCursor + i) * 3 + 1] = mesh.positions[p + 1] as number;
-      positionsCat[(vertexCursor + i) * 3 + 2] = mesh.positions[p + 2] as number;
-      if (mesh.normals !== undefined) {
-        const n = i * 3;
-        normalsCat[(vertexCursor + i) * 3 + 0] = mesh.normals[n + 0] as number;
-        normalsCat[(vertexCursor + i) * 3 + 1] = mesh.normals[n + 1] as number;
-        normalsCat[(vertexCursor + i) * 3 + 2] = mesh.normals[n + 2] as number;
-      } else {
-        normalsCat[(vertexCursor + i) * 3 + 1] = 1;
+    copyVertexStream(positionsCat, mesh.positions, vertexCursor * 3, primVertexCount * 3);
+    if (mesh.normals !== undefined) {
+      copyVertexStream(normalsCat, mesh.normals, vertexCursor * 3, primVertexCount * 3);
+    } else {
+      for (let i = vertexCursor; i < vertexCursor + primVertexCount; i++) normalsCat[i * 3 + 1] = 1;
+    }
+    if (mesh.texcoord0 !== undefined)
+      copyVertexStream(uvsCat, mesh.texcoord0, vertexCursor * 2, primVertexCount * 2);
+    if (sourceTangents !== undefined) {
+      copyVertexStream(tangentsCat, sourceTangents, vertexCursor * 4, primVertexCount * 4);
+    } else {
+      for (let i = vertexCursor; i < vertexCursor + primVertexCount; i++) {
+        tangentsCat[i * 4] = 1;
+        tangentsCat[i * 4 + 3] = 1;
       }
-      if (mesh.texcoord0 !== undefined) {
-        const t = i * 2;
-        uvsCat[(vertexCursor + i) * 2 + 0] = mesh.texcoord0[t + 0] as number;
-        uvsCat[(vertexCursor + i) * 2 + 1] = mesh.texcoord0[t + 1] as number;
-      }
-      if (sourceTangents !== undefined) {
-        const g = i * 4;
-        tangentsCat[(vertexCursor + i) * 4 + 0] = sourceTangents[g + 0] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 1] = sourceTangents[g + 1] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 2] = sourceTangents[g + 2] as number;
-        tangentsCat[(vertexCursor + i) * 4 + 3] = sourceTangents[g + 3] as number;
-      } else {
-        tangentsCat[(vertexCursor + i) * 4 + 0] = 1;
-        tangentsCat[(vertexCursor + i) * 4 + 3] = 1;
-      }
-      if (colorsCat !== undefined) {
-        const colorDst = (vertexCursor + i) * 4;
-        const colorSrc = i * 4;
-        if (mesh.colors0 === undefined) {
-          colorsCat[colorDst + 0] = 1;
-          colorsCat[colorDst + 1] = 1;
-          colorsCat[colorDst + 2] = 1;
-          colorsCat[colorDst + 3] = 1;
-        } else {
-          colorsCat[colorDst + 0] = mesh.colors0[colorSrc + 0] as number;
-          colorsCat[colorDst + 1] = mesh.colors0[colorSrc + 1] as number;
-          colorsCat[colorDst + 2] = mesh.colors0[colorSrc + 2] as number;
-          colorsCat[colorDst + 3] = mesh.colors0[colorSrc + 3] as number;
-        }
-      }
-      for (let targetIndex = 0; targetIndex < morphTargetCount; targetIndex++) {
-        const source = mesh.morphTargets?.[targetIndex];
-        const target = morphTargets[targetIndex] as MorphTarget;
-        const vertex = vertexCursor + i;
-        if (source?.position !== undefined && target.position !== undefined) {
-          target.position.set(source.position.subarray(i * 3, i * 3 + 3), vertex * 3);
-        }
-        if (source?.normal !== undefined && target.normal !== undefined) {
-          target.normal.set(source.normal.subarray(i * 3, i * 3 + 3), vertex * 3);
-        }
-        if (source?.tangent !== undefined && target.tangent !== undefined) {
-          target.tangent.set(source.tangent.subarray(i * 4, i * 4 + 4), vertex * 4);
-        }
-      }
-      // D-2 / w8: when the MeshAsset is promoted to a skinned projection,
-      // retain both canonical standalone arrays. The geometry packer writes
-      // their typed values into the canonical interleaved byte layout once.
-      if (hasAnySkin && skinIndicesCat !== undefined && skinWeightsCat !== undefined) {
-        const skinDst = (vertexCursor + i) * 4;
-        if (mesh.joints0 !== undefined && mesh.weights0 !== undefined) {
-          const j = i * 4;
-          const j0 = mesh.joints0[j + 0] as number;
-          const j1 = mesh.joints0[j + 1] as number;
-          const j2 = mesh.joints0[j + 2] as number;
-          const j3 = mesh.joints0[j + 3] as number;
-          skinIndicesCat[skinDst + 0] = j0;
-          skinIndicesCat[skinDst + 1] = j1;
-          skinIndicesCat[skinDst + 2] = j2;
-          skinIndicesCat[skinDst + 3] = j3;
-          const w0 = mesh.weights0[j + 0] as number;
-          const w1 = mesh.weights0[j + 1] as number;
-          const w2 = mesh.weights0[j + 2] as number;
-          const w3 = mesh.weights0[j + 3] as number;
-          skinWeightsCat[skinDst + 0] = w0;
-          skinWeightsCat[skinDst + 1] = w1;
-          skinWeightsCat[skinDst + 2] = w2;
-          skinWeightsCat[skinDst + 3] = w3;
-        }
-        // else: unskinned primitive in a mixed MeshAsset; typed arrays remain
-        // zero-filled, which is the canonical fallback.
-      }
-      // feat-20260629-multi-uv-set-support m1-w3: write uv1..uvK after skin data.
-      // Canonical interleaved order: position/normal/uv/tangent/skinIndex/skinWeight/uv1..uv7.
-      // UV1 starts at offset UV1_OFFSET (12 for unskinned, 18 for skinned) in float slots.
-      // Each additional UV set 2F. Missing texcoordK → zero-fill (plan-strategy M1).
-      for (let k = 1; k <= uvKeys.length; k++) {
-        const uvKey = `texcoord${k}` as keyof GltfMeshIr;
-        const catIdx = k - 1;
-        const cat = uvCats[catIdx] as Float32Array;
-        const catDst = (vertexCursor + i) * 2;
-        const srcArr = mesh[uvKey] as Float32Array | undefined;
-        if (srcArr !== undefined) {
-          const t = i * 2;
-          cat[catDst + 0] = srcArr[t + 0] as number;
-          cat[catDst + 1] = srcArr[t + 1] as number;
-        }
-        // else: zero-fill (implicit — Float32Array defaults to 0)
-      }
+    }
+    if (colorsCat !== undefined) {
+      if (mesh.colors0 === undefined)
+        colorsCat.fill(1, vertexCursor * 4, (vertexCursor + primVertexCount) * 4);
+      else copyVertexStream(colorsCat, mesh.colors0, vertexCursor * 4, primVertexCount * 4);
+    }
+    if (
+      skinIndicesCat !== undefined &&
+      skinWeightsCat !== undefined &&
+      mesh.joints0 !== undefined &&
+      mesh.weights0 !== undefined
+    ) {
+      copyVertexStream(skinIndicesCat, mesh.joints0, vertexCursor * 4, primVertexCount * 4);
+      copyVertexStream(skinWeightsCat, mesh.weights0, vertexCursor * 4, primVertexCount * 4);
+    }
+    for (let k = 1; k <= uvKeys.length; k++) {
+      const source = gltfMeshUvSet(mesh, k);
+      const target = uvCats[k - 1];
+      if (source !== undefined && target !== undefined)
+        copyVertexStream(target, source, vertexCursor * 2, primVertexCount * 2);
+    }
+    // Morph lanes already use bounded subarrays: absent or short lanes stay zero-filled.
+    for (let targetIndex = 0; targetIndex < morphTargetCount; targetIndex++) {
+      const source = mesh.morphTargets?.[targetIndex];
+      const target = morphTargets[targetIndex] as MorphTarget;
+      if (source?.position !== undefined && target.position !== undefined)
+        target.position.set(source.position.subarray(0, primVertexCount * 3), vertexCursor * 3);
+      if (source?.normal !== undefined && target.normal !== undefined)
+        target.normal.set(source.normal.subarray(0, primVertexCount * 3), vertexCursor * 3);
+      if (source?.tangent !== undefined && target.tangent !== undefined)
+        target.tangent.set(source.tangent.subarray(0, primVertexCount * 4), vertexCursor * 4);
     }
     // Bias each submesh's indices by the running vertex offset so they
     // reference into the merged vertex buffer rather than the per-primitive
@@ -762,12 +724,7 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
     if (isCamera) {
       // B6: camera node detected via GltfNodeIr.camera (not heuristic).
       // Camera component sits alongside Transform (and Name if present).
-      components.Camera = {
-        fov: 0.7853981633974483,
-        aspect: 1.7777777777777777,
-        near: 0.1,
-        far: 100,
-      };
+      components.Camera = { ...ir.camera };
     }
 
     const localIdx = resultNodes.length;
@@ -828,9 +785,6 @@ export function gltfDocToSceneAsset(doc: GltfDoc, ctx: GltfBridgeContext): Scene
   } as unknown as SceneAsset;
 }
 
-/** Internal helper: mark GltfNodeIr usable so future surface evolutions stay typed. */
-export type _NodeIrAlias = GltfNodeIr;
-
 export interface MaterialBridgeContext {
   /** glTF texture index -> registry TextureAsset handle. */
   readonly textureHandles?: ReadonlyMap<number, Handle<'TextureAsset', 'shared'>>;
@@ -850,37 +804,12 @@ export interface MaterialBridgeContext {
   readonly skinned?: boolean;
 }
 
-function textureInfo(info: GltfTextureInfoIr | number | undefined): GltfTextureInfoIr | undefined {
-  return info === undefined ? undefined : typeof info === 'number' ? { texture: info } : info;
-}
-
-type MaterialTextureSlot =
-  | 'baseColorTexture'
-  | 'metallicRoughnessTexture'
-  | 'normalTexture'
-  | 'occlusionTexture'
-  | 'emissiveTexture'
-  | 'transmissionTexture'
-  | 'thicknessTexture'
-  | 'clearcoatTexture'
-  | 'clearcoatRoughnessTexture'
-  | 'clearcoatNormalTexture'
-  | 'anisotropyTexture'
-  | 'sheenColorTexture'
-  | 'sheenRoughnessTexture'
-  | 'iridescenceTexture'
-  | 'iridescenceThicknessTexture'
-  | 'specularTexture'
-  | 'specularColorTexture'
-  | 'diffuseTransmissionTexture'
-  | 'diffuseTransmissionColorTexture';
-
 function textureValue(
   info: GltfTextureInfoIr | number | undefined,
-  slot: MaterialTextureSlot,
+  slot: GltfMaterialTextureSlot,
   ctx: MaterialBridgeContext | undefined,
 ): MaterialTextureValue | undefined {
-  const binding = textureInfo(info);
+  const binding = materialTextureBinding(info);
   if (binding === undefined || ctx?.textureHandles === undefined) return undefined;
   const textureHandle = ctx.textureHandles.get(binding.texture);
   if (textureHandle === undefined) return undefined;
@@ -935,9 +864,6 @@ function standardRootParameterNames(mat: GltfMaterialIr): {
   const addLayer = (layer: keyof typeof STANDARD_LAYER_PARAMETER_GROUPS): void => {
     for (const name of STANDARD_LAYER_PARAMETER_GROUPS[layer]) names.add(name);
   };
-  const addTexture = (name: string, info: GltfTextureInfoIr | number | undefined): void => {
-    if (info !== undefined) names.add(name);
-  };
 
   const clearcoat =
     mat.clearcoatFactor !== undefined ||
@@ -973,23 +899,9 @@ function standardRootParameterNames(mat: GltfMaterialIr): {
   if (diffuseTransmission) addLayer('diffuseTransmission');
   if (clearcoat && mat.clearcoatNormalTexture !== undefined) names.add('clearcoatNormalScale');
 
-  addTexture('baseColorTexture', mat.baseColorTexture);
-  addTexture('metallicRoughnessTexture', mat.metallicRoughnessTexture);
-  addTexture('normalTexture', mat.normalTexture);
-  addTexture('emissiveTexture', mat.emissiveTexture);
-  addTexture('occlusionTexture', mat.occlusionTexture);
-  addTexture('clearcoatTexture', mat.clearcoatTexture);
-  addTexture('clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture);
-  addTexture('clearcoatNormalTexture', mat.clearcoatNormalTexture);
-  addTexture('anisotropyTexture', mat.anisotropyTexture);
-  addTexture('sheenColorTexture', mat.sheenColorTexture);
-  addTexture('sheenRoughnessTexture', mat.sheenRoughnessTexture);
-  addTexture('iridescenceTexture', mat.iridescenceTexture);
-  addTexture('iridescenceThicknessTexture', mat.iridescenceThicknessTexture);
-  addTexture('specularTexture', mat.specularTexture);
-  addTexture('specularColorTexture', mat.specularColorTexture);
-  addTexture('diffuseTransmissionTexture', mat.diffuseTransmissionTexture);
-  addTexture('diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture);
+  for (const slot of GLTF_MATERIAL_TEXTURE_SLOTS) {
+    if (mat[slot] !== undefined) names.add(slot);
+  }
 
   const transmission =
     mat.transmissionFactor !== undefined ||
@@ -1026,29 +938,8 @@ export function validateMaterialUvSets(
   availableSets: readonly number[],
 ): Result<void, MaterialError> {
   const available = new Set(availableSets);
-  const slots: readonly [MaterialTextureSlot, GltfTextureInfoIr | number | undefined][] = [
-    ['baseColorTexture', mat.baseColorTexture],
-    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
-    ['normalTexture', mat.normalTexture],
-    ['occlusionTexture', mat.occlusionTexture],
-    ['emissiveTexture', mat.emissiveTexture],
-    ['transmissionTexture', mat.transmissionTexture],
-    ['thicknessTexture', mat.thicknessTexture],
-    ['clearcoatTexture', mat.clearcoatTexture],
-    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
-    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
-    ['anisotropyTexture', mat.anisotropyTexture],
-    ['sheenColorTexture', mat.sheenColorTexture],
-    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
-    ['iridescenceTexture', mat.iridescenceTexture],
-    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
-    ['specularTexture', mat.specularTexture],
-    ['specularColorTexture', mat.specularColorTexture],
-    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
-    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
-  ];
-  for (const [slot, rawBinding] of slots) {
-    const binding = textureInfo(rawBinding);
+  for (const slot of GLTF_MATERIAL_TEXTURE_SLOTS) {
+    const binding = materialTextureBinding(mat[slot]);
     if (binding === undefined) continue;
     const requestedSet = binding.texCoord ?? 0;
     if (!available.has(requestedSet)) {
@@ -1084,9 +975,9 @@ export function validateMaterialTangentInputs(
       ? { layer: 'clearcoat', info: mat.clearcoatNormalTexture }
       : undefined;
   if (tangentSlot === undefined) return ok(undefined);
-  const selected = textureInfo(tangentSlot.info);
+  const selected = materialTextureBinding(tangentSlot.info);
   const uvSet = selected?.texCoord ?? 0;
-  const uv = mesh[`texcoord${uvSet === 0 ? '0' : uvSet}` as keyof GltfMeshIr];
+  const uv = gltfMeshUvSet(mesh, uvSet);
   const attributes = ['NORMAL', `TEXCOORD_${uvSet}`, 'TANGENT'];
   const fail = (reason: string): Result<void, MaterialError> =>
     err(
@@ -1134,31 +1025,10 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   };
   if (mat.emissiveFactor !== undefined) {
     values.emissive = mat.emissiveFactor;
-    values.emissiveIntensity = 1;
+    values.emissiveIntensity = mat.emissiveStrength ?? 1;
   }
-  const textureSlots: readonly [MaterialTextureSlot, GltfTextureInfoIr | number | undefined][] = [
-    ['baseColorTexture', mat.baseColorTexture],
-    ['metallicRoughnessTexture', mat.metallicRoughnessTexture],
-    ['normalTexture', mat.normalTexture],
-    ['occlusionTexture', mat.occlusionTexture],
-    ['emissiveTexture', mat.emissiveTexture],
-    ['transmissionTexture', mat.transmissionTexture],
-    ['thicknessTexture', mat.thicknessTexture],
-    ['clearcoatTexture', mat.clearcoatTexture],
-    ['clearcoatRoughnessTexture', mat.clearcoatRoughnessTexture],
-    ['clearcoatNormalTexture', mat.clearcoatNormalTexture],
-    ['anisotropyTexture', mat.anisotropyTexture],
-    ['sheenColorTexture', mat.sheenColorTexture],
-    ['sheenRoughnessTexture', mat.sheenRoughnessTexture],
-    ['iridescenceTexture', mat.iridescenceTexture],
-    ['iridescenceThicknessTexture', mat.iridescenceThicknessTexture],
-    ['specularTexture', mat.specularTexture],
-    ['specularColorTexture', mat.specularColorTexture],
-    ['diffuseTransmissionTexture', mat.diffuseTransmissionTexture],
-    ['diffuseTransmissionColorTexture', mat.diffuseTransmissionColorTexture],
-  ];
-  for (const [slot, info] of textureSlots) {
-    const value = textureValue(info, slot, ctx);
+  for (const slot of GLTF_MATERIAL_TEXTURE_SLOTS) {
+    const value = textureValue(mat[slot], slot, ctx);
     if (value !== undefined) values[slot] = value;
   }
   if (mat.occlusionTexture !== undefined && values.occlusionStrength === undefined) {
@@ -1175,11 +1045,11 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
     values.clearcoat = mat.clearcoatFactor ?? 0;
     values.clearcoatRoughness = mat.clearcoatRoughnessFactor ?? 0;
   }
-  const normal = textureInfo(mat.normalTexture) as
+  const normal = materialTextureBinding(mat.normalTexture) as
     | (GltfTextureInfoIr & { readonly scale?: number })
     | undefined;
   if (normal?.scale !== undefined) values.normalScale = [normal.scale, normal.scale];
-  const clearcoatNormal = textureInfo(mat.clearcoatNormalTexture) as
+  const clearcoatNormal = materialTextureBinding(mat.clearcoatNormalTexture) as
     | (GltfTextureInfoIr & { readonly scale?: number })
     | undefined;
   if (clearcoatNormal?.scale !== undefined) values.clearcoatNormalScale = clearcoatNormal.scale;
@@ -1204,7 +1074,12 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   if (mat.specularFactor !== undefined) values.specular = mat.specularFactor;
   if (mat.specularColorFactor !== undefined) values.specularColor = mat.specularColorFactor;
 
-  const module = ctx?.skinned === true ? 'forgeax::pbr-skin' : 'forgeax::default-standard-pbr';
+  const module =
+    mat.unlit === true
+      ? 'forgeax_material::unlit'
+      : ctx?.skinned === true
+        ? 'forgeax::pbr-skin'
+        : 'forgeax::default-standard-pbr';
 
   const isMask = mat.alphaMode === 'MASK';
   const alphaCutoff = isMask ? (mat.alphaCutoff ?? 0.5) : undefined;
@@ -1249,7 +1124,7 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   // authored Standard materials. Physical layers and BLEND stay Forward;
   // opaque/MASK materials also provide the deferred material attachments.
   const passes: [MaterialPass, ...MaterialPass[]] = [pass];
-  if (!isBlend && !rootContract.extended) {
+  if (mat.unlit !== true && !isBlend && !rootContract.extended) {
     passes.push({
       ...pass,
       name: 'Deferred',
@@ -1259,14 +1134,20 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
   }
   passes.push({
     name: 'ShadowCaster',
-    program: { module: 'forgeax::default-shadow-caster', fragmentEntry: 'fs_shadow' },
+    program:
+      mat.unlit === true
+        ? { module, vertexEntry: 'vs_shadow' }
+        : { module: 'forgeax::default-shadow-caster', fragmentEntry: 'fs_shadow' },
     renderState: {
       tags: { LightMode: 'ShadowCaster' },
       ...(mat.doubleSided === true ? { cullMode: 'none' } : {}),
     },
   });
 
-  const child = !rootContract.extended && ctx?.standardRootGuid !== undefined;
+  const child = mat.unlit !== true && !rootContract.extended && ctx?.standardRootGuid !== undefined;
+  if (mat.unlit === true)
+    for (const name of Object.keys(values))
+      if (!['baseColor', 'baseColorTexture', 'alphaCutoff'].includes(name)) delete values[name];
   return {
     kind: 'material',
     ...(child
@@ -1274,7 +1155,10 @@ export function toMaterialAsset(mat: GltfMaterialIr, ctx?: MaterialBridgeContext
       : {
           colorSpace: 'linear' as const,
           passes,
-          parameters: standardMaterialParameters(rootContract.names),
+          parameters:
+            mat.unlit === true
+              ? unlitMaterialParameters('linear')
+              : standardMaterialParameters(rootContract.names),
         }),
     values,
   };

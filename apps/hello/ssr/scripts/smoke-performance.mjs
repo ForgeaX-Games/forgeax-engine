@@ -6,15 +6,19 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { abbaIncrement, summarizePerformanceWindow } from './smoke-performance-sequence-aggregation.mjs';
+
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const rootDir = resolve(appDir, '../../..');
 const WIDTH = 1920;
 const HEIGHT = 1080;
-const MIN_FRAMES = 60;
+const MIN_FRAMES = 180;
+const WARMUP_FRAMES = 120;
+const SAMPLED_FRAMES = 60;
 const FEATURE_ID = 'feat-20260831-ssr-probe-environment-fallback';
 const BUDGET_BYTES = 45_088_768;
 const CPU_INCREMENT_BUDGET_MS = 0.25;
-const artifactDir = resolve(rootDir, 'artifacts/ssr-fallback');
+const artifactDir = resolve(rootDir, process.env.SSR_PERF_ARTIFACT_DIR ?? 'artifacts/maturity/performance-evidence/ssr-budget');
 
 function deriveIndependentDescriptor(width, height) {
   // Keep this arithmetic independent from Render's implementation while
@@ -94,250 +98,88 @@ const descriptorMatchesOwner =
   JSON.stringify(descriptorProjection(ownerDescriptor)) ===
   JSON.stringify(descriptorProjection(independentDescriptor));
 
-const percentile = (values, fraction) => {
-  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-  if (sorted.length === 0) return null;
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(fraction * (sorted.length - 1))));
-  return sorted[index];
-};
-
-function runDawn({ disableSsr, reportPath }) {
-  const env = {
-    ...process.env,
-    FORGEAX_SKIP_HARNESS_SYNC: '1',
-    SMOKE_MIN_FRAMES: String(MIN_FRAMES),
-    SMOKE_PERF_TIMING: '1',
-    SMOKE_WAIT_DRAW_COMPLETION: '1',
-    SMOKE_WIDTH: String(WIDTH),
-    SMOKE_HEIGHT: String(HEIGHT),
-    SMOKE_REPORT_FILE: reportPath,
-    SMOKE_QUIET: '1',
-    VITE_REFLECTION_PROBE_EVIDENCE: '0',
-    VITE_SSR_EVIDENCE: '1',
-  };
-  if (disableSsr) env.SMOKE_DISABLE_SSR = '1';
-  else delete env.SMOKE_DISABLE_SSR;
-  const child = spawnSync(process.execPath, ['scripts/smoke-dawn.mjs'], {
-    cwd: appDir,
-    encoding: 'utf8',
-    timeout: Number(process.env.SSR_PERF_TIMEOUT_MS ?? 900_000),
-    maxBuffer: 32 * 1024 * 1024,
-    env,
-  });
-  const output = `${child.stdout ?? ''}\n${child.stderr ?? ''}`;
-  let report;
-  try {
-    report = JSON.parse(readFileSync(reportPath, 'utf8'));
-  } catch {
-    const reportMatch = output.match(/^\[hello-ssr\] report=(\{.*\})$/m);
-    if (reportMatch !== null) {
-      try {
-        report = JSON.parse(reportMatch[1]);
-      } catch {
-        report = undefined;
-      }
-    }
-  }
-  return { child, output, report };
-}
-
-mkdirSync(artifactDir, { recursive: true });
-const baselineRun = runDawn({
-  disableSsr: true,
-  reportPath: resolve(artifactDir, 'performance-baseline-runtime-report.json'),
-});
-const ssrRun = runDawn({
-  disableSsr: false,
-  reportPath: resolve(artifactDir, 'performance-runtime-report.json'),
-});
-process.stdout.write(`${baselineRun.output}\n${ssrRun.output}`);
-const child = ssrRun.child;
-const runtimeReport = ssrRun.report;
-const baselineReport = baselineRun.report;
-
-const passStats = runtimeReport?.performanceTiming?.gpu?.passStats ?? {};
-const ssrPassStats = Object.fromEntries(
-  Object.entries(passStats).filter(([name]) => name.startsWith('ssr-') || name.startsWith('depth-pyramid-')),
-);
-const passFamilies = {
-  depthPyramid: Object.entries(ssrPassStats).filter(([name]) => name.startsWith('depth-pyramid-')),
-  trace: Object.entries(ssrPassStats).filter(([name]) => name === 'ssr-trace'),
-  temporal: Object.entries(ssrPassStats).filter(([name]) => name === 'ssr-temporal'),
-  compose: Object.entries(ssrPassStats).filter(([name]) => name === 'ssr-compose'),
-};
-const sumRawSamples = (entries) => {
-  const lengths = entries.map(([, stats]) => Array.isArray(stats.samples) ? stats.samples.length : -1);
-  const sampleCount = lengths[0] ?? 0;
-  const valid = entries.length > 0 && sampleCount > 0 && lengths.every((length) => length === sampleCount);
-  if (!valid) return { samples: [], sampleCount, lengths, valid: false };
-  const samples = Array.from({ length: sampleCount }, (_, index) =>
-    entries.reduce((sum, [, stats]) => sum + stats.samples[index], 0),
-  );
-  return { samples, sampleCount, lengths, valid: true };
-};
-const gpuSsrAggregate = sumRawSamples(Object.entries(ssrPassStats));
-const gpuSsrFamilyAggregates = Object.fromEntries(
-  Object.entries(passFamilies).map(([family, entries]) => [family, sumRawSamples(entries)]),
-);
-const gpuSsrBudget = {
-  // Percentiles are computed after summing matching per-frame pass samples;
-  // summing independent pass percentiles would describe different frames.
-  samplesMs: gpuSsrAggregate.samples,
-  sampleCount: gpuSsrAggregate.sampleCount,
-  p50Ms: gpuSsrAggregate.valid ? percentile(gpuSsrAggregate.samples, 0.5) : null,
-  p95Ms: gpuSsrAggregate.valid ? percentile(gpuSsrAggregate.samples, 0.95) : null,
-  thresholdsMs: { p50: 3, p95: 5 },
-  families: Object.fromEntries(
-    Object.entries(passFamilies).map(([family, entries]) => [family, {
-      passNames: entries.map(([name]) => name),
-      samplesMs: gpuSsrFamilyAggregates[family].samples,
-      sampleCount: gpuSsrFamilyAggregates[family].sampleCount,
-      p50Ms: gpuSsrFamilyAggregates[family].valid
-        ? percentile(gpuSsrFamilyAggregates[family].samples, 0.5) : null,
-      p95Ms: gpuSsrFamilyAggregates[family].valid
-        ? percentile(gpuSsrFamilyAggregates[family].samples, 0.95) : null,
-    }]),
-  ),
-};
-const cpu = runtimeReport?.performanceTiming?.cpu;
-const baselineCpu = baselineReport?.performanceTiming?.cpu;
-const cpuIncrementSampleCount = Math.min(
-  MIN_FRAMES,
-  baselineCpu?.samples?.length ?? 0,
-  cpu?.samples?.length ?? 0,
-);
-const cpuIncrementSamples = Array.from({ length: Math.max(0, cpuIncrementSampleCount) }, (_, index) =>
-  cpu.samples[index] - baselineCpu.samples[index],
-);
-const cpuIncrement = {
-  method: 'paired-frame-delta',
-  samples: cpuIncrementSamples,
-  sampleCount: cpuIncrementSamples.length,
-  p50Ms: percentile(cpuIncrementSamples, 0.5),
-  p95Ms: percentile(cpuIncrementSamples, 0.95),
-  thresholdsMs: { p50: CPU_INCREMENT_BUDGET_MS },
-  baseline: baselineCpu ?? null,
-  ssr: cpu ?? null,
-};
-const gpu = runtimeReport?.performanceTiming?.gpu;
-const shaderIdentity = runtimeReport?.shaderIdentity;
-const baselineShaderIdentity = baselineReport?.shaderIdentity;
-const adapterIdentity = runtimeReport?.adapter;
-const baselineAdapterIdentity = baselineReport?.adapter;
-const hostIdentity = runtimeReport?.host;
-const baselineHostIdentity = baselineReport?.host;
-const finite = (value) => typeof value === 'number' && Number.isFinite(value);
-const errors = [];
-if (child.error !== undefined) errors.push(`runner error=${child.error.message}`);
-if (child.status !== 0) errors.push(`runner exit=${child.status}`);
-if (baselineRun.child.error !== undefined) errors.push(`baseline runner error=${baselineRun.child.error.message}`);
-if (baselineRun.child.status !== 0) errors.push(`baseline runner exit=${baselineRun.child.status}`);
-if (baselineReport === undefined) errors.push('baseline hello-ssr runtime report missing');
-if (baselineReport?.frames !== MIN_FRAMES) errors.push(`baseline frames=${baselineReport?.frames} != ${MIN_FRAMES}`);
-if (baselineReport?.ssr?.status !== 'not-requested') {
-  errors.push(`SSR baseline was not disabled (status=${baselineReport?.ssr?.status ?? 'missing'})`);
-}
-if (runtimeReport === undefined) errors.push('hello-ssr runtime report missing');
-if (adapterIdentity === null || typeof adapterIdentity !== 'object') {
-  errors.push('runtime adapter identity is missing');
-}
-if (baselineAdapterIdentity === null || typeof baselineAdapterIdentity !== 'object') {
-  errors.push('baseline adapter identity is missing');
-}
-if (JSON.stringify(adapterIdentity) !== JSON.stringify(baselineAdapterIdentity)) {
-  errors.push('baseline/runtime adapter identity mismatch');
-}
-if (hostIdentity === null || typeof hostIdentity !== 'object') {
-  errors.push('runtime host identity is missing');
-}
-if (baselineHostIdentity === null || typeof baselineHostIdentity !== 'object') {
-  errors.push('baseline host identity is missing');
-}
-if (JSON.stringify(hostIdentity) !== JSON.stringify(baselineHostIdentity)) {
-  errors.push('baseline/runtime host identity mismatch');
-}
-for (const field of ['traceShaderSha256', 'composeShaderSha256', 'shaderManifestSha256']) {
-  if (!/^[0-9a-f]{64}$/.test(shaderIdentity?.[field] ?? '')) {
-    errors.push(`runtime shader identity ${field} is missing or invalid`);
-  }
-  if (!/^[0-9a-f]{64}$/.test(baselineShaderIdentity?.[field] ?? '')) {
-    errors.push(`baseline shader identity ${field} is missing or invalid`);
-  }
-  if (shaderIdentity?.[field] !== baselineShaderIdentity?.[field]) {
-    errors.push(`baseline/runtime shader identity mismatch for ${field}`);
-  }
-}
-if (runtimeReport?.frames !== MIN_FRAMES) errors.push(`frames=${runtimeReport?.frames} != ${MIN_FRAMES}`);
-if (runtimeReport?.ssr?.status !== 'admitted') errors.push(`SSR inspection was not admitted (status=${runtimeReport?.ssr?.status ?? 'missing'})`);
-if (runtimeReport?.performanceTiming?.resolution?.width !== WIDTH || runtimeReport?.performanceTiming?.resolution?.height !== HEIGHT) {
-  errors.push(`runtime resolution is not ${WIDTH}x${HEIGHT}`);
-}
-if (!independentDescriptor.withinBudget || !ownerDescriptor.withinBudget) errors.push('SSR descriptor exceeds memory budget');
-if (!descriptorMatchesOwner) errors.push('independent descriptor does not match Render owner estimate');
-if (!finite(cpu?.p50Ms) || !finite(cpu?.p95Ms)) errors.push('CPU p50/p95 is unavailable');
-if (cpu?.samples?.length < MIN_FRAMES) errors.push(`CPU timing samples=${cpu?.samples?.length ?? 0} < ${MIN_FRAMES}`);
-if (cpuIncrement.sampleCount < MIN_FRAMES) errors.push(`CPU increment samples=${cpuIncrement.sampleCount} < ${MIN_FRAMES}`);
-if (!finite(cpuIncrement.p50Ms) || !finite(cpuIncrement.p95Ms)) errors.push('CPU planning/record increment p50/p95 is unavailable');
-if (finite(cpuIncrement.p50Ms) && cpuIncrement.p50Ms > CPU_INCREMENT_BUDGET_MS) {
-  errors.push(`SSR CPU increment p50=${cpuIncrement.p50Ms}ms > ${CPU_INCREMENT_BUDGET_MS}ms`);
-}
-if (!['complete', 'partial'].includes(gpu?.status)) errors.push(`GPU timing status=${gpu?.status ?? 'missing'}`);
-if (Object.keys(ssrPassStats).length < 4) errors.push(`SSR pass timing coverage=${Object.keys(ssrPassStats).length}`);
-for (const [family, entries] of Object.entries(passFamilies)) {
-  if (entries.length === 0) errors.push(`SSR ${family} timing family is missing`);
-}
-if (!finite(gpuSsrBudget.p50Ms) || !finite(gpuSsrBudget.p95Ms)) {
-  errors.push('SSR aggregate GPU timing is unavailable');
-} else {
-  if (gpuSsrBudget.p50Ms > gpuSsrBudget.thresholdsMs.p50) errors.push(`SSR GPU p50=${gpuSsrBudget.p50Ms}ms > ${gpuSsrBudget.thresholdsMs.p50}ms`);
-  if (gpuSsrBudget.p95Ms > gpuSsrBudget.thresholdsMs.p95) errors.push(`SSR GPU p95=${gpuSsrBudget.p95Ms}ms > ${gpuSsrBudget.thresholdsMs.p95}ms`);
-}
-if (!gpuSsrAggregate.valid) {
-  errors.push(`SSR aggregate GPU raw sample lengths are invalid: ${JSON.stringify(gpuSsrAggregate.lengths)}`);
-}
-for (const [name, stats] of Object.entries(ssrPassStats)) {
-  if (!finite(stats.p50Ms) || !finite(stats.p95Ms) || !Array.isArray(stats.samples) || stats.samples.length === 0) {
-    errors.push(`SSR pass ${name} has no raw timing samples`);
-  }
-}
-
 const identity = {
   sourceHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' }).trim(),
   sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: rootDir, encoding: 'utf8' }).trim(),
   lockSha256: createHash('sha256').update(readFileSync(resolve(rootDir, 'pnpm-lock.yaml'))).digest('hex'),
   buildSha256: createHash('sha256').update(readFileSync(resolve(rootDir, 'packages/render/dist/index.mjs'))).digest('hex'),
 };
+const sourceClean = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: rootDir, encoding: 'utf8' }).trim() === '';
+
+const runs = [];
+mkdirSync(artifactDir, { recursive: true });
+for (const [orderIndex, disableSsr] of [true, false, false, true].entries()) {
+  const reportPath = resolve(artifactDir, `${orderIndex}-${disableSsr ? 'off' : 'on'}.json`);
+  const env = {
+    ...process.env,
+    FORGEAX_SHARED_APP_INPUTS_MANIFEST: process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST === undefined
+      ? undefined : resolve(rootDir, process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST), FORGEAX_SKIP_HARNESS_SYNC: '1', SMOKE_MIN_FRAMES: String(MIN_FRAMES),
+    SMOKE_PERF_TIMING: '1', SMOKE_WAIT_DRAW_COMPLETION: '1',
+    SMOKE_WIDTH: String(WIDTH), SMOKE_HEIGHT: String(HEIGHT), SMOKE_QUIET: '1',
+    SMOKE_REPORT_FILE: reportPath, VITE_REFLECTION_PROBE_EVIDENCE: '0', VITE_SSR_EVIDENCE: '1',
+    SMOKE_RUN_ORDER_INDEX: String(orderIndex), SMOKE_RUN_MODE: disableSsr ? 'ssr-off' : 'ssr-on',
+  };
+  if (disableSsr) env.SMOKE_DISABLE_SSR = '1';
+  else delete env.SMOKE_DISABLE_SSR;
+  const child = spawnSync(process.execPath, ['scripts/smoke-dawn.mjs'], {
+    cwd: appDir, encoding: 'utf8', timeout: Number(process.env.SSR_PERF_TIMEOUT_MS ?? 900_000),
+    maxBuffer: 32 * 1024 * 1024, env,
+  });
+  writeFileSync(resolve(artifactDir, `${orderIndex}.log`), `${child.stdout ?? ''}\n${child.stderr ?? ''}`);
+  let report;
+  try { report = JSON.parse(readFileSync(reportPath, 'utf8')); } catch { /* preserved child log owns failure */ }
+  runs.push({ orderIndex, disableSsr, childStatus: child.status, childSignal: child.signal,
+    childError: child.error?.message ?? null, reportPath, report,
+    window: summarizePerformanceWindow(report, WARMUP_FRAMES, SAMPLED_FRAMES) });
+  console.log(`[hello-ssr] ABBA ${orderIndex}: exit=${child.status}, envelope p50=${runs.at(-1).window.gpuEnvelope.p50Ms}`);
+}
+const measurementErrors = [];
+for (const run of runs) {
+  if (run.childStatus !== 0 || !run.window.complete) measurementErrors.push(`incomplete run ${run.orderIndex}`);
+  if (run.report?.ssr?.status !== (run.disableSsr ? 'not-requested' : 'admitted')) measurementErrors.push(`feature state ${run.orderIndex}`);
+  if (run.report?.frames !== MIN_FRAMES) measurementErrors.push(`frame count ${run.orderIndex}`);
+}
+for (const field of ['adapter', 'host', 'shaderIdentity', 'backend', 'antialias', 'sceneFixture']) {
+  const values = runs.map((run) => run.report?.[field]);
+  if (!values[0] || !values.every((value) => JSON.stringify(value) === JSON.stringify(values[0]))) measurementErrors.push(`mismatched ${field}`);
+}
+for (const run of runs) {
+  if (JSON.stringify(run.report?.ssrDependencies?.identity) !== JSON.stringify(identity)) measurementErrors.push(`source/build identity ${run.orderIndex}`);
+}
+if (!sourceClean || execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: rootDir, encoding: 'utf8' }).trim() !== '' ||
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' }).trim() !== identity.sourceHead) measurementErrors.push('tracked source changed during measurement');
+if (!descriptorMatchesOwner) measurementErrors.push('owner/independent descriptor mismatch');
+const measurementComplete = measurementErrors.length === 0;
+const adapter = runs[0]?.report?.adapter;
+const physicalGpu = adapter?.isFallbackAdapter === false && typeof adapter?.device === 'string' &&
+  adapter.device.length > 0 && !/software|swiftshader|llvmpipe|lavapipe|basic renderer/i.test(JSON.stringify(adapter));
+const windows = runs.map((run) => run.window);
+const gpu = measurementComplete ? abbaIncrement(windows, 'gpuEnvelope') : null;
+const cpu = measurementComplete ? abbaIncrement(windows, 'cpuSubmission') : null;
+const thresholds = { gpuIncrementMs: { p50: 3, p95: 5 }, cpuSubmissionIncrementMs: { p50: CPU_INCREMENT_BUDGET_MS }, ssrDescriptorBytes: BUDGET_BYTES };
+const budgetFailures = [];
+if (gpu !== null && (gpu.p50Ms > thresholds.gpuIncrementMs.p50 || gpu.p95Ms > thresholds.gpuIncrementMs.p95)) budgetFailures.push('GPU increment');
+if (cpu !== null && cpu.p50Ms > thresholds.cpuSubmissionIncrementMs.p50) budgetFailures.push('CPU submission increment');
+if (!ownerDescriptor.withinBudget || !independentDescriptor.withinBudget) budgetFailures.push('active logical SSR descriptor bytes');
+const budgetStatus = !measurementComplete || !physicalGpu ? 'not-evaluated' : budgetFailures.length ? 'fail' : 'pass';
 const artifact = {
-  schemaVersion: 'hello-ssr-performance/1',
-  featureId: FEATURE_ID,
-  status: errors.length === 0 ? 'pass' : 'fail',
+  schemaVersion: 'hello-ssr-performance/2', featureId: FEATURE_ID,
+  status: measurementComplete && budgetStatus === 'pass' ? 'pass' : budgetStatus === 'not-evaluated' ? 'blocked' : 'fail',
+  measurement: { status: measurementComplete ? 'pass' : 'fail', errors: measurementErrors },
+  budget: { status: budgetStatus, physicalGpu, thresholds, failures: budgetFailures,
+    gpuIncrement: gpu, cpuSubmissionIncrement: cpu,
+    semantics: 'ABBA whole-graph pass envelope increment; p95 is the shift of per-run p95, paired ordinal deltas are diagnostic only',
+    numericThresholdSource: 'unchanged previous SSR 1080p gate: GPU 3/5 ms, CPU 0.25 ms, descriptor 45088768 bytes',
+    limitation: 'descriptor budget is active logical payload only; native lifecycle peak is reported separately and has no invented budget' },
   identity,
-  runner: {
-    lane: 'dawn',
-    backend: runtimeReport?.backend ?? null,
-    adapter: adapterIdentity ?? null,
-    host: hostIdentity ?? null,
-    frames: runtimeReport?.frames ?? 0,
-    resolution: { width: WIDTH, height: HEIGHT },
-  },
-  descriptor: {
-    owner: ownerDescriptor,
-    independent: independentDescriptor,
-    matchesOwner: descriptorMatchesOwner,
-  },
-  shaderIdentity: shaderIdentity ?? null,
-  runs: {
-    baseline: baselineReport?.run ?? null,
-    runtime: runtimeReport?.run ?? null,
-  },
-  timing: {
-    cpu: cpu ?? null,
-    cpuIncrement,
-    gpu: gpu === undefined ? null : { ...gpu, passStats: ssrPassStats },
-    ssrGpuBudget: gpuSsrBudget,
-  },
-  ...(errors.length === 0 ? {} : { errors }),
+  protocol: { order: 'ABBA', warmupFrames: WARMUP_FRAMES, sampledFramesPerRun: SAMPLED_FRAMES,
+    percentile: 'sorted zero-based ceil(p*(n-1))', resolution: { width: WIDTH, height: HEIGHT },
+    nativeOuterQuery: { status: 'unavailable', reason: 'portable RHI has pass-boundary queries only' },
+    gpuPassSum: 'diagnostic repeated coverage; never frame latency, exclusive feature cost, or FPS' },
+  descriptor: { owner: ownerDescriptor, independent: independentDescriptor, matchesOwner: descriptorMatchesOwner },
+  runs: runs.map(({ report, ...run }) => ({ ...run, adapter: report?.adapter, host: report?.host, shaderIdentity: report?.shaderIdentity })),
 };
-writeFileSync(resolve(artifactDir, 'performance.json'), `${JSON.stringify(artifact, null, 2)}\n`);
-console.log(`[hello-ssr] performance=${JSON.stringify(artifact)}`);
-process.exitCode = errors.length === 0 ? 0 : 1;
+const output = resolve(artifactDir, 'performance.json');
+writeFileSync(output, `${JSON.stringify(artifact, null, 2)}\n`);
+console.log(`[hello-ssr] measurement=${artifact.measurement.status} budget=${budgetStatus} artifact=${output}`);
+process.exitCode = artifact.status === 'pass' ? 0 : artifact.status === 'blocked' ? 2 : 1;

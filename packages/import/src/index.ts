@@ -103,6 +103,7 @@ export {
   type LightmapUvStorage,
   validateLightmapUvs,
 } from './lightmap-uv.js';
+export { projectMaterialPackTransport } from './material-pack-transport.js';
 export {
   type MeshBinEncodeError,
   packMeshBin,
@@ -112,6 +113,12 @@ export {
   type MeshCardCookInput,
   type MeshCardCookPayload,
 } from './mesh-card-cooker';
+export { cookMeshCollision } from './mesh-collision';
+export {
+  cookMeshDistanceFieldProduct,
+  encodeMeshDistanceFieldProduct,
+  type MeshDistanceFieldProduct,
+} from './mesh-distance-field-product';
 export {
   deriveDefaultLodScreenCoverages,
   type MeshLodBounds,
@@ -160,6 +167,7 @@ export {
 } from './scriptable-pack-file-snapshot.js';
 export {
   canonicalScriptableSourcePath,
+  createDeclaredPackAssetSnapshotSource,
   createScriptablePackProduction,
   type DirectPackTransport,
   type DirectPackTransportInput,

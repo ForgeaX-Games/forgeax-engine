@@ -483,6 +483,7 @@ export type SourceDependency = string;
 
 /** Logical artifact content emitted by one imported asset. */
 export interface ImportedArtifactBody {
+  readonly delivery?: 'stream';
   readonly mediaType: string;
   readonly assetCodec?: AssetCodec;
   readonly bytes: Uint8Array;

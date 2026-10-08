@@ -1,6 +1,7 @@
-import type { Buffer, RhiDevice, Texture, TextureView } from '@forgeax/engine-rhi';
+import type { Buffer, RhiDevice, Texture, TextureView, Tlas } from '@forgeax/engine-rhi';
 import { ok } from './errors.js';
 import type {
+  GraphAccelerationStructure,
   GraphAccess,
   GraphBuffer,
   GraphBufferDescriptor,
@@ -11,6 +12,7 @@ import type {
   GraphTextureDescriptor,
   GraphTextureView,
   GraphTextureViewDescriptor,
+  ImportedAccelerationStructureDescriptor,
   ImportedBufferDescriptor,
   ImportedTextureDescriptor,
   ImportedTextureViewResolver,
@@ -36,7 +38,17 @@ export interface BufferHandleData {
   readonly kind: 'buffer';
 }
 
-export type ResourceHandleData = TextureHandleData | TextureViewHandleData | BufferHandleData;
+export interface AccelerationStructureHandleData {
+  readonly owner: object;
+  readonly id: number;
+  readonly kind: 'acceleration-structure';
+}
+
+export type ResourceHandleData =
+  | TextureHandleData
+  | TextureViewHandleData
+  | BufferHandleData
+  | AccelerationStructureHandleData;
 
 export function textureHandle(owner: object, id: number): GraphTexture {
   return Object.freeze({ owner, id, kind: 'texture' }) as unknown as GraphTexture;
@@ -55,6 +67,14 @@ export function bufferHandle(owner: object, id: number): GraphBuffer {
   return Object.freeze({ owner, id, kind: 'buffer' }) as unknown as GraphBuffer;
 }
 
+export function accelerationStructureHandle(owner: object, id: number): GraphAccelerationStructure {
+  return Object.freeze({
+    owner,
+    id,
+    kind: 'acceleration-structure',
+  }) as unknown as GraphAccelerationStructure;
+}
+
 export function handleData(resource: unknown): ResourceHandleData | undefined {
   if (typeof resource !== 'object' || resource === null) return undefined;
   const candidate = resource as Partial<ResourceHandleData>;
@@ -62,7 +82,8 @@ export function handleData(resource: unknown): ResourceHandleData | undefined {
   if (
     candidate.kind !== 'texture' &&
     candidate.kind !== 'texture-view' &&
-    candidate.kind !== 'buffer'
+    candidate.kind !== 'buffer' &&
+    candidate.kind !== 'acceleration-structure'
   ) {
     return undefined;
   }
@@ -102,11 +123,19 @@ export interface ImportedBufferRecord<FrameCtx> extends ResourceRecordBase {
   readonly resolve: (frame: FrameCtx) => Buffer;
 }
 
+export interface ImportedAccelerationStructureRecord<FrameCtx> extends ResourceRecordBase {
+  readonly kind: 'acceleration-structure';
+  readonly origin: 'imported';
+  readonly descriptor: ImportedAccelerationStructureDescriptor;
+  readonly resolve: (frame: FrameCtx) => Tlas;
+}
+
 export type ResourceRecord<FrameCtx> =
   | CreatedTextureRecord
   | ImportedTextureRecord<FrameCtx>
   | CreatedBufferRecord
-  | ImportedBufferRecord<FrameCtx>;
+  | ImportedBufferRecord<FrameCtx>
+  | ImportedAccelerationStructureRecord<FrameCtx>;
 
 export interface TextureViewRecord<FrameCtx extends RenderGraphFrame = RenderGraphFrame> {
   readonly id: number;

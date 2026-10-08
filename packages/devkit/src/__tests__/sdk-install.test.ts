@@ -1,5 +1,15 @@
 // @perf-budget-skip: standalone npm-process and filesystem integration gate, not a hot path.
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,7 +40,7 @@ async function fixture() {
   await writeFile(
     clientScript,
     `${[
-      "import { cp, mkdir, readdir } from 'node:fs/promises';",
+      "import { cp, link, mkdir, readdir, symlink } from 'node:fs/promises';",
       "import { resolve } from 'node:path';",
       'const args = process.argv.slice(2);',
       "const prefixIndex = args.indexOf('--prefix');",
@@ -42,6 +52,8 @@ async function fixture() {
       'for (const entry of await readdir(source)) {',
       '  await cp(resolve(source, entry), resolve(target, entry), { recursive: true });',
       '}',
+      "await link(resolve(target, 'bin/forgeax.mjs'), resolve(target, 'bin/forgeax-linked.mjs'));",
+      "if (process.platform !== 'win32') await symlink('forgeax.mjs', resolve(target, 'bin/forgeax-alias.mjs'));",
     ].join('\n')}\n`,
   );
   if (process.platform === 'win32') {
@@ -95,5 +107,38 @@ describe('sdkInstallCommand', () => {
       error: expect.objectContaining({ code: 'sdk-target-not-empty' }),
     });
     expect(await readFile(resolve(target, 'keep.txt'), 'utf8')).toBe('keep\n');
+  });
+
+  it('preserves carrier hard links and relative links when installing into an empty target', async () => {
+    const root = await fixture();
+    const target = resolve(root, 'empty-sdk');
+    await mkdir(target);
+
+    expect((await sdkInstallCommand({ root: target, version: '1.2.3' })).ok).toBe(true);
+    const entry = resolve(target, 'bin/forgeax.mjs');
+    const linked = resolve(target, 'bin/forgeax-linked.mjs');
+    const [entryStat, linkedStat] = await Promise.all([stat(entry), stat(linked)]);
+    expect([linkedStat.dev, linkedStat.ino]).toEqual([entryStat.dev, entryStat.ino]);
+    expect(entryStat.nlink).toBe(2);
+    expect(await readFile(linked, 'utf8')).toBe('export {};\n');
+    if (process.platform !== 'win32') {
+      const alias = resolve(target, 'bin/forgeax-alias.mjs');
+      expect(await readlink(alias)).toBe('forgeax.mjs');
+      expect(await readFile(alias, 'utf8')).toBe('export {};\n');
+    }
+    expect((await readdir(root)).filter((name) => name.includes('forgeax-sdk-'))).toEqual([]);
+  });
+
+  it('rejects a mismatched carrier before publishing any entries', async () => {
+    const root = await fixture();
+    const target = resolve(root, 'empty-sdk');
+    await mkdir(target);
+
+    expect(await sdkInstallCommand({ root: target, version: '1.2.4' })).toMatchObject({
+      ok: false,
+      error: { code: 'sdk-install-failed' },
+    });
+    expect(await readdir(target)).toEqual([]);
+    expect((await readdir(root)).filter((name) => name.includes('forgeax-sdk-'))).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -44,8 +45,7 @@ test('positive LUT is an ordinary Catalogued 3D TextureAsset, not inline data', 
   assert.ok(rows.every((row) => row.length === 3 && row.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)));
 
   assert.ok(existsSync(packIndexPath), 'build must emit the authoritative pack-index');
-  const packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
-  const entries = Array.isArray(packIndex) ? packIndex : packIndex.entries;
+  const entries = decodeCatalogWire(JSON.parse(readFileSync(packIndexPath, 'utf8'))).unwrap();
   const row = entries?.find((entry) =>
     typeof entry?.sourcePath === 'string' && entry.sourcePath.endsWith('auto-exposure-positive-lut.cube'),
   );

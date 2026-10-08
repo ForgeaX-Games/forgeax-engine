@@ -7,6 +7,14 @@ and physical realm. `ToolRealm` distinguishes resident Node `host`, browser
 `frontend`, simulation `engine`, and build-time `build`; the Plugin loader uses
 the same vocabulary.
 
+`TOOL_REALMS` is the frozen, ordered tool-realm vocabulary. `ToolRealm` derives
+from it; provider admission, serialized command admission, capability matrices
+and DevKit's default providers consume that same value.
+
+`ToolCommandDeclaration` derives its identity fields from `ToolDescriptor`.
+Its schemas remain serialized strings and evidence is optional; runtime parser
+objects do not cross the declaration boundary.
+
 Preview descriptors may add a portable `preview` contract containing `realm`, a
 `ToolSubjectRef`, and a `SnapshotRef`; `evidence` remains the required
 `ArtifactRef` kind list. `defineTool` rejects a preview contract whose realm does
@@ -96,3 +104,18 @@ structured failures with stable `code`, `expected`, `hint`, and optional
 `start` is terminal (`carrier-provider-exit` or `carrier-exited`): report one
 failure and never execute through a second fallback path. Capture and cleanup
 failures remain structured so retry is allowed only from a safe snapshot.
+
+## Artifact record contracts
+
+Preview records select `owner`, `uri`, `digest` and `byteLength` from
+`ToolArtifactManifestEntry`. Preview keeps its own kind/role vocabulary and
+requires `mediaType` and `derivedFrom`; ordinary Tool records allow those
+fields to be absent. Manifest versions and run/subject identities stay distinct.
+
+Command help leaves select title, realm, schemas and example from
+`ToolDescriptor`. Their descriptions remain help-owned; normalized
+`capabilities` and `errors` are required arrays even when the descriptor omits them.
+
+`ToolApiRunOptions` is `ToolRunOptions` with internal `owner` omitted. Provider
+routing and observed generation are declared once on the run contract. The
+public option name is a type alias; it is not an interface augmentation point.

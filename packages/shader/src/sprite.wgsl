@@ -1,5 +1,6 @@
 #define_import_path forgeax_material::sprite
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 #pragma variant_axis PER_INSTANCE_REGION
 
 #import forgeax_clipping::planes::{applyViewClipping}

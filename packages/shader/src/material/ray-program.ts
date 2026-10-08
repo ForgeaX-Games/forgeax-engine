@@ -1,5 +1,6 @@
 import {
   err,
+  isMaterialTextureParameterType,
   type MaterialAsset,
   type MaterialPass,
   ok,
@@ -62,6 +63,7 @@ export function rayMaterialNeedsCoverage(asset: {
 export function admitRayMaterial(
   asset: MaterialAsset,
   material: string,
+  context: RaySurfaceProgram['context'] = 'ray-hit',
 ): Result<void, RayMaterialError> {
   const pass = asset.passes?.find((p) => p.name.toLowerCase() === 'forward');
   const module = pass?.program.module ?? '<missing-forward>';
@@ -70,10 +72,21 @@ export function admitRayMaterial(
     !['forgeax_material::standard', 'forgeax::default-standard-pbr'].includes(module)
   )
     return rayMaterialFailure(material, module, 'Standard rigid Surface root');
+  const surface =
+    pass.program.moduleSlots?.surface ??
+    asset.surface?.module ??
+    'forgeax_material::default_standard_surface';
+  if (context === 'card-capture' && surface !== 'forgeax_material::default_standard_surface')
+    return rayMaterialFailure(
+      material,
+      surface,
+      'canonical Standard card capture; custom/view-dependent capture is not qualified',
+    );
   if (pass.renderState?.blend !== undefined || asset.surface?.model === 'single-layer-medium')
     return rayMaterialFailure(material, module, 'opaque coverage');
   for (const p of asset.parameters ?? []) {
-    if (p.type === 'texture_cube') return rayMaterialFailure(material, module, '2D textures');
+    if (p.type !== 'texture' && isMaterialTextureParameterType(p.type))
+      return rayMaterialFailure(material, module, '2D textures');
     if (
       /^(clearcoat|anisotropy|sheen|iridescence|diffuseTransmission|transmission|thickness|attenuation|bumpTexture|specularTexture|specularColorTexture|clipping)/.test(
         p.name,
@@ -94,7 +107,9 @@ export function admitRayMaterialValues(
   material: string,
   source: string,
 ): Result<void, RayMaterialError> {
-  for (const name of ['alphaHash'])
+  // Projection selectors specialize raster pipelines only; the ray entry is
+  // unspecialized and would silently sample by UV with a tangent frame.
+  for (const name of ['alphaHash', 'triplanarSpace', 'normalMapSpace'])
     if (typeof values[name] === 'number' && values[name] !== 0)
       return rayMaterialFailure(material, source, name);
   for (const value of Object.values(values)) {

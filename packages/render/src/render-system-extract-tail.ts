@@ -11,6 +11,7 @@ import {
   SpriteInstancesMutuallyExclusiveWithInstancesError,
   SpriteInstancesRequiresSpriteShaderError,
 } from '@forgeax/engine-ecs/projection';
+import { worldRead } from '@forgeax/engine-ecs/world-read';
 import { box3, frustum, type Mat4, mat4, type Vec3, vec3 } from '@forgeax/engine-math';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { MaterialCookRasterContext } from '@forgeax/engine-pack/material-cook';
@@ -35,6 +36,7 @@ import {
   ASSET_ERROR_HINTS,
   AssetError,
   derive,
+  isTriangleTopology,
   materialValuesToLinearRuntime,
   toShared,
 } from '@forgeax/engine-types';
@@ -58,6 +60,7 @@ import {
 import type { DirectionalShadowQuality } from './components/directional-shadow-filter';
 import { GlyphText } from './components/glyph-text';
 import type { LightValidationError } from './components/light-helpers';
+import { validateLightingChannels } from './components/lighting-channels';
 import { ProjectedDecalInvalidError } from './decals/component';
 import { extractProjectedDecals } from './decals/extract';
 import { MaterialSkinAttrMissingError, SkinMaterialMismatchError } from './errors/render';
@@ -133,10 +136,10 @@ import {
   materialNormalScale,
   materialParamSchemaForMaterial,
   materialProgramSelectionsForMaterial,
-  materialRayForMaterial,
   materialSceneIndexProgramKeysForMaterial,
   materialStandardTextureMask,
   materialSurfaceModel,
+  materialSurfaceProgramsForMaterial,
   materialTextureFields,
   materialTextureRef,
   materialTextureSourceFields,
@@ -160,6 +163,7 @@ import {
   standardDisplacementRadius,
 } from './standard-displacement-bounds';
 import type { SkinPaletteReceipt, SkinPose } from './systems/skin-palette-types';
+import { extractTerrainSources } from './terrain/source.js';
 
 function skinPaletteIdentity(world: World, entity: number): string {
   return `skin:${world.identity}:${entity}`;
@@ -193,7 +197,7 @@ export function extractFrames(
   options: {
     readonly materialContext?: MaterialCookRasterContext;
     readonly cull?: 'normal' | 'none';
-    readonly viewExtent?: { readonly width: number; readonly height: number };
+    readonly viewExtent?: import('./render-contract').PhysicalViewExtent;
     readonly renderables?:
       | 'full'
       | 'none'
@@ -519,6 +523,7 @@ export function extractFrames(
             orthoRight: mergeCam.orthoRight,
             orthoBottom: mergeCam.orthoBottom,
             orthoTop: mergeCam.orthoTop,
+            ...(mergeCam.eye === undefined ? {} : { eye: mergeCam.eye }),
           }
         : undefined;
     const csm = computeDirectionalCsm(
@@ -826,9 +831,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
   // Keep the derived material snapshot and its resolved passes local to this
   // extraction. Shared handles are immutable inputs for the frame, while
   // dispatch entries still need to be rebuilt for each entity.
-  const materialSnapshotCache: MaterialSnapshotCache = new Map();
-  const skinnedMaterialSnapshotCache: MaterialSnapshotCache = new Map();
-  const spriteMaterialSnapshotCache: MaterialSnapshotCache = new Map();
+  const materialCaches = new Map<string, MaterialSnapshotCache>();
   // tweak-20260611 M1: MeshRenderer renderable archetype walk routes
   // through one World-owned Query. K-2 sniffing scheme B
   // (`row.get(X) !== undefined` edge sniff) replaces the prior
@@ -908,6 +911,21 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     // surfaces as an absent bundle key, not a row-internal optional chain.
     // Presence-only checks use QueryRow.has so large array-bearing components
     // are not materialised merely to answer a boolean question.
+    // The required query component owns this scalar. Read it without
+    // materialising MeshRenderer's unrelated variable-length materials array.
+    const lightingChannels = world[worldRead].getFieldValue(
+      row.entity,
+      MeshRenderer,
+      'lightingChannels',
+    ) as number;
+    const channelsError = validateLightingChannels(lightingChannels);
+    if (channelsError !== null) {
+      worldInternal._routeError(channelsError, {
+        severity: Severity.Error,
+        systemName: 'RenderSystem.extract (lighting-channels)',
+      });
+      continue;
+    }
     const hasTransform = row.has(Transform);
     const meshFilter = row.get(MeshFilter);
     const hasInstances = row.has(Instances);
@@ -938,23 +956,6 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     //   - 'sprite-instances-count-mismatch'
     //       (transforms.length / 16 !== regions.length / 4) — stride pair desync.
     const hasSpriteInstances = row.has(SpriteInstances);
-    // Program selection and cache ownership follow the geometry buffer ABI.
-    // A shared material handle must never reuse a mesh program for region data.
-    const geometryMaterialCache = hasSkin
-      ? skinnedMaterialSnapshotCache
-      : hasSpriteInstances
-        ? spriteMaterialSnapshotCache
-        : materialSnapshotCache;
-    const geometryPersistentCache =
-      hasSkin || hasSpriteInstances ? undefined : persistentMaterialSnapshotCache;
-    const geometryMaterialContext =
-      context.materialContext === undefined
-        ? undefined
-        : hasSkin
-          ? { ...context.materialContext, geometry: 'skinned' as const }
-          : hasSpriteInstances
-            ? { ...context.materialContext, geometry: 'sprite-instances' as const }
-            : context.materialContext;
     const points = row.get(Points);
     const lines = row.get(Lines);
     const sortKey = row.get(SortKey)?.value;
@@ -978,19 +979,11 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
     // archetype edge that carries a sprite entity -- they all wear
     // `MeshFilter.assetHandle === HANDLE_QUAD` + a `forgeax::sprite`-shaded
     // material asset + the sprite-bucket `values.region` rectangle.
-    // For the per-entity Y-sort path (requirements §AC-12 / §AC-13):
-    //
-    //   sortKey = -(Transform.posY - effectivePivotY * |Transform.scaleY|)
-    //
-    // with `effectivePivotY = effectivePivotYForTilemapFlip(pivotY, pivotX,
-    // flipV, flipDiagonal)` from `tilemap-chunk-extract-system` (the SAME
-    // helper drives `spawnDerivedRenderEntities`, so the value the sort
-    // uses matches the value baked into `Transform.posY` -- charter P4
-    // single SSOT for the post-flip pivot). Sprite entities reuse the same
-    // formula but skip the flip composition (their pivot stays raw); both
-    // bucket types therefore feed one `transparentSortEntries` argsort
-    // step + share the `argsortInPlace` radix LSD primitive (plan-strategy
-    // §D-1 / §D-3). The detection lives on the material side -- detect a
+    // They share one Y-sort path with sprites: `TransparentSortCache`
+    // (systems/transparent-dispatch.ts) derives footY = posY - pivotY *
+    // |scaleY| from each RenderableSnapshot, so the post-flip pivot baked into
+    // Transform.posY by `effectivePivotYForTilemapFlip` is the only pivot SSOT.
+    // The detection lives on the material side -- detect a
     // tilemap-spawned entity by `MeshFilter.assetHandle === HANDLE_QUAD`
     // plus the `forgeax::sprite` shader id on `MeshRenderer.material`'s
     // first pass + non-empty `values.region`; no new public ECS
@@ -1197,6 +1190,25 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         materialBindingSources = ['engine-default'];
       }
 
+      const vertexColorAvailable = gpuDrivenMesh?.attributes.color !== undefined;
+      const geometry: MaterialCookRasterContext['geometry'] = hasSkin
+        ? 'skinned'
+        : hasSpriteInstances
+          ? 'sprite-instances'
+          : 'mesh';
+      const cacheKey = `${geometry}:${vertexColorAvailable}`;
+      let geometryMaterialCache = materialCaches.get(cacheKey);
+      if (geometryMaterialCache === undefined) {
+        geometryMaterialCache = new Map();
+        materialCaches.set(cacheKey, geometryMaterialCache);
+      }
+      const geometryPersistentCache =
+        geometry === 'mesh' && !vertexColorAvailable ? persistentMaterialSnapshotCache : undefined;
+      const geometryMaterialContext =
+        context.materialContext === undefined
+          ? undefined
+          : { ...context.materialContext, geometry };
+
       // Use the first material handle for the entity-level snapshot
       // (shading-model dispatch routing + multi-pass DispatchEntry. Per-
       // submesh materials[i>=1] are resolved by `resolveMaterialSnapshot`
@@ -1325,6 +1337,8 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
                 programOwner,
                 assets,
                 materialContext,
+                'direct',
+                vertexColorAvailable,
               );
             } catch (error) {
               // A standalone mesh can only satisfy a cooked skinned program
@@ -1341,6 +1355,8 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
                       ...materialContext,
                       geometry: 'skinned',
                     },
+                    'direct',
+                    vertexColorAvailable,
                   );
                   if (
                     skinnedSelections?.some(materialProgramSelectionRequiresSkin) === true &&
@@ -1381,8 +1397,9 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               programOwner,
               assets,
               materialContext,
+              vertexColorAvailable,
             );
-            const materialRay = materialRayForMaterial(
+            const materialSurfacePrograms = materialSurfaceProgramsForMaterial(
               programOwner,
               assets,
               materialContext,
@@ -1741,7 +1758,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               materialShaderId: firstPassShader,
               materialProgramKeys,
               materialSceneIndexProgramKeys,
-              materialRay,
+              materialSurfacePrograms,
               materialHandle: handleRaw,
               renderState: pipelineRenderState(allPasses[0]?.renderState),
               paramSnapshot: paramSnap,
@@ -2069,6 +2086,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
                   geometryMaterialContext,
                   materialTextureSourceStats,
                   materialTextureSourceCache,
+                  vertexColorAvailable,
                 ),
             );
           }
@@ -2219,7 +2237,9 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
               ? undefined
               : {
                   kind: 'lines' as const,
-                  widthPx: lines.widthPx,
+                  width: lines.width,
+                  widthUnits: lines.widthUnits,
+                  cap: lines.cap,
                   dashSize: lines.dashSize,
                   gapSize: lines.gapSize,
                   dashOffset: lines.dashOffset,
@@ -2288,6 +2308,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         }
 
         const baseRenderable: RenderableSnapshot = {
+          lightingChannels,
           assetHandle: Math.round(fAssetHandle ?? 0),
           transform: transformSnap,
           ...(lods === undefined ? {} : { lods }),
@@ -2444,7 +2465,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
         if (gpuDrivenMesh !== undefined) {
           const worldEntity = worldEntityKey(context.worldId, entity);
           for (const [drawItemIndex, submesh] of gpuDrivenMesh.submeshes.entries()) {
-            if (submesh.topology !== 'triangle-list' && submesh.topology !== 'triangle-strip') {
+            if (!isTriangleTopology(submesh.topology)) {
               continue;
             }
             const material = materialsArr[submesh.materialSlot] ?? materialSnap;
@@ -2524,7 +2545,7 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
       }
 
       // feat-20260520-2d-sprite-layer-mvp M-3 / w22 + w25: finalise the
-      // pending TransparentEntry with the renderableIndex pointing at the
+      // pending DispatchEntry with the renderableIndex pointing at the
       // RenderableSnapshot we just pushed (when isRenderable === true).
       // The check below also covers a sprite entity that survives the
       // dangling-Instances branch (silent skip with `dispatchEntry !==
@@ -2533,6 +2554,20 @@ export function extractFrame(world: World, context: PreparedExtractContext): Ext
       // already captures the dispatch position.
     }
   }
+
+  if (context.renderables !== 'none' && assets != null)
+    extractTerrainSources(
+      world,
+      assets,
+      context.materialContext,
+      context.worldId,
+      renderables,
+      dispatch,
+      renderableEntities,
+      visibility,
+      retainHidden,
+      explicitlyHidden,
+    );
 
   // M3 / w26: sort dispatch entries by queue (ascending, stable sort)
   // per plan-strategy D-3.

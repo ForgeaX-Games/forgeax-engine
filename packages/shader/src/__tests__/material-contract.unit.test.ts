@@ -399,7 +399,7 @@ describe('standard PBR transmission material contract', () => {
     );
     expect(baseVariant).toBeDefined();
     if (baseVariant === undefined) return;
-    expect(derived.totalBytes).toBe(1040);
+    expect(derived.totalBytes).toBe(1056);
     // The base capability variant owns only the ordinary material region and
     // the IBL injection. Transmission and second-stage physical maps are
     // specialized in authored roots, so no transmission/physical resource

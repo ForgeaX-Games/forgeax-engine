@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
+import { createAdditiveCoatMutantPublication } from '../evidence/additive-coat-mutant.mjs';
 // Physical-material Dawn witness. This drives the Engine-owned renderer path:
 // dawn-node -> constructRuntimeRendererHost -> ECS -> Renderer -> readback.
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
@@ -11,7 +13,8 @@ import { evaluateCaseRecords, evaluatePairedSentinels, referencePlan } from '../
 import { createLinearHdrRoiEvidence, fnv1a, objectCoverage, resolveCaseRoi } from '../evidence/evaluator-core.mjs';
 import { disposeRenderResources, runPairedStages, runRenderPhase } from '../evidence/phase-executor.mjs';
 import { describeMaterialCase } from '../evidence/material-case-builder.mjs';
-import { readbackTexturePixels } from '@forgeax/engine-rhi-debug';
+import { buildFrameModel, decodeTape, halfToFloat, readbackTexturePixels } from '@forgeax/engine-rhi-debug';
+import { writeReferencePng } from '../../../shared/png-codec.mjs';
 import { withPhysicalMaterialModule } from '../src/material-contract.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,7 +65,7 @@ const exactHead = execFileSync('git', ['rev-parse', 'HEAD'], {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (cause) {
   console.error(`[physical-material] dawn-node import failed: ${cause instanceof Error ? cause.message : String(cause)}`);
   process.exit(1);
@@ -195,11 +198,14 @@ const additiveMutantShader = {
     composedWgsl: mutateAdditiveCoat(variant.composedWgsl),
   })),
 };
-shaderManifest.materialShaders = shaderManifest.materialShaders.map((shader) =>
-  shader.identifier === productShader.identifier ? additiveMutantShader : shader,
-);
+// The expanded manifest repeats every Standard variant's full WGSL and exceeds
+// V8's string limit once URI-encoded, so the mutant stays in the deduplicated
+// publication form and only the clearcoat rows point at new mutated sources.
 const productManifestUrl = `data:application/json,${encodeURIComponent(productManifestBytes)}`;
-const mutantManifestBytes = JSON.stringify(shaderManifest);
+const mutantPublication = await createAdditiveCoatMutantPublication(
+  JSON.parse(productManifestBytes), productShader.identifier, productShader.identifier,
+);
+const mutantManifestBytes = JSON.stringify(mutantPublication);
 const mutantManifestUrl = `data:application/json,${encodeURIComponent(mutantManifestBytes)}`;
 const shaderManifestHash = fnv1a(new TextEncoder().encode(productManifestBytes));
 const mutantSourceClosureDigest = createHash('sha256').update(mutantManifestBytes).digest('hex');
@@ -247,7 +253,10 @@ function describeMaterial(item, material) {
   });
 }
 
-const constructed = await constructRuntimeRendererHost(canvas, {}, { shaderManifestUrl: productManifestUrl });
+const captureDirectory = process.env.FORGEAX_PHYSICAL_CAPTURE_DIR;
+const recorder = captureDirectory === undefined ? undefined :
+  (await import('@forgeax/engine-rhi-debug')).attachRecorder(await import('@forgeax/engine-rhi-webgpu')).unwrap();
+const constructed = await constructRuntimeRendererHost(canvas, recorder === undefined ? {} : { rhi: recorder.backend.rhi }, { shaderManifestUrl: productManifestUrl });
 if (!constructed.ok) {
   console.error(`[physical-material] renderer construction failed: ${JSON.stringify(constructed.error)}`);
   process.exit(1);
@@ -267,7 +276,8 @@ if (process.env.PHYSICAL_MATERIAL_DIAGNOSTICS === '1' && sharedDevice !== undefi
 const { Skylight } = await import('@forgeax/engine-render');
 const { AssetGuid } = await import('@forgeax/engine-pack/guid');
 const packIndexPath = resolve(here, '..', 'dist', 'pack-index.json');
-const packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+const packIndexWire = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+const packIndex = decodeCatalogWire(packIndexWire).unwrap();
 const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const fullPhysicalMaterialGuid = '8a5a0001-0000-4000-8000-000000000008';
 const hdrEntry = packIndex.find((entry) => entry.guid === hdrGuid);
@@ -310,7 +320,7 @@ const publishedArtifacts = publishedPackages.flatMap(({ entry, packagePath, pack
 });
 globalThis.fetch = async (url) => {
   const request = typeof url === 'string' ? url : String(url);
-  if (request === '/pack-index.json') return responseFromJson(packIndex);
+  if (request === '/pack-index.json') return responseFromJson(packIndexWire);
   for (const { entry, pack } of publishedPackages) {
     if (request === entry.packageUrl) return responseFromJson(pack);
   }
@@ -709,6 +719,7 @@ async function readGraphTargetCapture(host, capture) {
 }
 
 const anchorEntity = directEntityByCaseId.get('direct-rigid-factor-r');
+let frameCapture;
 const directReceipt = await runRenderPhase({
   phase: 'direct',
   frameCount: FRAME_COUNT,
@@ -716,6 +727,41 @@ const directReceipt = await runRenderPhase({
   renderer,
   frameRequest,
   yieldFrame: yieldToFrameLoop,
+  beforeDraw: async (frame) => {
+    if (recorder !== undefined && (frame === 0 || frame === 4)) {
+      frameCapture = recorder.captureFrame();
+      (await recorder.frameBoundary()).unwrap();
+    }
+  },
+  afterDraw: async (frame) => {
+    if (recorder !== undefined && frameCapture !== undefined) {
+      (await recorder.frameBoundary()).unwrap();
+      mkdirSync(captureDirectory, { recursive: true });
+      const captured = (await frameCapture).unwrap();
+      writeFileSync(resolve(captureDirectory, `direct-${frame}.rhitape`), captured.bytes);
+      const tape = decodeTape(captured.bytes).unwrap();
+      const model = buildFrameModel(tape);
+      const creates = new Map([...tape.bootstrap.map((row) => row.create), ...tape.events]
+        .filter((row) => row?.handleId !== undefined).map((row) => [row.handleId, row]));
+      let checked = 0;
+      for (const work of model.works) {
+        const pipeline = creates.get(work.pipeline?.pipelineHandleId);
+        const layout = creates.get(pipeline?.layoutHandleId);
+        if (layout?.bglHandleIds === undefined) continue;
+        for (const binding of work.bindings) {
+          const group = creates.get(binding.bindGroupId);
+          const expected = creates.get(layout.bglHandleIds[binding.groupIndex]);
+          const actual = creates.get(group?.layoutHandleId);
+          if (expected === undefined || actual === undefined) continue;
+          checked++;
+          if (JSON.stringify(expected.desc.entries) !== JSON.stringify(actual.desc.entries))
+            throw new Error(`Physical work ${work.workIndex} group ${binding.groupIndex}: recorded layout differs from its pipeline`);
+        }
+      }
+      writeFileSync(resolve(captureDirectory, `direct-${frame}-bindings.json`), JSON.stringify({ works: model.works.length, checked, differences: 0 }));
+      frameCapture = undefined;
+    }
+  },
   onDrawError: (phase, frame, error) => console.error(`[physical-material] ${phase} frame=${frame} failed: ${JSON.stringify(describeRuntimeError(error))}`),
 });
 const directObservation = await captureObservation(directReceipt);
@@ -731,6 +777,16 @@ if (process.env.PHYSICAL_MATERIAL_DIAGNOSTICS === '1') {
   })}`);
 }
 const directPixels = directObservation.bytes;
+if (captureDirectory !== undefined) {
+  const view = new DataView(directPixels.buffer, directPixels.byteOffset, directPixels.byteLength);
+  const preview = Uint8Array.from({ length: WIDTH * HEIGHT * 4 }, (_, index) => {
+    if (index % 4 === 3) return 255;
+    const linear = Math.max(0, Math.min(1, halfToFloat(view.getUint16(index * 2, true))));
+    return Math.round((linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055) * 255);
+  });
+  writeFileSync(resolve(captureDirectory, 'direct-linear-hdr-preview.png'), writeReferencePng(preview, WIDTH, HEIGHT));
+  writeFileSync(resolve(captureDirectory, 'direct-linear-hdr.bin'), directPixels);
+}
 const directMaterialBindingReceipt = renderer.inspect().meshMaterialBindings.map((entry) => ({
   worldId: entry.worldId,
   entityKey: entry.entityKey,

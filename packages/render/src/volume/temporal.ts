@@ -39,16 +39,6 @@ export type VolumeTemporalReset =
   | { readonly reset: false }
   | { readonly reset: true; readonly reason: VolumeTemporalResetReason };
 
-/** TAAU remains dependency-deferred until its sibling reaches this branch. */
-export const VOLUME_TAAU_DEPENDENCY = Object.freeze({
-  status: 'dependency-deferred' as const,
-  siblingFeature: 'feat-20260831-taau-dynamic-resolution',
-  candidateShas: Object.freeze([
-    '6a0b8fe01ab81d5b60704f2120fa3f9b056742e4',
-    '677a7a40852d748e2af3352e2666d7c310115d0a',
-  ]),
-});
-
 export function resolveVolumeTemporalReset(
   previous: VolumeTemporalSignature,
   next: VolumeTemporalSignature,

@@ -58,7 +58,7 @@ const PLAY_BASE_COLOR = [1.0, 0.5, 0.2, 1.0];
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (err) {
   console.error(
     `[smoke] FAIL - dawn.node import failed: ${err instanceof Error ? err.message : String(err)}`,

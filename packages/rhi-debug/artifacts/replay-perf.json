@@ -1,0 +1,266 @@
+{
+  "schema": "forgeax-rhi-debug-perf/v1",
+  "host": "linux x86_64, Dawn on lavapipe 25.2.8 (LP_NUM_THREADS=4)",
+  "note": "Sponza raytracing packet tapes copied to /tmp; shadow-stress capture via apps/perf/shadow-stress smoke-dawn (40 timed frames)",
+  "before": {
+    "sponzaRetained": {
+      "tape": "/tmp/rhidbg/retained.rhitape",
+      "fileBytes": 443343588,
+      "blobs": 177,
+      "blobBytes": 441183301,
+      "events": 3445,
+      "bootstrap": 1206,
+      "works": 768,
+      "decodeMs": 4408.5,
+      "encodeMs": 4294.3,
+      "frameModelMs": 90.2,
+      "openReplayMs": 128.6,
+      "reads": [
+        {
+          "workIndex": 383,
+          "resourceId": "buffer:173",
+          "bytes": 1280,
+          "firstMs": 4071.4,
+          "repeatMs": 1106.5
+        },
+        {
+          "workIndex": 767,
+          "resourceId": "textureView:9825",
+          "bytes": 589824,
+          "firstMs": 1929.1,
+          "repeatMs": 1533.7
+        }
+      ],
+      "peakRssBytes": 2778959872,
+      "peakHeapPlusArrayBuffersBytes": 1469425287
+    },
+    "sponzaOn": {
+      "tape": "/tmp/rhidbg/on.rhitape",
+      "fileBytes": 563434851,
+      "blobs": 419,
+      "blobBytes": 555212485,
+      "events": 18517,
+      "bootstrap": 5793,
+      "works": 4477,
+      "decodeMs": 5496.9,
+      "encodeMs": 5429.2,
+      "frameModelMs": 398.5,
+      "openReplayMs": 497.8,
+      "reads": [
+        {
+          "workIndex": 100,
+          "resourceId": "textureView:9618",
+          "bytes": 1179648,
+          "firstMs": 4047.2,
+          "repeatMs": 1523
+        },
+        {
+          "workIndex": 2000,
+          "resourceId": "textureView:4908",
+          "bytes": 1179648,
+          "firstMs": 2534.4,
+          "repeatMs": 2629.4
+        },
+        {
+          "workIndex": 4367,
+          "resourceId": "textureView:4908",
+          "bytes": 1179648,
+          "firstMs": 9214.1,
+          "repeatMs": 9225.3
+        },
+        {
+          "workIndex": 4476,
+          "resourceId": "textureView:9645",
+          "bytes": 589824,
+          "firstMs": 8771,
+          "repeatMs": 8218.8
+        }
+      ],
+      "peakRssBytes": 3856531456,
+      "peakHeapPlusArrayBuffersBytes": 2046511453
+    },
+    "shadowStress": {
+      "off": {
+        "count": 40,
+        "mean": 154113.875,
+        "p50": 138304,
+        "p95": 289791,
+        "max": 338334
+      },
+      "on": {
+        "count": 40,
+        "mean": 158668.55,
+        "p50": 139734,
+        "p95": 334216,
+        "max": 394958
+      },
+      "capture": {
+        "byteLength": 299111498,
+        "captureMs": 8993
+      }
+    },
+    "shadowStressCapture": {
+      "frames": [
+        99,
+        100
+      ],
+      "captureMs": 8993,
+      "byteLength": 299111498,
+      "recorderOffSyncedP50Ms": 138.3,
+      "recorderIdleSyncedP50Ms": 139.7
+    }
+  },
+  "after": {
+    "sponzaRetained": {
+      "tape": "/tmp/rhidbg/retained.rhitape",
+      "fileBytes": 443343588,
+      "blobs": 177,
+      "blobBytes": 441183301,
+      "events": 3445,
+      "bootstrap": 1206,
+      "works": 768,
+      "decodeMs": 1423.3,
+      "encodeMs": 1871.8,
+      "frameModelMs": 130,
+      "openReplayMs": 116.8,
+      "reads": [
+        {
+          "workIndex": 383,
+          "resourceId": "buffer:173",
+          "bytes": 1280,
+          "digest": "sha256:a1c374fb0549bf01379cfaf77979e958eea2c1b8bb08e8ab2704fbcdcedd9f9c",
+          "firstMs": 3003.6,
+          "repeatMs": 1015.8
+        },
+        {
+          "workIndex": 767,
+          "resourceId": "textureView:9825",
+          "bytes": 589824,
+          "digest": "sha256:d01b5e4c41ede0ac8c428cb93524883270e1b3a773e32ea6a0ebadee470b6877",
+          "firstMs": 1621.1,
+          "repeatMs": 1283
+        }
+      ],
+      "batch": {
+        "requests": 2,
+        "ms": 1390.1,
+        "ok": true,
+        "matchesSequential": true
+      },
+      "peakRssBytes": 2278404096,
+      "peakHeapPlusArrayBuffersBytes": 1354350074
+    },
+    "sponzaOn": {
+      "tape": "/tmp/rhidbg/on.rhitape",
+      "fileBytes": 563434851,
+      "blobs": 419,
+      "blobBytes": 555212485,
+      "events": 18517,
+      "bootstrap": 5793,
+      "works": 4477,
+      "decodeMs": 1667.3,
+      "encodeMs": 2261.5,
+      "frameModelMs": 451.6,
+      "openReplayMs": 543.3,
+      "reads": [
+        {
+          "workIndex": 100,
+          "resourceId": "textureView:9618",
+          "bytes": 1179648,
+          "digest": "sha256:658eb0cf67912b2292b05eb9353f9bc1507706651bce59161f6d612755ec0578",
+          "firstMs": 3010.9,
+          "repeatMs": 1073.8
+        },
+        {
+          "workIndex": 2000,
+          "resourceId": "textureView:4908",
+          "bytes": 1179648,
+          "digest": "sha256:b944f8a285e003a0d0f5d0a4b04db2bf00fabf6aa1730ec6735824bd6b5c27fa",
+          "firstMs": 1933.6,
+          "repeatMs": 1847.6
+        },
+        {
+          "workIndex": 4367,
+          "resourceId": "textureView:4908",
+          "bytes": 1179648,
+          "digest": "sha256:5a0e94d83794abf437ed891ea52cb15f61fc23817ef50df1a58f145d58bdce9d",
+          "firstMs": 6011.8,
+          "repeatMs": 6247.2
+        },
+        {
+          "workIndex": 4476,
+          "resourceId": "textureView:9645",
+          "bytes": 589824,
+          "digest": "sha256:d01b5e4c41ede0ac8c428cb93524883270e1b3a773e32ea6a0ebadee470b6877",
+          "firstMs": 6334,
+          "repeatMs": 6178.2
+        }
+      ],
+      "batch": {
+        "requests": 4,
+        "ms": 6529,
+        "ok": true,
+        "matchesSequential": true
+      },
+      "peakRssBytes": 3022684160,
+      "peakHeapPlusArrayBuffersBytes": 1463787832
+    },
+    "sponzaOnBatch8": {
+      "requests": 8,
+      "ms": 7874.2,
+      "ok": true,
+      "matchesSequential": true
+    },
+    "sponzaOnTiming": {
+      "command": "measure-replay.mjs /tmp/rhidbg/on.rhitape --works 100 --timing",
+      "timePassesMs": 10442.3,
+      "passes": 94,
+      "untimed": 0,
+      "totalReplayGpuMs": 8969.94,
+      "slowest": [
+        {
+          "passIndex": 78,
+          "label": "probe-card.capture",
+          "works": 3708,
+          "gpuMs": 7600.35
+        },
+        {
+          "passIndex": 4,
+          "label": "g-buffer",
+          "works": 103,
+          "gpuMs": 318.35
+        },
+        {
+          "passIndex": 25,
+          "label": "shadowCascade0",
+          "works": 103,
+          "gpuMs": 251.03
+        },
+        {
+          "passIndex": 53,
+          "label": "shadowCascade2",
+          "works": 103,
+          "gpuMs": 165.79
+        },
+        {
+          "passIndex": 39,
+          "label": "shadowCascade1",
+          "works": 103,
+          "gpuMs": 159.92
+        }
+      ],
+      "note": "lavapipe software GPU: ranks passes, not a frame budget"
+    },
+    "shadowStressCapture": {
+      "frames": [
+        99,
+        100
+      ],
+      "captureMs": 4823,
+      "byteLength": 299111498,
+      "recorderOffSyncedP50Ms": 190.7,
+      "recorderIdleSyncedP50Ms": 134.3,
+      "note": "recorder-off p50 measured under host load average ~44-65 from concurrent agents; idle overhead within noise"
+    }
+  }
+}

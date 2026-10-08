@@ -14,11 +14,11 @@ describe('Standard PBR fallback graph integration contract', () => {
     expect(source).toContain('REFLECTION_FALLBACK_AVAILABLE');
   });
 
-  it('does not introduce SSR history, trace, or Hi-Z work', () => {
+  it('does not introduce SSR history, trace, or depth-pyramid work', () => {
     const source = readFileSync(
       resolve(import.meta.dirname, '../../../shader/src/standard-surface.wgsl'),
       'utf8',
     );
-    expect(source).not.toMatch(/ssrHistory|rayMarch|hiz|hi-z/i);
+    expect(source).not.toMatch(/ssrHistory|rayMarch|depthPyramid|hiz|hi-z/i);
   });
 });

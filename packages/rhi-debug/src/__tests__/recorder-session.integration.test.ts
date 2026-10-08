@@ -99,7 +99,10 @@ describe('RecorderSession real RHI consumer', () => {
     (await replay.dispose()).unwrap();
   });
 
-  it('preserves synchronous shader creation and replays pipeline-derived layouts', async () => {
+  it.each([
+    false,
+    true,
+  ])('replays labelled pipeline-derived layouts created during recording=%s', async (duringCapture) => {
     const source = '@compute @workgroup_size(1) fn main() {}';
     const rawDevice = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
     const module = (await createShaderModule(rawDevice, { code: source })).unwrap();
@@ -125,8 +128,14 @@ describe('RecorderSession real RHI consumer', () => {
     expect(shader?.ok).toBe(true);
     expect(receivedDevice).not.toBe(device);
     if (!shader?.ok) throw new Error('synchronous shader factory unavailable');
+    let capture: ReturnType<typeof attachment.captureFrame> | undefined;
+    if (duringCapture) {
+      capture = attachment.captureFrame();
+      (await attachment.frameBoundary()).unwrap();
+    }
     const pipeline = device
       .createComputePipeline({
+        label: 'irradiance-field.traceProbes',
         layout: 'auto',
         compute: { module: shader.value, entryPoint: 'main' },
       })
@@ -135,8 +144,10 @@ describe('RecorderSession real RHI consumer', () => {
       pipeline as typeof pipeline & import('@forgeax/engine-rhi').RhiComputePipelineOps
     ).getBindGroupLayout(0);
     const bindings = device.createBindGroup({ layout, entries: [] }).unwrap();
-    const capture = attachment.captureFrame();
-    (await attachment.frameBoundary()).unwrap();
+    if (capture === undefined) {
+      capture = attachment.captureFrame();
+      (await attachment.frameBoundary()).unwrap();
+    }
     const encoder = device.createCommandEncoder({}).unwrap();
     const pass = encoder.beginComputePass({});
     pass.setPipeline(pipeline);
@@ -146,7 +157,18 @@ describe('RecorderSession real RHI consumer', () => {
     device.queue.submit([encoder.finish().unwrap()]).unwrap();
     (await attachment.frameBoundary()).unwrap();
     const tape = decodeTape((await capture).unwrap().bytes).unwrap();
-    expect(tape.bootstrap.some((item) => item.create.kind === 'getBindGroupLayout')).toBe(true);
+    const layoutIndex = tape.bootstrap.findIndex(
+      (item) => item.create.kind === 'getBindGroupLayout',
+    );
+    expect(layoutIndex).toBeGreaterThanOrEqual(0);
+    const pipelineIndex = tape.bootstrap.findIndex(
+      (item) => item.create.kind === 'createComputePipeline',
+    );
+    expect(pipelineIndex).toBeLessThan(layoutIndex);
+    // Producer labels survive into the tape so works reverse-map to their pass.
+    expect(tape.bootstrap[pipelineIndex]?.create).toMatchObject({
+      desc: { label: 'irradiance-field.traceProbes' },
+    });
     const replayDevice = (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
     const replay = await openReplay(tape, { device: replayDevice, createShaderModule });
     expect(replay.ok).toBe(true);

@@ -217,3 +217,23 @@ it.each([
     }
   }
 });
+
+it('normalizes a wire parentGuid child once and reports child-contract failures', () => {
+  const parent = '01900000-0000-7000-8000-000000000992';
+  const child = (extra: Record<string, unknown>) =>
+    ({ kind: 'material', parentGuid: parent, values: { a: 1 }, ...extra }) as unknown as Asset;
+  const ok = prepareAssetPayload(child({}));
+  expect(ok.ok && ok.value).toMatchObject({ kind: 'material', values: { a: 1 } });
+  expect(ok.ok && 'parentGuid' in ok.value).toBe(false);
+  expect(prepareAssetPayload(child({ parentGuid: 'not-a-guid' }))).toMatchObject({
+    ok: false,
+    error: {
+      code: 'asset-parse-failed',
+      hint: "parent GUID 'not-a-guid' is not a valid UUID format",
+    },
+  });
+  expect(prepareAssetPayload(child({ passes: [] }))).toMatchObject({
+    ok: false,
+    error: { code: 'asset-parse-failed', detail: { field: 'material-child-contract' } },
+  });
+});

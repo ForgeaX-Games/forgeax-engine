@@ -26,6 +26,7 @@ export {
 } from './box';
 export { createCapsuleGeometry } from './capsule';
 export { createConeGeometry } from './cone';
+export type { PolygonShape } from './contour';
 export { createCylinderGeometry } from './cylinder';
 export { createDecalGeometry, type DecalGeometryOptions } from './decal';
 export {
@@ -49,6 +50,7 @@ export type {
 export {
   buildMeshDistanceField,
   distanceFieldMeshDigest,
+  MESH_DISTANCE_FIELD_GENERATION_VERSION,
   sampleMeshDistanceField,
 } from './distance-field';
 export {
@@ -56,8 +58,10 @@ export {
   encodeMeshDistanceField,
   validateMeshDistanceField,
 } from './distance-field-artifact';
+export { distanceFieldTexel } from './distance-field-bricks';
 // Edge factories return Result<MeshAsset, AssetError>; threshold units are degrees.
 export { createEdgesGeometry, createWireframeGeometry } from './edges';
+export { createExtrusionGeometry, type ExtrusionOptions } from './extrusion';
 export { withMeshAabb } from './mesh-aabb.js';
 export {
   createMeshBuilder,
@@ -66,6 +70,7 @@ export {
   type MeshBuilderSubmesh,
 } from './mesh-builder';
 export {
+  admitsMeshCardLayout,
   decodeMeshCardLayout,
   encodeMeshCardLayout,
   validateMeshCardLayout,
@@ -76,26 +81,29 @@ export {
   type MeshCardProjection,
   meshCardSidednessDigest,
 } from './mesh-card-layout';
+export { buildMeshCollision, validateMeshCollisionAttachment } from './mesh-collision';
 export {
   type MeshBinEncodeError,
   packMeshBin,
   prepareMeshData,
 } from './mesh-data.js';
+export * from './mesh-distance-field-product';
 export { createPlaneGeometry } from './plane';
 export {
-  createExtrusionGeometry,
   createRevolutionGeometry,
   createSweepGeometry,
   type Vec2Point,
   type Vec3Point,
 } from './procedural';
+export { createProfileSweepGeometry, type ProfileSweepOptions } from './profile-sweep';
 export { createSphereGeometry } from './sphere';
-export { computeTangentVec4 } from './tangent';
+export { computeTangentVec4, writeNormalPlaneTangent } from './tangent';
 export {
   createTeapotGeometry,
   type TeapotMeshAsset,
   type TeapotProvenance,
 } from './teapot';
+export { createTerrainGrids } from './terrain-grid.js';
 export { createTorusGeometry } from './torus';
 export {
   buildMeshAttributeMapForUvSets,
@@ -109,9 +117,13 @@ export {
   type PackedVertexAttributes,
   packInterleavedVertexAttributes,
   SKIN_VERTEX_ATTRIBUTE_MAP,
+  unpackInterleavedVertexAttributes,
   VertexAttributePackError,
   type VertexLayoutProjection,
   type VertexLayoutProjectionAttribute,
   type VertexLayoutProjectionMaskError,
 } from './vertex-attribute-layout';
-export { buildVisibilityDistanceField } from './visibility-distance-field';
+export {
+  buildVisibilityDistanceField,
+  visibilityDistanceFieldSourceDigest,
+} from './visibility-distance-field';

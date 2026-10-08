@@ -9,7 +9,13 @@
 
 export type { CollisionEventPayload } from './collision-event.js';
 export { CollisionEvent } from './collision-event.js';
-export type { ColliderShape, RigidBodyType } from './components.js';
+export type {
+  CharacterControllerData,
+  ColliderData,
+  ColliderShape,
+  ColliderSnapshot,
+  RigidBodyType,
+} from './components.js';
 export {
   CharacterController,
   COLLIDER_SHAPE_CAPSULE,
@@ -26,6 +32,7 @@ export {
   RigidBodyTypeValue,
   registerPhysicsComponents,
   rigidBodyTypeFromF32,
+  snapshotCollider,
 } from './components.js';
 export type {
   DerivedPhysicsCandidate,
@@ -37,8 +44,11 @@ export type {
   DerivedPhysicsMotion,
   DerivedPhysicsPublication,
   DerivedPhysicsSnapshot,
+  DerivedShapeInput,
   DerivedShapeSeamInput,
   DerivedShapeState,
+  HeightfieldShapeInput,
+  NormalizedDerivedShapeInput,
   PhysicsConstraintBodyDependency,
   PhysicsConstraintInput,
   PhysicsContactObservation,
@@ -54,6 +64,7 @@ export {
   DERIVED_PHYSICS_LIMITS,
   DerivedPhysicsError,
   estimateDerivedPhysicsInputBytes,
+  normalizeHeightfieldShapeInput,
   normalizeVoxelShapeInput,
   preserveCenterOfMassVelocity,
   validateMassProperties,
@@ -65,3 +76,5 @@ export type { PhysicsWorld, PhysicsWorld2D, RaycastHit, RaycastHit2D } from './p
 export type { PhysicsBackend } from './plugin-factory.js';
 export { physicsComponentsPlugin, physicsPlugin } from './plugin-factory.js';
 export { PhysicsSet } from './system-set.js';
+
+export { syncTerrainHeightfields } from './terrain-heightfield.js';

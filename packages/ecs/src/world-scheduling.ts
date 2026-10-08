@@ -7,17 +7,18 @@ import {
   CyclicDependencyError,
   ProtectedResourceError,
   ScheduleScopeMismatchError,
+  SharedKernelFailureError,
   SystemFailedError,
   type SystemSetNotRegisteredError,
   TimeConfigInvalidError,
   TimeDeltaInvalidError,
+  type WorldPoisonedError,
 } from './errors';
+import { worldPoisonedError } from './errors/shared-kernel-errors';
 import {
   SHARED_KERNEL_EXECUTOR_RESOURCE_KEY,
   type SharedKernelDispatch,
   type SharedKernelExecutor,
-  SharedKernelFailureError,
-  WorldPoisonedError,
 } from './execution/shared-kernel';
 import type { QueryDescriptor } from './query/query';
 import {
@@ -226,9 +227,8 @@ export function worldUpdate(
   | CyclicDependencyError
   | SharedKernelFailureError
 > {
-  if (world.execution.health === 'poisoned') {
-    return err(new WorldPoisonedError(world.identity, world.execution.fault));
-  }
+  const poisoned = worldPoisonedError(world.execution);
+  if (poisoned !== undefined) return err(poisoned);
   if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0)
     return err(new TimeDeltaInvalidError(deltaSeconds));
 
@@ -285,15 +285,13 @@ export function worldUpdate(
     if (error instanceof CyclicDependencyError || error instanceof SharedKernelFailureError) {
       return err(error);
     }
-    if (world.execution.health === 'healthy') {
-      world[worldInternal].poisonExecution({
-        code: 'shared-kernel-failed',
-        kernelName: `schedule:${Update.name}`,
-        cause: error,
-        partialWrite: true,
-        retryable: false,
-      });
-    }
+    world[worldInternal].poisonExecution({
+      code: 'shared-kernel-failed',
+      kernelName: `schedule:${Update.name}`,
+      cause: error,
+      partialWrite: true,
+      retryable: false,
+    });
     return err(new SystemFailedError('<schedule>', Update.name, error));
   }
   world[worldInternal].setFixedAccumulator(accumulator.value);

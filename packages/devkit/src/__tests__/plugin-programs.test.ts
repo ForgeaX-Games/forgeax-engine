@@ -51,7 +51,7 @@ function record(module: string, name: string): PluginSourceRecord {
 }
 
 async function distHostFixture() {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-dist-host-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-dist-host-')));
   const temporary = await mkdtemp(resolve(tmpdir(), 'forgeax-dist-host-output-'));
   roots.push(root, temporary);
   await mkdir(resolve(root, 'node_modules/@forgeax'), { recursive: true });
@@ -118,6 +118,31 @@ async function distHostFixture() {
   return { root, temporary, facts, sourcePath, files };
 }
 describe('plugin program projection', () => {
+  it('fences WGSL bytes and additions through the existing source input authority', async () => {
+    const { root, facts } = await distHostFixture();
+    const shader = resolve(root, 'surface.wgsl');
+    await writeFile(shader, '#define_import_path fixture::surface\nconst value = 1.0;\n');
+    const initial = await discoverPluginAssets(facts);
+    const path = await realpath(shader);
+    const revision = `sha256:${createHash('sha256')
+      .update(await readFile(shader))
+      .digest('hex')}`;
+    expect(initial.sourceInputs.get(path)).toBe(revision);
+    await writeFile(shader, '#define_import_path fixture::surface\nconst value = 2.0;\n');
+    await expect(assertPluginSourceInputs(initial, root)).rejects.toMatchObject({
+      code: 'plugin-bootstrap-failed',
+      detail: { cause: { reason: 'source changed during plugin compilation' } },
+    });
+    expect(initial.sourceInputs.get(path)).toBe(revision);
+    const current = await discoverPluginAssets(facts);
+    expect(current.sourceInputs.get(path)).not.toBe(revision);
+    await writeFile(resolve(root, 'added.wgsl'), '#define_import_path fixture::added\n');
+    await expect(assertPluginSourceInputs(current, root)).rejects.toMatchObject({
+      code: 'plugin-bootstrap-failed',
+      detail: { cause: { reason: 'source added during plugin compilation' } },
+    });
+  });
+
   it.each([
     ['./dist/runtime.js', 'dist/runtime.ts'],
     ['./dist/runtime', 'dist/runtime/index.ts'],

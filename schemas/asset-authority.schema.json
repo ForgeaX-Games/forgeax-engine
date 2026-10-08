@@ -209,7 +209,9 @@
       "font",
       "audio",
       "supporting-producer",
-      "plugin"
+      "plugin",
+      "mesh-interchange",
+      "navigation-mesh"
     ],
     "aiOperations": [
       "inspect",
@@ -426,6 +428,26 @@
         "producerIds": ["font-importer", "import-runner"]
       },
       {
+        "id": "navigation-mesh",
+        "displayName": "Navigation mesh",
+        "subject": "internal-asset",
+        "execution": "cooked",
+        "authority": {
+          "id": "navigation-pack-authority",
+          "kind": "pack-source-geometry-placement-and-agent-settings",
+          "sources": ["packages/types/src/navigation.ts", "packages/import/src/navigation-bake.ts"]
+        },
+        "runtimeSource": [
+          "packages/assets-runtime/src/loaders/navigation-mesh.ts",
+          "packages/navigation/src/navmesh.ts"
+        ],
+        "lifecycle": "source-and-settings-fingerprint-to-cooked-polygon-catalog",
+        "owner": "packages/import, packages/navigation and packages/assets-runtime",
+        "catalog": "included",
+        "sourceKeyPolicy": "required",
+        "producerIds": ["navigation-recast-producer", "scriptable-pack-producer"]
+      },
+      {
         "id": "audio",
         "displayName": "audio",
         "subject": "imported-output",
@@ -436,7 +458,7 @@
           "sources": ["packages/audio-webaudio/src/audio-importer.ts"]
         },
         "runtimeSource": ["packages/audio-webaudio/src/audio-importer.ts"],
-        "lifecycle": "source-meta-to-runtime-decode",
+        "lifecycle": "source-meta-to-catalog-buffer-or-verified-stream",
         "owner": "packages/audio-webaudio and packages/import",
         "catalog": "included",
         "sourceKeyPolicy": "required",
@@ -465,6 +487,23 @@
           "plugin-program-compiler",
           "scriptable-pack-producer"
         ]
+      },
+      {
+        "id": "mesh-interchange",
+        "displayName": "OBJ / STL / SVG",
+        "subject": "imported-output",
+        "execution": "cooked",
+        "authority": {
+          "id": "mesh-interchange-source-meta-authority",
+          "kind": "external-source-and-meta",
+          "sources": ["packages/mesh-io/src/node.ts", "packages/mesh-io/src/importer.ts"]
+        },
+        "runtimeSource": ["packages/assets-runtime/src/asset-registry.ts"],
+        "lifecycle": "source-meta-to-catalog-derived",
+        "owner": "packages/mesh-io and packages/import",
+        "catalog": "included",
+        "sourceKeyPolicy": "required",
+        "producerIds": ["mesh-io-importer", "import-runner"]
       }
     ],
     "producers": [
@@ -537,7 +576,7 @@
           "packages/import/src/import-runner.ts",
           "packages/import/src/importer-registry.ts"
         ],
-        "categories": ["glb", "fbx", "image", "font", "audio"],
+        "categories": ["glb", "fbx", "image", "font", "audio", "mesh-interchange"],
         "outputs": [
           {
             "name": "imported-output",
@@ -551,7 +590,7 @@
         "id": "importer-registry",
         "owner": "packages/import",
         "sourceFiles": ["packages/import/src/importer-registry.ts"],
-        "categories": ["glb", "fbx", "image", "font", "audio"],
+        "categories": ["glb", "fbx", "image", "font", "audio", "mesh-interchange"],
         "outputs": [
           {
             "name": "registered-importer",
@@ -857,6 +896,42 @@
             "name": "program-table-and-publication-tuple",
             "category": "plugin",
             "sourceKey": "logical module and export"
+          }
+        ],
+        "sourceKeyPolicy": "required"
+      },
+      {
+        "id": "navigation-recast-producer",
+        "owner": "packages/import",
+        "sourceFiles": [
+          "packages/import/src/navigation-bake.ts",
+          "packages/import/src/scriptable-pack-output-producers.ts"
+        ],
+        "categories": ["navigation-mesh"],
+        "outputs": [
+          {
+            "name": "navigation-mesh",
+            "category": "navigation-mesh",
+            "sourceKey": "Pack output key"
+          }
+        ],
+        "sourceKeyPolicy": "required"
+      },
+      {
+        "id": "mesh-io-importer",
+        "owner": "packages/mesh-io",
+        "sourceFiles": [
+          "packages/mesh-io/src/node.ts",
+          "packages/mesh-io/src/importer.ts",
+          "packages/mesh-io/src/parse.ts",
+          "packages/mesh-io/src/svg.ts"
+        ],
+        "categories": ["mesh-interchange"],
+        "outputs": [
+          {
+            "name": "mesh",
+            "category": "mesh-interchange",
+            "sourceKey": "mesh:object-name"
           }
         ],
         "sourceKeyPolicy": "required"

@@ -1,11 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { it } from 'vitest';
-import { prepareRayPathFixture } from './path-tracer.commands';
+import { rayPathCommands } from './path-tracer.commands';
 import { verifySubmittedTextures } from './submitted-textures.gpu-fixture';
 
 it('traces dynamic MASK through accepted texture and sampler residency and fresh replay', async () => {
-  const result = await verifySubmittedTextures(await prepareRayPathFixture());
+  const result = await verifySubmittedTextures(
+    await rayPathCommands.prepareRayPublicationFixture(undefined, 'cutout'),
+  );
   const directory = process.env.FORGEAX_RAY_EVIDENCE;
   if (directory) {
     await mkdir(directory, { recursive: true });

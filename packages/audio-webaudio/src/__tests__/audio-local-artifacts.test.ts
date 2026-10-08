@@ -21,12 +21,12 @@ describe('audio asset-local artifacts', () => {
     const asset = (result as { value: { assets: readonly Record<string, unknown>[] } }).value
       .assets[0];
     expect(asset?.payload).toMatchObject({ kind: 'audio', mediaType: 'audio/ogg' });
-    expect(asset?.payload).toHaveProperty('bytes');
+    expect(asset?.payload).not.toHaveProperty('bytes');
     const body = (asset?.artifacts as Record<string, Record<string, unknown>>).source;
     expect(body).toBeDefined();
     if (body === undefined) return;
     expect(body.mediaType).toBe('audio/ogg');
-    expect(body.assetCodec).toEqual({ name: 'browser-audio' });
+    expect(body.assetCodec).toEqual({ name: 'browser-audio', version: '1' });
     expect(body.bytes).toBeInstanceOf(Uint8Array);
     expect(body).not.toHaveProperty('path');
     expect(body).not.toHaveProperty('integrity');

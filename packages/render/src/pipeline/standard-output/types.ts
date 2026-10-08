@@ -5,6 +5,7 @@ export const STANDARD_OUTPUT_LOGICAL_STAGES = [
   'meter',
   'dof',
   'bloom',
+  'lens-flare',
   'exposure-white-balance',
   'tone',
   'lut',
@@ -33,6 +34,8 @@ export interface StandardOutputRequest {
   readonly bloom: boolean;
   /** Built-in spatial DoF stage; false keeps the path exact-zero. */
   readonly dof?: boolean;
+  /** Image-based ghosts from bright HDR pixels, after Bloom. */
+  readonly lensFlare?: boolean;
   readonly exposure: boolean;
   readonly whiteBalance: boolean;
   readonly lut: boolean;
@@ -60,6 +63,7 @@ export interface StandardOutputPlan {
       | 'meter'
       | 'bloom'
       | 'dof'
+      | 'lensFlare'
       | 'exposure'
       | 'whiteBalance'
       | 'lut'

@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 const trackedFiles = execFileSync(
   'git',
   ['ls-files', '--cached', '--others', '--exclude-standard'],
-  { encoding: 'utf8' },
+  { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
 )
   .split('\n')
   .filter(Boolean);

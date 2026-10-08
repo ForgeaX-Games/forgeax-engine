@@ -38,7 +38,7 @@ export function deriveFbxAnimatedBounds(
               node: targetIds.indexOf(channel.targetId),
               property: channel.property,
               values: channel.sampler.output,
-              interpolation: channel.sampler.interpolation,
+              interpolation: 'LINEAR' as const,
             },
           ],
     ),

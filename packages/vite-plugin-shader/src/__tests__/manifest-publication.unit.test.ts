@@ -2,10 +2,72 @@ import {
   expandShaderManifestPublication,
   readShaderManifestPublication,
 } from '@forgeax/engine-shader';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { publishShaderManifest } from '../manifest-publication.js';
 
 describe('shared shader source publication', () => {
+  it('reuses admitted source blocks while publishing fresh variants and removing old sources', async () => {
+    const retained = 'fn common() {}\n\nfn retained() {}\n';
+    const removed = 'fn removed() {}\n';
+    const fresh = 'fn common() {}\n\nfn fresh() {}\n';
+    const previous = publishShaderManifest(
+      [
+        { hash: 'retained', wgsl: retained },
+        { hash: 'removed', wgsl: removed },
+      ],
+      [],
+    );
+    const expanded = expandShaderManifestPublication(previous);
+    const blocks = new Map(
+      [...expanded.sources].map(([digest, source]) => [
+        source,
+        (previous.sources[digest] ?? []).map((index) => previous.fragments[index] ?? ''),
+      ]),
+    );
+    const original = {
+      entries: [{ hash: 'retained', wgsl: retained, bindings: '[]' }],
+      materialShaders: [
+        {
+          identifier: 'fresh',
+          composedWgsl: fresh,
+          variants: [{ definesKey: 'A=true', defines: { A: true }, composedWgsl: retained }],
+        },
+      ],
+    };
+    const split = String.prototype.split;
+    const divided: string[] = [];
+    const spy = vi.spyOn(String.prototype, 'split').mockImplementation(function (
+      this: string,
+      separator: unknown,
+      limit?: number,
+    ) {
+      if (separator === '\n\n') divided.push(String(this));
+      return Reflect.apply(split, this, [separator, limit]) as string[];
+    });
+    const publication = (() => {
+      try {
+        return publishShaderManifest(original.entries, original.materialShaders, blocks);
+      } finally {
+        spy.mockRestore();
+      }
+    })();
+    expect(divided).toEqual([fresh]);
+    expect(await readShaderManifestPublication(publication)).toEqual(original);
+    expect(Object.keys(publication.sources)).toHaveLength(2);
+    expect(publication.fragments.join('')).not.toContain('fn removed()');
+  });
+
+  it('rejects reused fragments that do not reproduce the keyed source', () => {
+    const source = 'fn retained() {}';
+    expect(() =>
+      publishShaderManifest(
+        [{ hash: 'test', wgsl: source }],
+        [],
+        new Map([[source, ['fn corrupted() {}']]]),
+      ),
+    ).toThrow('do not match admitted bytes');
+  });
+
   it('retains separators, CRLF and the final unterminated source bytes', async () => {
     const wgsl = '\n\n// prefix\r\n\r\nfn main() {}\n\n\n// tail  ';
     const entries = [{ hash: 'test', wgsl }];

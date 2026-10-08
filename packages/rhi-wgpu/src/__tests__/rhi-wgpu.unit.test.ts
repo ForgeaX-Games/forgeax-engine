@@ -17,7 +17,7 @@
 // use restoreMocks() (mockClear) to prevent cross-block call-count leakage.
 
 import { afterEach, beforeEach, describe, expect, it, test, vi } from 'vitest';
-import { makeCanvasContext, validateSurfacePresentationProof } from '../adapter';
+import { makeCanvasContext } from '../adapter';
 import { makeRhiCommandEncoder } from '../command-encoder';
 import { makeRhiDevice, type RawDeviceLike } from '../device';
 import { __resetForTests, ensureRhiWgpuReady, getRhiWgpuModule } from '../internal/wasm-loader';
@@ -165,21 +165,6 @@ describe('compute-pass forwarding', () => {
 });
 
 describe('surface presentation proof', () => {
-  it('requires descriptor, acquisition, and validation evidence together', () => {
-    expect(
-      validateSurfacePresentationProof({ descriptor: true, acquisition: true, validation: true }),
-    ).toBe(true);
-    expect(
-      validateSurfacePresentationProof({ descriptor: true, acquisition: true, validation: false }),
-    ).toBe(false);
-    expect(
-      validateSurfacePresentationProof({ descriptor: true, acquisition: false, validation: true }),
-    ).toBe(false);
-    expect(
-      validateSurfacePresentationProof({ descriptor: false, acquisition: true, validation: true }),
-    ).toBe(false);
-  });
-
   it('keeps acquire and present separate from pixel readback evidence', () => {
     const rawContext = {
       configure: vi.fn(),
@@ -201,10 +186,11 @@ describe('surface presentation proof', () => {
 
     expect(result.ok).toBe(true);
     expect(rawContext.probeSurfacePresentation).toHaveBeenCalledOnce();
-    expect(context.presentationProof).toBeDefined();
-    if (context.presentationProof !== undefined) {
-      expect(validateSurfacePresentationProof(context.presentationProof)).toBe(true);
-    }
+    expect(context.presentationProof).toEqual({
+      descriptor: true,
+      acquisition: true,
+      validation: true,
+    });
   });
 
   it('turns a fallible raw probe into a structured configure failure', () => {

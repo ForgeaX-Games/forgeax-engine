@@ -77,7 +77,7 @@ export function inspectPointsLines(input: PointsLinesInspectionInput): PointsLin
     meshGeneration: snapshot.meshGeneration,
     materialHandle: snapshot.materialHandle,
     materialGeneration: snapshot.materialGeneration,
-    style: snapshot.style ?? { kind: 'lines', widthPx: 0 },
+    style: snapshot.style ?? { kind: 'lines', width: 0 },
     topology: input.topology,
     lane: input.lane,
     pointCount: input.pointCount,
@@ -90,8 +90,4 @@ export function inspectPointsLines(input: PointsLinesInspectionInput): PointsLin
     lastKnownGood: input.lastKnownGood,
     ...(input.refusal === undefined ? {} : { refusal: { ...input.refusal } }),
   };
-}
-
-export function pointsLinesInspectionToJson(inspection: PointsLinesInspection): string {
-  return JSON.stringify(inspection);
 }

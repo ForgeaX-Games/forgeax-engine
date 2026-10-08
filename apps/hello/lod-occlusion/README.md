@@ -62,9 +62,9 @@ The browser and Dawn scripts fail closed when their backend or compositor is
 unavailable. They do not replace the asset with procedural geometry, hand-write
 a pack index, or treat canvas liveness as visual evidence. Renderer inspection
 is a detached bounded POD containing source identity, view/slot generations,
-LOD histogram, query timing, page pressure, fallback error hints, and at most
-64 stable samples. The performance producer also records renderer-owned CPU
-draw process time, query-page map-only latency, and GPU-selected index work.
+LOD histogram, GPU HZB occlusion counts, and at most 64 stable samples. The
+performance producer also records renderer-owned CPU draw process time and
+GPU-selected index work.
 CPU A/B p50/p95 values use only the post-warm-up retained window, matching the
 GPU timing sample window; warm-up CPU values remain diagnostics and never enter
 the regression ratio. CPU p95 remains diagnostic because hosted runner tails
@@ -72,8 +72,6 @@ can contain an isolated GC or scheduler interruption; admission uses the paired
 post-warm-up CPU median with a bounded 20% regression allowance. GPU admission
 keeps a hard 15% median-improvement floor and a <=5% p95 regression ceiling;
 these are GPU timestamp thresholds, not wall-clock measurements.
-Query memory is reported as the combined resolve plus staging allocation
-(`96 KiB + 96 KiB = 192 KiB` for the three-page pool), not as a single buffer.
 
 ```bash
 pnpm --filter @forgeax/hello-lod-occlusion build
@@ -88,8 +86,8 @@ pnpm --filter @forgeax/hello-lod-occlusion smoke:browser
   absolute projected-height coverage.
 - [x] Vite `pluginPack` builds the source through the registered glTF importer;
   the generated `dist/pack-index.json` is an output, not a hand-written input.
-- [x] Runtime inspection is bounded and detached, with explicit readiness,
-  fallback, and generation identity.
+- [x] Runtime inspection is bounded and detached, with explicit readiness and
+  generation identity.
 - [ ] GPU performance evidence: `smoke:performance` remains fail-closed until
   `evidence/gpu-frame-samples.json` contains same-device Browser/Dawn samples.
 
@@ -104,11 +102,16 @@ occluded) and records four structural groups: `control` and the A/B baseline
 (root-pinned LOD0, no occluder), `lodOnly` (LOD-on, no occluder),
 `occlusionOnly` (root-pinned LOD0, occluder-on), and `treatment` (LOD-on,
 occluder-on). GPU timing is still the two-order baseline / treatment
-comparison. CPU p95 admission compares `treatment` with `occlusionOnly`, which
-holds the query transport and occluder cost constant and isolates incremental
+comparison. CPU median admission and p95 diagnostics compare `treatment` with `occlusionOnly`, which
+holds the occluder and two-phase HZB cost constant and isolates incremental
 LOD work; the no-occluder baseline remains the GPU control.
-Group rows run for the shared derived settle floor and then require stable
-observations; at `Q=2048` this is 98 submits and at `Q=4096` it is 50. Each row
+The CPU control runs in both orders with the same 32 warm-up and 32 retained
+CPU observations per window as treatment. It emits no extra GPU timestamp
+samples; the original 128-sample GPU A/B contract remains unchanged. A cold
+16-frame CPU control is rejected. The separate LOD-only structural row runs
+for `SETTLE_SUBMITS` (16) submits, which covers the
+asynchronous LOD-selection readback lag, and then require stable observations.
+Each row
 also reports `batchCount` (all selector/filtered plan batches) and
 `indirectDrawCount` (non-zero-capacity raster commands actually encoded).
 Suppressed-only batches remain in selector accounting but do not create a
@@ -116,7 +119,7 @@ zero-sized storage binding or an empty raster command, so
 `0 < indirectDrawCount <= batchCount` is the expected relation. The current
 topology key may still turn 128 LOD candidates into 128 singleton selector
 batches, and that cost must remain visible in production evidence. The renderer
-inspection v2 publishes rows for every World attachment
+inspection v3 publishes rows for every World attachment
 and marks their attribution mode. When the renderer joins every row to the
 same submit it publishes same-submit per-World GPU facts; missing rows or
 projection-only attribution keep the World-reorder falsification unavailable.
@@ -124,13 +127,15 @@ The producer never infers attribution from array position or aggregate counts;
 missing rows or unavailable attribution remain fail-closed.
 
 The authored occluder is sanity-calibrated with one central-hidden and one
-side-visible sentinel using the same imported payload and proxy-query path.
-That calibration does not stand in for the locked 16/112 workload. The
-delayed-map falsifier injects 15 ms before the real map and requires at least
-10,000 µs of renderer-reported map latency; no host-only timer is accepted.
+side-visible sentinel using the same imported payload and GPU HZB path. That
+calibration does not stand in for the locked 16/112 workload. The
+`gpu-occlusion-off` falsifier keeps the occluder and LOD policy, disables only
+the Standard `gpuOcclusion` config, and requires 128 visible / 0 occluded;
+re-enabling it must restore 16 / 112, so every occluded count is owned by
+two-phase HZB.
 
 > [!IMPORTANT]
 > When inspection reports `producer-failed`, repair the source Meta or importer
-> and rebuild through the import owner. For `query-failed`, `page-exhausted`,
-> or `device-loss`, retry after the next valid frame. All failure paths remain
-> all-visible and never remove a draw because a query transport failed.
+> and rebuild through the import owner. Occlusion never removes a draw without
+> a valid HZB: the first frame and every history reset rasterize all
+> frustum-visible candidates.

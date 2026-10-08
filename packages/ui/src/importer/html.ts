@@ -1,4 +1,4 @@
-import type { AuthoringDiagnostic } from '../authoring/diagnostics.js';
+import type { ImportDiagnostic } from '@forgeax/engine-types';
 import { parseHtmlAuthoring } from '../authoring/html.js';
 
 export interface SourceLocation {
@@ -18,7 +18,7 @@ export type HtmlValidation =
   | { readonly ok: true; readonly value: string }
   | { readonly ok: false; readonly error: ValidationError };
 
-function toLegacyError(diagnostic: AuthoringDiagnostic): ValidationError {
+function toLegacyError(diagnostic: ImportDiagnostic): ValidationError {
   return {
     code: diagnostic.code.includes('template')
       ? 'invalid-template'

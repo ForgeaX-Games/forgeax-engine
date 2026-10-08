@@ -3,11 +3,6 @@ import { err, ok } from '@forgeax/engine-types';
 import { freezeRuntimePayload } from './immutable-payload.js';
 import { assetLoadCancelled as cancelled, waitForAsset } from './wait-for-asset.js';
 
-export interface AssetGraphValue<P> {
-  readonly value: P;
-  readonly refs: readonly string[];
-}
-
 export interface AssetGraphOptions<
   P extends { readonly value: unknown; readonly refs: readonly string[] },
 > {
@@ -209,10 +204,8 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
     ticketEpoch: number,
   ): Promise<GraphResult<P>> {
     const values = new Map<string, P>();
-    const visiting = new Set<string>();
-    const visited = new Set<string>();
-    const group = new Set<string>();
-    const result = await this.visit(root, signal, visiting, visited, values, group, ticketEpoch);
+    const seen = new Set<string>();
+    const result = await this.visit(root, signal, seen, values, ticketEpoch);
     if (this.disposed) return err(disposed());
     if (ticketEpoch !== this.epoch) return err(superseded(root, ticketEpoch));
     if (!result.ok) return result;
@@ -225,40 +218,33 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   private async visit(
     guid: string,
     signal: AbortSignal,
-    visiting: Set<string>,
-    visited: Set<string>,
+    seen: Set<string>,
     values: Map<string, P>,
-    group: Set<string>,
     ticketEpoch: number,
-  ): Promise<GraphResult<P>> {
-    if (visiting.has(guid)) {
-      group.add(guid);
-      return ok({ value: undefined as unknown as P, refs: [] } as unknown as P);
-    }
-    if (visited.has(guid)) return ok(values.get(guid) as P);
+  ): Promise<GraphResult<void>> {
+    if (seen.has(guid)) return ok(undefined);
     const cached = this.ready.get(guid);
     if (cached !== undefined) {
       values.set(guid, cached);
-      visited.add(guid);
-      return ok(cached);
+      seen.add(guid);
+      return ok(undefined);
     }
-    visiting.add(guid);
+    seen.add(guid);
     const read = await this.readOnce(guid, signal);
     if (!read.ok) {
-      visiting.delete(guid);
+      seen.delete(guid);
       return read;
     }
     if (this.disposed) return err(disposed());
     if (ticketEpoch !== this.epoch) return err(superseded(guid, ticketEpoch));
     values.set(guid, read.value);
-    group.add(guid);
     this.link(guid, read.value.refs);
     const references = (read.value as P & { readonly references?: 'eager' | 'deferred' })
       .references;
     for (const ref of references === 'deferred' ? [] : read.value.refs) {
-      const child = await this.visit(ref, signal, visiting, visited, values, group, ticketEpoch);
+      const child = await this.visit(ref, signal, seen, values, ticketEpoch);
       if (!child.ok) {
-        visiting.delete(guid);
+        seen.delete(guid);
         return err({
           code: 'asset-dependency-failed',
           expected: 'every referenced asset to load successfully',
@@ -267,9 +253,7 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
         });
       }
     }
-    visiting.delete(guid);
-    visited.add(guid);
-    return ok(read.value);
+    return ok(undefined);
   }
 
   private readOnce(guid: string, signal: AbortSignal): Promise<GraphResult<P>> {
@@ -363,39 +347,41 @@ export class AssetGraph<P extends { readonly value: unknown; readonly refs: read
   }
 
   private recordScc(): void {
-    const indexByGuid = new Map<string, number>();
-    const lowByGuid = new Map<string, number>();
-    const stack: string[] = [];
-    const onStack = new Set<string>();
-    let nextIndex = 0;
+    interface Vertex {
+      readonly guid: string;
+      readonly index: number;
+      low: number;
+      onStack: boolean;
+    }
+    const vertices = new Map<string, Vertex>();
+    const stack: Vertex[] = [];
     const components: string[][] = [];
-    const visit = (guid: string): void => {
-      indexByGuid.set(guid, nextIndex);
-      lowByGuid.set(guid, nextIndex);
-      nextIndex += 1;
-      stack.push(guid);
-      onStack.add(guid);
+    const visit = (guid: string): Vertex => {
+      const vertex: Vertex = { guid, index: vertices.size, low: vertices.size, onStack: true };
+      vertices.set(guid, vertex);
+      stack.push(vertex);
       for (const ref of this.forward.get(guid) ?? []) {
-        if (!indexByGuid.has(ref)) {
-          visit(ref);
-          lowByGuid.set(guid, Math.min(lowByGuid.get(guid) ?? 0, lowByGuid.get(ref) ?? 0));
-        } else if (onStack.has(ref)) {
-          lowByGuid.set(guid, Math.min(lowByGuid.get(guid) ?? 0, indexByGuid.get(ref) ?? 0));
+        const child = vertices.get(ref);
+        if (child === undefined) {
+          vertex.low = Math.min(vertex.low, visit(ref).low);
+        } else if (child.onStack) {
+          vertex.low = Math.min(vertex.low, child.index);
         }
       }
-      if (lowByGuid.get(guid) !== indexByGuid.get(guid)) return;
+      if (vertex.low !== vertex.index) return vertex;
       const component: string[] = [];
-      let member: string | undefined;
+      let member: Vertex | undefined;
       do {
         member = stack.pop();
         if (member === undefined) break;
-        onStack.delete(member);
-        component.push(member);
-      } while (member !== guid);
+        member.onStack = false;
+        component.push(member.guid);
+      } while (member !== vertex);
       if (component.length > 1 || this.forward.get(guid)?.has(guid) === true)
         components.push(component.sort());
+      return vertex;
     };
-    for (const guid of this.forward.keys()) if (!indexByGuid.has(guid)) visit(guid);
+    for (const guid of this.forward.keys()) if (!vertices.has(guid)) visit(guid);
     this.sccs.splice(
       0,
       this.sccs.length,

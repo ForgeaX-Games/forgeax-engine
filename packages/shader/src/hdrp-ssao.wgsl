@@ -139,11 +139,9 @@ fn gtaoVisibility(uv: vec2<f32>) -> f32 {
   return clamp(1.0 - occlusion / f32(slices), 0.0, 1.0);
 }
 
-// ── fs_ssao_calc: 64-sample hemisphere SSAO (LO 5.9) ────────────────────────
+// ── hemisphere SSAO: 64-sample kernel (LO 5.9) ──────────────────────────────
 
-@fragment
-fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
-  if (ssao_uniform.algorithmPad.x > 0.5) { return gtaoVisibility(in.uv); }
+fn hemisphereVisibility(in : SsaoVsOut) -> f32 {
   // Reconstruct view-space position from depth + NDC.
   let depth = textureSampleLevel(hdr_depth, ssao_depth_sampler, in.uv, 0);
   // NDC reconstruction: screen-space xy in [-1,1], depth in [0,1].
@@ -208,6 +206,38 @@ fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) f32 {
   return occlusion;
 }
 
+// The raw target carries the center world normal beside visibility, so the
+// blur weights 25 taps from this half-res texel instead of re-reading and
+// decoding the full-res G-buffer per tap (the dominant filter cost).
+fn encodeSsaoNormal(n : vec3<f32>) -> vec2<f32> {
+  var oct = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+  if (n.z < 0.0) {
+    oct = (1.0 - abs(oct.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), oct >= vec2<f32>(0.0));
+  }
+  return oct * 0.5 + 0.5;
+}
+
+fn decodeSsaoNormal(encoded : vec2<f32>) -> vec3<f32> {
+  let oct = encoded * 2.0 - 1.0;
+  var n = vec3<f32>(oct, 1.0 - abs(oct.x) - abs(oct.y));
+  let fold = max(-n.z, 0.0);
+  n = vec3<f32>(n.xy + select(vec2<f32>(fold), vec2<f32>(-fold), n.xy >= vec2<f32>(0.0)), n.z);
+  return normalize(n);
+}
+
+// ── fs_ssao_calc: raw visibility (r) + encoded world normal (gb) ────────────
+
+@fragment
+fn fs_ssao_calc(in : SsaoVsOut) -> @location(0) vec4<f32> {
+  var visibility : f32;
+  if (ssao_uniform.algorithmPad.x > 0.5) {
+    visibility = gtaoVisibility(in.uv);
+  } else {
+    visibility = hemisphereVisibility(in);
+  }
+  return vec4<f32>(visibility, encodeSsaoNormal(ssaoNormal(in.uv)), 1.0);
+}
+
 // Symmetric depth/normal-aware filter. Never spread a foreground contact
 // shadow across a background edge or wrap the opposite screen border.
 fn ssaoViewZ(uv: vec2<f32>, depth: f32) -> f32 {
@@ -220,7 +250,7 @@ fn fs_ssao_blur(in: SsaoVsOut) -> @location(0) f32 {
   let depth = textureSampleLevel(hdr_depth, ssao_depth_sampler, in.uv, 0);
   if (depth <= 0.0) { return 1.0; }
   let z = ssaoViewZ(in.uv, depth);
-  let normal = ssaoNormal(in.uv);
+  let normal = decodeSsaoNormal(textureSampleLevel(ssaoRaw, ssao_depth_sampler, in.uv, 0).gb);
   let texel = 1.0 / vec2<f32>(textureDimensions(ssaoRaw));
   var total = 0.0;
   var weight = 0.0;
@@ -230,10 +260,11 @@ fn fs_ssao_blur(in: SsaoVsOut) -> @location(0) f32 {
       if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) { continue; }
       let d = textureSampleLevel(hdr_depth, ssao_depth_sampler, uv, 0);
       if (d <= 0.0) { continue; }
-      let n = ssaoNormal(uv);
+      let raw = textureSampleLevel(ssaoRaw, ssao_depth_sampler, uv, 0);
+      let n = decodeSsaoNormal(raw.gb);
       let dz = abs(ssaoViewZ(uv, d) - z);
       let w = exp(-f32(x*x + y*y) / 4.0) * exp(-dz / max(0.01, ssao_uniform.intensityPad.y * 0.1)) * pow(max(dot(n, normal), 0.0), 8.0);
-      total += textureSampleLevel(ssaoRaw, ssao_depth_sampler, uv, 0).r * w;
+      total += raw.r * w;
       weight += w;
     }
   }

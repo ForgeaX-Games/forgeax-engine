@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "learn-render LearnOpenGL section 1.4 textures — disk JPEG + sidecar meta + GPU upload via loadByGuid (M8 milestone fills index.ts + smoke).",
+  "description": "learn-render LearnOpenGL section 1.4 textures \u2014 disk JPEG + sidecar meta + GPU upload via loadByGuid (M8 milestone fills index.ts + smoke).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -54,8 +54,8 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

@@ -8,6 +8,7 @@ import type {
 import { ok, type RhiError } from '@forgeax/engine-rhi';
 import type { MaterialShaderManifestEntry, ShaderRegistry } from '@forgeax/engine-shader';
 import type { ManifestEntry } from '@forgeax/engine-types';
+import { atmosphereAvailable } from '../environment/capability';
 import { type GpuDrivenPbrProgram, standardPbrProgramKey } from '../gpu-driven/pbr-program';
 import { GPU_DRIVEN_VIEW_WGSL } from '../gpu-driven/view-gpu';
 import {
@@ -20,6 +21,7 @@ import {
   type PbrPipelineLayoutBundle,
   SKIN_MATERIAL_SHADER_ID,
 } from '../pbr-pipeline';
+import type { RhiBackendPack } from './backend-contract';
 import { assembleStandardPbrArtifact } from './material/assembly';
 import {
   invokeDeviceCreateShaderModule,
@@ -31,6 +33,7 @@ import {
   STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES,
   selectGpuDrivenSceneIndexVariant,
   selectSkinPrewarmVariants,
+  type VariantPrewarmAdmission,
 } from './shader-prewarm-policy';
 
 export type AsyncCreateShaderModule = (
@@ -61,6 +64,7 @@ interface GpuDrivenPbrModuleInput {
   readonly device: RhiDevice;
   readonly storageBufferCapable: boolean;
   readonly asyncCreateShaderModule: AsyncCreateShaderModule | undefined;
+  readonly immediateCreateShaderModule?: RhiBackendPack['createShaderModuleImmediate'];
   readonly pbrSkinEntry: ManifestEntry | undefined;
   readonly pbrManifestEntry: MaterialShaderManifestEntry | undefined;
   readonly pbrSkinManifestEntry: MaterialShaderManifestEntry | undefined;
@@ -68,6 +72,7 @@ interface GpuDrivenPbrModuleInput {
   readonly directionalPcssAvailable: boolean;
   readonly projectorAvailable: boolean;
   readonly seedShaderModule: (label: string, module: ShaderModule) => void;
+  readonly admitsVariant: VariantPrewarmAdmission;
 }
 
 function createShader(
@@ -122,6 +127,10 @@ export async function buildGpuDrivenPbrReadyModules(
           input.directionalPcssAvailable,
           input.projectorAvailable,
           color,
+          atmosphereAvailable(
+            input.storageBufferCapable,
+            input.device.limits.maxSampledTexturesPerShaderStage,
+          ),
         );
         if (variant === undefined || entry === undefined) continue;
         const key = standardPbrProgramKey(materialId, color);
@@ -153,39 +162,48 @@ export async function buildGpuDrivenPbrReadyModules(
       }
     }
   }
-  // Device capabilities are fixed for this ready generation. Keep both scene
-  // topology/color/reflection lanes and every supported material lane warm;
-  // compiling unreachable capability combinations delays even an unlit boot.
-  const skinVariants = selectSkinPrewarmVariants(
-    input.pbrSkinManifestEntry,
-    input.storageBufferCapable,
-    input.extendedLightingShaderAvailable,
-    input.directionalPcssAvailable,
-    input.projectorAvailable,
-    (input.device.limits.maxSampledTexturesPerShaderStage ?? 0) >=
-      STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES,
-  );
-  await prewarmMaterialShaderVariants(
-    SKIN_MATERIAL_SHADER_ID,
-    skinVariants,
-    new Map(
-      input.pbrSkinEntry === undefined || pbrSkinModule === null
-        ? []
-        : [[input.pbrSkinEntry.wgsl, pbrSkinModule]],
-    ),
-    (variant, label) =>
-      runShimStep(
-        () => createShader(input, variant.composedWgsl, label),
-        'shader-compile-failed',
-        `pbr-skin variant ${variant.definesKey || '<default>'} compiled`,
-        'inspect the selected pbr-skin storage/cluster/color variant and device.features',
+  // Synchronous module backends prepare optional material lanes at first use.
+  // Async-only backends prewarm admitted lanes before publishing readiness.
+  if (input.immediateCreateShaderModule === undefined) {
+    // Device capabilities are fixed for this ready generation. Keep both scene
+    // topology/color/reflection lanes and every supported material lane warm;
+    // compiling unreachable capability combinations delays even an unlit boot.
+    const skinVariants = selectSkinPrewarmVariants(
+      input.pbrSkinManifestEntry,
+      input.storageBufferCapable,
+      input.extendedLightingShaderAvailable,
+      input.directionalPcssAvailable,
+      input.projectorAvailable,
+      (input.device.limits.maxSampledTexturesPerShaderStage ?? 0) >=
+        STANDARD_PBR_REQUIRED_SAMPLED_TEXTURES,
+      atmosphereAvailable(
+        input.storageBufferCapable,
+        input.device.limits.maxSampledTexturesPerShaderStage,
       ),
-    (label, module) => {
-      input.seedShaderModule(label, module);
-      if (label === `module-${SKIN_MATERIAL_SHADER_ID}#`)
-        input.seedShaderModule(`module-${SKIN_MATERIAL_SHADER_ID}`, module);
-    },
-  );
+    );
+    await prewarmMaterialShaderVariants(
+      SKIN_MATERIAL_SHADER_ID,
+      skinVariants,
+      new Map(
+        input.pbrSkinEntry === undefined || pbrSkinModule === null
+          ? []
+          : [[input.pbrSkinEntry.wgsl, pbrSkinModule]],
+      ),
+      (variant, label) =>
+        runShimStep(
+          () => createShader(input, variant.composedWgsl, label),
+          'shader-compile-failed',
+          `pbr-skin variant ${variant.definesKey || '<default>'} compiled`,
+          'inspect the selected pbr-skin storage/cluster/color variant and device.features',
+        ),
+      (label, module) => {
+        input.seedShaderModule(label, module);
+        if (label === `module-${SKIN_MATERIAL_SHADER_ID}#`)
+          input.seedShaderModule(`module-${SKIN_MATERIAL_SHADER_ID}`, module);
+      },
+      input.admitsVariant,
+    );
+  }
   return { pbrSkinModule, gpuDrivenPbrPrograms };
 }
 

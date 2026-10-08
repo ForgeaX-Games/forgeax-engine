@@ -1,9 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyBrowserWebGpuAlignment,
+  closeBrowserBounded,
   resolveBrowserWebGpuLaunch,
   resolveDawnReplaySelection,
 } from '../rhi-debug-verify.mjs';
+
+describe('RHI-debug owned browser cleanup', () => {
+  it('closes the captured page before shutting down its browser', async () => {
+    const order = [];
+    let pageOpen = true;
+    const page = { close: async (options) => {
+      expect(options).toEqual({ runBeforeUnload: false });
+      pageOpen = false;
+      order.push('page');
+    } };
+    await closeBrowserBounded({
+      contexts: () => [{ pages: () => [page] }],
+      close: async () => {
+        if (pageOpen) throw new Error('Captured GPU page still owns its target');
+        order.push('browser');
+      },
+    });
+    expect(order).toEqual(['page', 'browser']);
+  });
+
+  it('keeps page cleanup inside the same bounded shutdown deadline', async () => {
+    const browser = {
+      contexts: () => [{ pages: () => [{ close: () => new Promise(() => {}) }] }],
+      close: async () => {},
+    };
+    await expect(closeBrowserBounded(browser, 10)).rejects.toThrow('browser close timed out after 10ms');
+  });
+
+  it('still shuts down the browser when a page cleanup rejects', async () => {
+    let closed = false;
+    const browser = {
+      contexts: () => [{ pages: () => [{ close: async () => { throw new Error('page cleanup rejected'); } }] }],
+      close: async () => { closed = true; },
+    };
+    await expect(closeBrowserBounded(browser)).rejects.toThrow('page cleanup rejected');
+    expect(closed).toBe(true);
+  });
+});
 
 describe('RHI-debug browser backend selection', () => {
   it('aligns the macOS default with the explicit Dawn Metal replay', () => {

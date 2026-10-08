@@ -25,13 +25,10 @@ export interface PreviewArtifactIdentity {
   readonly frameId: number;
 }
 
-export interface PreviewArtifactManifestEntry {
-  readonly owner: string;
+export interface PreviewArtifactManifestEntry
+  extends Pick<ToolArtifactManifestEntry, 'owner' | 'uri' | 'digest' | 'byteLength'> {
   readonly kind: PreviewArtifactKind;
   readonly role: PreviewArtifactRole;
-  readonly uri: string;
-  readonly digest: string;
-  readonly byteLength: number;
   readonly mediaType: string;
   readonly derivedFrom: readonly string[];
 }

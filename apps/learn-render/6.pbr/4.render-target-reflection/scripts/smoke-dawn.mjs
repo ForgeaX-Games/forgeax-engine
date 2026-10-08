@@ -64,7 +64,7 @@ const ssrIdentity = {
 let create;
 let globals;
 try {
-  ({ create, globals } = await import('webgpu'));
+  ({ create, globals } = await import('@forgeax/engine-dawn-node'));
 } catch (error) {
   console.error(`[smoke] FAIL - webgpu import failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
@@ -479,7 +479,7 @@ for (let face = 0; face < CUBE_CAMERA_FACE_ORDER.length; face += 1) {
   // Bind all face copies to the receipt observed after the completed capture cycle.
   if (face === CUBE_CAMERA_FACE_ORDER.length - 1) {
     for (const face of CUBE_CAMERA_FACE_ORDER.keys()) {
-      const ticketResult = renderer.requestTargetReadback(targetResult.value, { mipLevel: 0, face });
+      const ticketResult = renderer.requestTargetReadback(targetResult.value, { mipLevel: 0, layer: face });
       if (!ticketResult.ok) {
         console.error(`[smoke] FAIL - readback request failed: ${ticketResult.error.code}`);
         process.exit(1);

@@ -104,7 +104,7 @@ describe('direct light snapshot consumers', () => {
 
     const packed = ordered.map((value) => packDirectLightSlot(value as never));
     expect(packed).toHaveLength(3);
-    expect(packed.every((slot) => slot.byteLength === 80)).toBe(true);
+    expect(packed.every((slot) => slot.byteLength === 96)).toBe(true);
   });
 
   it('requires both direct and cluster consumers to name the same packer', async () => {

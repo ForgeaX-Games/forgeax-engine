@@ -48,9 +48,9 @@ function failure(
   };
 }
 
-function artifactUrl(packageUrl: string, path: string): string {
+export function artifactUrl(packageUrl: string, path: string): string {
   try {
-    return new URL(path, packageUrl).toString();
+    return new URL(path, new URL(packageUrl, globalThis.location?.href)).toString();
   } catch {
     const queryIndex = packageUrl.search(/[?#]/);
     const cleanPackageUrl = queryIndex < 0 ? packageUrl : packageUrl.slice(0, queryIndex);

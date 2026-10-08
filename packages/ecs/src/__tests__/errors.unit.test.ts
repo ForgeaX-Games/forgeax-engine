@@ -17,7 +17,7 @@
 // source as ancestorTitles[0]. Top-level imports merged + deduped.
 
 import { execSync, spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { err, ok, type Result } from '@forgeax/engine-types';
@@ -47,13 +47,12 @@ import {
   UniqueRefReleasedError,
 } from '../errors';
 import { World } from '../world';
+import { sourceHits } from './source-scan.fixture';
 
 {
   // ─── from ac16-register-component-grep-gate.test.ts ───
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(here, '..', '..', '..', '..');
-
-  const SCAN_DIRS = ['packages', 'apps', 'templates'];
 
   const NAME = 'register' + 'Component';
   const CALL_PATTERN = `[.](${NAME}|${NAME}Checked)[(]`;
@@ -63,78 +62,12 @@ import { World } from '../world';
   // but allow a contended runner to finish this I/O-only contract gate.
   const SOURCE_SCAN_TIMEOUT_MS = 30_000;
 
-  function sourceHitsFallback(pattern: string): string[] {
-    const expression = new RegExp(pattern);
-    const hits: string[] = [];
-    const visit = (relativeDir: string): void => {
-      for (const entry of readdirSync(resolve(repoRoot, relativeDir), { withFileTypes: true })) {
-        const relativePath = `${relativeDir}/${entry.name}`;
-        if (entry.isDirectory()) {
-          if (entry.name !== 'dist' && entry.name !== 'node_modules') visit(relativePath);
-          continue;
-        }
-        if (!entry.isFile() || (!entry.name.endsWith('.ts') && !entry.name.endsWith('.mjs'))) {
-          continue;
-        }
-        for (const [index, line] of readFileSync(resolve(repoRoot, relativePath), 'utf8')
-          .split('\n')
-          .entries()) {
-          if (expression.test(line)) hits.push(`${relativePath}:${index + 1}:${line.trim()}`);
-        }
-      }
-    };
-    for (const directory of SCAN_DIRS) {
-      visit(directory);
-    }
-    return hits;
-  }
-
-  function sourceHits(pattern: string): string[] {
-    const result = spawnSync(
-      'rg',
-      [
-        '--no-heading',
-        '--color=never',
-        '--line-number',
-        '--glob',
-        '*.ts',
-        '--glob',
-        '*.mjs',
-        '--glob',
-        '!dist/**',
-        '--glob',
-        '!node_modules/**',
-        pattern,
-        ...SCAN_DIRS,
-      ],
-      { cwd: repoRoot, encoding: 'utf8' },
-    );
-    if (result.error === undefined) {
-      if (result.status === 1) return [];
-      if (result.status !== 0) {
-        throw result.error ?? new Error(`rg exited with status ${result.status}`);
-      }
-      return result.stdout
-        .trimEnd()
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          const separator = line.indexOf(':');
-          const lineEnd = line.indexOf(':', separator + 1);
-          return `${line.slice(0, separator)}:${line.slice(separator + 1, lineEnd)}:${line
-            .slice(lineEnd + 1)
-            .trim()}`;
-        });
-    }
-    return sourceHitsFallback(pattern);
-  }
-
   describe('ac16-register-component-grep-gate.test.ts', () => {
     describe('AC-16 - register-component call surface is zero repo-wide (w20)', () => {
       it(
         'layer 1: zero method-call sites for the deleted register* methods',
         () => {
-          const hits = sourceHits(CALL_PATTERN);
+          const hits = sourceHits(repoRoot, CALL_PATTERN);
           expect(hits, `unexpected register-component call sites:\n${hits.join('\n')}`).toEqual([]);
         },
         SOURCE_SCAN_TIMEOUT_MS,
@@ -143,7 +76,7 @@ import { World } from '../world';
       it(
         'layer 2: zero mock interface field declarations for the deleted method',
         () => {
-          const hits = sourceHits(FIELD_PATTERN);
+          const hits = sourceHits(repoRoot, FIELD_PATTERN);
           expect(
             hits,
             `unexpected register-component field declarations:\n${hits.join('\n')}`,

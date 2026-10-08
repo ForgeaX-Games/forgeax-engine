@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { getOrCreateIblCache } from '../ibl/IblPipelineCache';
 import type { RenderSystemInternals } from '../record/render-context';
 import { createProbeFilterState } from '../reflection/filter';
 import type { ReflectionProbeFact } from '../reflection/projection';
 import { ReflectionProbeRecordOwner } from '../reflection/record-owner';
+import type { SkylightSnapshot } from '../render-system-extract';
 
 // Tests exercise the existing owner without widening its production API.
 type ProbeOwnerFixture = {
@@ -12,9 +14,19 @@ type ProbeOwnerFixture = {
 };
 
 function fixture(intent: 'once' | 'on-change' | 'continuous') {
+  const writes: Float32Array[] = [];
+  const scope = { generation: 1 } as RenderSystemInternals['deviceScope'];
   const owner = new ReflectionProbeRecordOwner({
-    device: { caps: { rgba16floatRenderable: true }, queue: { writeBuffer: () => ({ ok: true }) } },
-    deviceScope: { generation: 1 },
+    device: {
+      caps: { rgba16floatRenderable: true },
+      queue: {
+        writeBuffer: (_buffer: unknown, _offset: number, payload: Float32Array) => {
+          writes.push(new Float32Array(payload));
+          return { ok: true };
+        },
+      },
+    },
+    deviceScope: scope,
   } as unknown as RenderSystemInternals) as unknown as ProbeOwnerFixture;
   const fact: ReflectionProbeFact = {
     worldId: 0,
@@ -44,7 +56,7 @@ function fixture(intent: 'once' | 'on-change' | 'continuous') {
     spare: undefined,
   } as unknown as NonNullable<ReturnType<(typeof owner)['resourceFor']>>;
   owner.resources.set('0:1', resource);
-  return { owner, fact, resource };
+  return { owner, fact, resource, writes, scope };
 }
 
 describe('ReflectionProbe real resource update ownership', () => {
@@ -125,5 +137,78 @@ describe('ReflectionProbe real resource update ownership', () => {
     );
     expect(resource.rawFaceCursor).toBe(2);
     expect(resource.pending).toBe(current);
+  });
+});
+
+describe('ReflectionProbe global diffuse availability', () => {
+  const sky: SkylightSnapshot = {
+    entityHandle: 123,
+    equirectHandle: 456,
+    color: [0.4, 0.6, 0.8],
+    intensity: 2,
+    rotation: [0, 0.6, 0, 0.8],
+  };
+  function ready(scope: RenderSystemInternals['deviceScope']) {
+    const cache = getOrCreateIblCache(scope);
+    cache.irradianceView = {} as NonNullable<typeof cache.irradianceView>;
+    cache.prefilterView = {} as NonNullable<typeof cache.prefilterView>;
+    cache.brdfLutView = {} as NonNullable<typeof cache.brdfLutView>;
+    return cache;
+  }
+  function readPayload(f: { writes: Float32Array[] }) {
+    const payload = f.writes.at(-1);
+    if (payload === undefined) throw new Error('Expected probe uniform write');
+    return [...payload];
+  }
+  function write(input: SkylightSnapshot | undefined, complete = false) {
+    const f = fixture('once');
+    if (complete) ready(f.scope);
+    f.owner.resourceFor('0:1', f.fact, 0, '1', input);
+    return { ...f, payload: readPayload(f) };
+  }
+  it('keeps explicit unavailable image diffuse zero without removing local probe specular', () => {
+    const { payload } = write(sky);
+    expect(payload).toHaveLength(16);
+    expect(payload[0]).toBe(-2);
+    expect(payload.slice(1, 8)).toEqual([0, 0, 0, 2, 2, 2, 0]);
+    expect(payload.slice(8, 11)).toEqual([0, 0, 0]);
+    expect(payload[11]).toBe(1);
+    expect(payload.slice(12)).toEqual([...new Float32Array(sky.rotation)]);
+  });
+  it('retains ready image diffuse and authored rotation', () => {
+    const { payload } = write(sky, true);
+    expect(payload.slice(8, 11)).toEqual([...new Float32Array([0.8, 1.2, 1.6])]);
+    expect(payload.slice(12)).toEqual([...new Float32Array(sky.rotation)]);
+  });
+  it('retains explicit solid-color ambient without an image or cache', () => {
+    expect(write({ ...sky, equirectHandle: 0 }).payload.slice(8, 11)).toEqual([
+      ...new Float32Array([0.8, 1.2, 1.6]),
+    ]);
+  });
+  it('retains no-Skylight zero diffuse', () => {
+    expect(write(undefined).payload.slice(8)).toEqual([0, 0, 0, 1, 0, 0, 0, 1]);
+  });
+  it.each([
+    'irradianceView',
+    'prefilterView',
+    'brdfLutView',
+  ] as const)('keeps explicit image diffuse zero when %s is unavailable', (missing) => {
+    const f = fixture('once');
+    const cache = ready(f.scope);
+    cache[missing] = undefined;
+    f.owner.resourceFor('0:1', f.fact, 0, '1', sky);
+    expect(readPayload(f).slice(8, 11)).toEqual([0, 0, 0]);
+  });
+  it('rewrites the same resource through unavailable-ready-unavailable transitions', () => {
+    const f = fixture('once');
+    const first = f.owner.resourceFor('0:1', f.fact, 0, '1', sky);
+    expect(readPayload(f).slice(8, 11)).toEqual([0, 0, 0]);
+    const cache = ready(f.scope);
+    expect(f.owner.resourceFor('0:1', f.fact, 0, '1', sky)).toBe(first);
+    expect(readPayload(f).slice(8, 11)).toEqual([...new Float32Array([0.8, 1.2, 1.6])]);
+    cache.irradianceView = undefined;
+    expect(f.owner.resourceFor('0:1', f.fact, 0, '1', sky)).toBe(first);
+    expect(readPayload(f).slice(8, 11)).toEqual([0, 0, 0]);
+    expect(f.writes).toHaveLength(3);
   });
 });

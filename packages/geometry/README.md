@@ -7,11 +7,11 @@ forgeax-engine. A **leaf** package: depends on `@forgeax/engine-ecs` (`Result`),
 
 ## 30-second self-introduction
 
-- **Surface**: 10 reusable 3D procedural factories
+- **Surface**: reusable 3D procedural factories
   (`createBoxGeometry` / `createCapsuleGeometry` / `createConeGeometry` /
   `createCylinderGeometry` / `createPlaneGeometry` / `createSphereGeometry` /
   `createTorusGeometry` / `createExtrusionGeometry` / `createSweepGeometry` /
-  `createRevolutionGeometry`),
+  `createRevolutionGeometry` / `createProfileSweepGeometry`),
   each returning `Result<MeshAsset, AssetError>`; the vertex-attribute-layout
   SSOT (`deriveVertexBufferLayout` / `buildMeshAttributeMapForUvSets` /
   `GpuVertexBufferLayoutEntry`); and the tangent + interleave helpers
@@ -133,15 +133,51 @@ const sphere = createSphereGeometry(1, 32, 24);
 ```
 
 The primitive factories cover the common built-in shapes. For reusable authored
-geometry, `createExtrusionGeometry` ear-clips a simple concave 2D contour and
-adds cap and side normals, `createSweepGeometry` follows a 3D path with a
-circular profile, and `createRevolutionGeometry` turns a `(radius, height)`
-profile around the Y axis. Each operation validates finite input before
+geometry, `createExtrusionGeometry` triangulates a concave contour with holes,
+adds caps and outward walls, and optionally bevels both rims.
+`createProfileSweepGeometry` transports a polygon section along a sampled 3D
+path; `createSweepGeometry` provides circular profiles, and
+`createRevolutionGeometry` turns a `(radius, height)` profile around Y. Each operation validates finite input before
 allocating a MeshAsset and returns through the same tangent, layout, and AABB
 owners. For an imported
 glTF mesh, use `@forgeax/engine-gltf`; FBX follows the same source-plus-Meta
 route through `@forgeax/engine-fbx`. Runtime consumption is
 `@forgeax/engine-assets-runtime` after the owning importer has cooked the asset.
+
+### Polygon extrusion and profile sweep
+
+```ts
+import { createExtrusionGeometry, createProfileSweepGeometry } from '@forgeax/engine/geometry';
+
+const contour = [{ x: -2, y: -2 }, { x: 2, y: -2 }, { x: 2, y: 2 }, { x: -2, y: 2 }];
+const holes = [[{ x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 }]];
+const frame = createExtrusionGeometry(contour, 2, { holes, bevelSize: 0.25, bevelSegments: 6 });
+const rail = createProfileSweepGeometry(
+  { contour, holes },
+  [[0, 0, 0], [0, 0, 4], [1, 0, 8]],
+  { capped: true, up: [1, 0, 0] },
+);
+```
+
+| Input | Contract |
+|:--|:--|
+| Contours | Copies inputs; either winding accepted; duplicate closing point accepted. Simple nonzero-area outer loop, strictly internal disjoint holes. Touching, crossing and nested hole boundaries fail. At most 4096 total contour points. |
+| Bevel | `bevelSize` defaults to zero. Inset and axial radius in source units; positive size must be less than half depth. `bevelSegments` 1–64, default 1: chamfer; more segments approximate a quarter-circle. Offset-edge collapse or changed domain topology fails. Bounds stay inside the original extrusion. |
+| Sweep | Receives 2–4096 sampled 3D points; sampling density belongs to the author. Minimal-rotation frames avoid independent-reference-axis flips. `up` selects the initial cross-section X axis; it must not be parallel to the initial tangent. `capped` defaults to true. `closed: true` requires a duplicate endpoint, distributes closure twist and omits caps. Consecutive duplicate points and 180-degree reversals fail. |
+| Mesh | At most 262144 ring vertices, checked before ring allocation; canonical normal/UV/tangent/AABB production. Triangles that collapse or overflow after f32 conversion fail. Per-triangle wall normals retain polygon corners and beveled facets. |
+
+> [!NOTE]
+> Bevel operates on extrusion rims, including hole rims. It does not edit selected
+> edges of an arbitrary imported mesh. Sweep joins use bisector frames rather than
+> UE's optional miter expansion, and do not perform global self-collision clipping.
+> Large profiles on tightly bent paths can overlap; use adequate curve sampling
+> and a profile that fits the path. These are authoring factories, with no runtime
+> curve evaluator, editor tool or renderer dependency.
+
+The cap triangulator is the pinned MIT Earcut dependency also used by Three.js.
+Geometry retains domain admission and offset checks instead of relying on a
+triangulator's partial output. Source comparison, CPU benchmarks and production
+Renderer/RHI Debug evidence are in the [modeling report](../../docs/advanced-modeling.md).
 
 ### 2D primitive geometry
 
@@ -167,7 +203,7 @@ if (!filled.ok || !ring.ok) return;
 
 ## API surface
 
-### 10 procedural geometry factories
+### Procedural geometry factories
 
 Each returns `Result<MeshAsset, AssetError>`. Interleaved vertex layout:
 position (3xf32) + normal (3xf32) + uv (2xf32) = 8 floats/vertex at creation
@@ -183,7 +219,8 @@ time; expanded to the 12-float runtime layout (adds tangent vec4) by
 | `createPlaneGeometry` | `(w, h, wSeg?, hSeg?)` | 1 / dim; XY plane, +Z normal |
 | `createSphereGeometry` | `(radius, wSeg?, hSeg?)` | wSeg >= 3, hSeg >= 2 |
 | `createTorusGeometry` | `(radius, tube, radSeg?, tubSeg?)` | radSeg >= 3, tubSeg >= 3 |
-| `createExtrusionGeometry` | `(contour, depth)` | 3+ finite simple contour points, depth > 0 |
+| `createExtrusionGeometry` | `(contour, depth, options?)` | Simple outer contour with disjoint interior holes; depth > 0 |
+| `createProfileSweepGeometry` | `(shape, path, options?)` | Simple polygon section (including holes), sampled 3D path; bounded transport frames |
 | `createSweepGeometry` | `(path, radius, radialSeg?)` | 2+ distinct finite 3D points, radius > 0, radialSeg >= 3 |
 | `createRevolutionGeometry` | `(profile, radialSeg?)` | 2+ finite non-negative-radius points spanning height, radialSeg >= 3 |
 
@@ -197,6 +234,7 @@ the [attribute layout](#vertex-attribute-layout-ssot) section.
 | Symbol | Kind | Purpose |
 |:--|:--|:--|
 | `computeTangentVec4(positions, normals, uvs, indices?)` | fn | Preflights attribute cardinality, triangle topology, and index range, then returns `Result<Float32Array, AssetError>`. Success is the per-vertex tangent (vec4): face-area-weighted average + Gram-Schmidt orthogonalise + handedness sign packed into `.w`. |
+| `writeNormalPlaneTangent(out, offset, nx, ny, nz)` | fn | Writes a finite unit tangent into three consecutive output elements, preserving handedness and other elements. Returns `false` without writing for an undefined normal plane or an incomplete, negative, or noninteger output range. |
 | `meshFromInterleaved(vertices, indices)` | fn | Preflights the 8-float interleaved stride and triangle index topology before slicing or allocating output, then returns `Result<MeshAsset, AssetError>` with the 12-float runtime layout. |
 | `PROCEDURAL_FLOATS_PER_VERTEX` | const | `12` -- the runtime interleaved stride: position (3) + normal (3) + uv (2) + tangent (4). |
 
@@ -357,7 +395,8 @@ attribute consistency, non-finite rejection, and v5 wire bytes are unchanged.
 ## Derived mesh distance fields
 
 `buildMeshDistanceField(positions, indices, { resolution, twoSided })` builds a
-bounded dense local field. Resolution defaults to 24 and accepts 8–64 along the
+bounded local field, computed densely for its geometric sign checks and published
+as shared 4-cubed bricks. Resolution defaults to 24 and accepts 8–64 along the
 longest axis. The default signed-solid policy welds position seams, checks closed
 outward topology and sampled winding, and rejects unresolved thin solids. It
 allows 1,024 triangles and 32 million voxel/triangle sign evaluations.
@@ -370,7 +409,7 @@ sample receives `floor(32,000,000 / sampleCount)` primitive tests; exhaustion
 returns `distance-field-limit` rather than publishing a partial nearest distance.
 This bounds primitive work, not wall-clock bake duration or BVH node visits.
 The shared spatial index uses a deterministic 12-bin surface-area split and
-at most eight primitives per leaf. Closest-point traversal visits the nearer
+at most two primitives per leaf. Closest-point traversal visits the nearer
 child bound first to avoid spending the sample budget on distant geometry. It still returns `distance-field-limit`
 if the remaining candidates cannot be excluded within that budget; exact output
 samples and the deterministic ray-hit primitive tie rule remain unchanged. Ray slab pruning is widened by
@@ -389,9 +428,15 @@ Never change sidedness automatically to admit a rejected source.
 
 The geometry digest covers canonical f32 positions/u32 topology independently
 of material and transform. `encodeMeshDistanceField` / `decodeMeshDistanceField`
-carry version-3 metadata, the explicit `policy` union, little-endian samples and a
-whole-artifact digest; v1/v2 artifacts must be recooked. Decode validates expected
-geometry, bounds, counts, finiteness and policy-consistent `quality.negativeSamples`.
+carry version-4 metadata, the explicit `policy` union, a little-endian u32 brick
+address table and exact f32 payloads, followed by a whole-artifact digest. Older
+artifacts require producer rebuild. `bricks` addresses 64-sample payloads in
+`values`; identical payloads share offsets, and edge padding repeats the last
+valid lattice coordinate. `distanceFieldTexel(field, x, y, z)` reads this storage;
+`sampleMeshDistanceField` retains trilinear semantics. Decode validates expected
+geometry, bounds, addresses, padding, finite values, all referenced payloads, the
+combined 32 MiB table/payload budget and logical `quality.negativeSamples`.
+Physical payload length is not the logical voxel count.
 The NativeCooker in `engine-import` fingerprints geometry, resolution, sidedness
 and producer version. These derived bytes create no authored asset kind and are
 never built during an ordinary frame.
@@ -408,10 +453,11 @@ hint. It never claims a geometric error bound or a proved solid interior.
 | Rule | Contract |
 |:--|:--|
 | Sampling | Closest-point magnitude capped at `4 * sqrt(3) * voxelSize`; 98 deterministic directions, negative only when more than one quarter hit a one-sided backface. Stop voting once the remaining directions cannot change that predicate. This follows UE's visibility construction, with independent sampling and BVH code. |
+| Sparse generation | Visit fixed 4-cubed bricks. A nearest-distance bound at the brick center, its enclosing radius and an outward rounding guard prove when all samples lie outside the band; only then fill the positive band without sample queries. Retained samples use the original f32 coordinates and sign predicate. Exact full-payload comparisons resolve hash collisions. Geometric predicates, work budgets and the lattice do not change. |
 | Geometry | Explicit source-unit voxel size; at most 1,048,576 vertices/triangles. Exact zero-area triangles are excluded from queries; original topology and flags remain in source identity. All-degenerate geometry is refused. No automatic alpha or material-ID partitioning. |
-| Bounds | Positive plane extent, mostly-two-sided expansion, then a separate one-voxel gradient border. At most 514 samples per axis and 8,388,608 total (32 MiB of CPU f32 samples); distinct finite f32 sample centers are required. Producer and artifact admission share these limits. Sampled visibility packs as SNORM16 into the query's unchanged 16 MiB aggregate budget; multiple fields still compete for that budget. |
+| Bounds | Positive plane extent, mostly-two-sided expansion, then a separate one-voxel gradient border. At most 514 samples per axis; distinct finite f32 centers and the existing lattice origin rule remain required. The combined brick table and exact f32 payloads must fit 32 MiB; virtual volume size does not require a dense allocation. Producer and artifact admission share these limits. Sampled visibility packs as SNORM16 into the query's unchanged 16 MiB aggregate budget; multiple fields still compete for that budget. |
 | Work | Shared per-cook caps of 134,217,728 closest-point and 1,073,741,824 sign-ray primitive tests. Exhaustion refuses the entire result. These are work bounds, not a wall-clock promise. |
-| Difference from UE | Dense samples instead of sparse bricks/mips; a separate RNG; exact-zero degeneracy instead of UE's tolerance; no stochastic transparency or streaming. Unsigned thin sheets can have an interpolation floor; consumers must expose approximation errors. |
+| Difference from UE | Exact f32 shared bricks, rather than UE UNORM8 mip/streaming data; a separate RNG; exact-zero degeneracy instead of UE's tolerance; no stochastic transparency or streaming. Unsigned thin sheets can have an interpolation floor; consumers must expose approximation errors. |
 
 `mostlyTwoSided` uses the original triangle count and a 25% threshold. It is a
 trace/coverage hint, not a claim that every surface is two-sided. The sign query
@@ -451,3 +497,48 @@ GUID or artifact registry. Both mesh decoders validate and preserve it; geometry
 identity is checked by the capture consumer before GPU allocation. This preparation API
 has CPU/codec/cooker tests; representative GPU capture and residency acceptance
 belongs to the ongoing software-representation iteration.
+
+Measured examples, pinned source references and RHI replay evidence: [advanced modeling report](docs/advanced-modeling.md).
+
+### Mesh publication boundary
+
+`MeshDistanceField` is shared POD in Types; Geometry owns its builders, identity
+and codec. `meshDistanceFieldSource` validates the complete static triangle
+partition and expands source section sidedness. `attachMeshDistanceField` checks
+an ordinary Mesh publication against the encoded field and returns a Mesh with
+validated data; it performs no work when both attachment members are absent.
+The artifact codec profile and native cook fingerprint derive their policy
+revision from `MESH_DISTANCE_FIELD_GENERATION_VERSION`.
+
+`packMeshBin` only encodes geometry and rejects a decoded `distanceField` rather
+than dropping it. Use Import's complete Mesh output producer for export; it
+validates and emits the existing field artifact alongside either binary or JSON
+geometry. `normalizeMeshPayload` likewise requires complete publication handling
+when a distance-field attachment is present.
+
+### Profile sweep UV and degeneracy
+
+Wall U follows profile perimeter; wall V follows cumulative sampled path length,
+normalized to `[0, 1]`. Uneven point spacing therefore does not stretch textures
+by point ordinal. Closed paths duplicate the first ring exactly at V=1 and
+omit caps; transport closure distributes twist by distance. Hard triangle
+normals agree with actual f32 winding. Adjacent duplicates, reversals,
+parallel/invalid initial axes and f32-collapsed triangles return structured
+`asset-parse-failed` errors. Acute turns may self-intersect if the profile is too
+wide; the factory guarantees finite oriented triangles, not solid CSG repair.
+
+## Mesh collision products
+
+`buildMeshCollision(mesh)` returns `Result<MeshCollision, AssetError>` with owned
+`Float32Array` positions and `Uint32Array` triangles. It exact-welds position
+seams, includes authored triangle sections, and omits degenerate triangles.
+Static triangle-list sources are bounded to 1,048,576 vertices and triangles;
+skinning, morph targets, nonfinite positions, invalid/overlapping section ranges
+and empty nondegenerate coverage are rejected.
+
+Attach the result as `MeshAsset.collision`. Mesh-bin metadata and JSON admission
+preserve the typed payload and validate it against source geometry using
+`validateMeshCollisionAttachment`; stale or malformed products are errors,
+not implicit recooks. This pure producer owns no native hull or physics state.
+
+`unpackInterleavedVertexAttributes(vertices, projection)` copies Geometry-projected bytes into independent typed attributes, including uint16 skin indices. It derives vertex count from stride, rejects incomplete vertices, and preserves byte offsets. Semantic finite-value validation and error projection remain with each binary consumer. The same kernel serves Geometry decoding and the runtime mesh-bin loader.

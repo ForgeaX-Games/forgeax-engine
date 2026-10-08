@@ -15,6 +15,7 @@ import {
 } from '../capsule-shadow/frame';
 import { WORLD_CAPSULE_STRIDE } from '../capsule-shadow/world-capsules';
 import type { GraphEnvironment } from '../environment/ibl';
+import { atmosphereTextures } from '../environment/luts';
 import { GPU_BUFFER_USAGE_COPY_DST, GPU_BUFFER_USAGE_STORAGE } from '../gpu-usage';
 import type { SkylightBindGroupResources } from '../ibl/skylight-bind-group';
 import { buildPerFrameBindGroups } from '../record/frame-lighting';
@@ -26,6 +27,9 @@ import type {
 } from '../record/render-context';
 import type { RenderPipelineFrame, RenderPipelineTarget } from '../render-pipeline';
 import type { StandardClusterGraphBuffers } from './standard-lighting/graph';
+
+/** Two vec4 lanes shared by the graph allocation and uniform binding layout. */
+export const DEFERRED_LIGHTING_PARAMS_BYTES = 2 * 4 * Float32Array.BYTES_PER_ELEMENT;
 
 export interface StandardDeferredShaderSources {
   readonly decalProject?: string;
@@ -40,6 +44,7 @@ export function addStandardDeferredLighting(
   input: {
     readonly color: RenderPipelineTarget;
     readonly gbuffer: readonly RenderPipelineTarget[];
+    readonly receiverGeometry: RenderPipelineTarget;
     readonly depth: GraphTextureView;
     readonly reflectionFallback?: RenderPipelineTarget;
     readonly response?: RenderPipelineTarget;
@@ -55,7 +60,9 @@ export function addStandardDeferredLighting(
     readonly size: { readonly width: number; readonly height: number };
   },
 ) {
-  const params = graph.createBuffer('deferred-lighting-params', { size: 16 });
+  const params = graph.createBuffer('deferred-lighting-params', {
+    size: DEFERRED_LIGHTING_PARAMS_BYTES,
+  });
   if (!params.ok) return params;
   const capsuleBytes = MAX_FRAME_CAPSULES * WORLD_CAPSULE_STRIDE * 4;
   const tileBytes = capsuleTileTableWords(input.size.width, input.size.height) * 4;
@@ -139,6 +146,10 @@ export function addStandardDeferredLighting(
             // Lane z gates the capsule evaluation; lane w is the light cone half-angle.
             capsuleFrame?.submission.capsuleCount ?? 0,
             capsuleFrame?.coneHalfAngle ?? 0,
+            input.ssao === undefined ? 0 : (settings?.directLightingStrength ?? 0),
+            0,
+            0,
+            0,
           ]),
         )
         .unwrap();
@@ -152,6 +163,7 @@ export function addStandardDeferredLighting(
   ];
   const sampled = [
     ...input.gbuffer.map((target) => target.view),
+    input.receiverGeometry.view,
     input.depth,
     ...[
       input.ssao,
@@ -162,7 +174,13 @@ export function addStandardDeferredLighting(
     ].flatMap((target) => (target === undefined ? [] : [target.view])),
     ...(input.environment === undefined
       ? []
-      : [input.environment.irradiance, input.environment.prefilter]),
+      : [
+          input.environment.irradiance,
+          input.environment.prefilter,
+          ...(input.environment.atmosphere === undefined
+            ? []
+            : atmosphereTextures(input.environment.atmosphere)),
+        ]),
   ];
   let state:
     | {
@@ -233,7 +251,11 @@ export function addStandardDeferredLighting(
                 },
               })),
               { binding: 6, visibility: 2, sampler: { type: 'filtering' } },
-              { binding: 7, visibility: 2, buffer: { type: 'uniform', minBindingSize: 16 } },
+              {
+                binding: 7,
+                visibility: 2,
+                buffer: { type: 'uniform', minBindingSize: DEFERRED_LIGHTING_PARAMS_BYTES },
+              },
               ...[8, 9, 10, 11].map((binding) => ({
                 binding,
                 visibility: 2,
@@ -245,6 +267,7 @@ export function addStandardDeferredLighting(
               { binding: 12, visibility: 2, buffer: { type: 'uniform', minBindingSize: 64 } },
               { binding: 13, visibility: 2, buffer: { type: 'read-only-storage' } },
               { binding: 14, visibility: 2, buffer: { type: 'read-only-storage' } },
+              { binding: 15, visibility: 2, texture: { sampleType: 'uint', viewDimension: '2d' } },
             ],
           })
           .unwrap();
@@ -327,6 +350,26 @@ export function addStandardDeferredLighting(
         true,
         internal.bindGroupCounts,
         {
+          atmosphere:
+            input.environment?.atmosphere === undefined
+              ? undefined
+              : {
+                  transmittance: resources
+                    .textureView(input.environment.atmosphere.transmittance)
+                    .unwrap(),
+                  distantSkyLight: resources
+                    .textureView(input.environment.atmosphere.distantSkyLight)
+                    .unwrap(),
+                  multipleScattering: resources
+                    .textureView(input.environment.atmosphere.multipleScattering)
+                    .unwrap(),
+                  aerialPerspective: resources
+                    .textureView(input.environment.atmosphere.aerialPerspective)
+                    .unwrap(),
+                  aerialTransmittance: resources
+                    .textureView(input.environment.atmosphere.aerialTransmittance)
+                    .unwrap(),
+                },
           directionalShadow: view(input.directionalShadow),
           spotShadow: view(input.spotShadow),
           cloudShadow: view(input.cloudShadow),
@@ -429,12 +472,14 @@ export function addStandardDeferredLighting(
         view(input.ssao) ?? internal.pipelineState.defaultWhiteTextureView,
       ];
       const paramsBuffer = resources.buffer(params.value).unwrap();
+      const receiverView = resources.textureView(input.receiverGeometry.view).unwrap();
       const capsuleBuffers = [capsules.value, capsuleTiles.value].map((ref) =>
         resources.buffer(ref).unwrap(),
       );
       for (const env of environments) {
         const keys = [
           ...surfaces,
+          receiverView,
           env.irradianceSampler,
           paramsBuffer,
           ...capsuleBuffers,
@@ -453,6 +498,13 @@ export function addStandardDeferredLighting(
               .createBindGroup({
                 layout: current.material,
                 entries: [
+                  {
+                    binding: 15,
+                    resource: {
+                      kind: 'textureView' as const,
+                      value: receiverView,
+                    },
+                  },
                   ...surfaces.map((resource, binding) => ({
                     binding,
                     resource: { kind: 'textureView' as const, value: resource },

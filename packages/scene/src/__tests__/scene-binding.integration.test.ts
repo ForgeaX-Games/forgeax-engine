@@ -231,3 +231,46 @@ describe('SceneEntityRef instance address', () => {
     );
   });
 });
+
+describe('shared null wire sentinel', () => {
+  it('keeps zero shared handles distinct from reference index zero', () => {
+    const scene = {
+      kind: 'scene',
+      entities: {
+        car: {
+          components: {
+            MeshFilter: { assetHandle: 'mesh-guid' },
+            MeshRenderer: { materials: [0, 'material-guid', 0] },
+            VolumetricFog: { density: 0, light: null },
+            Transform: { pos: [0, 1, 0] },
+          },
+        },
+      },
+    } as unknown as import('@forgeax/engine-types').SceneAsset;
+    const schemas: Record<string, Readonly<Record<string, string>>> = {
+      MeshFilter: { assetHandle: 'shared<MeshAsset>' },
+      MeshRenderer: { materials: 'array<shared<MaterialAsset>>' },
+      VolumetricFog: { density: 'shared<TextureAsset>', light: 'string' },
+      Transform: { pos: 'array<f32,3>' },
+    };
+    const result = externalizeSceneAsset(scene, (name) => schemas[name]);
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        payload: {
+          entities: {
+            car: {
+              components: {
+                MeshFilter: { assetHandle: 0 },
+                MeshRenderer: { materials: [null, 1, null] },
+                VolumetricFog: { density: null, light: null },
+                Transform: { pos: [0, 1, 0] },
+              },
+            },
+          },
+        },
+        refs: [{ guid: 'mesh-guid' }, { guid: 'material-guid' }],
+      },
+    });
+  });
+});

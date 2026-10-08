@@ -13,10 +13,12 @@ export const REQUIRED_CATEGORIES = Object.freeze([
   'game-config',
   'glb',
   'fbx',
+  'mesh-interchange',
   'image',
   'font',
   'audio',
   'plugin',
+  'navigation-mesh',
 ]);
 
 const REQUIRED_CHANNELS = Object.freeze(['ts', 'scripts', 'json']);

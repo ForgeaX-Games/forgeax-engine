@@ -1,16 +1,21 @@
 import type { RhiBackendInstrumentation } from '@forgeax/engine-render/internal/construct-renderer';
-import type { EncodedTape, RecorderAttachment, RhiDebugError } from '@forgeax/engine-rhi-debug';
+import {
+  type EncodedTape,
+  type RecorderAttachment,
+  type RhiDebugError,
+  tapeArtifact,
+} from '@forgeax/engine-rhi-debug';
 import { ok, type Result } from '@forgeax/engine-types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   bindRhiCaptureFrameDriver,
   createRhiCapture,
   mergeRhiInstrumentation,
+  type RhiCapture,
 } from '../internal/rhi-capture';
 
 const encoded: EncodedTape = {
-  bytes: new Uint8Array([82, 72, 73, 84, 65, 80, 69]),
-  digest: 'sha256:host-contract',
+  ...tapeArtifact([new Uint8Array([82, 72, 73, 84, 65, 80, 69])]),
   tape: {
     header: { formatVersion: 7, rhiCaps: {}, eventCount: 0, blobCount: 0 },
     bootstrap: [],
@@ -18,6 +23,19 @@ const encoded: EncodedTape = {
     blobs: [],
   },
 };
+
+const expectedFacts = {
+  kind: 'rhi-tape',
+  byteLength: encoded.byteLength,
+  digest: encoded.digest,
+  bytes: encoded.bytes,
+};
+
+function artifactFacts(result: Awaited<ReturnType<RhiCapture['captureFrame']>>) {
+  if (!result.ok) return result;
+  const { kind, byteLength, digest, bytes } = result.value;
+  return { kind, byteLength, digest, bytes };
+}
 
 function attachment(): RecorderAttachment {
   return {
@@ -143,15 +161,8 @@ describe('RHI capture host capability', () => {
       worker.captureFrame(),
     ]);
 
-    expect(mainResult).toEqual({
-      ok: true,
-      value: {
-        kind: 'rhi-tape',
-        digest: encoded.digest,
-        bytes: encoded.bytes,
-      },
-    });
-    expect(workerResult).toEqual(mainResult);
+    expect(artifactFacts(mainResult)).toEqual(expectedFacts);
+    expect(artifactFacts(workerResult)).toEqual(expectedFacts);
   });
 
   it('captures the next measured frame and keeps a previously running loop running', async () => {
@@ -169,14 +180,7 @@ describe('RHI capture host capability', () => {
     deferred.releaseSnapshot();
     const result = await pending;
 
-    expect(result).toEqual({
-      ok: true,
-      value: {
-        kind: 'rhi-tape',
-        digest: encoded.digest,
-        bytes: encoded.bytes,
-      },
-    });
+    expect(artifactFacts(result)).toEqual(expectedFacts);
     expect(driver.stepFrame).not.toHaveBeenCalled();
     expect(driver.resume).toHaveBeenCalledTimes(1);
   });

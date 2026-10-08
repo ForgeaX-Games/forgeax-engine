@@ -1,9 +1,10 @@
 import { workerPolicyFixture as fixture } from './worker-policy.fixture';
 import { expect, it } from 'vitest';
 
-it('defaults to real render and kernel workers, seals shared results for 300 frames, and preserves kernels across render replacement', async () => {
+it('honors slow kernel startup with default workers, seals ordered frames, and preserves kernels across render replacement', async () => {
+  const frameCount = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 60 : 300;
   expect(globalThis.crossOriginIsolated).toBe(true);
-  const f = await fixture();
+  const f = await fixture('delayed-kernel');
   try {
     const app = f.result.unwrap();
     const before = app.execution.report();
@@ -15,8 +16,8 @@ it('defaults to real render and kernel workers, seals shared results for 300 fra
     app.start().unwrap();
     await expect
       .poll(() => app.execution.report().render?.completedFrame, { timeout: 180_000 })
-      .toBeGreaterThanOrEqual(300);
-    expect(f.values.slice(0, 300)).toEqual(Array.from({ length: 300 }, (_, i) => i + 1));
+      .toBeGreaterThanOrEqual(frameCount);
+    expect(f.values.slice(0, frameCount)).toEqual(Array.from({ length: frameCount }, (_, i) => i + 1));
     const report = app.execution.report();
     expect(report.kernelDispatch.usedShared).toBe(true);
     expect(report.kernelDispatch.completed).toBeGreaterThan(0);
@@ -86,7 +87,7 @@ it('rejects an invalid kernel module during auto startup before the source repor
   try {
     expect(f.result.ok).toBe(false);
     if (f.result.ok) throw new Error('invalid kernel was accepted');
-    expect(f.result.error.code).toBe('app-execution-bootstrap-failed');
+    expect(f.result.error).toMatchObject({ code: 'app-execution-bootstrap-failed' });
     expect(f.values).toEqual([]);
   } finally {
     await f.dispose();

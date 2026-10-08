@@ -24,7 +24,7 @@ describe('replica fatal apply stop', () => {
   it('stops later trusted applies after a real post-validation ECS write invariant failure', () => {
     const replication = profile();
     const [authorityEndpoint, replicaEndpoint] = createMemoryEndpointPair();
-    const replica = createReplicaCoordinator(new World(), replication, replicaEndpoint);
+    const replica = createReplicaCoordinator(new World(), replication);
     const session = new NetSession({ endpoint: replicaEndpoint, maxRawMessages: 8 });
     session.attachReplica(replica, replication.limits);
     authorityEndpoint.poll();

@@ -1,6 +1,6 @@
 import type { Buffer, QuerySet, RhiCommandEncoder, RhiDevice } from '@forgeax/engine-rhi';
 import { ok } from '@forgeax/engine-types';
-import { describe, expect, it, vi } from 'vitest';
+import { assert, describe, expect, it, vi } from 'vitest';
 import { GPU_BUFFER_USAGE_MAP_READ } from '../../gpu-usage';
 import { GpuTimingCapture } from '../gpu-timing';
 
@@ -54,6 +54,8 @@ function timestampDevice(readbackBytes: ArrayBuffer): {
       rgba16floatRenderable: true,
       rg11b10ufloatRenderable: true,
       float32Filterable: true,
+      textureImport: false,
+      externalTexture: false,
       maxColorAttachments: 8,
     },
     createQuerySet: vi.fn(() => ok(querySet)),
@@ -83,6 +85,24 @@ function writeTimestampPair(bytes: ArrayBuffer, index: number, begin: bigint, en
 }
 
 describe('GpuTimingCapture pass descriptor contract', () => {
+  it('derives the envelope from extrema when a later pass finishes inside an earlier interval', async () => {
+    const bytes = new ArrayBuffer(64 * 8);
+    writeTimestampPair(bytes, 0, 100n, 450n);
+    writeTimestampPair(bytes, 1, 200n, 300n);
+    const { device, encoder } = timestampDevice(bytes);
+    const capture = GpuTimingCapture.create(device).unwrap();
+    assert(capture);
+    capture.beginPass('volume-inject', 'compute', 0);
+    capture.beginPass('volume-integrate', 'compute', 1);
+    capture.resolve(encoder).unwrap();
+    capture.markSubmitted();
+    expect(await capture.observation()).toMatchObject({
+      status: 'ready',
+      frameMs: 0.00035,
+      totalMs: 0.00035,
+    });
+  });
+
   it('resolves real pass pairs without calling command-encoder writeTimestamp', async () => {
     const bytes = new ArrayBuffer(64 * 8);
     writeTimestampPair(bytes, 0, 100n, 200n);

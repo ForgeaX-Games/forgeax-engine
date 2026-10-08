@@ -1,40 +1,30 @@
+import type { RhiDevice } from '@forgeax/engine-rhi';
 import { describe, expect, it } from 'vitest';
-import { resolveAutoExposureCapability } from '../capability';
+import { createAutoExposureGpuResources } from '../gpu';
 
-const complete = {
-  compute: true,
-  storageBuffer: true,
-  float32Filterable: true,
-  rgba16floatRenderable: true,
-};
+function deviceWith(caps: { compute: boolean; storageBuffer: boolean }): RhiDevice {
+  return { caps } as unknown as RhiDevice;
+}
 
-describe('auto exposure capability contract', () => {
-  it('requires live compute, storage, and float filtering facts', () => {
-    expect(resolveAutoExposureCapability(complete, 8)).toMatchObject({
-      ok: true,
-      value: { available: true, generation: 8 },
-    });
-    expect(resolveAutoExposureCapability({ ...complete, compute: false }, 8)).toMatchObject({
-      ok: false,
-      error: { code: 'auto-exposure-capability-unavailable', detail: { capability: 'compute' } },
-    });
+describe('auto exposure capability gate', () => {
+  it('names the first missing live capability with the requesting generation', () => {
     expect(
-      resolveAutoExposureCapability({ ...complete, float32Filterable: false }, 8),
+      createAutoExposureGpuResources(deviceWith({ compute: false, storageBuffer: true }), 8),
     ).toMatchObject({
       ok: false,
       error: {
         code: 'auto-exposure-capability-unavailable',
-        detail: { capability: 'float-filterable' },
+        detail: { capability: 'compute', generation: 8 },
       },
     });
-  });
-
-  it('does not infer float filtering from rgba16float renderability', () => {
     expect(
-      resolveAutoExposureCapability(
-        { ...complete, float32Filterable: false, rgba16floatRenderable: true },
-        9,
-      ),
-    ).toMatchObject({ ok: false, error: { detail: { capability: 'float-filterable' } } });
+      createAutoExposureGpuResources(deviceWith({ compute: true, storageBuffer: false }), 9),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: 'auto-exposure-capability-unavailable',
+        detail: { capability: 'storage-buffer', generation: 9 },
+      },
+    });
   });
 });

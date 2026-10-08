@@ -169,11 +169,21 @@ test('benchmark source recovery rebuilds core/shared and materializes only its s
 test.each([
   { staleShared: true },
   { corruptCore: true },
-])('invalid base artifacts rebuild from source before app recovery: %j', async (scenario) => {
+])('invalid shared/core admission rebuilds before app recovery: %j', async (scenario) => {
   const { root, calls, run } = recoveryFixture(scenario);
   await run();
-  expect(existsSync(join(root, 'packages/core/dist/index.js'))).toBe(false);
+  expect(existsSync(join(root, 'packages/core/dist/index.js'))).toBe(!scenario.corruptCore);
+  if (scenario.staleShared)
+    expect(readFileSync(join(root, 'packages/core/dist/index.js'), 'utf8')).toBe('core');
+  const coreAdmission = calls.findIndex(
+    ([script, ...args]) =>
+      script === 'scripts/ci/verify-build-artifact-input.mjs' &&
+      args.includes('--transfer-artifact') &&
+      option(args, '--transfer-artifact') === 'core-build',
+  );
   const base = calls.findIndex(([script]) => script === 'scripts/build.mjs');
+  expect(coreAdmission).toBeGreaterThan(-1);
+  expect(base).toBeGreaterThan(coreAdmission);
   const app = calls.findIndex(([script]) => script === 'scripts/ci/build-app-shard.mjs');
   expect(base).toBeGreaterThan(-1);
   expect(app).toBeGreaterThan(base);

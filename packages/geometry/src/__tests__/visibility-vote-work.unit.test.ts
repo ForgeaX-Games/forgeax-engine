@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import { encodeMeshDistanceField } from '../distance-field-artifact';
+import type { MeshDistanceField } from '../distance-field';
+import { distanceFieldTexel } from '../distance-field-bricks';
 import * as triangleQueries from '../triangle-query';
 import { buildVisibilityDistanceField } from '../visibility-distance-field';
 
@@ -35,7 +36,7 @@ it('preserves full-vote artifacts while avoiding votes that cannot change the si
           },
         )
       ).unwrap();
-      const artifact = (await encodeMeshDistanceField(field)).unwrap();
+      const artifact = await legacyDenseArtifact(field);
       const digest = Array.from(
         new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(artifact))),
         (b) => b.toString(16).padStart(2, '0'),
@@ -88,7 +89,7 @@ it('does not cast sign rays when the bounded nearest query found no nearby geome
         { voxelSize: 0.25, triangleSidedness: [0, 0] },
       )
     ).unwrap();
-    const artifact = (await encodeMeshDistanceField(field)).unwrap();
+    const artifact = await legacyDenseArtifact(field);
     const digest = Array.from(
       new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(artifact))),
       (b) => b.toString(16).padStart(2, '0'),
@@ -99,3 +100,29 @@ it('does not cast sign rays when the bounded nearest query found no nearby geome
     spy.mockRestore();
   }
 });
+
+// Reconstruct the frozen v3 oracle only in this regression. Its old digests stay
+// unchanged across storage versions, proving every logical sample and metadata.
+async function legacyDenseArtifact(field: MeshDistanceField): Promise<Uint8Array> {
+  const { values: _, bricks: __, ...metadata } = field;
+  const header = new TextEncoder().encode(JSON.stringify({ version: 3, ...metadata }));
+  const [nx, ny, nz] = field.dimensions;
+  const bytes = new Uint8Array(4 + header.length + nx * ny * nz * 4 + 64),
+    view = new DataView(bytes.buffer);
+  view.setUint32(0, header.length, true);
+  bytes.set(header, 4);
+  for (let z = 0; z < nz; z++)
+    for (let y = 0; y < ny; y++)
+      for (let x = 0; x < nx; x++)
+        view.setFloat32(
+          4 + header.length + ((z * ny + y) * nx + x) * 4,
+          distanceFieldTexel(field, x, y, z),
+          true,
+        );
+  const hash = Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.subarray(0, -64))),
+    (b) => b.toString(16).padStart(2, '0'),
+  ).join('');
+  bytes.set(new TextEncoder().encode(hash), bytes.length - 64);
+  return bytes;
+}

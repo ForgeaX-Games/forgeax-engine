@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -38,9 +38,39 @@ test('shader reuse requires both current input identity and unchanged output byt
   }
 });
 
+test('local shader admission reports the rejected receipt identity and payload digest', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forgeax-local-shader-miss-'));
+  const output = join(root, 'shared');
+  const misses = [];
+  const reuse = (identity) =>
+    reusableSharedBuild(root, output, identity, (reason) => misses.push(reason));
+  mkdirSync(output);
+  try {
+    assert.equal(reuse('compiler-A/profile-A'), false);
+    assert.match(misses.pop(), /missing.*manifest/);
+    writeFileSync(join(output, 'manifest.json'), '{}');
+    assert.equal(reuse('compiler-A/profile-A'), false);
+    assert.match(misses.pop(), /missing or invalid.*receipt/);
+    recordSharedBuild(root, output, 'compiler-A/profile-A');
+    assert.equal(reuse('compiler-A/profile-A'), true);
+    assert.equal(misses.length, 0);
+    assert.equal(reuse('compiler-B/profile-A'), false);
+    assert.match(misses.pop(), /expected=compiler-B\/profile-A observed=compiler-A\/profile-A/);
+    writeFileSync(join(output, 'manifest.json'), '[]');
+    assert.equal(reuse('compiler-A/profile-A'), false);
+    assert.match(
+      misses.pop(),
+      /payload digest mismatch: expected=sha256:[a-f0-9]+ observed=sha256:[a-f0-9]+/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('transferred shaders bind source, compiler, WASM, lockfile, profile and exact output bytes', () => {
   const root = mkdtempSync(join(tmpdir(), 'forgeax-shared-shader-'));
   const copy = mkdtempSync(join(tmpdir(), 'forgeax-shared-shader-copy-'));
+  const alias = `${root}-alias`;
   const inputs = [
     'package.json',
     'packages/vite-plugin-shader/package.json',
@@ -84,6 +114,12 @@ test('transferred shaders bind source, compiler, WASM, lockfile, profile and exa
     const publish = (value) => writeFileSync(manifestPath, JSON.stringify(value));
     publish(manifest);
     assert.equal(reusableSharedShader(root, manifestPath, expected), join(root, shader));
+    symlinkSync(root, alias, 'dir');
+    assert.equal(
+      reusableSharedShader(root, join(alias, 'shared-app-inputs/manifest.json'), expected),
+      join(root, shader),
+      'a directory alias names the same shader payload',
+    );
     cpSync(root, copy, { recursive: true });
     assert.equal(sharedShaderInputFingerprint(copy, profile), expected);
     assert.equal(
@@ -141,6 +177,7 @@ test('transferred shaders bind source, compiler, WASM, lockfile, profile and exa
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(copy, { recursive: true, force: true });
+    rmSync(alias, { force: true });
   }
 });
 

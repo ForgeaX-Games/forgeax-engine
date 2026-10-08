@@ -92,9 +92,7 @@ export async function verifyClippingPlanes(
   const reports: unknown[] = [];
   let baselineShadowPixels = 0;
   const profile = renderer.inspect().profile;
-  renderValue(
-    renderer.setProfile({ ...profile, renderPath: 'forward', shadows: 'filtered', ssao: false }),
-  );
+  renderValue(renderer.setProfile({ ...profile, renderPath: 'forward', ssao: false }));
   const draw = async (direct: boolean) => {
     world.update(1 / 60).unwrap();
     propagateTransforms(world).unwrap();
@@ -119,6 +117,7 @@ export async function verifyClippingPlanes(
   };
   try {
     let caseIndex = 0;
+    let previousGpuShadowClipping: string | undefined;
     for (const [name, planes, intersection, clipShadows, direct] of [
       ['baseline', [], false, true, true],
       [
@@ -171,7 +170,26 @@ export async function verifyClippingPlanes(
           }),
         )
         .unwrap();
-      for (let frame = 0; frame < 8; frame++) await draw(direct);
+      await draw(direct);
+      // Retained static shadow depth bakes the camera clipping casters honor,
+      // so a change to it rebuilds every static layer in full.
+      const shadowClipping =
+        clipShadows && materials === undefined && planes.length > 0
+          ? JSON.stringify([planes, intersection])
+          : '';
+      if (!direct && previousGpuShadowClipping !== undefined) {
+        const staticReasons = renderer
+          .inspect()
+          .shadowRaster.views.filter((view) => view.identity.layer === 'static')
+          .map((view) => ('invalidationReason' in view ? view.invalidationReason : 'hit'));
+        expect(staticReasons.length, `${name} static shadow views`).toBeGreaterThan(0);
+        if (shadowClipping !== previousGpuShadowClipping)
+          expect(new Set(staticReasons), `${name} static shadow reasons`).toEqual(
+            new Set(['view-clipping-changed']),
+          );
+      }
+      if (!direct) previousGpuShadowClipping = shadowClipping;
+      for (let frame = 1; frame < 8; frame++) await draw(direct);
       expect(errors).toEqual([]);
       if (renderer.requestObservation === undefined)
         throw new Error('missing live HDR observation');
@@ -190,7 +208,9 @@ export async function verifyClippingPlanes(
       const model = buildFrameModel(tape);
       const geometry = model.works.find((work) =>
         work.pipeline.shaders.some(
-          (shader) => shader.entryPoint === 'fs_main' && shader.source?.includes('clippedByPlanes'),
+          (shader) =>
+            (shader.entryPoint === 'fs_main' || shader.entryPoint === 'fs_opaque') &&
+            shader.source?.includes('clippedByPlanes'),
         ),
       );
       const shadows = model.works.filter((work) =>
@@ -198,7 +218,6 @@ export async function verifyClippingPlanes(
       );
       if (geometry === undefined || geometry.attachments === null)
         throw new Error(`missing geometry ${name}`);
-      expect(shadows.length).toBeGreaterThan(0);
       expect(geometry.kind).toBe(direct ? 'drawIndexed' : 'drawIndexedIndirect');
       const adapter = (await webgpu.rhi.requestAdapter()).unwrap();
       const device = (
@@ -266,35 +285,35 @@ export async function verifyClippingPlanes(
           expect(sample.color > 0.2, `${name} color ${index}`).toBe(expected[index]);
           expect(sample.depth > 0, `${name} depth ${index}`).toBe(expected[index]);
         });
-        const shadowReads = [];
+        // A retained shadow layer need not re-raster in the captured frame, so
+        // measure the map the receiver samples rather than the raster passes.
+        const shadowMapId = inspection.bindings.find(
+          (binding) => binding.groupIndex === 0 && binding.binding === 3,
+        )?.resourceId;
+        if (shadowMapId == null) throw new Error('missing shadow map binding');
+        const shadowReads = shadows.map((work) => ({
+          workIndex: work.workIndex,
+          eventIndex: work.eventIndex,
+        }));
         let shadowPixels = 0;
-        for (const work of shadows) {
-          const inspected = (
-            await replay.inspectWork(work.workIndex, ['pipeline', 'bindings'])
-          ).unwrap();
-          const shadowId = work.attachments?.depthStencilViewHandleId;
-          if (shadowId == null) throw new Error('missing shadow attachment');
-          const shadowRead = (
-            await replay.readResourceAtWork(shadowId, work.workIndex, {
-              aspect: 'depth-only',
-              mipLevel: 0,
-              arrayLayer: 0,
-            })
-          ).unwrap();
-          if (shadowRead === undefined || shadowRead.format !== 'depth32float')
+        for (let arrayLayer = 0; ; arrayLayer++) {
+          const shadowRead = await replay.readResourceAtWork(shadowMapId, geometry.workIndex, {
+            aspect: 'depth-only',
+            mipLevel: 0,
+            arrayLayer,
+          });
+          if (!shadowRead.ok) {
+            if (arrayLayer === 0) throw shadowRead.error;
+            break;
+          }
+          if (shadowRead.value === undefined || shadowRead.value.format !== 'depth32float')
             throw new Error('missing shadow depth evidence');
           const depths = new Float32Array(
-            shadowRead.bytes.buffer,
-            shadowRead.bytes.byteOffset,
-            shadowRead.bytes.byteLength / 4,
+            shadowRead.value.bytes.buffer,
+            shadowRead.value.bytes.byteOffset,
+            shadowRead.value.bytes.byteLength / 4,
           );
           shadowPixels += depths.filter((value) => value > 0).length;
-          shadowReads.push({
-            workIndex: work.workIndex,
-            eventIndex: work.eventIndex,
-            format: shadowRead.format,
-            bindings: inspected.bindings,
-          });
         }
         if (name === 'baseline') baselineShadowPixels = shadowPixels;
         expect(baselineShadowPixels).toBeGreaterThan(0);

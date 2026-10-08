@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { compileShader } from '../src/index.js';
 
-const compilerSource = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const compilerSource = readFileSync(new URL('../src/compile.ts', import.meta.url), 'utf8');
 const materialCookSource = readFileSync(new URL('../src/material/cook.ts', import.meta.url), 'utf8');
 const vitePluginSource = readFileSync(
   new URL('../../vite-plugin-shader/src/index.ts', import.meta.url),

@@ -1,5 +1,6 @@
 import { startClippingPlanesServer } from './clipping-planes.server';
 import { startMaterialMrtServer } from './material-mrt.server';
+import { startVertexColorPublicationServer } from './vertex-color-publication.server';
 
 const mrtServers = new Map<string, Awaited<ReturnType<typeof startMaterialMrtServer>>>();
 
@@ -16,7 +17,21 @@ const surfaceServers = new Map<
 >();
 
 const clippingServers = new Map<string, Awaited<ReturnType<typeof startClippingPlanesServer>>>();
+const vertexColorServers = new Map<
+  string,
+  Awaited<ReturnType<typeof startVertexColorPublicationServer>>
+>();
 export const materialPublicationCommands = {
+  async startVertexColorPublication(_context: unknown) {
+    const server = await startVertexColorPublicationServer();
+    vertexColorServers.set(server.url, server);
+    return { guid: server.guid, url: server.url };
+  },
+  async stopVertexColorPublication(_context: unknown, url: string) {
+    const server = vertexColorServers.get(url);
+    vertexColorServers.delete(url);
+    await server?.close();
+  },
   async startClippingPlanes(_context: unknown) {
     const server = await startClippingPlanesServer();
     const id = server.binding.catalogUrl;

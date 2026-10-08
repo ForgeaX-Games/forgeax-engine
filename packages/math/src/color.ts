@@ -1,6 +1,7 @@
 // color.ts — RGBA color namespace (M5 / T-032)
 //
-// 7-function surface: create / clone / srgbToLinear / linearToSrgb / fromHex / fromCss / toHex
+// Surface: create / clone / srgbToLinear / linearToSrgb / fromHex / fromCss / toHex, plus the
+// primaries-derived RGB gamut SSOT (RGB_PRIMARIES / rgbGamutMatrix / Display-P3 conversions)
 //
 // Design anchors:
 //   - branded Float32Array length 4 [r, g, b, a]; `as Color` casts are funneled inside factories (D-P15)
@@ -106,6 +107,164 @@ export function linearToSrgb(out: Color, c: ColorLike): Color {
   out[2] = linearChannelToSrgb(c[2] as number);
   out[3] = c[3] as number;
   return out;
+}
+
+// === RGB gamut (primaries -> 3x3 conversion) ===
+
+/** Closed set of RGB colour spaces the engine converts between. Both share D65 and the sRGB transfer curve. */
+export type RgbColorSpace = 'srgb' | 'display-p3';
+
+/** CIE 1931 xy chromaticities of one RGB colour space. */
+export interface RgbPrimaries {
+  readonly red: readonly [number, number];
+  readonly green: readonly [number, number];
+  readonly blue: readonly [number, number];
+  readonly white: readonly [number, number];
+}
+
+/** CIE 1931 xy of the D65 white point (IEC 61966-2-1 / SMPTE EG 432-1). */
+export const D65_WHITE_XY: readonly [number, number] = Object.freeze([0.3127, 0.329] as const);
+
+/**
+ * Primaries SSOT. Rec.709/sRGB per IEC 61966-2-1; Display P3 is DCI-P3
+ * primaries with the D65 white point (SMPTE EG 432-1). Every gamut matrix in
+ * TS and the generated WGSL block derives from these numbers.
+ */
+export const RGB_PRIMARIES: Readonly<Record<RgbColorSpace, RgbPrimaries>> = Object.freeze({
+  srgb: Object.freeze({
+    red: [0.64, 0.33],
+    green: [0.3, 0.6],
+    blue: [0.15, 0.06],
+    white: D65_WHITE_XY,
+  } as const),
+  'display-p3': Object.freeze({
+    red: [0.68, 0.32],
+    green: [0.265, 0.69],
+    blue: [0.15, 0.06],
+    white: D65_WHITE_XY,
+  } as const),
+});
+
+/** Row-major 3x3 matrix in float64: `out = M * rgb`. */
+export type RgbMatrix3 = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+function xyToXyz(xy: readonly [number, number]): [number, number, number] {
+  return [xy[0] / xy[1], 1, (1 - xy[0] - xy[1]) / xy[1]];
+}
+
+function multiply3(a: RgbMatrix3, b: RgbMatrix3): RgbMatrix3 {
+  const out: number[] = [];
+  for (let row = 0; row < 3; row += 1) {
+    for (let col = 0; col < 3; col += 1) {
+      let sum = 0;
+      for (let k = 0; k < 3; k += 1) sum += (a[row * 3 + k] as number) * (b[k * 3 + col] as number);
+      out.push(sum);
+    }
+  }
+  return out as unknown as RgbMatrix3;
+}
+
+function invert3(m: RgbMatrix3): RgbMatrix3 {
+  const [a, b, c, d, e, f, g, h, i] = m;
+  const A = e * i - f * h;
+  const B = -(d * i - f * g);
+  const C = d * h - e * g;
+  const det = a * A + b * B + c * C;
+  return [
+    A / det,
+    -(b * i - c * h) / det,
+    (b * f - c * e) / det,
+    B / det,
+    (a * i - c * g) / det,
+    -(a * f - c * d) / det,
+    C / det,
+    -(a * h - b * g) / det,
+    (a * e - b * d) / det,
+  ];
+}
+
+/**
+ * Derive the linear RGB -> CIE XYZ matrix from xy primaries (SMPTE RP 177):
+ * columns are the primaries' XYZ scaled so RGB (1, 1, 1) maps to the white
+ * point with Y = 1.
+ */
+export function rgbToXyzMatrix(primaries: RgbPrimaries): RgbMatrix3 {
+  const r = xyToXyz(primaries.red);
+  const g = xyToXyz(primaries.green);
+  const b = xyToXyz(primaries.blue);
+  const w = xyToXyz(primaries.white);
+  const inverse = invert3([r[0], g[0], b[0], r[1], g[1], b[1], r[2], g[2], b[2]]);
+  const s = [
+    inverse[0] * w[0] + inverse[1] * w[1] + inverse[2] * w[2],
+    inverse[3] * w[0] + inverse[4] * w[1] + inverse[5] * w[2],
+    inverse[6] * w[0] + inverse[7] * w[1] + inverse[8] * w[2],
+  ] as const;
+  return [
+    r[0] * s[0],
+    g[0] * s[1],
+    b[0] * s[2],
+    r[1] * s[0],
+    g[1] * s[1],
+    b[1] * s[2],
+    r[2] * s[0],
+    g[2] * s[1],
+    b[2] * s[2],
+  ];
+}
+
+/** Linear RGB `from` -> linear RGB `to` (same white point, so no adaptation). */
+export function rgbGamutMatrix(from: RgbColorSpace, to: RgbColorSpace): RgbMatrix3 {
+  return multiply3(invert3(rgbToXyzMatrix(RGB_PRIMARIES[to])), rgbToXyzMatrix(RGB_PRIMARIES[from]));
+}
+
+/** Linear Rec.709/sRGB -> linear Display P3, derived from {@link RGB_PRIMARIES}. */
+export const LINEAR_SRGB_TO_LINEAR_DISPLAY_P3: RgbMatrix3 = Object.freeze(
+  rgbGamutMatrix('srgb', 'display-p3'),
+);
+
+/** Linear Display P3 -> linear Rec.709/sRGB; components outside sRGB become negative or > 1. */
+export const LINEAR_DISPLAY_P3_TO_LINEAR_SRGB: RgbMatrix3 = Object.freeze(
+  rgbGamutMatrix('display-p3', 'srgb'),
+);
+
+function applyMatrix(out: Color, m: RgbMatrix3, c: ColorLike): Color {
+  const r = c[0] as number;
+  const g = c[1] as number;
+  const b = c[2] as number;
+  out[0] = m[0] * r + m[1] * g + m[2] * b;
+  out[1] = m[3] * r + m[4] * g + m[5] * b;
+  out[2] = m[6] * r + m[7] * g + m[8] * b;
+  out[3] = c[3] as number;
+  return out;
+}
+
+/** out = linear sRGB -> linear Display P3 (alpha passed through, no clamping). */
+export function linearSrgbToLinearDisplayP3(out: Color, c: ColorLike): Color {
+  return applyMatrix(out, LINEAR_SRGB_TO_LINEAR_DISPLAY_P3, c);
+}
+
+/** out = linear Display P3 -> linear sRGB (alpha passed through; out-of-sRGB colours keep negatives). */
+export function linearDisplayP3ToLinearSrgb(out: Color, c: ColorLike): Color {
+  return applyMatrix(out, LINEAR_DISPLAY_P3_TO_LINEAR_SRGB, c);
+}
+
+/**
+ * out = CSS `color(display-p3 r g b)` (sRGB transfer curve, P3 primaries) ->
+ * linear Rec.709 working colour. Colours outside sRGB keep negative components
+ * so a Display-P3 output can reproduce them.
+ */
+export function displayP3ToLinear(out: Color, c: ColorLike): Color {
+  return linearDisplayP3ToLinearSrgb(out, srgbToLinear(out, c));
 }
 
 // === Hex parse / serialize ===

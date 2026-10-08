@@ -61,6 +61,7 @@ describe('public render-target schema and stable consumer manifest', () => {
       'Renderer.resizeRenderTarget',
       'Renderer.createRenderTargetTextureSource',
       'Renderer.requestTargetReadback',
+      'Renderer.requestFramebufferSnapshot',
       'Renderer.observe',
       'Renderer.inspect',
       'Renderer.recover',
@@ -69,8 +70,10 @@ describe('public render-target schema and stable consumer manifest', () => {
     expect(schema.properties.errorCodes.items.enum).toEqual([
       'render-target-descriptor-invalid',
       'render-target-capability-missing',
+      'render-target-layer-invalid',
       'render-target-state-invalid',
       'render-target-operation-failed',
+      'framebuffer-snapshot-failed',
       'reflection-probe-budget-exceeded',
       'render-intent-invalid',
     ]);
@@ -78,7 +81,13 @@ describe('public render-target schema and stable consumer manifest', () => {
   });
 
   it('keeps the five stable target IDs and evidence commands aligned', () => {
-    expect(manifest.operations).toEqual(schema.properties.operations.items.properties.name.enum);
+    // The reflection consumer does not snapshot a framebuffer; the snapshot journey
+    // is gated by framebuffer-snapshot.{dawn,browser}.test.ts in @forgeax/engine-runtime.
+    expect(manifest.operations).toEqual(
+      schema.properties.operations.items.properties.name.enum.filter(
+        (name) => name !== 'Renderer.requestFramebufferSnapshot',
+      ),
+    );
     expect(manifest.stableTargetIds).toEqual(schema.properties.stableTargetIds.const);
     expect(manifest.evidenceCommands).toEqual([
       'node scripts/smoke-cube-camera-browser.mjs',

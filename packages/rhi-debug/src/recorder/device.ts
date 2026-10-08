@@ -5,6 +5,8 @@
 import type {
   BindGroupDescriptor,
   BindGroupLayoutDescriptor,
+  Blas,
+  BlasDescriptor,
   Buffer,
   BufferDescriptor,
   CommandEncoderDescriptor,
@@ -19,11 +21,14 @@ import type {
   Texture,
   TextureDescriptor,
   TextureViewDescriptor,
+  Tlas,
+  TlasDescriptor,
 } from '@forgeax/engine-rhi';
 import { RhiError } from '@forgeax/engine-rhi';
 import { err as makeErr, ok as makeOk, type Result } from '@forgeax/engine-types';
 import type { HandleId, RhiBindResourceKind, RhiCallEvent } from '../types';
-import type { RecorderInternal } from './core';
+
+import type { RecorderDevice, RecorderInternal } from './core';
 import {
   allocHandleId,
   ensureTextureCreateEvent,
@@ -39,10 +44,13 @@ import {
   TEXTURE_USAGE_COPY_DST,
   TEXTURE_USAGE_COPY_SRC,
 } from './core';
-import { createCommandEncoderProxy } from './encoder';
+import { createCommandEncoderProxy, observeIdleAccelerationStructureBuilds } from './encoder';
+import { recordImportExternalTexture, recordImportTexture } from './external-texture';
 import { createRenderBundleProxy } from './pass';
 import { wrapPipeline } from './pipeline';
 import { createQueueProxy } from './queue';
+
+const UNKNOWN_EXTERNAL = 'externalTexture:unknown' as HandleId;
 
 export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): RhiDevice {
   const proxiedQueue = createQueueProxy(s, realDevice.queue);
@@ -53,9 +61,7 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
   // from the RhiDevice that makeRhiDevice registered, so WeakMap.get(proxy)
   // returns undefined and createShaderModule returns shader-compile-failed.
   // The _realDevice property lets callers pass the real RhiDevice directly.
-  type RhiDeviceWithReal = RhiDevice & { _realDevice: RhiDevice };
-
-  const d: RhiDeviceWithReal = {
+  const d: RecorderDevice = {
     _realDevice: realDevice,
 
     get caps() {
@@ -153,6 +159,18 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
       return res;
     },
 
+    nativeDevice() {
+      return realDevice.nativeDevice();
+    },
+
+    importTexture(texture: GPUTexture) {
+      return recordImportTexture(s, realDevice, texture);
+    },
+
+    importExternalTexture(desc) {
+      return recordImportExternalTexture(s, realDevice, d, proxiedQueue, desc);
+    },
+
     createTextureView(texture: Texture, desc: TextureViewDescriptor) {
       const res = realDevice.createTextureView(texture, desc);
       if (!res.ok) return res;
@@ -227,48 +245,64 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
       const res = realDevice.createBindGroup(desc);
       if (!res.ok) return res;
       const layoutId = getHandleId(s, desc.layout as object, 'bindGroupLayout');
-      const entries = Array.from(desc.entries);
-      const resourceKinds: RhiBindResourceKind[] = entries.map((e) => e.resource.kind);
-      const resourceHandleIds: HandleId[] = entries.map((e) => {
+      const resourceHandleIds: HandleId[] = [];
+      const unresolvedExternal: { key: object; index: number }[] = [];
+      const entries = Array.from(desc.entries).map((e, index) => {
         const r = e.resource;
+        const entry: {
+          binding: number;
+          resourceKind: RhiBindResourceKind;
+          bufferOffset?: number;
+          bufferSize?: number;
+        } = { binding: e.binding, resourceKind: r.kind };
         switch (r.kind) {
           case 'sampler':
-            return getHandleId(s, r.value as object, 'sampler');
-          case 'buffer':
-            return getHandleId(s, r.value.buffer as object, 'buffer');
+            resourceHandleIds.push(getHandleId(s, r.value as object, 'sampler'));
+            break;
+          case 'buffer': {
+            resourceHandleIds.push(getHandleId(s, r.value.buffer as object, 'buffer'));
+            // Capture the bound sub-range so a dynamic-offset slice (e.g. a
+            // 256 B view of a 256 KiB pool) replays as that slice, not the
+            // whole buffer.
+            const { offset, size } = r.value;
+            if (offset !== undefined) entry.bufferOffset = offset;
+            if (size !== undefined) entry.bufferSize = size;
+            break;
+          }
           case 'textureView':
-            return getHandleId(s, r.value as object, 'textureView');
-          case 'externalTexture':
-            return 'externalTexture:unknown';
+            resourceHandleIds.push(getHandleId(s, r.value as object, 'textureView'));
+            break;
+          case 'externalTexture': {
+            // A recorded external texture binds its upload view; an unknown
+            // one stays pending until its upload view is recorded.
+            const viewId = s.handleMap.get(r.value as object);
+            if (viewId === undefined) {
+              resourceHandleIds.push(UNKNOWN_EXTERNAL);
+              unresolvedExternal.push({ key: r.value as object, index });
+            } else {
+              entry.resourceKind = 'textureView';
+              resourceHandleIds.push(viewId);
+            }
+            break;
+          }
+          case 'accelerationStructure':
+            resourceHandleIds.push(getHandleId(s, r.value as object, 'tlas'));
+            break;
         }
-        return 'externalTexture:unknown' as HandleId;
+        return entry;
       });
       const event: RhiCallEvent = {
         kind: 'createBindGroup',
         handleId: '' as HandleId,
         layoutHandleId: layoutId,
-        entries: entries.map((e, idx) => {
-          const entry: {
-            binding: number;
-            resourceKind: RhiBindResourceKind;
-            bufferOffset?: number;
-            bufferSize?: number;
-          } = {
-            binding: e.binding,
-            resourceKind: resourceKinds[idx] as RhiBindResourceKind,
-          };
-          // Capture the bound sub-range for buffer entries so a
-          // dynamic-offset slice (e.g. a 256 B view of a 256 KiB pool)
-          // replays as that slice, not the whole buffer.
-          if (e.resource.kind === 'buffer') {
-            const { offset, size } = e.resource.value;
-            if (offset !== undefined) entry.bufferOffset = offset;
-            if (size !== undefined) entry.bufferSize = size;
-          }
-          return entry;
-        }),
+        entries,
         resourceHandleIds,
       };
+      for (const { key, index } of unresolvedExternal) {
+        const pending = s.pendingExternalBindings.get(key) ?? [];
+        pending.push({ event, index });
+        s.pendingExternalBindings.set(key, pending);
+      }
       registerHandle(s, res.value as object, 'bindGroup', event);
       pushEvent(s, event);
       return res;
@@ -333,6 +367,7 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
         kind: 'createRenderPipeline',
         handleId: '' as HandleId,
         desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
           vertex: recordedVertex,
           primitive: desc.primitive,
           depthStencil: desc.depthStencil,
@@ -365,7 +400,10 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
       const event: RhiCallEvent = {
         kind: 'createComputePipeline',
         handleId: '' as HandleId,
-        desc: { compute: JSON.parse(JSON.stringify(desc.compute)) },
+        desc: {
+          ...(desc.label === undefined ? {} : { label: desc.label }),
+          compute: JSON.parse(JSON.stringify(desc.compute)),
+        },
         layoutHandleId: layoutId,
         computeShaderModuleHandleId,
       };
@@ -388,6 +426,43 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
       };
       registerHandle(s, res.value as object, 'querySet', event);
       pushEvent(s, event);
+      return res;
+    },
+
+    createBlas(desc: BlasDescriptor) {
+      const res = realDevice.createBlas(desc);
+      if (!res.ok) return res;
+      const event: RhiCallEvent = {
+        kind: 'createBlas',
+        handleId: '' as HandleId,
+        desc: JSON.parse(JSON.stringify(desc)),
+      };
+      registerHandle(s, res.value as object, 'blas', event);
+      pushEvent(s, event);
+      return res;
+    },
+    createTlas(desc: TlasDescriptor) {
+      const res = realDevice.createTlas(desc);
+      if (!res.ok) return res;
+      const event: RhiCallEvent = {
+        kind: 'createTlas',
+        handleId: '' as HandleId,
+        desc: JSON.parse(JSON.stringify(desc)),
+      };
+      registerHandle(s, res.value as object, 'tlas', event);
+      pushEvent(s, event);
+      return res;
+    },
+    destroyBlas(blas: Blas) {
+      const hId = s.handleMap.get(blas as object);
+      const res = realDevice.destroyBlas(blas);
+      if (res.ok && hId !== undefined) retireBootstrapHandle(s, hId, 'destroyBlas');
+      return res;
+    },
+    destroyTlas(tlas: Tlas) {
+      const hId = s.handleMap.get(tlas as object);
+      const res = realDevice.destroyTlas(tlas);
+      if (res.ok && hId !== undefined) retireBootstrapHandle(s, hId, 'destroyTlas');
       return res;
     },
 
@@ -490,7 +565,11 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
       // so an idle-created encoder's whole frame is consistently un-recorded,
       // matching the now-gated queue.submit which skips its handle lookup.
       if (!shouldRecord(s)) {
-        return res;
+        // Builds encoded between captures define the BLAS/TLAS state a later
+        // capture starts from, so only Ray Query devices pay for observing them.
+        return realDevice.caps.rayQuery.supported
+          ? makeOk(observeIdleAccelerationStructureBuilds(s, res.value))
+          : res;
       }
       const cmdId = allocHandleId('commandEncoder');
       pushEvent(s, {
@@ -506,6 +585,21 @@ export function createDeviceProxy(s: RecorderInternal, realDevice: RhiDevice): R
     },
   };
   return d;
+}
+
+function retireBootstrapHandle(
+  s: RecorderInternal,
+  hId: HandleId,
+  kind: 'destroyBlas' | 'destroyTlas',
+): void {
+  if (
+    !retainsCaptureBootstrap(s) &&
+    !s.snapshotSeededHandles.has(hId) &&
+    !hasBootstrapDependency(s, hId)
+  ) {
+    s.bootstrapCreates.delete(hId);
+  }
+  pushEvent(s, { kind, handleId: hId });
 }
 
 // --------------------------------------------------

@@ -4,7 +4,7 @@ import { parseKtx2 } from '@forgeax/engine-codec';
 import { ImporterRegistry, runImport } from '@forgeax/engine-import';
 import type { TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
-import { imageImporter } from '../image-importer.js';
+import { decodeImageForImport, imageImporter } from '../image-importer.js';
 import { makePng } from './make-fixture.js';
 
 const GUID = '019f0000-0000-7000-8000-000000000311';
@@ -32,6 +32,45 @@ async function importTexture(importSettings: Readonly<Record<string, unknown>>) 
 }
 
 describe('image importer offline mip chain', () => {
+  it.skipIf(!pkgBuilt).each(['none', 'uastc'] as const)(
+    'source and embedded images share cooked pixels and mip facts for %s',
+    async (compressionMode) => {
+      const settings = {
+        colorSpace: 'srgb',
+        mipmap: true,
+        compressionMode,
+        downscaleMaxDimension: 8,
+      };
+      const source = await importTexture(settings);
+      const embedded = await decodeImageForImport(
+        makePng(16, 16, [200, 40, 40, 255]),
+        'image/png',
+        settings,
+      );
+      expect(embedded.ok).toBe(true);
+      if (!embedded.ok) throw new Error('embedded image import failed');
+      expect(embedded.value.texture).toEqual(source.payload);
+      expect(embedded.value.bytes).toEqual(source.artifacts?.body?.bytes);
+      expect(embedded.value.assetCodec?.name).toBe(source.artifacts?.body?.assetCodec?.name);
+      expect(embedded.value.mediaType).toBe(
+        compressionMode === 'none' ? 'image/png' : 'image/ktx2',
+      );
+    },
+    30_000,
+  );
+
+  it('retains each import boundary interpretation of the auto mip token', async () => {
+    const settings = { mipmap: 'auto', compressionMode: 'none' };
+    const source = await importTexture(settings);
+    const embedded = await decodeImageForImport(
+      makePng(16, 16, [200, 40, 40, 255]),
+      'image/png',
+      settings,
+    );
+    expect((source.payload as TextureAsset).mips).toEqual({ kind: 'generate' });
+    expect(embedded.ok && embedded.value.texture.mips).toEqual({ kind: 'none' });
+  });
+
   it.skipIf(!pkgBuilt)(
     'a compressed mipmapped PNG bakes the full chain into the KTX2 and declares it packed',
     async () => {

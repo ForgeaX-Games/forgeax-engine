@@ -30,6 +30,11 @@ export {
   RelationshipTargetReadonlyError,
 } from './errors/relationship-errors';
 export {
+  SharedKernelEligibilityError,
+  SharedKernelFailureError,
+  WorldPoisonedError,
+} from './errors/shared-kernel-errors';
+export {
   SharedFieldInvalidValueError,
   SpriteInstancesCountMismatchError,
   SpriteInstancesMutuallyExclusiveWithInstancesError,
@@ -49,12 +54,6 @@ export {
   validateEnumFieldValues,
   validateNumericFieldValues,
 } from './errors/validation-errors';
-
-export {
-  SharedKernelEligibilityError,
-  SharedKernelFailureError,
-  WorldPoisonedError,
-} from './execution/shared-kernel';
 
 /**
  * Thrown when an attempt is made to encode an entity index that does not fit

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "3D third-person collectathon showcase game — 11 forgeax engine capabilities combined in a single level",
+  "description": "3D third-person collectathon showcase game \u2014 11 forgeax engine capabilities combined in a single level",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
@@ -70,8 +70,8 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-shader-compiler": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

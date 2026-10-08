@@ -186,6 +186,7 @@ describe('typed shadow layers with partial per-view cache hits', () => {
           invalidationReason: (identity: ShadowViewIdentity) =>
             hits.has(`${identity.kind}:${identity.index}`) ? undefined : 'content-changed',
           texelCulled: () => undefined,
+          cameraCulled: () => undefined,
           dirtyRects: () => undefined,
         },
         pipelineState: { perPassResources: {} },

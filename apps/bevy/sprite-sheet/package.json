@@ -24,19 +24,38 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   },
   "forgeax": {
-    "bevyExample": { "name": "sprite_sheet", "category": "2D Rendering", "status": "implemented" },
+    "bevyExample": {
+      "name": "sprite_sheet",
+      "category": "2D Rendering",
+      "status": "implemented"
+    },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-sprite-sheet smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level" },
-      "fps": { "enabled": false, "reason": "sprite sheet demo; fps no-regression covered by engine-runtime gates" },
-      "bench": { "enabled": false, "reason": "sprite sheet demo; bench focus on engine-math / pixel-parity" },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/bevy-sprite-sheet smoke" },
-      "spike-report": { "enabled": false, "reason": "not a spike app; Bevy sprite sheet reproduction" }
+      "bundle-size": {
+        "enabled": false,
+        "reason": "vite app bundle downstream of engine-runtime sizes already tracked at the package level"
+      },
+      "fps": {
+        "enabled": false,
+        "reason": "sprite sheet demo; fps no-regression covered by engine-runtime gates"
+      },
+      "bench": {
+        "enabled": false,
+        "reason": "sprite sheet demo; bench focus on engine-math / pixel-parity"
+      },
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/bevy-sprite-sheet smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "not a spike app; Bevy sprite sheet reproduction"
+      }
     }
   }
 }

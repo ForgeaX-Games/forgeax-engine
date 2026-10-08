@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { DAWN_COMPACT_TEST_FILES } from '../dawn-compact-roster.mjs';
+import { DAWN_GATE_GROUPS, DAWN_GATE_SHARDS } from '../dawn-gate-roster.mjs';
 
 const workflow = readFileSync(resolve('.github/workflows/nightly.yml'), 'utf8');
 const shadowFieldsObservable = readFileSync(
@@ -53,15 +55,20 @@ test('nightly failure issue records failed jobs and deduplicates reruns', () => 
   assert.match(section, /github\.rest\.issues\.create/);
 });
 
-test('nightly coverage checkout keeps the historical sibling-gate baseline', () => {
+test('nightly keeps full Linux history and only current hosted probe inputs', () => {
   const checkout = workflow.slice(
     workflow.indexOf('      - name: Checkout\n'),
     workflow.indexOf('      - name: Setup Node.js for WASM hydration\n'),
   );
   assert.match(
     checkout,
-    /fetch-depth: 0/,
-    'nightly must retain the historical commit used by the sibling ancestry gate',
+    /fetch-depth: \$\{\{ matrix\.hostedPlatform && 1 \|\| 0 \}\}/,
+    'Linux retains the historical sibling baseline; hosted probes need only the current commit',
+  );
+  assert.match(
+    checkout,
+    /submodules: \$\{\{ matrix\.ubuntu && 'recursive' \|\| false \}\}/,
+    'Linux keeps the asset/View/Rust inputs; hosted procedural native probes do not fetch them',
   );
 });
 
@@ -74,6 +81,22 @@ test('nightly provisions Node before the wgpu-wasm provenance step', () => {
   assert.ok(node < wgpu, 'Node setup must precede build.sh');
 });
 
+test('full Linux nightly uses the verified native and coverage capacity pool', () => {
+  const section = jobSection('smoke-browser-dawn');
+  assert.match(section, /runner: '\["self-hosted", "Linux", "X64", "heavy"\]'/);
+  assert.match(
+    section,
+    /- name: Verify full Linux gate capacity\n\s+if: matrix\.ubuntu\n\s+run: node scripts\/ci\/verify-runner-pool-capacity\.mjs --pool heavy/,
+  );
+  const linux = section.slice(
+    section.indexOf('- name: self-hosted-linux-heavy'),
+    section.indexOf('- name: macos-latest'),
+  );
+  assert.match(linux, /ubuntu: true\n\s+hostedPlatform: false/);
+  assert.match(linux, /timeout: 90/);
+  assert.doesNotMatch(section, /FORGEAX_DAWN_LIGHTWEIGHT/);
+});
+
 test('nightly uses the canonical package graph and declaration preflight', () => {
   const section = jobSection('smoke-browser-dawn');
   const start = section.indexOf(
@@ -82,6 +105,9 @@ test('nightly uses the canonical package graph and declaration preflight', () =>
   assert.notEqual(start, -1, 'missing nightly package build step');
   const end = section.indexOf('\n      - name:', start + 1);
   const build = section.slice(start, end === -1 ? undefined : end);
+  assert.match(build, /shell: bash/);
+  assert.match(build, /if \[ "\$RUNNER_OS" = "Windows" \]; then/);
+  assert.match(build, /export FORGEAX_PACKAGE_BUILD_CONCURRENCY=2/);
   assert.match(build, /FORGEAX_BUILD_NO_TASK_CACHE: ['"]1['"]/);
   assert.match(build, /node scripts\/build-packages\.mjs/);
   assert.match(build, /node scripts\/typecheck-output-preflight\.mjs/);
@@ -117,7 +143,7 @@ test('nightly bounds hosted platform probes and keeps the complete roster on Lin
   );
   assert.match(
     section,
-    /- name: Vitest dawn project \(real GPU command capture\)[\s\S]*?FORGEAX_SHARED_APP_INPUTS_MANIFEST: \$\{\{ github\.workspace \}\}\/shared-build-inputs\/manifest\.json[\s\S]*?run: node scripts\/ci\/run-dawn-gate\.mjs/,
+    /- name: Vitest dawn project \(real GPU command capture\)[\s\S]*?FORGEAX_SHARED_APP_INPUTS_MANIFEST: \$\{\{ github\.workspace \}\}\/shared-build-inputs\/manifest\.json[\s\S]*?run: >-\s+node scripts\/ci\/run-with-runner-cpu-affinity\.mjs --\s+node scripts\/ci\/run-dawn-gate\.mjs/,
     'nightly must run the same complete gate after producing its shader inputs',
   );
   assert.doesNotMatch(section, /FORGEAX_DAWN_LIGHTWEIGHT/);
@@ -216,4 +242,95 @@ test('nightly success closes only machine-tracked issues with proof', () => {
   assert.match(section, /includes\('\*\*nightly run id\*\*:'\) \|\| legacyNightlyFailure/);
   assert.match(section, /state: 'closed'/);
   assert.match(section, /\*\*scenario\*\*: nightly-green/);
+});
+
+test('Bun installs only after every pnpm consumer in the shared Linux workspace', () => {
+  const section = jobSection('smoke-browser-dawn');
+  const install = section.indexOf('- name: Bun install (frozen)');
+  assert.ok(install > section.lastIndexOf('pnpm '));
+  assert.match(section.slice(install), /if: matrix\.ubuntu/);
+  assert.match(section.slice(install), /bun install --frozen-lockfile --ignore-scripts/);
+});
+
+test('Windows source and smoke gates fail immediately and retain a bounded heap', () => {
+  const section = jobSection('smoke-browser-dawn');
+  for (const name of ['English-only check', 'Hello-triangle headless smoke']) {
+    const start = section.indexOf(`- name: ${name}`);
+    const end = section.indexOf('\n      - name:', start + 1);
+    const step = section.slice(start, end);
+    assert.match(step, /shell: bash/);
+    if (name.includes('smoke')) {
+      assert.match(step, /NODE_OPTIONS: --max-old-space-size=4096/);
+      assert.ok(
+        /FORGEAX_SHADER_COMPILE_WORKERS: \$\{\{ runner\.os == 'Windows' && '2' \|\| '' \}\}/.test(
+          step,
+        ),
+      );
+      assert.match(
+        step,
+        /pnpm --filter @forgeax\/hello-triangle build\s+pnpm --filter @forgeax\/hello-triangle smoke/,
+      );
+    }
+  }
+});
+
+test('a successful diagnostic branch nightly cannot close main tracking issues', () => {
+  assert.match(jobSection('notify-success'), /github\.ref == 'refs\/heads\/main'/);
+});
+
+test('full Linux nightly consumers inherit the existing software-GPU CPU envelope', () => {
+  assert.match(workflow, /LP_NUM_THREADS: '?4'?/);
+  const section = jobSection('smoke-browser-dawn');
+  for (const command of ['run-dawn-gate', 'run-split-vitest-coverage']) {
+    assert.match(
+      section,
+      new RegExp(
+        `node scripts/ci/run-with-runner-cpu-affinity\\.mjs --\\s+node scripts/ci/${command}\\.mjs`,
+      ),
+    );
+  }
+});
+
+test('nightly full Linux shards conserve every native owner and one coverage owner', () => {
+  const matrix = workflow.slice(
+    workflow.indexOf('        include:'),
+    workflow.indexOf('    runs-on:'),
+  );
+  const linuxRows = matrix
+    .split('          - name: ')
+    .slice(1)
+    .filter((row) => row.includes('ubuntu: true'));
+  assert.equal(linuxRows.length, 4);
+  const selections = linuxRows.map((row) => row.match(/dawnShard: '([1-4])\/4'/)?.[1]);
+  assert.deepEqual(selections.toSorted(), ['1', '2', '3', '4']);
+  const command = workflow.match(/node scripts\/ci\/run-dawn-gate\.mjs ([^\n]+)/)?.[1];
+  assert.ok(command, 'nightly must invoke the native gate CLI');
+  const owners = selections.flatMap((index) => {
+    const args = command.replace('${{ matrix.dawnShard }}', `${index}/4`).trim().split(/\s+/);
+    const result = spawnSync(
+      process.execPath,
+      ['scripts/ci/run-dawn-gate.mjs', ...args, '--dry-run'],
+      {
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(result.status, 0, `nightly shard ${index}: ${result.stderr}`);
+    const groups = JSON.parse(result.stdout);
+    assert.deepEqual(
+      new Set(groups.map((group) => group.id)),
+      new Set(DAWN_GATE_SHARDS[Number(index) - 1]),
+    );
+    return groups.map((group) => group.id);
+  });
+  assert.equal(new Set(owners).size, owners.length, 'no duplicate native owners');
+  assert.deepEqual(owners.toSorted(), DAWN_GATE_GROUPS.map((group) => group.id).toSorted());
+  assert.equal(linuxRows.filter((row) => /coverage: true/.test(row)).length, 1);
+  for (const row of linuxRows) assert.match(row, /timeout: 90/);
+  for (const name of [
+    'Install Playwright Chrome Beta (for nightly browser-owned unit coverage)',
+    'Vitest unit + coverage (nightly fallback for AC-33)',
+  ]) {
+    assert.ok(workflow.includes(`- name: ${name}\n        if: matrix.ubuntu && matrix.coverage`));
+  }
+  assert.doesNotMatch(workflow, /FORGEAX_DAWN_LIGHTWEIGHT/);
 });

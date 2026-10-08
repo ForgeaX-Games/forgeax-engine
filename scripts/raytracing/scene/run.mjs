@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { create, globals } from '@forgeax/engine-dawn-node';
 import UPNG from 'upng-js';
-import { create, globals } from 'webgpu';
 import {
   attachRecorder,
   buildFrameModel,

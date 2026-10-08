@@ -21,10 +21,18 @@ function resolveFields(
   rawFields: Record<string, unknown>,
   refs: readonly string[] | undefined,
 ): Record<string, unknown> | ParseSceneError | undefined {
-  if (refs === undefined) return { ...rawFields };
   const resolved: Record<string, unknown> = {};
   for (const [fieldName, value] of Object.entries(rawFields)) {
-    if (HANDLE_FIELD_NAMES.has(fieldName) && typeof value === 'number' && Number.isInteger(value)) {
+    if (HANDLE_FIELD_NAMES.has(fieldName) && value === null) {
+      resolved[fieldName] = 0;
+      continue;
+    }
+    if (
+      refs !== undefined &&
+      HANDLE_FIELD_NAMES.has(fieldName) &&
+      typeof value === 'number' &&
+      Number.isInteger(value)
+    ) {
       if (value < 0 || value >= refs.length) {
         return {
           entityKey,
@@ -40,7 +48,11 @@ function resolveFields(
     if (HANDLE_ARRAY_FIELD_NAMES.has(fieldName) && Array.isArray(value)) {
       const values: unknown[] = [];
       for (const [arrayIndex, item] of value.entries()) {
-        if (typeof item !== 'number' || !Number.isInteger(item)) {
+        if (item === null) {
+          values.push(0);
+          continue;
+        }
+        if (refs === undefined || typeof item !== 'number' || !Number.isInteger(item)) {
           values.push(item);
           continue;
         }

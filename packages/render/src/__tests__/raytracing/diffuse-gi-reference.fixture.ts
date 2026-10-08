@@ -29,7 +29,7 @@ export async function verifyGiPathReference(fixture: DiffuseGiFixture) {
           kind: 'directional',
           contactShadowLength: 0,
           direction: vec3.create(-1, 0, 0),
-          color: vec3.create(1, 1, 1),
+          color: vec3.create(Math.PI, Math.PI, Math.PI),
           intensity: Math.PI,
         },
       ],

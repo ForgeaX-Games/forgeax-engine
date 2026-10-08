@@ -1,4 +1,5 @@
 import { Console } from 'node:console';
+import { createHash } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -9,16 +10,23 @@ import { fileURLToPath } from 'node:url';
 import { audioImporter } from '@forgeax/engine-audio-webaudio/audio-importer';
 import { fbxImporter } from '@forgeax/engine-fbx';
 import { fontImporter } from '@forgeax/engine-font/font-importer';
-import { gltfImporter } from '@forgeax/engine-gltf';
+import { gltfImporter } from '@forgeax/engine-gltf/node-importer';
 import { type BackendHost, createBackendHost } from '@forgeax/engine-host/backend';
 import { createHostAssembly, type HostAssembly } from '@forgeax/engine-host/protocol';
 import { attachHostWebSocketServer, createHostTransport } from '@forgeax/engine-host/transport';
 import { imageImporter } from '@forgeax/engine-image/image-importer';
 import { iesImporter } from '@forgeax/engine-import';
+import { objImporter, stlImporter, svgImporter } from '@forgeax/engine-mesh-io';
 import { BUILTIN_MESH_ASSETS } from '@forgeax/engine-pack/builtin';
-import { type ScanInventory, scanInventory } from '@forgeax/engine-pack/scanner';
-import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
+import {
+  declaredPackAssets,
+  declaredSourceGuids,
+  type ScanInventory,
+  scanInventory,
+} from '@forgeax/engine-pack/scanner';
+import { createScriptablePackSourceSnapshot } from '@forgeax/engine-pack/source-node';
 import { validateCanonicalKitReceipt } from '@forgeax/engine-preview';
+import type { SsrAdmissionIdentity } from '@forgeax/engine-render';
 import { createMaterialPackCooker } from '@forgeax/engine-shader-compiler';
 import { createStandaloneRuntimeAssetBinding, type Importer } from '@forgeax/engine-types';
 import { createUiImporter } from '@forgeax/engine-ui/importer';
@@ -42,6 +50,7 @@ import {
   assertPluginSourceInputs,
   discoverPluginAssets,
   isPluginAssetSourceIgnoredPath,
+  type PluginSourceInventory,
   publishedPluginInventory,
 } from './build/plugin-assets.js';
 import {
@@ -51,7 +60,11 @@ import {
 } from './build/plugin-programs.js';
 import { runtimePacksSource } from './build/runtime-packs-source.js';
 import { verifyDist, writeDistManifest } from './dist.js';
-import { inspectEngineWorkspace, readEngineBinding } from './engine-binding.js';
+import {
+  enginePackageRuntimeIdentity,
+  inspectEngineWorkspace,
+  readEngineBinding,
+} from './engine-binding.js';
 import { environmentExecutionWorkers } from './execution-workers.js';
 import type { BootstrapRoot } from './host/base-host.js';
 import {
@@ -60,6 +73,7 @@ import {
   hostBindingError,
   validateHostBinding,
 } from './host-binding.js';
+import { preparePreviewHttpArtifacts } from './preview-http-artifacts.js';
 import { commandError, readProjectFacts } from './project.js';
 import { projectToolProjection } from './tools/project-tools.js';
 import type {
@@ -84,6 +98,9 @@ export const DEFAULT_IMPORTERS: readonly Importer[] = [
   imageImporter,
   fbxImporter,
   gltfImporter,
+  objImporter,
+  stlImporter,
+  svgImporter,
   fontImporter,
   iesImporter,
   createUiImporter(),
@@ -138,28 +155,8 @@ async function prepareBuiltinPack(
 ): Promise<string | undefined> {
   if (inventory === undefined) return undefined;
   const declared = new Set<string>();
-  for (const declaration of inventory.declarations.values()) {
-    if (declaration.format === 'pack.json') {
-      if (declaration.value.schemaVersion === '3.0.0') {
-        const parsed = parsePackSourceJson(declaration.value);
-        if (parsed.ok && parsed.value.format === 'direct') {
-          const projected = projectDirectPackJson(parsed.value);
-          if (projected.ok) {
-            for (const asset of projected.value.assets) declared.add(asset.guid.toLowerCase());
-          }
-        }
-      } else {
-        for (const asset of declaration.value.assets) declared.add(asset.guid.toLowerCase());
-      }
-      continue;
-    }
-    if (declaration.format === 'pack.ts') continue;
-    const subAssets =
-      'subAssets' in declaration.value && Array.isArray(declaration.value.subAssets)
-        ? declaration.value.subAssets
-        : [];
-    for (const asset of subAssets) declared.add(asset.guid.toLowerCase());
-  }
+  for (const declaration of inventory.declarations.values())
+    for (const guid of declaredSourceGuids(declaration)) declared.add(guid.toLowerCase());
   const missing = BUILTIN_MESH_ASSETS.filter((asset) => !declared.has(asset.guid.toLowerCase()));
   if (missing.length === 0) return undefined;
   const packPath = resolve(generated, 'engine-builtins.pack.json');
@@ -193,19 +190,7 @@ async function discoverMaterialPackages(
   const paths: string[] = [];
   for (const declaration of inventory.declarations.values()) {
     if (declaration.format !== 'pack.json') continue;
-    let assets: readonly {
-      readonly kind?: unknown;
-      readonly payload?: { readonly kind?: unknown };
-    }[] = [];
-    if (declaration.value.schemaVersion === '3.0.0') {
-      const parsed = parsePackSourceJson(declaration.value);
-      if (!parsed.ok || parsed.value.format !== 'direct') continue;
-      const projected = projectDirectPackJson(parsed.value);
-      if (!projected.ok) continue;
-      assets = projected.value.assets;
-    } else {
-      assets = declaration.value.assets;
-    }
+    const assets = declaredPackAssets(declaration.value);
     if (
       assets.length === 1 &&
       assets[0]?.kind === 'material' &&
@@ -404,6 +389,68 @@ async function consumerEngineAliases(
   } catch {
     return [];
   }
+}
+
+async function hostEngineAliases(
+  projectRoot: string,
+  binding: DevKitHostBinding | undefined,
+): Promise<
+  readonly {
+    readonly find: string;
+    readonly replacement: string;
+    readonly customResolver: (id: string) => string | null;
+  }[]
+> {
+  const hostRoot = binding?.backend.context.get('devkitBackend')?.hostPackageRoot;
+  if (hostRoot === undefined) return [];
+  const hostManifest = JSON.parse(await readFile(resolve(hostRoot, 'package.json'), 'utf8'));
+  // A generic presentation package need not use Engine. Only an explicit
+  // Engine dependency selects a paired runtime and its singleton vocabulary.
+  if (hostManifest.dependencies?.['@forgeax/engine'] === undefined) return [];
+  const hostRequire = createRequire(resolve(hostRoot, 'package.json'));
+  const engineRoot = dirname(hostRequire.resolve('@forgeax/engine/package.json'));
+  const manifest = JSON.parse(await readFile(resolve(engineRoot, 'package.json'), 'utf8'));
+  const engineRequire = createRequire(resolve(engineRoot, 'package.json'));
+  const local = await readEngineBinding(projectRoot);
+  if (!local.ok) hostBindingError(`${local.error.code}: ${local.error.hint}`);
+  const localPackages = await engineWorkspacePackages(local.value?.path);
+  const projectRequire = createRequire(resolve(projectRoot, 'package.json'));
+  const projectEngineRequire = local.value?.path
+    ? undefined
+    : createRequire(projectRequire.resolve('@forgeax/engine/package.json'));
+  const aliases = [];
+  for (const name of [
+    '@forgeax/engine',
+    ...Object.keys(manifest.dependencies ?? {}).filter((name) =>
+      name.startsWith('@forgeax/engine-'),
+    ),
+  ]) {
+    const selected = await realpath(dirname(engineRequire.resolve(`${name}/package.json`)));
+    const target =
+      localPackages.get(name)?.root ??
+      dirname(
+        projectEngineRequire?.resolve(`${name}/package.json`) ??
+          projectRequire.resolve(`${name}/package.json`),
+      );
+    const actual = await realpath(target);
+    if (
+      actual !== selected &&
+      (await enginePackageRuntimeIdentity(actual)) !==
+        (await enginePackageRuntimeIdentity(selected))
+    ) {
+      hostBindingError(
+        `frontend Engine source conflict for ${name}: host=${selected}; project=${actual}. Select the same Engine build before opening this target.`,
+      );
+    }
+    const selectedManifest = JSON.parse(await readFile(resolve(selected, 'package.json'), 'utf8'));
+    const selectedPackages = new Map([[name, { root: selected, manifest: selectedManifest }]]);
+    aliases.push({
+      find: name,
+      replacement: name,
+      customResolver: (id: string) => engineWorkspaceImport(id, selectedPackages) ?? null,
+    });
+  }
+  return aliases.sort((a, b) => b.find.length - a.find.length);
 }
 
 async function hostFrontendModuleAlias(
@@ -607,11 +654,47 @@ const gameProjection = {
 };
 `;
 
+/** The existing input fence identifies this generation, not a Git commit or final bundle. */
+function projectSsrIdentity(
+  facts: ProjectFacts,
+  inventory: PluginSourceInventory,
+  generation: {
+    readonly command: 'serve' | 'build';
+    readonly base: string;
+    readonly bootstrapRoot: BootstrapRoot;
+    readonly sessionGeneration: number;
+  },
+): SsrAdmissionIdentity {
+  const digest = (value: unknown): string =>
+    `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
+  const inputs = [...inventory.sourceInputs]
+    .map(([path, revision]) => [relative(facts.root, path).split(sep).join('/'), revision] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const sourceTree = digest(inputs);
+  const lockSha256 = digest(
+    inputs.filter(([path]) =>
+      ['package.json', 'pnpm-lock.yaml', 'bun.lock', 'package-lock.json'].includes(path),
+    ),
+  );
+  return {
+    sourceHead: `project:${facts.id}`,
+    sourceTree,
+    lockSha256,
+    buildSha256: digest({
+      sourceTree,
+      lockSha256,
+      roots: Object.entries(facts.roots).sort(([left], [right]) => left.localeCompare(right)),
+      ...generation,
+    }),
+  };
+}
+
 function executionBootstrapSource(
   _facts: ProjectFacts,
   _generated: string,
   bootstrapRoot: BootstrapRoot,
   sessionGeneration: number,
+  ssrIdentity: SsrAdmissionIdentity,
 ): string {
   return `import { audioPlugin } from '@forgeax/engine/audio';
 import type { GameHost } from '@forgeax/engine/app';
@@ -656,6 +739,7 @@ const bridge = {
   const runtimePacks = await createRuntimePackOptions(runtimeBinding.scopeId, () => prepareDelivery());
   const pluginPrograms = createPrograms(crypto.randomUUID(), 'engine-worker', ${sessionGeneration}, runtimePacks.programHost);
   return {
+    ssrIdentity: ${JSON.stringify(ssrIdentity)},
     runtimePacks: { ...runtimePacks, programHost: pluginPrograms.programHost ?? runtimePacks.programHost },
     plugins: [audioPlugin(), skinningPlugin(), bridge],
     pluginPrograms,
@@ -676,6 +760,8 @@ function hostSource(
   rhiCaptureEnabled = false,
   devMode = false,
   initialAssembly: HostAssembly = createHostAssembly(),
+  ssrIdentity?: SsrAdmissionIdentity,
+  previewRhiWindow = false,
 ): string {
   const boundRoot =
     binding?.workspace?.execution === 'game'
@@ -708,11 +794,20 @@ import { physicsComponentsPlugin } from '@forgeax/engine/physics';
 import { skinningPlugin } from '@forgeax/engine/skinning';
 import { createPrimitiveMesh } from '@forgeax/engine/geometry';
 import { mat4 } from '@forgeax/engine/math';
-import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Skylight, SkyboxBackground, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED } from '@forgeax/engine/render';
+import { CAMERA_PROJECTION_ORTHOGRAPHIC, Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, Skylight, SkyboxBackground, TONEMAP_NONE, TONEMAP_REINHARD_EXTENDED, materialSampledTextureBudget } from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine/scene';
 import { type SceneAsset } from '@forgeax/engine/types';
 import { ParticleEffectPlayer } from '@forgeax/engine/vfx';
 import { createVfxRuntimeHost } from '@forgeax/engine/vfx-render';
+${
+  previewRhiWindow && !rhiCaptureEnabled
+    ? `import { attachRecorder } from '@forgeax/engine/rhi-debug';
+import { uploadTape } from '@forgeax/engine/rhi-debug/browser';
+import { subscribeBrowserFrameSubmitted } from '@forgeax/engine/app';
+import { RhiError } from '@forgeax/engine/rhi';
+import { err } from '@forgeax/engine/types';`
+    : ''
+}
 
 const initialAssembly = createHostAssembly({ ...${JSON.stringify(initialAssembly)},
   ...(hostDescriptor === null ? {} : { root: hostDescriptor }) });
@@ -750,6 +845,82 @@ function makeVfxRuntimeHost() {
       },
     },
   });
+}
+${
+  previewRhiWindow && !rhiCaptureEnabled
+    ? `async function previewRhiDiagnostic(context, canvas, targetId) {
+  const controller = new AbortController();
+  const backend = typeof navigator !== 'undefined' && navigator.gpu !== undefined
+    ? await import('@forgeax/engine/rhi-webgpu')
+    : await import('@forgeax/engine/rhi-wgpu');
+  if ('ensureReady' in backend) await backend.ensureReady();
+  const attached = attachRecorder(backend);
+  if (!attached.ok) throw attached.error;
+  const attachment = attached.value;
+  let disposed = false;
+  let worldIdentity;
+  const observation = { targetId, seed: 'omitted', evidence: 'commands-and-bindings', status: 'attached', mapping: 'partial', frames: [] };
+  const publish = () => { if (!disposed) { try { canvas.dataset.forgeaxPreviewRhiWindow = JSON.stringify(observation); } catch {} } };
+  const remove = subscribeBrowserFrameSubmitted(canvas, (submitted) => {
+    if (observation.frames.length >= 4) return;
+    const receipt = submitted.receipt;
+    const previous = observation.frames.at(-1);
+    const valid = receipt !== undefined && worldIdentity !== undefined && submitted.worldIdentity === worldIdentity &&
+      receipt.frameId === submitted.frameId && receipt.deviceGeneration === submitted.deviceGeneration &&
+      (previous === undefined ? submitted.frameId === 1 : (submitted.frameId === previous.frameId + 1 && submitted.deviceGeneration === previous.deviceGeneration));
+    const row = { tapeFrameIndex: observation.frames.length, frameId: submitted.frameId, deviceGeneration: submitted.deviceGeneration,
+      worldIdentity: submitted.worldIdentity, presentation: receipt?.presentation, identityValid: valid,
+      completion: receipt === undefined ? 'unavailable' : 'pending' };
+    observation.frames.push(row);
+    observation.mapping = observation.frames.length === 4 && observation.frames.every((frame) => frame.identityValid) ? 'complete' : 'partial';
+    publish();
+    if (receipt === undefined) return;
+    void receipt.completed.then((result) => {
+      row.completion = result.ok ? 'fulfilled' : 'error';
+      publish();
+    }, () => { row.completion = 'rejected'; publish(); });
+  });
+  context.effect(() => async () => {
+    disposed = true;
+    controller.abort();
+    remove();
+    const result = await attachment.dispose();
+    if (!result.ok) throw result.error;
+  }, 'devkit/preview-rhi-window');
+  publish();
+  return {
+    options: { rhi: attachment.backend.rhi, rhiInstrumentation: {
+      resolveSurfaceDevice(device) {
+        const resolved = attachment.backend.unwrapDeviceForSurface(device);
+        return resolved.ok ? resolved : err(new RhiError({ code: 'rhi-not-available',
+          expected: 'The preview recorder resolves its surface device', hint: resolved.error.hint }));
+      },
+      onFrameBoundary() { void attachment.frameBoundary(); },
+      onDeviceLost() { observation.mapping = 'partial'; attachment.deviceLost(); publish(); },
+    } },
+    async arm(world) {
+      worldIdentity = world;
+      observation.worldIdentity = world;
+      observation.status = 'seeding'; publish();
+      const capture = attachment.captureFrames(4, { seed: { maxResourceBytes: 0 }, signal: controller.signal });
+      void capture.then(async (result) => {
+        if (!result.ok) { observation.status = 'capture-error'; observation.error = result.error; publish(); return; }
+        observation.status = 'uploading'; publish();
+        const uploaded = await uploadTape(result.value, { signal: controller.signal });
+        observation.status = uploaded.ok ? 'uploaded' : 'upload-error';
+        if (uploaded.ok) observation.artifact = uploaded.value;
+        else observation.error = uploaded.error;
+        publish();
+      }).catch((cause) => { observation.status = 'capture-error'; observation.error = String(cause); publish(); });
+      const seeded = await attachment.frameBoundary();
+      if (!seeded.ok) throw seeded.error;
+      if (observation.status === 'seeding' && !controller.signal.aborted) observation.status = 'recording';
+      publish();
+    },
+  };
+}
+`
+    : ''
 }
 const previewVfxHosts = new WeakMap();
 if (resource?.kind === 'vfx') ensureVfxRuntimeHost();
@@ -830,6 +1001,8 @@ canvas.addEventListener('forgeax:frame-submitted', (event) => {
 // Presentation, reparenting, visibility and restoration belong to its consumer.
 const engineWorkspaceSurface = canvas.parentElement ?? canvas;
 const resizeCanvas = () => {
+  // A hidden presentation retains its last drawable size for explicit capture.
+  if (canvas.clientWidth <= 0 || canvas.clientHeight <= 0) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const width = Math.max(1, Math.round(canvas.clientWidth * dpr));
   const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
@@ -989,12 +1162,20 @@ function textureRendererObservation(inspection, expected, frame) {
   };
 }
 
-async function previewOwnerFacts(assets, resource, payload) {
+async function previewOwnerFacts(assets, resource, payload, textureBudget) {
   if (resource.kind === 'material') {
     const primaryPass = selectedMaterialPass(payload);
     const program = primaryPass?.program?.module;
     const pass = primaryPass?.name;
     return {
+      ...(textureBudget === undefined
+        ? {}
+        : {
+            sampledTextureLimit: textureBudget.limit,
+            sampledTextureRequired: textureBudget.required,
+            sampledTextureTransmission: textureBudget.transmission,
+            sampledTextureConflicts: textureBudget.conflicts.join(','),
+          }),
       subjectDigest: await previewDigest(payload),
       bindingsDigest: await previewDigest(payload.passes),
       closureDigest: await previewDigest(payload.values ?? payload.passes),
@@ -1049,7 +1230,7 @@ function exposeGameInspection(app) {
     },
     renderer() {
       const inspection = app.renderer.inspect();
-      return { state: inspection.state, frameId: inspection.frame.frameId, execution: app.execution.report() };
+      return { state: inspection.state, frameId: inspection.frame.frameId, frame: inspection.frame, execution: app.execution.report(), lastError: app.lastError };
     },
   };
 }
@@ -1311,7 +1492,10 @@ if (resource !== undefined) {
     spawnOwned({ component: Skylight, data: { equirect: canonicalEnvironment } });
     spawnOwned({ component: SkyboxBackground, data: { equirect: canonicalEnvironment } });
   }
-  const ownerFacts = await previewOwnerFacts(assets, resource, payload);
+  const textureBudget = resource.kind === 'material' && materialHandle !== undefined
+    ? materialSampledTextureBudget(app.world, assets, materialHandle)
+    : undefined;
+  const ownerFacts = await previewOwnerFacts(assets, resource, payload, textureBudget);
   const publishedAsset = resource.kind === 'mesh' && payload.kind === 'mesh' && payload.aabb !== undefined
     ? { ...payload, aabb: Array.from(payload.aabb) }
     : payload;
@@ -1443,6 +1627,7 @@ const appBootstrapPlugin = {
           }
         : {
             context: ctx.root,
+            ${ssrIdentity === undefined ? '' : `ssrIdentity: ${JSON.stringify(ssrIdentity)},`}
             assetCatalog,
             pluginPrograms,
             runtimePacks: { ...runtimePacks, programHost: pluginPrograms.programHost ?? runtimePacks.programHost },
@@ -1499,7 +1684,7 @@ const appBootstrapPlugin = {
           renderer: () => {
             const execution = app.execution.report();
             const local = 'renderer' in app ? app.renderer.inspect() : undefined;
-            return { state: execution.render?.state ?? local?.state ?? (execution.engine.health === 'running' ? 'alive' : execution.engine.health), frameId: execution.render?.completedFrame ?? execution.frame.completed, execution };
+            return { state: execution.render?.state ?? local?.state ?? (execution.engine.health === 'running' ? 'alive' : execution.engine.health), frameId: execution.render?.completedFrame ?? execution.frame.completed, ...(local === undefined ? {} : { frame: local.frame }), execution, lastError: app.lastError };
           },
         };
         globalThis.__forgeaxGameInspection = inspection;
@@ -1514,15 +1699,18 @@ const appBootstrapPlugin = {
         const extent = (name, fallback) => { const value = Number(query.get(name)); return Number.isSafeInteger(value) && value > 0 ? value : fallback; };
         const fiber = await ctx.plugin(engineWorkspaceBrowserPlugin, {
           app, canvas, surface: engineWorkspaceSurface, transport: hostTransport,
-          ...(workspaceMode ? { createPreviewApp: async ({ context, canvas: previewCanvas, asset }) => {
+          ...(workspaceMode ? { createPreviewApp: async ({ context, canvas: previewCanvas, asset, targetId }) => {
             const vfx = asset.kind === 'vfx' ? makeVfxRuntimeHost() : undefined;
+            ${previewRhiWindow && !rhiCaptureEnabled ? "const diagnostic = asset.kind === 'mesh' ? await previewRhiDiagnostic(context, previewCanvas, targetId) : undefined;" : ''}
             const created = await createApp(previewCanvas, {
               context, assetCatalog: app.pluginContext.get('runtimePacks')?.catalog ?? assetCatalog, plugins: [physicsComponentsPlugin()],
+              ${previewRhiWindow && !rhiCaptureEnabled ? '...diagnostic?.options,' : ''}
               ...(vfx ? { features: [vfx.feature] } : {}),
               ...(import.meta.env.DEV ? { assetRuntimeBinding: runtimeScopeBinding } : {}),
               pointerLockAllowed: () => false,
             }, bundler);
             if (!created.ok) throw created.error;
+            ${previewRhiWindow && !rhiCaptureEnabled ? 'if (diagnostic !== undefined) await diagnostic.arm(created.value.world.identity);' : ''}
             if (vfx) previewVfxHosts.set(created.value, vfx);
             return created.value;
           } } : {}),
@@ -2024,7 +2212,6 @@ function htmlSource(title: string, startupScreen = true): string {
         const reducedMotion =
           typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
         const fadeDurationMs = reducedMotion ? 0 : 150;
-        const canvas = document.querySelector('#app');
         const setStartupTimeout = typeof setTimeout === 'function' ? setTimeout : () => undefined;
         const clearStartupTimeout = (timer) => {
           if (timer !== undefined && typeof clearTimeout === 'function') clearTimeout(timer);
@@ -2044,7 +2231,7 @@ function htmlSource(title: string, startupScreen = true): string {
           }
         };
         const isStartupControlTarget = (target) => {
-          if (target === null || target === undefined) return false;
+          if (!(target instanceof Node)) return false;
           const owns = (node) =>
             node !== null &&
             node !== undefined &&
@@ -2160,7 +2347,7 @@ function htmlSource(title: string, startupScreen = true): string {
           slowVisibleSince = clockNow();
           slowTimer = setStartupTimeout(showSlow, slowRemainingMs);
         };
-        const appendStructuredFailure = (value, prefix, depth, seen, lines) => {
+        const appendStructuredFailure = (value, prefix, seen, lines) => {
           const formatValue = (candidate) => {
             if (typeof candidate === 'string') return candidate;
             try {
@@ -2175,8 +2362,8 @@ function htmlSource(title: string, startupScreen = true): string {
             if (prefix && value !== undefined) lines.push(prefix + ': ' + formatValue(value));
             return;
           }
-          if (depth > 3) {
-            lines.push((prefix || 'cause') + ': [depth limit]');
+          if (seen.size >= 64) {
+            lines.push((prefix || 'cause') + ': [diagnostic node limit]');
             return;
           }
           if (seen.has(value)) {
@@ -2186,7 +2373,7 @@ function htmlSource(title: string, startupScreen = true): string {
           seen.add(value);
           if (Array.isArray(value)) {
             value.forEach((nested, index) =>
-              appendStructuredFailure(nested, (prefix || 'cause') + '[' + index + ']', depth + 1, seen, lines),
+              appendStructuredFailure(nested, (prefix || 'cause') + '[' + index + ']', seen, lines),
             );
             return;
           }
@@ -2213,7 +2400,7 @@ function htmlSource(title: string, startupScreen = true): string {
             const nested = record[key];
             const nestedPrefix = (prefix ? prefix + '.' : '') + key;
             if (nested !== undefined && nested !== null && typeof nested === 'object') {
-              appendStructuredFailure(nested, nestedPrefix, depth + 1, seen, lines);
+              appendStructuredFailure(nested, nestedPrefix, seen, lines);
             } else if (nested !== undefined && nested !== null) {
               lines.push(nestedPrefix + ': ' + formatValue(nested));
             }
@@ -2237,7 +2424,7 @@ function htmlSource(title: string, startupScreen = true): string {
             const nested = record[key];
             const nestedPrefix = (prefix ? prefix + '.' : '') + key;
             if (nested !== null && typeof nested === 'object') {
-              appendStructuredFailure(nested, nestedPrefix, depth + 1, seen, lines);
+              appendStructuredFailure(nested, nestedPrefix, seen, lines);
             } else if (nested !== undefined) {
               lines.push(nestedPrefix + ': ' + formatValue(nested));
             }
@@ -2246,7 +2433,7 @@ function htmlSource(title: string, startupScreen = true): string {
         const formatStartupFailure = (reason) => {
           if (reason !== null && typeof reason === 'object') {
             const lines = [];
-            appendStructuredFailure(reason, '', 0, new Set(), lines);
+            appendStructuredFailure(reason, '', new Set(), lines);
             if (lines.length > 0) return lines.join('\\n');
             try {
               return JSON.stringify(reason) || 'Unknown structured startup failure';
@@ -2290,7 +2477,13 @@ function htmlSource(title: string, startupScreen = true): string {
           if (!query.has('forgeaxWorkspace') && fatalReload !== null && fatalReload instanceof HTMLElement) fatalReload.focus?.();
         };
         const prepare = () => {
-          if (!gamePage || phase !== 'loading') return;
+          if (!gamePage || (phase !== 'loading' && phase !== 'fading')) return;
+          if (phase === 'fading') {
+            clearStartupTimeout(fadeTimer);
+            fadeTimer = undefined;
+            setAttribute(loading, 'aria-hidden', 'false');
+            setAttribute(loading, 'data-fading', 'false');
+          }
           phase = 'preparing';
           latestSubmitted = undefined;
           submittedFrames = new Set();
@@ -2309,6 +2502,7 @@ function htmlSource(title: string, startupScreen = true): string {
           ) return;
           if (
             latestSubmitted === undefined ||
+            latestSubmitted.canvas !== document.querySelector('#app') ||
             event.deviceGeneration !== latestSubmitted.deviceGeneration ||
             (latestSubmitted.worldIdentity !== undefined &&
               event.worldIdentity !== latestSubmitted.worldIdentity) ||
@@ -2328,10 +2522,15 @@ function htmlSource(title: string, startupScreen = true): string {
           clearStartupWork();
           setInputEnabled(false);
           const fadeGeneration = sessionGeneration;
+          const fadeCanvas = latestSubmitted.canvas;
           setAttribute(loading, 'data-fading', 'true');
           setAttribute(loading, 'aria-hidden', 'true');
           fadeTimer = setStartupTimeout(() => {
             if (phase !== 'fading' || fadeGeneration !== sessionGeneration) return;
+            if (fadeCanvas !== document.querySelector('#app')) {
+              prepare();
+              return;
+            }
             phase = 'entered';
             setInputEnabled(true);
             setDisplay(loading, 'none');
@@ -2347,6 +2546,7 @@ function htmlSource(title: string, startupScreen = true): string {
           cleanupStartupListeners();
         };
         const onSubmitted = (event) => {
+          if (event?.target !== document.querySelector('#app')) return;
           const detail = event?.detail;
           if (
             detail !== null &&
@@ -2360,11 +2560,14 @@ function htmlSource(title: string, startupScreen = true): string {
           ) {
             if (
               latestSubmitted !== undefined &&
-              detail.deviceGeneration !== latestSubmitted.deviceGeneration
+              (detail.deviceGeneration !== latestSubmitted.deviceGeneration ||
+                event.target !== latestSubmitted.canvas)
             ) {
-              submittedFrames = new Set();
+              if (phase === 'fading') prepare();
+              else submittedFrames = new Set();
             }
             latestSubmitted = {
+              canvas: event.target,
               frameId: detail.frameId,
               deviceGeneration: detail.deviceGeneration,
               worldIdentity: detail.worldIdentity,
@@ -2374,7 +2577,9 @@ function htmlSource(title: string, startupScreen = true): string {
             );
           }
         };
-        const onCompleted = (event) => enter(event?.detail);
+        const onCompleted = (event) => {
+          if (event?.target === document.querySelector('#app')) enter(event?.detail);
+        };
         const onVisibilityChange = () => {
           if (isForeground()) {
             armSlowTimer();
@@ -2411,11 +2616,9 @@ function htmlSource(title: string, startupScreen = true): string {
         const cleanupStartupListeners = (options = {}) => {
           if (startupListenersCleaned) return;
           startupListenersCleaned = true;
-          if (canvas !== null && typeof canvas.removeEventListener === 'function') {
-            canvas.removeEventListener('forgeax:frame-submitted', onSubmitted);
-            canvas.removeEventListener('forgeax:frame-completed', onCompleted);
-          }
           if (typeof window.removeEventListener === 'function') {
+            window.removeEventListener('forgeax:frame-submitted', onSubmitted, { capture: true });
+            window.removeEventListener('forgeax:frame-completed', onCompleted, { capture: true });
             window.removeEventListener('visibilitychange', onVisibilityChange);
             window.removeEventListener('pagehide', onPageHide);
             window.removeEventListener('error', onError, { capture: true });
@@ -2464,10 +2667,11 @@ function htmlSource(title: string, startupScreen = true): string {
           fatalReload.addEventListener('keyup', onStartupControlKey);
         }
         if (gamePage) {
-          if (canvas !== null && typeof canvas.addEventListener === 'function') {
-            canvas.addEventListener('forgeax:frame-submitted', onSubmitted);
-            canvas.addEventListener('forgeax:frame-completed', onCompleted);
-          }
+          // Render Worker recovery replaces its transferred canvas. Capture
+          // nonbubbling receipts on the stable page and admit only its current
+          // canvas; retired or unrelated surfaces cannot enter this game.
+          window.addEventListener('forgeax:frame-submitted', onSubmitted, { capture: true });
+          window.addEventListener('forgeax:frame-completed', onCompleted, { capture: true });
           window.addEventListener('visibilitychange', onVisibilityChange);
           window.addEventListener('pagehide', onPageHide);
           bindStartupInputCapture();
@@ -2731,6 +2935,7 @@ export async function startPreviewProjectWithHost(
                 root,
                 configFile: false,
                 base: verified.value.base,
+                plugins: [await preparePreviewHttpArtifacts(resolve(root, 'dist'), verified.value)],
                 preview: {
                   open: false,
                   ...port,
@@ -2805,13 +3010,15 @@ export async function createViteConfig(
   const startedAt = performance.now();
   let previousAt = startedAt;
   const timing = (stage: string): void => {
-    if (process.env.FORGEAX_WORKSPACE_TIMING !== '1' || !options.host?.workspace) return;
+    const game = options.host?.workspace?.execution === 'game';
+    if (!game && (process.env.FORGEAX_WORKSPACE_TIMING !== '1' || !options.host?.workspace)) return;
     const now = performance.now();
     console.error(
-      '[forgeax.vite-config.timing]',
+      game ? '[forgeax.play]' : '[forgeax.vite-config.timing]',
       JSON.stringify({
         root: facts.root,
-        targetId: options.host.workspace.targetId,
+        targetId: options.host?.workspace?.targetId,
+        execution: game ? 'game' : 'preview',
         stage,
         totalMs: Math.round(now - startedAt),
         stageMs: Math.round(now - previousAt),
@@ -2872,8 +3079,10 @@ export async function createViteConfig(
       bootstrapRoot === 'resource-bootstrap'
         ? isResourcePreviewIgnoredPath
         : isProjectSourceIgnoredPath;
+    const sourceSnapshot = createScriptablePackSourceSnapshot();
     const scanned = await scanInventory(projectRoots, {
       ignorePath: (path) => isPluginAssetSourceIgnoredPath(facts.root, path),
+      scriptablePack: { metadataOnly: true, sourceSnapshot },
     });
     timing('project-inventory');
     if (!scanned.ok) throw scanned.error;
@@ -2886,7 +3095,7 @@ export async function createViteConfig(
     timing('material-packages');
     // The plugin scan is a superset of the builtins/material scan. Reuse its
     // validated declarations instead of loading every authored Pack twice.
-    const sourceInventory = await discoverPluginAssets(facts, scanned.value);
+    const sourceInventory = await discoverPluginAssets(facts, scanned.value, sourceSnapshot);
     timing('plugin-assets');
     const toolProjection = await projectToolProjection(facts.root, sourceInventory);
     timing('tool-projection');
@@ -2900,6 +3109,12 @@ export async function createViteConfig(
       options.host && options.host.workspace?.execution !== 'game'
         ? composeBoundHostAssembly(options.host, projectAssembly)
         : projectAssembly;
+    const ssrIdentity = projectSsrIdentity(facts, sourceInventory, {
+      command,
+      base,
+      bootstrapRoot,
+      sessionGeneration: assembly.sessionGeneration,
+    });
     await Promise.all([
       writeFile(
         resolve(generated, 'index.html'),
@@ -2916,12 +3131,20 @@ export async function createViteConfig(
           process.env.FORGEAX_ENGINE_RHI_DEBUG === '1',
           command === 'serve',
           assembly,
+          ssrIdentity,
+          command === 'serve' && process.env.FORGEAX_PREVIEW_RHI_WINDOW === '1',
         ),
       ),
       writeFile(resolve(generated, 'runtime-packs.ts'), runtimePacksSource),
       writeFile(
         resolve(generated, 'execution-bootstrap.ts'),
-        executionBootstrapSource(facts, generated, bootstrapRoot, assembly.sessionGeneration),
+        executionBootstrapSource(
+          facts,
+          generated,
+          bootstrapRoot,
+          assembly.sessionGeneration,
+          ssrIdentity,
+        ),
       ),
     ]);
     timing('generated-files');
@@ -2934,7 +3157,10 @@ export async function createViteConfig(
     const runtimeBinding = createStandaloneRuntimeAssetBinding(facts.id);
     const engineWorkspaceResolver = await createEngineWorkspaceResolver(facts.root);
     timing('engine-resolver');
-    const consumerAliases = await consumerEngineAliases(facts.root);
+    const selectedAliases = await hostEngineAliases(facts.root, options.host);
+    const consumerAliases = selectedAliases.length
+      ? selectedAliases
+      : await consumerEngineAliases(facts.root);
     timing('consumer-aliases');
     const frontendAlias = await hostFrontendModuleAlias(options.host);
     timing('frontend-alias');
@@ -2942,7 +3168,12 @@ export async function createViteConfig(
       facts,
       [createMaterialPackCooker(roots), createParticleCodeNativeCookerFromRoots(roots)],
       {
-        resolve: { alias: consumerAliases, dedupe: ['@forgeax/engine'] },
+        resolve: {
+          alias: consumerAliases,
+          dedupe: consumerAliases.length
+            ? consumerAliases.map((alias) => alias.find)
+            : ['@forgeax/engine'],
+        },
         plugins: engineWorkspaceResolver === undefined ? [] : [engineWorkspaceResolver],
       },
     );
@@ -3004,8 +3235,27 @@ export async function createViteConfig(
         : []),
       ...(engineWorkspaceResolver === undefined ? [] : [engineWorkspaceResolver]),
 
-      ...(command === 'serve' && process.env.FORGEAX_ENGINE_RHI_DEBUG === '1'
-        ? [vitePluginRhiDebug({ rootDir: facts.root }) as Plugin]
+      ...(command === 'serve' &&
+      (process.env.FORGEAX_ENGINE_RHI_DEBUG === '1' ||
+        process.env.FORGEAX_PREVIEW_RHI_WINDOW === '1')
+        ? [
+            {
+              ...vitePluginRhiDebug({
+                rootDir:
+                  process.env.FORGEAX_PREVIEW_RHI_WINDOW === '1' &&
+                  process.env.FORGEAX_ENGINE_RHI_DEBUG !== '1'
+                    ? (process.env.FORGEAX_EVIDENCE_DIR ?? facts.root)
+                    : facts.root,
+              }),
+              ...(process.env.FORGEAX_ENGINE_RHI_DEBUG === '1'
+                ? {}
+                : {
+                    config: () => ({
+                      define: { 'import.meta.env.FORGEAX_ENGINE_RHI_DEBUG': JSON.stringify('0') },
+                    }),
+                  }),
+            } as Plugin,
+          ]
         : []),
       forgeaxShader({ materialPackages }) as Plugin,
       pack,
@@ -3190,7 +3440,10 @@ export async function createViteConfig(
         },
       },
     ];
-    if (process.env.FORGEAX_WORKSPACE_TIMING === '1' && options.host?.workspace) {
+    if (
+      options.host?.workspace?.execution === 'game' ||
+      (process.env.FORGEAX_WORKSPACE_TIMING === '1' && options.host?.workspace)
+    ) {
       plugins.unshift({
         name: 'forgeax:workspace-vite-timing-start',
         configResolved() {
@@ -3221,7 +3474,9 @@ export async function createViteConfig(
       plugins,
       resolve: {
         alias: [...(frontendAlias === undefined ? [] : [frontendAlias]), ...consumerAliases],
-        dedupe: ['@forgeax/engine'],
+        dedupe: consumerAliases.length
+          ? consumerAliases.map((alias) => alias.find)
+          : ['@forgeax/engine'],
       },
       server: {
         ...options.server,

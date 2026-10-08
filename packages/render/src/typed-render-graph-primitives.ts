@@ -7,12 +7,15 @@ import {
   type ResolveContext,
 } from '@forgeax/engine-render-graph';
 import { RhiError, type TextureView } from '@forgeax/engine-rhi';
+import { TONEMAP_PARAMS_LAYOUT } from '@forgeax/engine-shader';
 import { err, ok, type PassKind, type PassSelector, type Result } from '@forgeax/engine-types';
+import { atmosphereTextures } from './environment/luts';
 import {
   GPU_TEXTURE_USAGE_COPY_SRC,
   GPU_TEXTURE_USAGE_RENDER_ATTACHMENT,
   GPU_TEXTURE_USAGE_TEXTURE_BINDING,
 } from './gpu-texture-usage';
+import { renderExtentSize } from './pipeline/render-extent';
 import { buildPerFrameBindGroups } from './record/frame-lighting';
 import { encodeMainPass } from './record/main-pass';
 import { encodeFrameObservationCapture } from './record/observation-capture';
@@ -41,12 +44,11 @@ import type {
   RenderPipelineSurfaceMediumPair,
 } from './render-pipeline';
 import { createRenderPipelineTarget, type RenderPipelineTarget } from './render-pipeline';
-import type { OcclusionFrameProjection } from './scene/visibility/occlusion-runtime';
 import {
   getTemporalBindGroupResources,
   getTemporalGpuState,
   getTemporalParamsBuffer,
-  stageTemporalGpuSubmit,
+  stageTemporalGpuWrite,
 } from './temporal/gpu';
 
 function resolvedView(resources: GraphResourceResolver, view: GraphTextureView): TextureView {
@@ -97,14 +99,10 @@ function resolvedDepthView(
   return view.value;
 }
 
-export type TypedFrameObservationDomain = import('./render-contract').FrameObservationDomain;
-export type TypedFrameObservationCapture =
-  import('./render-contract').RenderPipelineObservationCapture;
-
 export function addObservationCapturePass(
   graph: RenderGraphBuilder<RenderPipelineFrame>,
   target: RenderPipelineTarget,
-  domain: TypedFrameObservationDomain,
+  domain: import('./render-contract').FrameObservationDomain,
 ): Result<void, RenderGraphError> {
   return graph.addCopyPass(`${domain}-observation`, {
     accesses: [{ resource: target.view, usage: 'copy-src' }],
@@ -118,7 +116,7 @@ export function addObservationCapturePass(
       // using observationFrameId here makes a current source look stale by one
       // frame to the legacy same-frame observer.
       if (domain === 'linear-hdr') {
-        internal.frameState.currentFrameObservationSource = {
+        internal.frameState.frameOutputs.observationSource = {
           texture: texture.value,
           descriptor: {
             texture: texture.value,
@@ -134,6 +132,19 @@ export function addObservationCapturePass(
           pipelineId: 'forgeax::standard',
           backendId: frame.runtime.device.caps.backendKind,
         };
+        if (target.sampleCount === 1) {
+          const size =
+            frame.extent === undefined
+              ? { width: frame.targetW, height: frame.targetH }
+              : renderExtentSize(frame.extent, 'internal');
+          frame.runtime.encodeFramebufferSnapshots?.(encoder, {
+            texture: texture.value,
+            format: target.format,
+            ...size,
+            camera: undefined,
+            role: 'display',
+          });
+        }
       }
       encodeFrameObservationCapture(frame.runtime, encoder, {
         texture: texture.value,
@@ -182,6 +193,7 @@ export function addTypedSkyboxPass(
 }
 
 export interface TypedScenePassOptions {
+  readonly executeIf?: ((frame: RenderPipelineFrame) => boolean) | undefined;
   readonly selectEntities?: (frame: RenderPipelineFrame) => {
     readonly worldId: number;
     readonly entities: readonly number[];
@@ -231,7 +243,6 @@ export interface TypedScenePassOptions {
   readonly gpuDriven?: RenderPipelineGpuDrivenProjection | undefined;
   /** `late` draws only HZB-revealed GPU items and skips CPU geometry. */
   readonly gpuDrivenPhase?: GpuDrivenDrawPhase | undefined;
-  readonly occlusion?: OcclusionFrameProjection | undefined;
 }
 
 export function addTypedScenePass(
@@ -273,7 +284,13 @@ export function addTypedScenePass(
       : []),
     ...(options.environment === undefined
       ? []
-      : [options.environment.irradiance, options.environment.prefilter].map((resource) => ({
+      : [
+          options.environment.irradiance,
+          options.environment.prefilter,
+          ...(options.environment.atmosphere === undefined
+            ? []
+            : atmosphereTextures(options.environment.atmosphere)),
+        ].map((resource) => ({
           resource,
           usage: 'sampled-read' as const,
         }))),
@@ -289,6 +306,7 @@ export function addTypedScenePass(
   }
   return graph.addRasterPass(options.name, {
     accesses,
+    executeIf: options.executeIf,
     colorAttachments: colorTargets.map((target, index) => ({
       view: target.view,
       ...(target.resolveTarget === undefined ? {} : { resolveTarget: target.resolveTarget }),
@@ -316,8 +334,6 @@ export function addTypedScenePass(
       stencilLoadOp: options.depthLoadOp ?? 'clear',
       stencilStoreOp: 'store',
     },
-    // Query pages and idle frames change independently of graph topology.
-    occlusionQuerySet: () => options.occlusion?.querySet,
     encode: ({ pass, frame, resources }) => {
       const colorViews = colorTargets.map((target) => resolvedView(resources, target.view));
       const depthView = resolvedView(resources, options.depth.view);
@@ -354,8 +370,11 @@ export function addTypedScenePass(
         options.surfaceNearestDepth === undefined
           ? null
           : resolvedView(resources, options.surfaceNearestDepth);
-      internal.frameState.currentDirectionalShadowView = directionalShadow ?? null;
-      internal.frameState.currentSpotShadowView = spotShadow ?? null;
+      // Each pass publishes only the shadow inputs it actually binds. A later
+      // selection pass has none and must preserve the main receiver's evidence.
+      if (directionalShadow !== undefined)
+        internal.frameState.frameOutputs.directionalShadowView = directionalShadow;
+      if (spotShadow !== undefined) internal.frameState.frameOutputs.spotShadowView = spotShadow;
       const groups = buildPerFrameBindGroups(
         internal.runtime as RenderSystemInternals,
         internal.frameState,
@@ -366,6 +385,31 @@ export function addTypedScenePass(
           directionalShadow,
           spotShadow,
           cloudShadow,
+          atmosphere:
+            options.environment?.atmosphere === undefined
+              ? undefined
+              : {
+                  distantSkyLight: resolvedView(
+                    resources,
+                    options.environment.atmosphere.distantSkyLight,
+                  ),
+                  transmittance: resolvedView(
+                    resources,
+                    options.environment.atmosphere.transmittance,
+                  ),
+                  multipleScattering: resolvedView(
+                    resources,
+                    options.environment.atmosphere.multipleScattering,
+                  ),
+                  aerialPerspective: resolvedView(
+                    resources,
+                    options.environment.atmosphere.aerialPerspective,
+                  ),
+                  aerialTransmittance: resolvedView(
+                    resources,
+                    options.environment.atmosphere.aerialTransmittance,
+                  ),
+                },
           projector: internal.spotLightProjector?.view ?? internal.volumetricFog?.projectorView,
           projectorSampler:
             internal.spotLightProjector?.sampler ?? internal.volumetricFog?.projectorSampler,
@@ -379,12 +423,6 @@ export function addTypedScenePass(
       // issue the same indirect draw twice. Keep this wrapper responsible for
       // resolving graph-owned attachments; the main-pass owner orders the
       // material producer before the GPU consumer.
-      // The context carries the frame's primary occlusion projection for
-      // pipeline construction, but only the pass that owns that projection
-      // may begin its query. Forwarding it to deferred/temporal scene passes
-      // leaves their descriptors without an occlusionQuerySet and makes Dawn
-      // reject beginOcclusionQuery in those passes.
-      const activeOcclusion = options.occlusion;
       const { gpuDrivenDrawKeys, ...directContext } = internal;
       const passContext: _InternalRenderPipelineContext = {
         ...directContext,
@@ -399,7 +437,6 @@ export function addTypedScenePass(
                 prefilter: resolvedView(resources, options.environment.prefilter),
               },
             }),
-        ...(activeOcclusion === undefined ? {} : { occlusion: activeOcclusion }),
         geometryColorView: colorViews[0] ?? null,
         geometryDepthView: depthView,
         geometryColorResolveView: resolveView,
@@ -480,10 +517,6 @@ export function addTypedScenePass(
       // readiness, UV-scale, and missing-texture diagnostic behavior intact.
       if (passContext.materialUboPayloadCache !== undefined) {
         internal.materialUboPayloadCache = passContext.materialUboPayloadCache;
-      }
-      if (activeOcclusion !== undefined) {
-        const proxyResult = activeOcclusion.encodeProxyBounds(pass);
-        if (!proxyResult.ok) throw proxyResult.error;
       }
     },
   });
@@ -935,8 +968,7 @@ export function addTypedTemporalResolvePass(
       pass.setPipeline(pipeline);
       pass.setBindGroup(1, bindGroup.value);
       pass.draw(3, 1, 0, 0);
-      stageTemporalGpuSubmit(state);
-      internal.frameState.temporalGpuState = state;
+      stageTemporalGpuWrite(internal.frameState, state);
     },
   });
   return added;
@@ -1088,7 +1120,9 @@ export function addTypedOutputTransformPass(
      * each one it exposes: linear-LDR input on the encode-only split, and
      * final-sRGB output on every entry that display-encodes.
      */
-    readonly observationCaptureDomains?: readonly TypedFrameObservationDomain[] | undefined;
+    readonly observationCaptureDomains?:
+      | readonly import('./render-contract').FrameObservationDomain[]
+      | undefined;
   } = {},
 ): Result<void, RenderGraphError> {
   const outputOnly = options.outputOnly ?? false;
@@ -1107,13 +1141,15 @@ export function addTypedOutputTransformPass(
     ...(options.dither !== undefined
       ? {
           paramsTransform: (params: Uint8Array | undefined): Uint8Array | undefined => {
-            if (params === undefined || params.byteLength !== 16) return params;
+            if (params === undefined || params.byteLength !== TONEMAP_PARAMS_LAYOUT.byteSize) {
+              return params;
+            }
             const transformed = params.slice();
             new DataView(
               transformed.buffer,
               transformed.byteOffset,
               transformed.byteLength,
-            ).setFloat32(12, options.dither === true ? 1 : 0, true);
+            ).setFloat32(TONEMAP_PARAMS_LAYOUT.ditherOffset, options.dither === true ? 1 : 0, true);
             return transformed;
           },
         }
@@ -1123,8 +1159,8 @@ export function addTypedOutputTransformPass(
       : { fragmentEntryPoint: options.fragmentEntryPoint }),
   });
   if (!transformed.ok) return transformed;
-  if (options.fragmentEntryPoint !== 'fs_tone_only' && requested.includes('final-srgb')) {
-    const finalCapture = addObservationCapturePass(graph, output, 'final-srgb');
+  if (options.fragmentEntryPoint !== 'fs_tone_only' && requested.includes('final-display')) {
+    const finalCapture = addObservationCapturePass(graph, output, 'final-display');
     if (!finalCapture.ok) return finalCapture;
   }
   return ok(undefined);

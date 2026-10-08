@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_NET_RECOVERY_POLICY,
+  isLegalNetSessionTransition,
+  isTerminalNetSessionState,
+  type NetSessionStateKind,
   resolveNetRecoveryPolicy,
   validateNetRecoveryPolicy,
 } from '../src/index';
@@ -44,3 +47,21 @@ describe('NetRecoveryPolicy contract', () => {
   });
 });
 
+
+describe('NetSessionState terminal predicate', () => {
+  const kinds: readonly NetSessionStateKind[] = [
+    'connecting',
+    'resyncing',
+    'active',
+    'recovering',
+    'failed',
+    'retired',
+  ];
+
+  it.each(kinds)('%s is terminal exactly when retirement is its only legal exit', (kind) => {
+    const onlyRetires = kinds.every(
+      (to) => isLegalNetSessionTransition(kind, to) === (to === 'retired'),
+    );
+    expect(isTerminalNetSessionState({ kind })).toBe(onlyRetires);
+  });
+});

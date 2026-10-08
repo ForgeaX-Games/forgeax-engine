@@ -174,7 +174,7 @@ describe('Standard Surface runtime Browser WebGPU provenance', () => {
 
   it('loads one published tuple per GUID and renders every cell through Runtime Renderer', {
     // This isolated owner intentionally exercises two full App/device-loss
-    // lifecycles after the 300-frame lane journey. The dedicated 360 s process
+    // lifecycles after the lane journey. The dedicated 360 s process
     // budget encloses this unchanged 300 s case plus startup and cleanup.
     timeout: 300_000,
   }, async () => {
@@ -464,7 +464,25 @@ describe('Standard Surface runtime Browser WebGPU provenance', () => {
       number,
       NonNullable<ReturnType<Renderer['inspect']>['renderScene']['submission']>
     >();
-    for (let frame = 0; frame < 300; frame += 1) {
+    // Retain the first 50 frames and every later time/revision boundary.
+    // Ordinary CI samples each static interval; full diagnostics keep all 300.
+    const frameIndices =
+      import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1'
+        ? [
+            ...Array.from({ length: 50 }, (_, frame) => frame),
+            50,
+            74,
+            99,
+            100,
+            124,
+            149,
+            150,
+            249,
+            250,
+            299,
+          ]
+        : Array.from({ length: 300 }, (_, frame) => frame);
+    for (const frame of frameIndices) {
       const pausedTime = 100 / 60;
       const frameTime =
         frame < 50 ? 0.5 : frame < 100 ? frame / 60 : frame < 150 ? pausedTime : (frame - 50) / 60;
@@ -536,7 +554,7 @@ describe('Standard Surface runtime Browser WebGPU provenance', () => {
         );
       }
     }
-    expect(completedFrames).toBe(300);
+    expect(completedFrames).toBe(frameIndices.length);
     if (finalReceipt === undefined) throw new Error('surface-standard: final receipt unavailable');
     const finalObservation = await renderer.observe(finalReceipt, { include: ['draws'] });
     expect(finalObservation.ok).toBe(true);

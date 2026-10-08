@@ -1,5 +1,6 @@
 import {
   type FrameReceipt,
+  querySubmittedTerrainHeight,
   type Renderer,
   type RendererOperationError,
   type RenderPublicationIdentity,
@@ -37,6 +38,7 @@ let attachment: RecorderAttachment | undefined;
 let capture: RhiCapture | undefined;
 let captureBoundary: ReturnType<RecorderAttachment['frameBoundary']> | undefined;
 let gpuPassTimingEnabled = false;
+const terrainReceipts = new Map<number, FrameReceipt>();
 const captureRequests = new Map<number, AbortController>();
 let synchronizeFeatures: (identities: ReadonlySet<string>) => Promise<void> = async () => {};
 type DrawMessage = Extract<RenderWorkerInput, { kind: 'draw' }>;
@@ -49,7 +51,11 @@ function closeVideoFrames(message: DrawMessage): void {
 function fail(message: RenderWorkerInput, cause: unknown): void {
   if (failed) return;
   failed = true;
-  const operationError = cause as RendererOperationError<'device-operation-failed'> | undefined;
+  terrainReceipts.clear();
+  const operationError = cause as
+    | RendererOperationError<'device-operation-failed'>
+    | RendererOperationError<'frame-submit-rejected'>
+    | undefined;
   scope.postMessage({
     kind: 'failed',
     error: workerError(cause),
@@ -66,6 +72,8 @@ function fail(message: RenderWorkerInput, cause: unknown): void {
       : {}),
     // Native destroy can fence a receipt before renderer health changes.
     recoverable:
+      (operationError?.code === 'frame-submit-rejected' &&
+        operationError.detail?.accepted === false) ||
       renderer?.state() === 'device-lost' ||
       (operationError?.code === 'device-operation-failed' &&
         operationError.detail?.operation === 'complete-frame' &&
@@ -134,6 +142,7 @@ async function completeFrame(
 
 async function receive(message: RenderWorkerInput): Promise<void> {
   if (message.kind === 'dispose') {
+    terrainReceipts.clear();
     shuttingDown = true;
     for (const controller of captureRequests.values()) controller.abort();
     try {
@@ -159,6 +168,23 @@ async function receive(message: RenderWorkerInput): Promise<void> {
   }
   let completionOwnsFrame = false;
   try {
+    if (message.kind === 'terrain-height') {
+      const receipt = terrainReceipts.get(message.frameId);
+      const result =
+        receipt === undefined
+          ? {
+              ok: false as const,
+              error: {
+                code: 'terrain-query-unavailable' as const,
+                expected: 'a retained exact submitted frame from this Worker generation',
+                hint: 'query a recent frame in the current Render Worker session',
+                detail: { field: 'frameId', actual: message.frameId },
+              },
+            }
+          : await querySubmittedTerrainHeight(receipt, message.request);
+      scope.postMessage({ kind: 'terrain-height-result', requestId: message.requestId, result });
+      return;
+    }
     if (message.kind === 'bounds') {
       scope.postMessage({
         kind: 'bounds-result',
@@ -193,11 +219,23 @@ async function receive(message: RenderWorkerInput): Promise<void> {
       captureRequests.set(message.requestId, controller);
       const result = await capture.captureFrame({ ...message.options, signal: controller.signal });
       captureRequests.delete(message.requestId);
-      scope.postMessage({
-        kind: 'capture-result',
-        requestId: message.requestId,
-        result: result.ok ? { ok: true, value: result.value } : { ok: false, error: result.error },
-      });
+      if (!result.ok) {
+        scope.postMessage({
+          kind: 'capture-result',
+          requestId: message.requestId,
+          result: { ok: false, error: result.error },
+        });
+        return;
+      }
+      const bytes = transferable(result.value.bytes);
+      scope.postMessage(
+        {
+          kind: 'capture-result',
+          requestId: message.requestId,
+          result: { ok: true, value: { kind: 'rhi-tape', bytes } },
+        },
+        [bytes.buffer],
+      );
       return;
     }
     if (message.kind === 'init') {
@@ -227,7 +265,13 @@ async function receive(message: RenderWorkerInput): Promise<void> {
               }),
           publicationSource: message.identity,
           ...(message.gpuPassTiming === undefined ? {} : { gpuPassTiming: message.gpuPassTiming }),
+          ...(message.outputColorSpace === undefined
+            ? {}
+            : { outputColorSpace: message.outputColorSpace }),
           ...(prepared.value.features === undefined ? {} : { features: prepared.value.features }),
+          ...(prepared.value.ssrIdentity === undefined
+            ? {}
+            : { ssrIdentity: prepared.value.ssrIdentity }),
         },
         {
           ...(message.shaderManifestUrl === undefined
@@ -254,7 +298,12 @@ async function receive(message: RenderWorkerInput): Promise<void> {
         }
       };
       busy = false;
-      scope.postMessage({ kind: 'ready', capabilities: renderer.inspect().capabilities });
+      const inspection = renderer.inspect();
+      scope.postMessage({
+        kind: 'ready',
+        capabilities: inspection.capabilities,
+        ...(inspection.limits === undefined ? {} : { limits: inspection.limits }),
+      });
       return;
     }
     if (renderer === undefined || canvas === undefined || busy)
@@ -275,6 +324,12 @@ async function receive(message: RenderWorkerInput): Promise<void> {
     });
     if (!draw.ok) throw draw.error;
     const receipt = draw.value;
+    terrainReceipts.set(message.frameId, receipt);
+    while (terrainReceipts.size > 8) {
+      const oldest = terrainReceipts.keys().next().value;
+      if (oldest === undefined) break;
+      terrainReceipts.delete(oldest);
+    }
     const snapshotBoundary = captureBoundary;
     captureBoundary = undefined;
     completionOwnsFrame = true;
@@ -351,3 +406,11 @@ scope.onmessage = (event) => {
   };
   drawing = drain(message);
 };
+
+function transferable(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength
+    ? (bytes as Uint8Array<ArrayBuffer>)
+    : bytes.slice();
+}

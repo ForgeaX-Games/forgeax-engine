@@ -4,9 +4,10 @@ import {
   createToolCommandRegistry,
   defineCommand,
   type JsonValue,
+  TOOL_REALMS,
   type ToolApi,
   type ToolCommandHelp,
-  type ToolCommandNode,
+  type ToolCommandRegistry,
   type ToolContribution,
   type ToolJsonSchema,
   type ToolRunOptions,
@@ -42,11 +43,9 @@ export interface ToolClientOptions extends ProjectToolDiscoveryOptions {
   readonly toolApi?: ToolApi;
 }
 
-export interface ToolClient {
+export interface ToolClient extends Pick<ToolCommandRegistry, 'help' | 'tree'> {
   readonly list: () => readonly ToolCatalogEntry[];
   readonly describe: (id: string) => ToolCatalogEntry | undefined;
-  readonly help: (path?: readonly string[] | string, tree?: boolean) => ToolCommandHelp;
-  readonly tree: (path?: readonly string[] | string) => readonly ToolCommandNode[];
   readonly runPath: <TResult = unknown>(
     path: readonly string[] | string,
     args: unknown,
@@ -261,7 +260,7 @@ export async function createToolClient(options: ToolClientOptions): Promise<Tool
   const ownerFibers = [] as Array<{ dispose: () => Promise<unknown> }>;
   const ownerInputs: readonly ClientProviderInput[] =
     options.realmOwners === undefined
-      ? (['build', 'host', 'engine', 'frontend'] as const).map((realm) => ({
+      ? TOOL_REALMS.map((realm) => ({
           realm,
           tools: allContributions.filter(
             (contribution) =>
@@ -416,8 +415,8 @@ export async function createToolClient(options: ToolClientOptions): Promise<Tool
   return {
     list: () => listTools(loaded),
     describe: (id) => describeTool(loaded, id),
-    help: (path, tree = false) => commandRegistry.help(path, tree),
-    tree: (path = []) => commandRegistry.tree(path),
+    help: commandRegistry.help,
+    tree: commandRegistry.tree,
     async runPath<TResult = unknown>(
       path: readonly string[] | string,
       args: unknown,

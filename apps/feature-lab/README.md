@@ -33,6 +33,15 @@ dev server never reload a feature mid-run.
 
 ## Authoring a feature
 
+The following Host rows use existing owner browser gates because their fixtures
+need a real Worker/native actuator boundary or producer-served HTTP Range data.
+They remain part of the complete `pnpm test:browser` roster.
+
+| Catalog row | Owning gate | Evidence boundary |
+|:--|:--|:--|
+| Gamepad feedback | `packages/input/src/__tests__/gamepad-feedback.browser.test.ts` | Actual DOM ownership and Worker POD transport; actuator double, physical compatibility unverified. |
+| Long audio windows | `packages/audio-webaudio/src/__tests__/pcm-stream.browser.test.ts` | Native Web Audio output and real HTTP Range windows; original PCM, clock, cleanup and budget assertions. |
+
 - Area directories are fixed in `src/lab/areas.ts` and mirror catalog subsections. The
   file name is the slug; the registry discovers files through `import.meta.glob`, so
   adding a feature never edits a shared list.

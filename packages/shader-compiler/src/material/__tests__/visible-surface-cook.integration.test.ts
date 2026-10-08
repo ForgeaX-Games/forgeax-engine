@@ -4,7 +4,7 @@ import { expect, it } from 'vitest';
 import { compileShader } from '../../index';
 import { createMaterialPackCooker } from '../pack-cooker';
 
-it('publishes six-target visible surfaces alongside ordinary cooked Standard passes', async () => {
+it('publishes eight-target visible surfaces alongside ordinary cooked Standard passes', async () => {
   const cooked = await createMaterialPackCooker().cook({
     guid: 'visible-surface-standard',
     source: {
@@ -32,12 +32,25 @@ it('publishes six-target visible surfaces alongside ordinary cooked Standard pas
       )
       .map((selection) => ({ program, selection })),
   );
-  expect(visible.map(({ selection }) => [selection.pass, selection.address]).sort()).toEqual([
-    ['deferred', 'direct'],
-    ['deferred', 'scene-index'],
-    ['forward', 'direct'],
-    ['forward', 'scene-index'],
-  ]);
+  for (const capability of ['storage-buffer', 'storage-buffer-atmosphere']) {
+    for (const color of [false, true]) {
+      expect(
+        visible
+          .filter(
+            ({ selection }) =>
+              selection.context.capability === capability &&
+              selection.abi?.vertexInputs.some((input) => input.semantic === 'color') === color,
+          )
+          .map(({ selection }) => [selection.pass, selection.address])
+          .sort(),
+      ).toEqual([
+        ['deferred', 'direct'],
+        ['deferred', 'scene-index'],
+        ['forward', 'direct'],
+        ['forward', 'scene-index'],
+      ]);
+    }
+  }
   for (const { program, selection } of visible) {
     const source = new TextDecoder().decode(program.artifact.bytes);
     expect(source).toContain('enable primitive_index;');
@@ -46,7 +59,16 @@ it('publishes six-target visible surfaces alongside ordinary cooked Standard pas
       renderEntries: {
         vertex: selection.entry ?? 'vs_main',
         fragment: 'fs_gbuffer',
-        colorFormats: ['rgba16float', 'r32uint', 'r32uint', 'r32uint', 'r32uint', 'rgba32uint'],
+        colorFormats: [
+          'rgba16float',
+          'r32uint',
+          'r32uint',
+          'r32uint',
+          'r32uint',
+          'r32uint',
+          'rgba32uint',
+          'rgba16float',
+        ],
       },
     });
     expect(compiled.ok, compiled.ok ? '' : compiled.error.message).toBe(true);

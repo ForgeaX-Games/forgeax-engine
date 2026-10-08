@@ -1,6 +1,16 @@
 // @perf-budget-skip: real Vite build/dev graphs and Chromium Worker module identity.
 import { existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,7 +20,7 @@ import { expect, it } from 'vitest';
 import { executionWorkerEntries } from '../build/execution-workers.js';
 
 it('shares installed Engine component identity across dev Worker and bootstrap imports', async () => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-worker-dev-identity-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-worker-dev-identity-')));
   const packages = resolve(import.meta.dirname, '../../..');
   const scope = resolve(root, 'node_modules/@forgeax');
   let server: Awaited<ReturnType<typeof createServer>> | undefined;
@@ -89,7 +99,7 @@ it('shares installed Engine component identity across dev Worker and bootstrap i
 }, 60_000);
 
 it('serves snapshotted App Worker entries without exposing sibling inputs', async () => {
-  const snapshot = await mkdtemp(resolve(tmpdir(), 'forgeax-worker-snapshot-'));
+  const snapshot = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-worker-snapshot-')));
   const root = resolve(snapshot, 'project');
   const facade = resolve(root, 'node_modules/@forgeax/engine');
   const app = resolve(snapshot, 'dependencies/app');
@@ -146,8 +156,8 @@ it('serves snapshotted App Worker entries without exposing sibling inputs', asyn
   }
 });
 
-it('shares component identity between emitted Worker runtimes and dynamically loaded plugins', async () => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-worker-identity-'));
+it('shares component identity and admits lazy imports in emitted Worker runtimes', async () => {
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-worker-identity-')));
   const skinning = resolve(import.meta.dirname, '../../../skinning/dist/index.mjs');
   try {
     await symlink(
@@ -163,10 +173,15 @@ it('shares component identity between emitted Worker runtimes and dynamically lo
     );
     await writeFile(resolve(root, 'bootstrap.js'), `export { Skin } from '${skinning}';`);
     await writeFile(
+      resolve(root, 'inspect.js'),
+      `import { Skin } from '${skinning}'; export const read = () => Skin;`,
+    );
+    await writeFile(
       resolve(root, 'engine-worker-runtime.mjs'),
       `
       import { Skin } from '${skinning}';
       globalThis.__forgeaxIdentityProbe = async url => Skin === (await import(/* @vite-ignore */ url)).Skin;
+      globalThis.__forgeaxLazyWorkerProbe = async () => (await import('./inspect.js')).read() === Skin;
     `,
     );
     const outDir = resolve(root, 'dist');
@@ -177,7 +192,6 @@ it('shares component identity between emitted Worker runtimes and dynamically lo
       plugins: [executionWorkerEntries()],
       build: {
         target: 'esnext',
-        modulePreload: false,
         outDir,
         rollupOptions: {
           preserveEntrySignatures: 'strict',
@@ -194,14 +208,17 @@ it('shares component identity between emitted Worker runtimes and dynamically lo
     await import(pathToFileURL(resolve(assets, workerFile)).href);
     const globals = globalThis as typeof globalThis & {
       __forgeaxIdentityProbe?: (url: string) => Promise<boolean>;
+      __forgeaxLazyWorkerProbe?: () => Promise<boolean>;
     };
     try {
       expect(
         await globals.__forgeaxIdentityProbe?.(pathToFileURL(resolve(assets, 'bootstrap.js')).href),
       ).toBe(true);
+      expect(await globals.__forgeaxLazyWorkerProbe?.()).toBe(true);
       expect(await readFile(resolve(assets, 'main.js'), 'utf8')).toContain('engine-worker-runtime');
     } finally {
       delete globals.__forgeaxIdentityProbe;
+      delete globals.__forgeaxLazyWorkerProbe;
     }
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -209,7 +226,7 @@ it('shares component identity between emitted Worker runtimes and dynamically lo
 });
 
 it('discovers nested native Engine dependencies before a cold browser target activates', async () => {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-engine-cold-deps-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-engine-cold-deps-')));
   let server: Awaited<ReturnType<typeof createServer>> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {

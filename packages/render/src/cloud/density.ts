@@ -1,3 +1,4 @@
+import { CLOUD_VERTICAL_CELLS } from '@forgeax/engine-shader';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { CloudLayerCacheInvalidError, type CloudLayerError } from '../errors/cloud';
 import {
@@ -58,10 +59,12 @@ export interface CloudFormationSample {
 const CLOUD_SHAPE_CELLS = 4;
 const CLOUD_WEATHER_CELLS = 2;
 const CLOUD_DETAIL_CELLS = CLOUD_SHAPE_CELLS * 3;
+
 // One advective cache period contains four horizontal and two vertical body cells.
 // Integer periods on every axis make the formation continuous when wind wraps
 // through the cache boundary instead of introducing a seam at y = 0/1.
-export const CLOUD_VERTICAL_CELLS = 1;
+export { CLOUD_VERTICAL_CELLS };
+
 // The cache keeps one advective period, while the formation itself gets two
 // smooth vertical lobes inside that period so the street view does not read as
 // a single sheet. Both are integer-period fields, so the cache seam remains

@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { projectAppShaderManifest, readSharedShaderManifest } from './app-shader-manifest.mjs';
 import { readRoster, resolveRunnableEntries } from './run-dawn-smoke-roster.mjs';
 
@@ -116,7 +117,7 @@ function packClosureInventory(root, app, packGuids) {
     failArtifact('ci-app-shard-pack-index-missing', { app, path: packIndexPath });
   let packIndex;
   try {
-    packIndex = JSON.parse(readFileSync(packIndexPath, 'utf8'));
+    packIndex = decodeCatalogWire(JSON.parse(readFileSync(packIndexPath, 'utf8'))).unwrap();
   } catch {
     failArtifact('ci-app-shard-pack-index-invalid', { app, path: packIndexPath });
   }

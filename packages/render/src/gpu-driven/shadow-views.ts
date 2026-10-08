@@ -2,12 +2,12 @@ import type { box3 } from '@forgeax/engine-math';
 import { frustum } from '@forgeax/engine-math';
 import {
   type GraphAccess,
-  type GraphResourceResolver,
+  type GraphTextureView,
   type RenderGraphBuilder,
   RenderGraphError,
   type RenderGraphFrame,
 } from '@forgeax/engine-render-graph';
-import type { Result, RhiDevice, RhiRenderPassEncoder } from '@forgeax/engine-rhi';
+import type { Result, RhiDevice } from '@forgeax/engine-rhi';
 import { err, ok, RhiError } from '@forgeax/engine-rhi';
 import type { GpuScene } from '../gpu-scene';
 import type { ShadowViewIdentity, ShadowViewInvalidationReason } from '../inspection-types';
@@ -21,7 +21,12 @@ import {
 } from './batch-topology';
 import type { LodViewCamera } from './lod-projection.wgsl';
 import { rasterLodDraws } from './production-raster-lod';
-import { GpuDrivenView, type GpuDrivenViewGraphResources } from './view-gpu';
+import { StaticShadowLayers } from './static-shadow-layers';
+import {
+  type GpuDrivenShadowCameraCull,
+  GpuDrivenView,
+  type GpuDrivenViewGraphResources,
+} from './view-gpu';
 
 export type { ShadowViewIdentity, ShadowViewKind } from '../inspection-types';
 
@@ -63,6 +68,12 @@ export interface ShadowViewUpdateInput {
    * static layer. Their boxes do not invalidate the view.
    */
   readonly ignoredChangeSlots?: ReadonlySet<number>;
+  /**
+   * Main-camera occlusion for a final directional or spot view: a caster whose
+   * dilated receiver volume the camera pyramid proves hidden is not drawn. The
+   * light matrix comes from `matrix`; other views ignore the input.
+   */
+  readonly cameraCull?: Omit<GpuDrivenShadowCameraCull, 'lightViewProjection'>;
 }
 
 export interface ShadowViewUpdate {
@@ -92,27 +103,6 @@ export interface ShadowViewSubmission {
   readonly view: GpuDrivenView;
 }
 
-/**
- * The only record-side hook a capable shadow lane needs after the shared
- * groups are bound.  The callback owns material/mesh binding policy and emits
- * the indirect draws for this view; it receives the pool projection rather
- * than rebuilding a candidate list from the frame.
- */
-export interface ShadowViewGpuRecordInput {
-  readonly identity: ShadowViewIdentity;
-  readonly projection: ShadowViewProjection;
-  readonly pass: RhiRenderPassEncoder;
-  readonly resources: GraphResourceResolver;
-}
-
-export type ShadowViewGpuRecorder = (input: ShadowViewGpuRecordInput) => void;
-
-export interface ShadowViewGpuPass {
-  readonly projection: ShadowViewProjection;
-  readonly resources: GraphResourceResolver;
-  readonly record: ShadowViewGpuRecorder;
-}
-
 export interface ShadowViewInspection {
   readonly identity: ShadowViewIdentity;
   readonly cache: ShadowViewCacheState;
@@ -127,6 +117,8 @@ export interface ShadowViewInspection {
   readonly minCasterDiameter: number;
   /** In-frustum casters the last observed GPU cull dropped below that diameter. */
   readonly texelCulled?: number;
+  /** Casters the last raster skipped because the main camera sees none of their receivers. */
+  readonly cameraCulled?: number;
   /** Present when a static layer's miss re-rasters only these regions. */
   readonly dirtyRects?: readonly ShadowDirtyRect[];
 }
@@ -175,6 +167,9 @@ interface ShadowViewRecord {
   sceneBuffers: SceneBuffers;
   minCasterDiameter: number;
   texelCulled: number | undefined;
+  /** The retained depth omits camera-hidden casters, so it is valid only for that camera. */
+  cameraCull: boolean;
+  cameraCulled: number | undefined;
   /** A partial static-layer miss: only these regions re-raster. */
   dirtyRects: readonly ShadowDirtyRect[] | undefined;
 }
@@ -182,7 +177,7 @@ interface ShadowViewRecord {
 function identityKey(identity: ShadowViewIdentity): string {
   return `${identity.kind}:${identity.index}:${identity.face ?? ''}${
     identity.layer === undefined ? '' : `:${identity.layer}`
-  }`;
+  }${identity.terrainReceiver === undefined ? '' : `:terrain:${identity.terrainReceiver.worldId}:${identity.terrainReceiver.entityKey}`}`;
 }
 
 export function shadowViewIdentityKey(identity: ShadowViewIdentity): string {
@@ -375,6 +370,35 @@ export function shadowViewRasterAccesses(
     { resource: resources.visible, usage: 'storage-read' },
     { resource: resources.indirect, usage: 'indirect-read' },
   ] satisfies GraphAccess[]);
+}
+
+/** Per-view receiver dilation a shadow caster's camera test must cover. */
+export type ShadowCameraCullDilation = Pick<
+  GpuDrivenShadowCameraCull,
+  'ndcDilation' | 'worldDilation'
+>;
+
+/**
+ * Receiver dilation for a caster's camera test: the lookup's filter radius
+ * plus two texels for rasterization and bilinear comparison footprint, and the
+ * world-space receiver offset the lighting shader applies before projection.
+ */
+export function shadowCameraCullDilation(
+  filterRadiusTexels: number,
+  worldDilation: number,
+  mapSize: number | undefined,
+): ShadowCameraCullDilation | undefined {
+  if (mapSize === undefined || !(mapSize > 0)) return undefined;
+  return { ndcDilation: ((filterRadiusTexels + 2) * 2) / mapSize, worldDilation };
+}
+
+/**
+ * Only final directional and spot views cull against the camera. Static
+ * layers outlive any one camera, and a point cube's PCF kernel crosses faces,
+ * so its per-face receiver prism would not bound what the lookup samples.
+ */
+function cameraCullEligible(identity: ShadowViewIdentity): boolean {
+  return identity.layer === undefined && identity.kind !== 'point';
 }
 
 function invalidateRecord(record: ShadowViewRecord, reason: ShadowViewInvalidationReason): void {
@@ -750,7 +774,6 @@ function partialStaticRects(
     !sameSceneBuffers(previous.sceneBuffers, input.scene) ||
     previous.resourceGeneration !== previous.view.inspect().resourceGeneration ||
     previous.targetSize !== input.targetSize ||
-    previous.graphGeneration !== input.graphGeneration ||
     !sameMatrix(previous.matrix, input.matrix) ||
     !samePrefix(previous.planes, input.planes, PLANE_FLOATS)
   ) {
@@ -786,7 +809,7 @@ function structureInvalidationReason(
   if (
     !sceneChangesMissView(previous, input) ||
     previous.targetSize !== input.targetSize ||
-    previous.graphGeneration !== input.graphGeneration ||
+    (input.identity.layer !== 'static' && previous.graphGeneration !== input.graphGeneration) ||
     !sameMatrix(previous.matrix, input.matrix)
   ) {
     return 'content-changed';
@@ -827,11 +850,15 @@ export class ShadowViewStatePool {
   private readonly activeKeys = new Set<string>();
   private readonly retiring = new Map<string, ShadowViewRecord>();
   private readonly pendingPublication = new Set<string>();
+  /** Depth behind every static layer; it outlives compiled graphs with the pool. */
+  readonly staticLayers: StaticShadowLayers;
 
   private constructor(
     private readonly device: RhiDevice,
     private readonly shaderModuleFactory: PipelineBuilderShaderModuleFactory,
-  ) {}
+  ) {
+    this.staticLayers = new StaticShadowLayers(device);
+  }
 
   static create(input: {
     readonly device: RhiDevice;
@@ -880,6 +907,12 @@ export class ShadowViewStatePool {
         sameSource,
       );
     }
+    // Depth rastered under a camera cull lacks casters a moved camera may see,
+    // so it is never reused. Changed content keeps culling every frame; a
+    // quiet view re-rasters once without the cull so it can be retained.
+    if (invalidationReason === undefined && previous?.cameraCull === true) {
+      invalidationReason = 'camera-culled';
+    }
     if (invalidationReason === undefined && previous !== undefined) {
       previous.cache = 'hit';
       previous.invalidationReason = undefined;
@@ -912,6 +945,7 @@ export class ShadowViewStatePool {
         device: this.device,
         shaderModuleFactory: this.shaderModuleFactory,
         labelPrefix: `${shadowViewLabelPrefix(input.identity)}.view`,
+        shadowCameraCull: cameraCullEligible(input.identity),
       });
       if (!created.ok) return created;
       view = created.value;
@@ -921,6 +955,13 @@ export class ShadowViewStatePool {
       input.matrix,
       input.targetSize,
     );
+    const cameraCull =
+      input.cameraCull !== undefined &&
+      input.matrix !== undefined &&
+      invalidationReason !== 'camera-culled' &&
+      view.cameraCullBound
+        ? { ...input.cameraCull, lightViewProjection: input.matrix }
+        : undefined;
     const updated = view.update(
       selectedPlan,
       input.scene,
@@ -929,6 +970,9 @@ export class ShadowViewStatePool {
       minCasterDiameter,
       undefined,
       input.lodClampCamera,
+      undefined,
+      undefined,
+      cameraCull,
     );
     if (!updated.ok) return updated;
     const generation = (previous?.generation ?? 0) + 1;
@@ -957,6 +1001,8 @@ export class ShadowViewStatePool {
       sceneBuffers: sceneBuffers(input.scene),
       minCasterDiameter,
       texelCulled: previous?.texelCulled,
+      cameraCull: cameraCull !== undefined,
+      cameraCulled: cameraCull === undefined ? undefined : previous?.cameraCulled,
       dirtyRects,
     };
     this.records.set(key, record);
@@ -1037,6 +1083,7 @@ export class ShadowViewStatePool {
     builder: RenderGraphBuilder<FrameCtx>,
     identity: ShadowViewIdentity,
     forceCompute = false,
+    cameraPyramid?: GraphTextureView,
   ): Result<ShadowViewProjection, RenderGraphError> {
     const record = this.records.get(identityKey(identity));
     if (record === undefined) return err(graphStateError(identity));
@@ -1069,6 +1116,8 @@ export class ShadowViewStatePool {
       includeCompute,
       undefined,
       includeCompute ? executeCompute : undefined,
+      false,
+      cameraPyramid,
     );
     if (!projected.ok) return projected;
     return ok({
@@ -1096,6 +1145,11 @@ export class ShadowViewStatePool {
     for (const record of this.records.values()) {
       if (record.skinned) invalidateRecord(record, 'skin-palette-changed');
     }
+  }
+
+  /** Camera clipping reaches every shadow raster through the view uniforms. */
+  invalidateViewClipping(): void {
+    for (const record of this.records.values()) invalidateRecord(record, 'view-clipping-changed');
   }
 
   cacheState(identity: ShadowViewIdentity): ShadowViewCacheState | undefined {
@@ -1128,6 +1182,12 @@ export class ShadowViewStatePool {
   texelCulled(identity: ShadowViewIdentity): number | undefined {
     const key = identityKey(identity);
     return this.activeKeys.has(key) ? this.records.get(key)?.texelCulled : undefined;
+  }
+
+  /** Casters the view's last raster skipped as hidden from the main camera. */
+  cameraCulled(identity: ShadowViewIdentity): number | undefined {
+    const key = identityKey(identity);
+    return this.activeKeys.has(key) ? this.records.get(key)?.cameraCulled : undefined;
   }
 
   isActive(identity: ShadowViewIdentity): boolean {
@@ -1173,9 +1233,12 @@ export class ShadowViewStatePool {
       // texel count cannot change and does not deserve a readback.
       const recount =
         record.texelCulled === undefined || record.invalidationReason !== 'skin-palette-changed';
-      if (record.minCasterDiameter > 0 && recount) void this.observeTexelCulling(key, record);
+      if ((record.minCasterDiameter > 0 && recount) || record.cameraCull) {
+        void this.observeCulling(key, record);
+      }
     }
     this.pendingPublication.clear();
+    this.staticLayers._commit();
     for (const [key, record] of this.retiring) {
       record.view.dispose();
       this.records.delete(key);
@@ -1196,19 +1259,23 @@ export class ShadowViewStatePool {
       invalidateRecord(record, 'submit-aborted');
     }
     this.pendingPublication.clear();
+    this.staticLayers._abort();
   }
 
   /**
    * Read the cull counters a view copied on the compute that was just
    * submitted. Only re-culled views pay a readback; a retained layer keeps
    * the count of the cull that produced it. A pending map makes the next
-   * frame skip its telemetry copy, never its raster work.
+   * frame skip its telemetry copy, never its raster work. A view re-culled
+   * every frame is replaced before its readback lands, so the count goes to
+   * the view's current record.
    */
-  private observeTexelCulling(key: string, record: ShadowViewRecord): Promise<void> {
+  private observeCulling(key: string, record: ShadowViewRecord): Promise<void> {
     return record.view.readLodSelection().then((selection) => {
-      if (selection !== undefined && this.records.get(key) === record) {
-        record.texelCulled = selection.texelCulled;
-      }
+      const current = this.records.get(key);
+      if (selection === undefined || current?.view !== record.view) return;
+      current.texelCulled = selection.texelCulled;
+      if (record.cameraCull && current.cameraCull) current.cameraCulled = selection.cameraCulled;
     });
   }
 
@@ -1234,6 +1301,7 @@ export class ShadowViewStatePool {
             resourceGeneration: view.resourceGeneration,
             minCasterDiameter: record.minCasterDiameter,
             ...(record.texelCulled === undefined ? {} : { texelCulled: record.texelCulled }),
+            ...(record.cameraCulled === undefined ? {} : { cameraCulled: record.cameraCulled }),
             ...(record.cache === 'invalidated' && record.dirtyRects !== undefined
               ? { dirtyRects: record.dirtyRects }
               : {}),
@@ -1245,6 +1313,7 @@ export class ShadowViewStatePool {
   dispose(): void {
     const views = new Set([...this.records.values()].map((record) => record.view));
     for (const view of views) view.dispose();
+    this.staticLayers.dispose();
     this.records.clear();
     this.activeKeys.clear();
     this.retiring.clear();

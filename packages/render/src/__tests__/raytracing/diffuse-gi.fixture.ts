@@ -42,7 +42,11 @@ export function giSource(
   return {
     sections: [{ indexOffset: 0, indexCount: sdfCubeIndices.length, material: { id, ...m } }],
     layout: fixture.layout,
-    field: { ...fixture.field, values: Float32Array.from(fixture.field.values) },
+    field: {
+      ...fixture.field,
+      bricks: Uint32Array.from(fixture.field.bricks),
+      values: Float32Array.from(fixture.field.values),
+    },
     instance: {
       instanceId: id,
       geometryId: id,
@@ -107,7 +111,7 @@ export async function runGi(
                   kind: 'directional',
                   contactShadowLength: 0,
                   direction: vec3.create(-1, 0, 0),
-                  color: vec3.create(1, 1, 1),
+                  color: vec3.create(Math.PI, Math.PI, Math.PI),
                   intensity: Math.PI,
                 },
               ],

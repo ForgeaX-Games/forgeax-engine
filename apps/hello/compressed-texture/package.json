@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "KTX2/Basis block-compression e2e demo — packed PBR checkerboard texture through the Basis transcode + block-aware upload pipeline, with uncompressed RGBA8 fallback query switch (feat-20260707-texture-block-compression-web-transcode-ktx2-basis M6 / w39).",
+  "description": "KTX2/Basis block-compression e2e demo \u2014 packed PBR checkerboard texture through the Basis transcode + block-aware upload pipeline, with uncompressed RGBA8 fallback query switch (feat-20260707-texture-block-compression-web-transcode-ktx2-basis M6 / w39).",
   "scripts": {
     "gen-assets": "node assets/gen-png.mjs",
     "predev": "node assets/gen-png.mjs",
@@ -56,14 +56,38 @@
         "@forgeax/engine-render",
         "@forgeax/engine-runtime"
       ],
-      "risks": ["baseline", "structured-fault", "retry", "gpu-upload", "recovery", "cleanup"],
-      "phaseInputs": ["baseline", "invalid", "repair", "cleanup"],
+      "risks": [
+        "baseline",
+        "structured-fault",
+        "retry",
+        "gpu-upload",
+        "recovery",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "baseline",
+        "invalid",
+        "repair",
+        "cleanup"
+      ],
       "evidence": {
-        "frontDoors": ["dawn-node", "browser-app", "browser-webgpu"],
-        "legs": ["semantic", "live", "gpu", "recovery"]
+        "frontDoors": [
+          "dawn-node",
+          "browser-app",
+          "browser-webgpu"
+        ],
+        "legs": [
+          "semantic",
+          "live",
+          "gpu",
+          "recovery"
+        ]
       },
       "oracle": {
-        "stdoutIncludes": ["[m27] PASS", "[m27] Browser PASS"]
+        "stdoutIncludes": [
+          "[m27] PASS",
+          "[m27] Browser PASS"
+        ]
       }
     }
   },
@@ -85,10 +109,10 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "playwright": "^1.56.1",
     "pngjs": "^7.0.0",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

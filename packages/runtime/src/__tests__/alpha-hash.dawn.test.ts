@@ -3,6 +3,7 @@ import {
   attachRecorder,
   buildFrameModel,
   decodeTape,
+  halfToFloat,
   openReplay,
   summarizeFrame,
 } from '@forgeax/engine-rhi-debug';
@@ -17,12 +18,14 @@ import { shaderManifestUrl } from './shader-manifest-url.fixture';
 const manifestUrl = shaderManifestUrl(await buildEngineShaderManifest());
 
 it.each([
-  'standard',
-  'unlit',
-  'skin',
-] as const)('alpha hash %s: coverage, temporal stability and fresh RHI replay', {
+  { kind: 'standard', taaRenderPath: 'forward' },
+  { kind: 'unlit', taaRenderPath: 'forward' },
+  { kind: 'skin', taaRenderPath: 'forward' },
+  { kind: 'standard', taaRenderPath: 'deferred' },
+  { kind: 'skin', taaRenderPath: 'deferred' },
+] as const)('alpha hash $kind / TAA $taaRenderPath: coverage, temporal stability and fresh RHI replay', {
   timeout: 180_000,
-}, async (kind) => {
+}, async ({ kind, taaRenderPath }) => {
   let texture: GPUTexture | undefined;
   const canvas = {
     width: ALPHA_HASH_SIZE,
@@ -49,11 +52,12 @@ it.each([
   );
   if (!constructed.ok) throw new Error(JSON.stringify(constructed.error));
   const host = constructed.value;
-  const directory = `artifacts/alpha-hash/${kind}`;
+  const directory = `artifacts/alpha-hash/${kind}${taaRenderPath === 'deferred' ? '-taa-deferred' : ''}`;
   mkdirSync(directory, { recursive: true });
   try {
     const evidence = await verifyAlphaHash(host.renderer, {
       kind,
+      taaRenderPath,
       recorder,
       image(name, bytes, metadata) {
         writeFileSync(`${directory}/${name}.bin`, bytes);
@@ -63,9 +67,71 @@ it.each([
         writeFileSync(`${directory}/independent-alpha.rhitape`, encoded.bytes);
       },
       async capture(encoded, live) {
-        writeFileSync(`${directory}/frame.rhitape`, encoded.bytes);
         const tape = decodeTape(encoded.bytes).unwrap();
         const model = buildFrameModel(tape);
+        if (
+          model.works.some((work) =>
+            work.pipeline.shaders.some((shader) => shader.source?.includes('fn blendTaaHistory')),
+          )
+        ) {
+          writeFileSync(`${directory}/temporal-frame.rhitape`, encoded.bytes);
+          const producer = model.works.find((work) =>
+            work.pipeline.shaders.some((shader) => shader.entryPoint === 'fs_gbuffer'),
+          );
+          expect(producer).toBeDefined();
+          if (!producer) throw new Error('Missing Deferred temporal producer');
+          expect(producer.attachments.colorViewHandleIds).toHaveLength(7);
+          const temporalId = producer.attachments.colorViewHandleIds[6];
+          if (!temporalId) throw new Error('Missing merged temporal attachment');
+          const adapter = (await webgpu.rhi.requestAdapter()).unwrap();
+          const device = (await adapter.requestDevice(deviceOptionsForAdapter(adapter))).unwrap();
+          const replay = (
+            await openReplay(tape, { device, createShaderModule: webgpu.createShaderModule })
+          ).unwrap();
+          try {
+            const temporal = (
+              await replay.readResourceAtWork(temporalId, producer.workIndex)
+            ).unwrap();
+            expect(temporal.format).toBe('rgba16float');
+            writeFileSync(`${directory}/scene-temporal.rgba16f`, temporal.bytes);
+            const values = new DataView(
+              temporal.bytes.buffer,
+              temporal.bytes.byteOffset,
+              temporal.bytes.byteLength,
+            );
+            let covered = 0,
+              maximumReactive = 0;
+            for (let offset = 0; offset < temporal.bytes.byteLength; offset += 8) {
+              if (halfToFloat(values.getUint16(offset + 4, true)) < 0) continue;
+              covered++;
+              maximumReactive = Math.max(
+                maximumReactive,
+                halfToFloat(values.getUint16(offset + 6, true)),
+              );
+            }
+            writeFileSync(
+              `${directory}/temporal-metadata.json`,
+              JSON.stringify(
+                {
+                  digest: encoded.digest,
+                  workIndex: producer.workIndex,
+                  extent: [temporal.width, temporal.height],
+                  covered,
+                  maximumReactive,
+                  oracle: 'Stationary alpha-hash coverage is sampling, not source reactivity',
+                },
+                null,
+                2,
+              ),
+            );
+            expect(covered).toBeGreaterThan(1000);
+            expect(maximumReactive).toBe(0);
+          } finally {
+            (await replay.dispose()).unwrap();
+          }
+          return;
+        }
+        writeFileSync(`${directory}/frame.rhitape`, encoded.bytes);
         writeFileSync(
           `${directory}/summary.json`,
           JSON.stringify({ digest: encoded.digest, ...summarizeFrame(model) }, null, 2),
@@ -73,7 +139,9 @@ it.each([
         const geometry = model.works.filter(
           (work) =>
             work.pipeline.shaders.some(
-              (shader) => shader.stage === 'fragment' && shader.entryPoint === 'fs_main',
+              (shader) =>
+                shader.stage === 'fragment' &&
+                (shader.entryPoint === 'fs_main' || shader.entryPoint === 'fs_opaque'),
             ) && work.vertexBuffers.length > 0,
         );
         expect(geometry.length).toBeGreaterThan(0);

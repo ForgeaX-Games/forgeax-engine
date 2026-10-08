@@ -1,5 +1,6 @@
 import type {
   CompiledRenderGraphInfo,
+  GraphAccess,
   GraphTextureDescriptor,
   GraphTextureView,
 } from '@forgeax/engine-render-graph';
@@ -7,6 +8,7 @@ import { RenderGraphError } from '@forgeax/engine-render-graph';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import { standardBloomAdmitted } from '../bloom-admission';
 import { addTypedDebugOverlayPass } from '../debug-draw-glue';
+import type { GraphAtmosphere } from '../environment/luts';
 import { RenderFeatureCapabilityMissingError, SceneDataUnavailableError } from '../errors/render';
 import {
   BARREL_DISTORTION_FEATURE_IDENTITY,
@@ -14,6 +16,8 @@ import {
 } from '../features/barrel-distortion';
 import { addDepthOfFieldPasses } from '../features/depth-of-field/depth-of-field-feature';
 import { LENS_EFFECTS_POST_PROCESS_ID } from '../features/lens-effects';
+import { isLensFlarePostProcess, LENS_FLARE_POST_PROCESS_ID } from '../features/lens-flare';
+import { addLensFlarePasses } from '../features/lens-flare-graph';
 import { addMotionBlurPass } from '../features/motion-blur/motion-blur-feature';
 import { addOutlinePasses } from '../features/outline/graph';
 import { isOutlinePostProcess } from '../features/outline/shaders';
@@ -379,6 +383,50 @@ function missingTemporalContributor(
  * path exact-zero while building one bounded five-level HDR
  * downsample/tent-upsample pyramid for the enabled path.
  */
+/**
+ * Project the generic scene-stage features over a lane's final scene target,
+ * with the same receiver reads the Standard lighting passes expose. Barrel
+ * distortion is withheld here and projected last by `addStandardPost`.
+ */
+export function contributeStandardSceneFeatures(
+  context: RenderPipelineBuildContext<RenderPipelineFrame>,
+  targets: {
+    readonly color: RenderPipelineTarget;
+    readonly colorResolve: GraphTextureView | undefined;
+    readonly depth: RenderPipelineTarget;
+  },
+  receiverAccesses: readonly GraphAccess[],
+  atmosphere?: GraphAtmosphere,
+): Result<void, RenderPipelineBuildError> {
+  const { color, colorResolve, depth } = targets;
+  return context.contributeFeatures(
+    [
+      {
+        name: 'linear-hdr',
+        kind: 'scene-color',
+        texture: color.texture,
+        view: color.view,
+        ...(colorResolve === undefined ? {} : { resolveTarget: colorResolve }),
+        format: color.format,
+        sampleCount: color.sampleCount,
+      },
+      {
+        kind: 'scene-depth',
+        texture: depth.texture,
+        view: depth.view,
+        format: depth.format,
+        sampleCount: depth.sampleCount,
+      },
+    ],
+    [],
+    {},
+    receiverAccesses,
+    { exclude: [BARREL_DISTORTION_FEATURE_IDENTITY] },
+    [],
+    atmosphere,
+  );
+}
+
 export function addStandardPost(
   context: RenderPipelineBuildContext<RenderPipelineFrame>,
   topology: RenderPipelineTopology,
@@ -397,6 +445,7 @@ export function addStandardPost(
     meter: topology.output?.autoExposure === true,
     bloom: !clearOnly && standardBloomAdmitted(topology.camera),
     dof: !clearOnly && topology.camera.depthOfField !== undefined,
+    lensFlare: !clearOnly && topology.camera.lensFlare === true,
     exposure: topology.output?.autoExposure === true,
     whiteBalance: topology.output?.whiteBalance === true,
     lut: topology.output?.colorLut === true,
@@ -408,14 +457,18 @@ export function addStandardPost(
     outputEncoding: 'explicit-oetf',
   });
   if (
-    (outputPlan.features.barrelDistortion || outputPlan.features.lensEffects) &&
+    (outputPlan.features.barrelDistortion ||
+      outputPlan.features.lensEffects ||
+      outputPlan.features.lensFlare) &&
     context.capabilities?.rgba16floatRenderable !== true
   ) {
     return err(
       new RenderFeatureCapabilityMissingError(
         outputPlan.features.barrelDistortion
           ? BARREL_DISTORTION_FEATURE_IDENTITY
-          : LENS_EFFECTS_POST_PROCESS_ID,
+          : outputPlan.features.lensEffects
+            ? LENS_EFFECTS_POST_PROCESS_ID
+            : LENS_FLARE_POST_PROCESS_ID,
         0,
         'rgba16floatRenderable',
       ),
@@ -447,6 +500,7 @@ export function addStandardPost(
           identity !== BARREL_DISTORTION_POST_PROCESS_ID &&
           identity !== LENS_EFFECTS_POST_PROCESS_ID &&
           !isOutlinePostProcess(identity) &&
+          !isLensFlarePostProcess(identity) &&
           !isSmaaPostProcess(identity),
       );
   const rawOnlyPostInput =
@@ -627,6 +681,16 @@ export function addStandardPost(
     if (!bloom.ok) return bloom;
     postInput = composited.value;
   }
+  // The threshold is authored in scene HDR units, so the flare shares Bloom's
+  // HDR-only admission and reads the Bloom-composited color.
+  if (hdr && outputPlan.features.lensFlare) {
+    const flare = addLensFlarePasses(context.graph, postInput, {
+      width: topology.extent?.outputWidth ?? topology.surface.width,
+      height: topology.extent?.outputHeight ?? topology.surface.height,
+    });
+    if (!flare.ok) return flare;
+    postInput = flare.value;
+  }
 
   if (outputPlan.features.exposure || outputPlan.features.whiteBalance) {
     const exposureOutput = target(context, 'standard-exposure-white-balance', {
@@ -667,7 +731,7 @@ export function addStandardPost(
     // that the LUT and auto-exposure routes already use so the graph can
     // capture it without changing unobserved frames.
     context.observationCaptureDomains?.some(
-      (domain) => domain === 'linear-ldr' || domain === 'final-srgb',
+      (domain) => domain === 'linear-ldr' || domain === 'final-display',
     ) === true;
 
   // Tone mapping and output encoding are separate entry points when a LUT is

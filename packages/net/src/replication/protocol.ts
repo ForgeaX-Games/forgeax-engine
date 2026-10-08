@@ -15,13 +15,7 @@ export interface ReplicationEntityRecord {
   readonly components: readonly ReplicationComponentRecord[];
 }
 
-export type ReplicationPacketKind =
-  | 'session-open'
-  | 'session-resume'
-  | 'baseline'
-  | 'delta'
-  | 'ack'
-  | 'rejection';
+export type ReplicationPacketKind = ReplicationPacket['kind'];
 
 /** Control packet that opens or resumes one application session. */
 export interface ReplicationSessionPacket {

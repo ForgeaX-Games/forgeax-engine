@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runBrowserCommand } from './run-browser-gate-with-retry.mjs';
@@ -79,12 +79,21 @@ export function focusPlan(kind, selector, { frames = 60, shardIndex = 0, shardCo
     )
       throw new Error(`unknown ${kind} project or test file: ${selector}`);
     if (kind === 'type') throw new Error('type focus selects an owning project');
+    const packageManifest = selector.startsWith('packages/')
+      ? join(root, ...selector.split('/').slice(0, 2), 'package.json')
+      : undefined;
+    const owner =
+      packageManifest && existsSync(packageManifest)
+        ? JSON.parse(readFileSync(packageManifest, 'utf8')).name
+        : undefined;
+    const projectArgs = projects.includes(owner)
+      ? ['--project', owner]
+      : ['--project=@forgeax/*', '--project=unit'];
     return {
       args: [
         vitest,
         'run',
-        '--project=@forgeax/*',
-        '--project=unit',
+        ...projectArgs,
         '--passWithNoTests=false',
         '--maxWorkers=1',
         '--typecheck.enabled=false',
@@ -132,12 +141,13 @@ export async function main(argv = process.argv.slice(2)) {
   rmSync(dirname(output), { recursive: true, force: true });
   mkdirSync(logs, { recursive: true });
   let commandIndex = 0;
-  const run = async (args) => {
+  const run = async (args, { nativeCoordinator = false } = {}) => {
     const result = await runBrowserCommand([process.execPath, ...args], {
       cwd: root,
       env,
       label: 'ci-focus',
       timeoutMs: 30 * 60_000,
+      excludeGpuLeaseQueue: nativeCoordinator && env.FORGEAX_LOCAL_GPU_LEASE === '1',
     });
     writeFileSync(join(logs, `command-${++commandIndex}.log`), result.output);
     if (result.status !== 0) throw new Error(`focus command failed (${result.status}): ${args[0]}`);
@@ -192,7 +202,7 @@ export async function main(argv = process.argv.slice(2)) {
         if (result.status !== 'pass')
           throw new Error(`smoke focus failed: ${JSON.stringify(result)}`);
       }
-    } else await run(plan.args);
+    } else await run(plan.args, { nativeCoordinator: ['browser', 'dawn'].includes(options.kind) });
     status = 'passed';
     return 0;
   } finally {

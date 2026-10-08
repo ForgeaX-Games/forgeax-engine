@@ -81,6 +81,26 @@ describe('immutable DDC entry store', () => {
     await expect(store.write(entry())).resolves.toEqual({ result: 'existing', key: KEY });
   });
 
+  it('keeps the accepted entry when the same key supplies different artifact bytes', async () => {
+    const root = join(tmpdir(), `forgeax-ddc-entry-${Date.now()}-${Math.random()}`);
+    roots.push(root);
+    const store = new DdcEntryStore(root);
+    const accepted = entry();
+    const changed = {
+      ...accepted,
+      artifacts: {
+        payload: { mediaType: 'application/octet-stream', bytes: new Uint8Array([1, 2, 4]) },
+      },
+    };
+    const candidate = {
+      ...changed,
+      receipt: { ...changed.receipt, outputDigest: ddcOutputDigest(changed) },
+    };
+    await expect(store.write(accepted)).resolves.toEqual({ result: 'published', key: KEY });
+    await expect(store.write(candidate)).resolves.toEqual({ result: 'conflict', key: KEY });
+    await expect(store.read(KEY)).resolves.toEqual(accepted);
+  });
+
   it('ignores publication generation metadata when comparing immutable content', async () => {
     const root = join(tmpdir(), `forgeax-ddc-entry-${Date.now()}-${Math.random()}`);
     roots.push(root);

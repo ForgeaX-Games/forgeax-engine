@@ -17,6 +17,12 @@ cook 使用的 reflection 与 artifact 输入。`coordinateSet`、transform 和
 
 ## Layer 1 — API surface (what you call)
 
+Build-time Surface source-closure and helper-name digests use Node's native
+SHA-256 on Node and the existing portable SHA-256 in browser source utilities.
+The native module is loaded only on Node. Canonical
+module ordering, UTF-8 replacement bytes, digest prefixes and published helper
+names remain identical; source changes still invalidate derived receipts.
+
 **Single entry.** `compileShader(source, options)` — pure function, `Promise<Result<CompileResult, ShaderError>>`. Same input produces same output; no mutable global state.
 
 For graphics consumers, `renderEntries: { vertex, fragment? }` checks the
@@ -34,15 +40,41 @@ storage-only branches. Standard Surface scene-index programs and their GPU Scene
 receipts are also emitted only for storage-buffer contexts; uniform fallback
 publishes its direct program without requesting storage-only Mesh metadata.
 
+Full-custom raster programs may conditionally declare `vs_scene_index` under
+`GPU_DRIVEN_SCENE_INDEX_AVAILABLE` and keep their direct entry in the opposite
+branch. Cook compiles each address independently with the native selector,
+validates both selected entries, and publishes both artifacts. Scene entries
+import `sceneIndexDraw` from `forgeax_view::common`; direct entries import
+`meshes` and `instances`. The native families share binding coordinates, so
+their imports and uses must follow the same conditional. The generated
+`forgeax_material::parameters` module owns `MaterialParameters`, `sceneMaterials`
+and `visibleItems`; uniform-fallback contexts publish only the direct program.
+A native `forgeax::default-shadow-caster` Pass paired with a custom scene
+program publishes the same address pair from the root parameter schema. Its
+default opaque coverage requires only position (plus skin attributes when
+selected), while retaining native transforms, clipping and LOD coverage.
+
 Material publications use `material-cook/4`: one validated root contract and a
 complete program set selected by Pass and compiler context. Pack and Native
 cookers share the publication builder. Independent modules retain independent
 WGSL; shared modules reuse code while entry choices remain pipeline facts.
 
+Standard Pack materials publish both plain and vertex-color programs, including
+matching direct and scene-index address pairs. The ABI receipt's vertex inputs
+own this distinction; no second color flag is persisted in the cook context.
+Runtime selection uses the mesh's color attribute, and extraction caches separate
+the resulting material programs even when two meshes share one material handle.
+
 The Native Pack cooker derives `skinned` geometry from a resolved Standard skin
 root, including inherited roots. Its color, visible-surface and shadow programs
 share that context and palette ABI. Readiness alone does not prove selection:
 the consumer must find one program for its exact pass, geometry and address.
+
+Standard Pack publications also include direct uniform programs for WebGPU and
+WebGL2, with the same authored Surface, parameters and geometry. A device or
+backend recovery selects these published artifacts without runtime compilation;
+the two backends retain distinct context and vertex-color selections. Uniform
+contexts have no scene-index program or storage-only View extension.
 
 Sprite materials publish both ordinary mesh and `sprite-instances` geometry
 programs. The latter derives `PER_INSTANCE_REGION` from the component-owned
@@ -56,7 +88,7 @@ published artifact with a legacy shader variant.
 
 | Contract | Compile-time rule |
 |:--|:--|
-| Root parameter storage | All used UBO members keep the generated offsets and span. |
+| Root parameter storage | Used UBO members retain declaration order, types, offsets, sizes and alignment. Compiler-renamed member spellings (including numeric suffixes) are diagnostic names, not buffer ABI. |
 | Per-Pass resources | Unused bindings may be absent; used resources keep root binding numbers and types. |
 | Custom resource names | Names such as `clearcoatTexture` do not enable Standard semantics or relocation. |
 | Default shadow coverage | `forgeax::default-shadow-caster` without an explicit Surface slot uses opaque coverage and adds no PBR parameters. Standard helpers explicitly select their shared Surface. |
@@ -120,6 +152,12 @@ if (result.ok) {
 4. **Portable WGSL canonicalization** (`wgsl-compat.ts`) — one internal `canonicalizePortableWgsl` façade owns post-Naga portability rewrites. The current rule uses a small lexical scan so only the affected numeric token changes; the canonical source then feeds parse, validate, reflection, hashing, and the manifest. Future rules extend this owner rather than adding a nested `normalizeX(normalizeY(...))` call chain in `compileShader`.
 5. **Error mapper** (`error-mapper.ts`) — wasm `JsError` prefixes map to closed-set codes: `IMPORT_NOT_FOUND:` → `shader-import-not-found`; `CIRCULAR:` → `shader-circular-import` (fallback if step 2 missed); anything else → `shader-compile-failed` with raw `compilerMessages`.
 
+The compiler owns all transient Naga handles. Validation consumes the parsed
+handle; successful syntax-only diagnostic probes release theirs immediately.
+A validated program is released in `finally` after reflection or selected-entry
+validation, including failure returns. Compiler results retain ordinary source
+and reflection data; native IR does not escape or wait for JavaScript finalizers.
+
 ### Bevy-style `moduleId` naming
 
 `moduleId` follows Bevy's `namespace::path` convention — `forgeax_view::common`, `forgeax_pbr::brdf`, `forgeax_pbr::main`. The `#define_import_path` directive at each module's head declares its id; consumers `#import moduleId::{Symbol1, Symbol2}` to pull named items. This aligns with naga_oil's upstream convention and lets AI users copy Bevy shader examples unmodified.
@@ -151,16 +189,64 @@ The plugin builds a `reverseDeps: Map<moduleId, Set<rootEntryId>>` during `trans
 - charter proposition 3 (machine-readable > prose) + AC-15 (no `err.message.match()`) — [AI-first contract](../../AGENTS.md#design-axiom--compression--intelligence)
 - AGENTS.md §Error model — family-level `ShaderErrorCode` + `ShaderErrorDetail` row (T-22 anchored).
 
-## Pack compilation lifetime
+## Material compilation lifetime
 
-Each `createMaterialPackCooker()` owns bounded reuse of successful raster
-compilations: at most 64 programs and 16 MiB of serialized compiler results.
-The key includes the exact source and all compiler options, including imported
-bytes, defines, selected entries and output formats. Sources are still read on
-every cook; material values, references, generations and receipts are published
-anew. Shader bytes stay binary until the Pack transport projection. Failed
-compilations are never retained, and returned results cannot mutate
-the retained copy. The pure `compileShader()` entry keeps no global cache.
+`createMaterialProgramCompiler()` shares pending composition and retains successful
+compilation stages in one bounded cache: at most 128 entries and 16 MiB jointly across composed WGSL and
+validated result facts. The two public WGSL fields share one immutable string;
+caller copies retain independent mutable metadata without copying that source
+twice. Source admission and composition run before program lookup. Validation
+reuse requires identical actual WGSL, selected vertex/fragment entries, ordered
+attachment formats and dynamic-offset annotations. Distinct source contexts
+that compose to those same facts reuse one validated result; changed programs
+or selections run the real Naga path. Each invocation projects its own declared
+import dependencies for HMR, even when its program bytes agree.
+Exact results retire before compositions when the cache fills, so many entry
+selections cannot evict the composition they share.
+
+Concurrent identical inputs share the same composition promise. Pending source
+bytes count toward the existing joint budget; completed entries account for
+actual WGSL bytes. Every caller keeps its own source diagnostics, selected-entry
+validation and mutable result metadata.
+
+| Composition outcome | Retention |
+|:--|:--|
+| Pending within both limits | Shared by callers with the identical source key |
+| Successful within both limits | Immutable WGSL available for scoped reuse |
+| Rejected or oversized | Not retained; the same input may retry |
+| Evicted while pending | Its later completion cannot restore the evicted entry |
+
+Composition remains keyed by prepared source, imported bytes and relevant
+boolean axes. Malformed selectors still reach native rejection. Conditional
+specialization and source diagnostics remain on the ordinary compiler path;
+only successful program facts are retained, never native IR handles.
+
+The real Standard reuse regression retains the complete raster/ray working set
+between material publications and checks that neither composition nor validation
+repeats. The joint entry/payload limits still evict larger working sets.
+
+Each `createMaterialPackCooker()` owns one such compiler. Vite authored-material
+preparation uses the same factory for the complete material and its variants,
+so entries sharing source do not repeat composition. Every preparation still
+reads current source and validates each selected entry before publication.
+
+> [!IMPORTANT]
+> Reusing composition never bypasses source diagnostics, WGSL validation,
+> requested render entries/formats, or reflection of changed dynamic offsets.
+> Only an exact successful WGSL and selection/reflection contract can reuse validation.
+
+Packaged shader sources come from the package resolved beside the compiler.
+The conventional workspace path is used only when that package cannot resolve;
+an SDK's expanded source tree and installed package never both enter the catalog.
+Explicit project roots still retain strict module-provenance validation.
+
+Sources are read on every cook; material values, references, generations and
+receipts are published anew. Failed compilations are never retained as results;
+failed compositions are never retained. Returned results cannot mutate retained
+values. Shader bytes stay binary until the Pack transport projection. Ray
+compiler identity names the template and evaluation context; material identity
+belongs to the fresh publication. The pure `compileShader()` entry keeps no
+global cache.
 
 ## Standard Surface composition
 
@@ -202,17 +288,26 @@ remain runtime admission. See [public MRT](../render/README.md#public-material-m
 
 `cookRayMaterial({ material, table, sources, context })` resolves the existing
 MaterialAsset inheritance, lowers the same Standard schema, composes its Surface
-slot and compiles either `ray-hit` compute or `raster-probe` diagnostic fragment
-WGSL. It returns the resolved asset, source closure and `RaySurfaceProgram`. Value edits retain
+slot and compiles `ray-hit` compute, `card-capture` vertex/fragment, or
+`raster-probe` diagnostic fragment WGSL. It returns the resolved asset, source closure and `RaySurfaceProgram`. Value edits retain
 program identity; source edits change `sourceClosureDigest`. Contexts own texture
 sampling policy, not separate material definitions.
 
-The ordinary Pack cooker publishes the eligible rigid Standard ray-hit derivative
-alongside its raster programs in the same receipt and artifact set. Unsupported
-materials remain raster publications; a ray consumer must report their admission
-failure or missing context, never substitute the raster program. Runtime never
-imports the compiler. Texture/MASK and normal maps require their qualified UV
+The ordinary Pack cooker publishes each eligible rigid Standard `ray-hit` and
+`card-capture` derivative alongside raster programs in the same receipt and
+artifact set. Admission is context-specific: Card capture requires the canonical
+Standard Surface; a custom Surface can retain its qualified raster/ray programs.
+An ineligible context is omitted, while an eligible context's compilation failure
+rejects the new publication. A consumer must report its missing context. Card
+compilation validates `vs_card`, `fs_card` and four `rgba16float` outputs. Runtime
+never imports the compiler. Texture/MASK and normal maps require their qualified UV
 and tangent inputs; unsupported coverage, physical layers and resource profiles
 fail admission. Custom Surface code must compile for compute and pass the GPU
-geometric-normal/finite-output checks. This delivery path alone does not install
-Renderer GI, cards or a hardware query pipeline.
+geometric-normal/finite-output checks. This material delivery path does not schedule
+Renderer Card capture, GI or a hardware query pipeline.
+
+## Terrain raster context
+
+Both `forgeax_material::terrain_surface` and `forgeax_material::terrain_id_surface` select Terrain geometry from resolved pass slots. The ID surface is an explicit Cook specialization, including inherited materials, rather than a runtime shader switch. All direct raster contexts retain the same shared vertex kernel and direct ABI receipt.
+
+The terrain material context emits an ordinary cooked Standard artifact with the direct scene ABI receipt. It shares the terrain vertex kernel with shadow/depth/temporal and GBuffer contexts. Terrain's exclusion from SceneIndex never removes its direct ABI admission fact. Artifact request identity includes the visible-surface context, preventing a cached no-surface variant from satisfying a surface request. Runtime only resolves cooked artifacts; it does not compile terrain WGSL.

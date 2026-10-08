@@ -8,7 +8,11 @@ import type {
   MaterialRenderState,
   MaterialValue,
 } from '@forgeax/engine-types';
-import { deriveStandardLayerPlan, standardSurfaceParameters } from '@forgeax/engine-types';
+import {
+  deriveStandardLayerPlan,
+  standardSurfaceParameters,
+  unlitMaterialParameters,
+} from '@forgeax/engine-types';
 import {
   DEFAULT_STANDARD_SURFACE_MODULE,
   projectStandardSurfacePasses,
@@ -22,7 +26,54 @@ export type MaterialTransmissionValidationReason =
   | 'blend'
   | 'depth-write';
 
-export type MaterialAuthoringValidationReason = 'non-finite' | 'range' | 'shape';
+export type MaterialAuthoringValidationReason = 'non-finite' | 'range' | 'shape' | 'conflict';
+
+function materialAuthoringHint(
+  parameter: MaterialAuthoringContractError['detail']['parameter'],
+  reason: MaterialAuthoringValidationReason,
+): string {
+  if (reason === 'conflict') {
+    return parameter === 'triplanar'
+      ? `remove triplanar, normalMapSpace 'object', alpha masking (alphaCutoff, alphaHash) or the slots it cannot project (${TRIPLANAR_UNSUPPORTED_SLOTS.join(', ')}); depth, shadow and temporal coverage sample by UV`
+      : 'remove normalMapSpace or bumpTexture; an object-space normal map replaces the height-derived normal';
+  }
+  switch (parameter) {
+    case 'normalScale':
+      return 'set normalScale to two finite numbers [x, y] before publishing the material';
+    case 'triplanar':
+      return "set triplanar to { space: 'world' | 'object', scale > 0, sharpness >= 1 } before publishing the material";
+    case 'normalMapSpace':
+      return "set normalMapSpace to 'tangent' or 'object' before publishing the material";
+    case 'alphaCutoff':
+      return 'set alphaCutoff to a finite number in [0, 1] before publishing the material';
+    default:
+      return `set ${parameter} to a finite number before publishing the material`;
+  }
+}
+
+/**
+ * Slots that keep UV sampling: height maps displace/perturb along the UV
+ * tangent frame, and the specular/transmission/physical layers are sampled
+ * outside the projected base Surface.
+ */
+const TRIPLANAR_UNSUPPORTED_SLOTS = [
+  'bumpTexture',
+  'displacementTexture',
+  'specularTexture',
+  'specularColorTexture',
+  'transmissionTexture',
+  'thicknessTexture',
+  'clearcoatTexture',
+  'clearcoatRoughnessTexture',
+  'clearcoatNormalTexture',
+  'anisotropyTexture',
+  'sheenColorTexture',
+  'sheenRoughnessTexture',
+  'iridescenceTexture',
+  'iridescenceThicknessTexture',
+  'diffuseTransmissionTexture',
+  'diffuseTransmissionColorTexture',
+] as const;
 
 /** Structured authoring failure for a built-in Standard material parameter. */
 export class MaterialAuthoringContractError extends Error {
@@ -38,7 +89,9 @@ export class MaterialAuthoringContractError extends Error {
       | 'normalScale'
       | 'bumpScale'
       | 'displacementScale'
-      | 'displacementBias';
+      | 'displacementBias'
+      | 'triplanar'
+      | 'normalMapSpace';
     readonly reason: MaterialAuthoringValidationReason;
     readonly actual?: unknown;
   };
@@ -50,7 +103,7 @@ export class MaterialAuthoringContractError extends Error {
   ) {
     super(`Materials.standard: ${parameter} violates the authoring contract (${reason})`);
     this.name = 'MaterialAuthoringContractError';
-    this.hint = `set ${parameter} to ${parameter === 'normalScale' ? 'two finite numbers [x, y]' : 'a finite number'}${parameter === 'alphaCutoff' ? ' in [0, 1]' : ''} before publishing the material`;
+    this.hint = materialAuthoringHint(parameter, reason);
     this.detail = {
       code: 'material-authoring-contract-invalid',
       material: 'Standard',
@@ -148,18 +201,24 @@ export function srgb(input: readonly number[]): readonly number[] {
     : [parsed[0] as number, parsed[1] as number, parsed[2] as number, parsed[3] as number];
 }
 
-function authoredColorParameter(
-  name: string,
-  type: 'color' | 'vec3',
-  colorSpace: MaterialColorSpace,
-  optional = false,
-): MaterialParameter {
-  return {
-    name,
-    type,
-    ...(type === 'color' && colorSpace === 'srgb' ? {} : { colorSpace }),
-    ...(optional ? { optional: true } : {}),
-  };
+/**
+ * Convert an explicit Display P3 (sRGB transfer, P3 primaries) tuple into the linear
+ * Rec.709 tuple factories store. Colors outside Rec.709 keep negative components so a
+ * `display-p3` renderer output re-encodes them exactly; an sRGB output clips them.
+ */
+export function displayP3(input: MaterialColorTuple3): MaterialColorTuple3;
+export function displayP3(input: MaterialColorTuple4): MaterialColorTuple4;
+export function displayP3(input: readonly number[]): readonly number[] {
+  if (input.length !== 3 && input.length !== 4) {
+    throw new Error(
+      `Display P3 material color tuple must contain 3 or 4 channels, got ${input.length}`,
+    );
+  }
+  const parsed = color.create(input[0] ?? 0, input[1] ?? 0, input[2] ?? 0, input[3] ?? 1);
+  color.displayP3ToLinear(parsed, parsed);
+  return input.length === 3
+    ? [parsed[0] as number, parsed[1] as number, parsed[2] as number]
+    : [parsed[0] as number, parsed[1] as number, parsed[2] as number, parsed[3] as number];
 }
 
 function standardParameters(
@@ -253,6 +312,10 @@ function standardParameters(
     'displacementBias',
     'specular',
     'specularColor',
+    'triplanarSpace',
+    'triplanarScale',
+    'triplanarSharpness',
+    'normalMapSpace',
     // IOR is part of the always-present dielectric F0 contract. The
     // transmission layer may be absent, but the Standard shader still
     // consumes this scalar for the base reflection path.
@@ -326,15 +389,6 @@ function standardParameters(
     });
 }
 
-function unlitParameters(colorSpace: MaterialColorSpace): readonly MaterialParameter[] {
-  return [
-    authoredColorParameter('baseColor', 'color', colorSpace),
-    { name: 'alphaCutoff', type: 'f32', optional: true },
-    { name: 'alphaHash', type: 'f32', optional: true },
-    { name: 'baseColorTexture', type: 'texture', optional: true },
-  ];
-}
-
 function pass(
   name: string,
   module: string,
@@ -369,11 +423,24 @@ interface UnlitOpts {
   readonly queue?: number;
 }
 
+/** Unlit shading modes; the value is the `shading` scalar the unlit module reads. */
+const UNLIT_SHADING = { color: 0, normal: 1, matcap: 2 } as const;
+
 function unlit(rgba: MaterialColorInput4, opts?: UnlitOpts): MaterialAsset {
+  return unlitMaterial('unlit', rgba, UNLIT_SHADING.color, opts);
+}
+
+function unlitMaterial(
+  factory: 'unlit' | 'matcap' | 'normal',
+  rgba: MaterialColorInput4,
+  shading: (typeof UNLIT_SHADING)[keyof typeof UNLIT_SHADING],
+  opts?: UnlitOpts,
+): MaterialAsset {
   if (opts?.alphaCutoff !== undefined && (opts.alphaCutoff < 0 || opts.alphaCutoff > 1)) {
-    throw new Error(`Materials.unlit: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
+    throw new Error(`Materials.${factory}: alphaCutoff must be in [0, 1], got ${opts.alphaCutoff}`);
   }
   const values: Record<string, MaterialValue> = { baseColor: linearColorFromInput(rgba, 4) };
+  if (shading !== UNLIT_SHADING.color) values.shading = shading;
   if (opts?.baseColorTexture !== undefined) values.baseColorTexture = opts.baseColorTexture;
   if (opts?.alphaCutoff !== undefined) values.alphaCutoff = opts.alphaCutoff;
   if (opts?.alphaHash !== undefined) values.alphaHash = Number(opts.alphaHash);
@@ -386,9 +453,44 @@ function unlit(rgba: MaterialColorInput4, opts?: UnlitOpts): MaterialAsset {
     kind: 'material',
     colorSpace: 'linear',
     passes,
-    parameters: unlitParameters('linear'),
+    parameters: unlitMaterialParameters('linear'),
     values,
   };
+}
+
+interface MatcapOpts extends Omit<UnlitOpts, 'baseColorTexture'> {
+  /** Tint multiplied with the matcap sample; numeric tuples are linear. */
+  readonly color?: MaterialColorInput4;
+}
+
+/**
+ * Three.js `MeshMatcapMaterial`: the sphere image is looked up by the
+ * view-space normal, so shading follows the camera without any light.
+ */
+function matcap(matcapTexture: MaterialValue, opts?: MatcapOpts): MaterialAsset {
+  return unlitMaterial('matcap', opts?.color ?? [1, 1, 1, 1], UNLIT_SHADING.matcap, {
+    ...opts,
+    baseColorTexture: matcapTexture,
+  });
+}
+
+interface NormalOpts extends Omit<UnlitOpts, 'baseColorTexture'> {
+  /** Only alpha is read; the color is the encoded view-space normal. */
+  readonly opacity?: number;
+}
+
+/**
+ * Three.js `MeshNormalMaterial`: writes `viewNormal * 0.5 + 0.5`. Pair it with
+ * a camera whose tonemap is `'none'` when the encoded value must read back exactly.
+ */
+function normal(opts?: NormalOpts): MaterialAsset {
+  return unlitMaterial('normal', [1, 1, 1, opts?.opacity ?? 1], UNLIT_SHADING.normal, opts);
+}
+
+export interface StandardTriplanarOptions {
+  readonly space: 'world' | 'object';
+  readonly scale?: number;
+  readonly sharpness?: number;
 }
 
 interface StandardOpts {
@@ -449,6 +551,18 @@ interface StandardOpts {
   readonly alphaTexture?: MaterialValue;
   readonly normalTexture?: MaterialValue;
   readonly normalScale?: readonly [number, number];
+  /**
+   * `'object'` reads `normalTexture` as an object-space normal (RGB * 2 - 1,
+   * Three.js `ObjectSpaceNormalMap`); no tangents are needed. Default `'tangent'`.
+   */
+  readonly normalMapSpace?: 'tangent' | 'object';
+  /**
+   * Project base color, metallic/roughness, alpha, normal, emissive and
+   * occlusion maps along the three axes of `space` instead of mesh UVs.
+   * `scale` is texture repeats per unit; `sharpness` (>= 1) narrows the
+   * blend between planes. Slot coordinate transforms still apply per plane.
+   */
+  readonly triplanar?: StandardTriplanarOptions;
   readonly bumpTexture?: MaterialValue;
   readonly bumpScale?: number;
   /** Linear red height in [0, 1], sampled at mip zero. Requires sufficient mesh vertices. */
@@ -484,6 +598,7 @@ export interface CustomStandardSurfaceOptions {
   readonly surfaceModule: string;
   readonly parameters: readonly MaterialParameter[];
   readonly values: Readonly<Record<string, MaterialValue>>;
+  readonly alphaClip?: boolean;
   readonly colorSpace?: MaterialColorSpace;
   readonly renderState?: MaterialRenderState;
   readonly queue?: number;
@@ -530,6 +645,8 @@ export interface CustomStandardSurfaceOptions {
   readonly alphaChannel?: never;
   readonly normalTexture?: never;
   readonly normalScale?: never;
+  readonly normalMapSpace?: never;
+  readonly triplanar?: never;
   readonly bumpTexture?: never;
   readonly bumpScale?: never;
   readonly displacementTexture?: never;
@@ -574,6 +691,42 @@ function validateFiniteRange(
   }
 }
 
+function validateProjection(opts: StandardOpts): void {
+  const normalSpace = opts.normalMapSpace;
+  if (normalSpace !== undefined && normalSpace !== 'tangent' && normalSpace !== 'object') {
+    throw new MaterialAuthoringContractError('normalMapSpace', 'range', normalSpace);
+  }
+  if (normalSpace === 'object' && opts.bumpTexture !== undefined) {
+    throw new MaterialAuthoringContractError('normalMapSpace', 'conflict', 'bumpTexture');
+  }
+  const triplanar = opts.triplanar;
+  if (triplanar === undefined) return;
+  if (triplanar.space !== 'world' && triplanar.space !== 'object') {
+    throw new MaterialAuthoringContractError('triplanar', 'range', triplanar);
+  }
+  const scale = triplanar.scale ?? 1;
+  const sharpness = triplanar.sharpness ?? 1;
+  if (!Number.isFinite(scale) || !Number.isFinite(sharpness)) {
+    throw new MaterialAuthoringContractError('triplanar', 'non-finite', triplanar);
+  }
+  if (scale <= 0 || sharpness < 1) {
+    throw new MaterialAuthoringContractError('triplanar', 'range', triplanar);
+  }
+  if (normalSpace === 'object') {
+    throw new MaterialAuthoringContractError('triplanar', 'conflict', 'normalMapSpace');
+  }
+  if ((opts.alphaCutoff ?? 0) > 0) {
+    throw new MaterialAuthoringContractError('triplanar', 'conflict', 'alphaCutoff');
+  }
+  if (opts.alphaHash === true) {
+    throw new MaterialAuthoringContractError('triplanar', 'conflict', 'alphaHash');
+  }
+  const conflict = TRIPLANAR_UNSUPPORTED_SLOTS.find((name) => opts[name] !== undefined);
+  if (conflict !== undefined) {
+    throw new MaterialAuthoringContractError('triplanar', 'conflict', conflict);
+  }
+}
+
 function standardDefault(opts: DefaultStandardOptions): MaterialAsset {
   const occlusionStrength = opts.occlusionStrength ?? 1;
   if (occlusionStrength < 0 || occlusionStrength > 1) {
@@ -603,6 +756,7 @@ function standardDefault(opts: DefaultStandardOptions): MaterialAsset {
       throw new MaterialAuthoringContractError(name, 'non-finite', opts[name]);
     }
   }
+  validateProjection(opts);
   validateChannel('metallicChannel', opts.metallicChannel);
   validateChannel('roughnessChannel', opts.roughnessChannel);
   validateChannel('alphaChannel', opts.alphaChannel);
@@ -700,6 +854,12 @@ function standardDefault(opts: DefaultStandardOptions): MaterialAsset {
   if (opts.alphaChannel !== undefined) values.alphaChannel = opts.alphaChannel;
   if (opts.normalTexture !== undefined) values.normalTexture = opts.normalTexture;
   if (opts.normalScale !== undefined) values.normalScale = [...opts.normalScale];
+  if (opts.normalMapSpace === 'object') values.normalMapSpace = 1;
+  if (opts.triplanar !== undefined) {
+    values.triplanarSpace = opts.triplanar.space === 'world' ? 1 : 2;
+    values.triplanarScale = opts.triplanar.scale ?? 1;
+    values.triplanarSharpness = opts.triplanar.sharpness ?? 1;
+  }
   if (opts.bumpTexture !== undefined) values.bumpTexture = opts.bumpTexture;
   if (opts.bumpScale !== undefined) values.bumpScale = opts.bumpScale;
   if (opts.displacementTexture !== undefined) values.displacementTexture = opts.displacementTexture;
@@ -752,6 +912,7 @@ function standardCustom(opts: CustomStandardSurfaceOptions): MaterialAsset {
     passes: projectStandardSurfacePasses({
       surfaceModule: opts.surfaceModule,
       values: opts.values,
+      ...(opts.alphaClip === undefined ? {} : { alphaClip: opts.alphaClip }),
       ...(opts.renderState === undefined ? {} : { renderState: opts.renderState }),
       ...(opts.queue === undefined ? {} : { queue: opts.queue }),
       layerPlan,
@@ -765,6 +926,40 @@ export function standard(options: StandardOptions): MaterialAsset {
   return options.surfaceModule === undefined ? standardDefault(options) : standardCustom(options);
 }
 
-export const Materials = { unlit, standard, srgb } as const;
+/** Diffuse-only authoring inputs; specular and physical layers stay Standard-owned. */
+export type LambertOptions = Pick<
+  StandardOpts,
+  | 'baseColor'
+  | 'baseColorTexture'
+  | 'alphaTexture'
+  | 'alphaChannel'
+  | 'normalTexture'
+  | 'normalScale'
+  | 'normalMapSpace'
+  | 'bumpTexture'
+  | 'bumpScale'
+  | 'emissive'
+  | 'emissiveIntensity'
+  | 'emissiveTexture'
+  | 'occlusionTexture'
+  | 'occlusionStrength'
+  | 'alphaCutoff'
+  | 'alphaHash'
+  | 'triplanar'
+  | 'renderState'
+  | 'queue'
+>;
+
+/**
+ * Three.js `MeshLambertMaterial` / Unreal Substrate F0 = 0: the Standard
+ * lighting path with metallic 0, roughness 1 and no specular. F90 is derived
+ * from F0, so the grazing Fresnel lobe vanishes and only diffuse remains;
+ * shadows, IBL irradiance, clustered lights and deferred shading stay shared.
+ */
+function lambert(options: LambertOptions): MaterialAsset {
+  return standardDefault({ ...options, metallic: 0, roughness: 1, specular: 0 });
+}
+
+export const Materials = { unlit, matcap, normal, lambert, standard, srgb } as const;
 
 export { SPRITE_MODULE };

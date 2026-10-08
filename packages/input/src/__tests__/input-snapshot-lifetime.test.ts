@@ -37,7 +37,7 @@ it.each([
       for (let i = 0; i < 256; i++) {
         current = snapshotFromSample({ ...createEmptyInputBackendSample(),
           downKeys: new Set(['a']), downCodes: new Set(['KeyA']),
-          buttons: [true, false, false] }, undefined, undefined, current);
+          buttons: [true, false, false] }, undefined, current);
         refs.push(new WeakRef(current));
       }
       for (let i = 0; i < 8; i++) {

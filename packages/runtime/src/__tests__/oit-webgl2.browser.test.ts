@@ -7,7 +7,7 @@ import { OIT_SIZE, verifyOit } from './oit.fixture';
 // WebGL2 OIT proof (plan section 2.3): the shared accum/weight layout runs on
 // rhi-wgpu and meets the same reference and order-independence gates as
 // WebGPU and Dawn. Deferred is not admitted on WebGL2 (storage buffers and
-// five color attachments), independently of transparency.
+// six color attachments), independently of transparency.
 it.each([
   { renderPath: 'forward', msaa: false },
   { renderPath: 'forward', msaa: true },

@@ -2,7 +2,7 @@
 
 import type { ScreenSpaceReflectionData } from '../components/screen-space-reflection';
 import type { ReflectionFallbackSource } from '../inspection-types';
-import type { SsrSpatialAdmission, SsrSpatialLane, SsrSpatialWork } from './admission';
+import type { SsrAdmissionWork, SsrSpatialAdmission, SsrSpatialLane } from './admission';
 import type { SsrConfigInvalidError, SsrUnavailableError } from './errors';
 import type { SsrHistoryState } from './history';
 
@@ -80,7 +80,7 @@ export interface SsrSpatialInspection {
     readonly excludedCount: number | null;
   };
   readonly history: SsrSpatialHistoryInspection;
-  readonly work: SsrSpatialWork;
+  readonly work: SsrAdmissionWork;
   readonly passRoster: readonly string[];
   readonly fallbackSource: ReflectionFallbackSource | undefined;
   readonly failure: SsrSpatialInspectionFailure | undefined;

@@ -203,84 +203,90 @@ async function captureCase(testCase: AlphaCase): Promise<[number, number, number
   const { renderer } = host.value;
   expect(renderer.inspect().state).toBe('alive');
 
-  const world = new World();
-  const attachment = renderer.attach(world);
-  if (!attachment.ok) throw attachment.error;
-  const plane = createPlaneGeometry(2.8, 2.8);
-  expect(plane.ok).toBe(true);
-  if (!plane.ok) throw new Error('plane creation failed');
-  const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
-  const texture =
-    testCase.textureColor === undefined ? undefined : makeTexture(testCase.textureColor);
-  const textureHandle =
-    texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
-  // The renderer-owned record stage derives GPU residency from this world
-  // asset. No renderer store upload is part of the public contract.
-  const renderState =
-    testCase.mode === 'BLEND'
-      ? {
-          cullMode: 'none' as const,
-          depthWriteEnabled: false,
-          blend: {
-            color: {
-              srcFactor: 'src-alpha' as const,
-              dstFactor: 'one-minus-src-alpha' as const,
-              operation: 'add' as const,
+  try {
+    const world = new World();
+    const attachment = renderer.attach(world);
+    if (!attachment.ok) throw attachment.error;
+    const plane = createPlaneGeometry(2.8, 2.8);
+    expect(plane.ok).toBe(true);
+    if (!plane.ok) throw new Error('plane creation failed');
+    const meshHandle = world.allocSharedRef('MeshAsset', plane.value);
+    const texture =
+      testCase.textureColor === undefined ? undefined : makeTexture(testCase.textureColor);
+    const textureHandle =
+      texture === undefined ? undefined : world.allocSharedRef('TextureAsset', texture);
+    // The renderer-owned record stage derives GPU residency from this world
+    // asset. No renderer store upload is part of the public contract.
+    const renderState =
+      testCase.mode === 'BLEND'
+        ? {
+            cullMode: 'none' as const,
+            depthWriteEnabled: false,
+            blend: {
+              color: {
+                srcFactor: 'src-alpha' as const,
+                dstFactor: 'one-minus-src-alpha' as const,
+                operation: 'add' as const,
+              },
+              alpha: {
+                srcFactor: 'one' as const,
+                dstFactor: 'one-minus-src-alpha' as const,
+                operation: 'add' as const,
+              },
             },
-            alpha: {
-              srcFactor: 'one' as const,
-              dstFactor: 'one-minus-src-alpha' as const,
-              operation: 'add' as const,
-            },
-          },
-        }
-      : { cullMode: 'none' as const };
-  const material = Materials.standard({
-    baseColor: Materials.srgb([
-      testCase.baseColor[0],
-      testCase.baseColor[1],
-      testCase.baseColor[2],
-      testCase.baseAlpha,
-    ]),
-    metallic: 0,
-    roughness: 1,
-    queue: testCase.mode === 'BLEND' ? 3000 : testCase.mode === 'MASK' ? 2450 : 2000,
-    renderState,
-    ...(textureHandle === undefined
-      ? {}
-      : { baseColorTexture: { texture: textureHandle as never } }),
-    ...(testCase.mode === 'MASK' && testCase.cutoff !== undefined
-      ? { alphaCutoff: testCase.cutoff }
-      : {}),
-  });
-  const materialHandle = world.allocSharedRef('MaterialAsset', material);
-  world.spawn(
-    { component: Transform, data: {} },
-    { component: MeshFilter, data: { assetHandle: meshHandle } },
-    { component: MeshRenderer, data: { materials: [materialHandle] } },
-  );
-  world.spawn(
-    { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1] } },
-    {
-      component: Camera,
-      data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 10, clearColor: testCase.clear },
-    },
-  );
-  world.spawn({
-    component: DirectionalLight,
-    data: { direction: [0, 0, -1], color: [1, 1, 1], intensity: 1, castShadow: false },
-  });
-  world.update().unwrap();
-  const drawn = renderer.draw({
-    leases: [attachment.value],
-    camera: { lease: attachment.value },
-    environment: { lease: attachment.value },
-  });
-  expect(drawn.ok).toBe(true);
-  if (!drawn.ok) throw new Error(`draw failed: ${drawn.error.code}`);
-  await device.queue.onSubmittedWorkDone();
-  if (target === undefined) throw new Error('runtime Dawn render target not configured');
-  return readCenter(device, target);
+          }
+        : { cullMode: 'none' as const };
+    const material = Materials.standard({
+      baseColor: Materials.srgb([
+        testCase.baseColor[0],
+        testCase.baseColor[1],
+        testCase.baseColor[2],
+        testCase.baseAlpha,
+      ]),
+      metallic: 0,
+      roughness: 1,
+      queue: testCase.mode === 'BLEND' ? 3000 : testCase.mode === 'MASK' ? 2450 : 2000,
+      renderState,
+      ...(textureHandle === undefined
+        ? {}
+        : { baseColorTexture: { texture: textureHandle as never } }),
+      ...(testCase.mode === 'MASK' && testCase.cutoff !== undefined
+        ? { alphaCutoff: testCase.cutoff }
+        : {}),
+    });
+    const materialHandle = world.allocSharedRef('MaterialAsset', material);
+    world.spawn(
+      { component: Transform, data: {} },
+      { component: MeshFilter, data: { assetHandle: meshHandle } },
+      { component: MeshRenderer, data: { materials: [materialHandle] } },
+    );
+    world.spawn(
+      { component: Transform, data: { pos: [0, 0, 3], quat: [0, 0, 0, 1] } },
+      {
+        component: Camera,
+        data: { fov: Math.PI / 4, aspect: 1, near: 0.1, far: 10, clearColor: testCase.clear },
+      },
+    );
+    world.spawn({
+      component: DirectionalLight,
+      data: { direction: [0, 0, -1], color: [1, 1, 1], intensity: 1, castShadow: false },
+    });
+    world.update().unwrap();
+    const drawn = renderer.draw({
+      leases: [attachment.value],
+      camera: { lease: attachment.value },
+      environment: { lease: attachment.value },
+    });
+    expect(drawn.ok).toBe(true);
+    if (!drawn.ok) throw new Error(`draw failed: ${drawn.error.code}`);
+    await device.queue.onSubmittedWorkDone();
+    if (target === undefined) throw new Error('runtime Dawn render target not configured');
+    return await readCenter(device, target);
+  } finally {
+    const disposed = await renderer.dispose();
+    target?.destroy();
+    expect(disposed.ok).toBe(true);
+  }
 }
 
 function expectedVisible(testCase: AlphaCase): boolean {

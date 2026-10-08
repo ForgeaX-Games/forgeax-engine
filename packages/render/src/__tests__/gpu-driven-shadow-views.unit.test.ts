@@ -301,6 +301,84 @@ describe('GPU-driven shadow view owner contract', () => {
     pool.dispose();
     sceneAvailability.scene.dispose();
   });
+  it('never reuses camera-culled depth, but keeps culling views that miss anyway', async () => {
+    const adapter = (await rhi.requestAdapter()).unwrap();
+    const device = (await adapter.requestDevice()).unwrap();
+    const shader = (await rhi.createShaderModule(device, { code: 'synthetic' })).unwrap();
+    const projection = new RenderScene();
+    const boundsOf = (slot: Parameters<RenderScene['cullingWorldBoundsAt']>[0]) =>
+      projection.cullingWorldBoundsAt(slot);
+    const moveCaster = (x: number) => {
+      const value = snapshot(1);
+      const world = new Float32Array(mat4.identity(mat4.create()));
+      world[12] = x;
+      scene
+        .sync(
+          projection.apply([updateSnapshot({ ...value, transform: { world } })]),
+          undefined,
+          boundsOf,
+        )
+        .unwrap();
+    };
+    const sceneAvailability = GpuScene.create(device, 1).unwrap();
+    if (sceneAvailability.status !== 'available') throw new Error('scene unavailable');
+    const scene = sceneAvailability.scene;
+    moveCaster(0);
+    const topology = new BatchTopology();
+    topology.rebuild(projection.slotsSnapshot());
+    const pool = ShadowViewStatePool.create({
+      device,
+      shaderModuleFactory: { createShaderModule: () => ok(shader) },
+    }).unwrap();
+    const matrix = mat4.identity(mat4.create());
+    const cameraCull = {
+      camera: {
+        viewProjection: mat4.identity(mat4.create()),
+        near: 0.1,
+        far: 100,
+        orthographic: true,
+        historyKey: 'main',
+      },
+      ndcDilation: 0.01,
+      worldDilation: 0,
+    };
+    const frame = (identity: ShadowViewIdentity) => {
+      const result = pool
+        .update({
+          identity,
+          sourcePlan: topology.plan(),
+          scene,
+          planes: frustum.fromViewProjection(frustum.create(), matrix),
+          matrix,
+          cameraCull,
+        })
+        .unwrap();
+      // A graph that binds the camera pyramid; point views never create the pipeline.
+      result.view.cameraCullBound = identity.kind !== 'point';
+      pool._commitResourceReplacement();
+      return { cache: result.cache, reason: pool.invalidationReason(identity) };
+    };
+    const spot: ShadowViewIdentity = { kind: 'spot', index: 0 };
+    expect(frame(spot)).toEqual({ cache: 'invalidated', reason: 'first-publication' });
+    expect(frame(spot)).toEqual({ cache: 'hit', reason: undefined });
+    // A moving caster misses every frame, and each miss rasters under the cull.
+    moveCaster(0.1);
+    expect(frame(spot)).toEqual({ cache: 'invalidated', reason: 'content-changed' });
+    moveCaster(0.2);
+    expect(frame(spot)).toEqual({ cache: 'invalidated', reason: 'content-changed' });
+    // Once it rests, the would-be hit re-rasters every caster once.
+    expect(frame(spot)).toEqual({ cache: 'invalidated', reason: 'camera-culled' });
+    expect(frame(spot)).toEqual({ cache: 'hit', reason: undefined });
+
+    const point: ShadowViewIdentity = { kind: 'point', index: 0 };
+    frame(point);
+    moveCaster(0.3);
+    frame(point);
+    expect(frame(point)).toEqual({ cache: 'hit', reason: undefined });
+    pool.dispose();
+    scene.dispose();
+  });
+
   it('keeps a view cached while changed slots stay outside its retained frustum', async () => {
     const adapter = (await rhi.requestAdapter()).unwrap();
     const device = (await adapter.requestDevice()).unwrap();
@@ -696,7 +774,7 @@ describe('GPU-driven shadow view owner contract', () => {
     expect(left?.[0]?.x0).toBeGreaterThan(0.5);
     pool._commitResourceReplacement();
 
-    // A changed matrix or graph always redraws the whole layer.
+    // A changed matrix redraws the layer; graph replacement retains its external depth.
     const shifted = new Float32Array(matrix);
     shifted[12] = (shifted[12] as number) + 0.1;
     expect(pool.update(input([0], { matrix: shifted })).unwrap().cache).toBe('invalidated');
@@ -704,8 +782,30 @@ describe('GPU-driven shadow view owner contract', () => {
     pool._commitResourceReplacement();
     expect(
       pool.update({ ...input([0], { matrix: shifted }), graphGeneration: 2 }).unwrap().cache,
+    ).toBe('hit');
+    expect(pool.dirtyRects(identity)).toBeUndefined();
+    // Content changes still use dirty rectangles across a graph replacement.
+    scene.scene
+      .sync(projection.apply([updateSnapshot(placed(1, -14))]), undefined, boundsOf)
+      .unwrap();
+    expect(
+      pool.update({ ...input([0], { matrix: shifted }), graphGeneration: 3 }).unwrap().cache,
+    ).toBe('invalidated');
+    expect(pool.dirtyRects(identity)).toHaveLength(1);
+    pool._commitResourceReplacement();
+    expect(
+      pool
+        .update({ ...input([0], { matrix: shifted }), targetSize: 2048, graphGeneration: 4 })
+        .unwrap().cache,
     ).toBe('invalidated');
     expect(pool.dirtyRects(identity)).toBeUndefined();
+    pool._abortResourceReplacement();
+    expect(
+      pool
+        .update({ ...input([0], { matrix: shifted }), targetSize: 2048, graphGeneration: 4 })
+        .unwrap().cache,
+    ).toBe('invalidated');
+    expect(pool.invalidationReason(identity)).toBe('submit-aborted');
     pool.dispose();
     scene.scene.dispose();
   });

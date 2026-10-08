@@ -812,6 +812,8 @@ function drawPublished(renderer: RendererType, world: WorldType) {
     rgba16floatRenderable: true,
     rg11b10ufloatRenderable: false,
     float32Filterable: false,
+    textureImport: false,
+    externalTexture: false,
   };
 
   interface BufferProbe {

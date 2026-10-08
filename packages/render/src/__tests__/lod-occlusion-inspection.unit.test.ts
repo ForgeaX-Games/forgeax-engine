@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  consumeLodOcclusionInspection,
   inspectLodOcclusion,
   LOD_OCCLUSION_INSPECTION_MAX_BYTES,
   serializeLodOcclusionInspection,
@@ -17,10 +16,6 @@ const baseInput = {
     { level: 1, count: 4_000 },
     { level: 2, count: 1_000 },
   ],
-  queryLatencyUs: { median: 42, p95: 91, last: 37 },
-  pagePressure: { used: 1, capacity: 3 },
-  fallback: { active: false as const },
-  degradation: { active: false as const },
   samples: Array.from({ length: 80 }, (_, index) => ({
     primitiveSlot: index,
     level: index % 3,
@@ -29,10 +24,10 @@ const baseInput = {
 };
 
 describe('LOD occlusion inspection projection', () => {
-  it('publishes bounded identity, histogram, timing, pressure and stable samples', () => {
+  it('publishes bounded identity, histogram and stable samples', () => {
     const inspection = inspectLodOcclusion(baseInput);
 
-    expect(inspection.schema).toBe('forgeax::lod-occlusion-inspection::v2');
+    expect(inspection.schema).toBe('forgeax::lod-occlusion-inspection::v3');
     expect(inspection.root).toEqual(baseInput.root);
     expect(inspection.view).toEqual(baseInput.view);
     expect(inspection.slot).toEqual(baseInput.slot);
@@ -45,28 +40,10 @@ describe('LOD occlusion inspection projection', () => {
     );
   });
 
-  it('serializes as detached POD and exposes a CLI recovery branch', () => {
-    const inspection = inspectLodOcclusion({
-      ...baseInput,
-      fallback: {
-        active: true,
-        reason: 'producer-failed',
-        error: {
-          code: 'asset-ddc-failed',
-          expected: 'a published DDC payload',
-          hint: 'inspect producer output, rebuild the source package, then retry',
-          detail: { sourceKey: baseInput.root.sourceKey },
-        },
-      },
-    });
-
+  it('serializes as detached POD without live renderer state', () => {
+    const inspection = inspectLodOcclusion(baseInput);
     const serialized = serializeLodOcclusionInspection(inspection);
     expect(JSON.parse(serialized)).toEqual(inspection);
-    expect(consumeLodOcclusionInspection(inspection)).toEqual({
-      action: 'rebuild',
-      sourceKey: baseInput.root.sourceKey,
-      reason: 'producer-failed',
-    });
-    expect(serialized).not.toMatch(/handle|encoder|queue|mutable/i);
+    expect(serialized).not.toMatch(/handle|encoder|queue|mutable|query/i);
   });
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 // game-default production UI edit smoke: authored pack -> build cache -> Pack v2 -> DOM.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -123,15 +124,10 @@ async function capture(label, expectedScore, browser) {
       const hud = root?.querySelector('[data-ui-asset="019f8354-6386-4386-849d-f2ab4b96229c"]');
       return (listed?.actions.length ?? 0) >= 4 && (listed?.reads.length ?? 0) >= 2 && hud?.shadowRoot !== null;
     }, null, { timeout: 30_000 });
-    const pack = await page.evaluate(async (guid) => {
-      const index = await (await fetch('/pack-index.json')).json();
-      const entries = Array.isArray(index)
-        ? index
-        : Array.isArray(index.entries)
-          ? index.entries
-          : Object.values(index.entries ?? index);
-      const row = entries.find((entry) => entry.guid === guid && entry.kind === 'ui');
-      if (!row) throw new Error(`HUD UI row ${guid} missing from production pack-index`);
+    const indexWire = await page.evaluate(async () => (await fetch('/pack-index.json')).json());
+    const row = decodeCatalogWire(indexWire).unwrap().find((entry) => entry.guid === GUID && entry.kind === 'ui');
+    if (!row) throw new Error(`HUD UI row ${GUID} missing from production pack-index`);
+    const pack = await page.evaluate(async ({ guid, row }) => {
       const packageResponse = await fetch(row.packageUrl);
       if (!packageResponse.ok) throw new Error(`HUD package status=${packageResponse.status}`);
       const packageJson = await packageResponse.json();
@@ -145,7 +141,7 @@ async function capture(label, expectedScore, browser) {
         html: asset.payload.html,
         cssBytes: asset.payload.css.length,
       };
-    }, GUID);
+    }, { guid: GUID, row: { guid: row.guid, name: row.name, packageUrl: row.packageUrl, lifecycle: row.lifecycle } });
     const settingsLabel = await page.evaluate(() => {
       const root = document.querySelector('[data-forgeax-ui-root]');
       const hud = root?.querySelector('[data-ui-asset="019f8354-6386-4386-849d-f2ab4b96229c"]');

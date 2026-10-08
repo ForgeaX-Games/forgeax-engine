@@ -41,6 +41,19 @@ describe('reference policy during recovery', () => {
     expect(result.error.code).toBe('remap-unresolved-reference');
     expect(replica.snapshot()).toEqual([]);
     expect(replica.stopped).toBe(false);
-    expect((replica as unknown as { getPendingUnresolvedReferences(): number }).getPendingUnresolvedReferences()).toBe(0);
+    // A later complete baseline must not revive a deferred write from the
+    // rejected packet. The first attempted LinkReference is never adopted.
+    expect(applyReplicationPacket(replica, {
+      version: 2,
+      kind: 'baseline',
+      sessionId: 17 as never,
+      epoch: 1,
+      sequence: 1,
+      fingerprint: profile().fingerprint,
+      tick: 1,
+      entities: [{ id: 1, kind: 'upsert', components: [{ name: 'NetworkedReference', data: { enabled: true } }] }],
+    }).ok).toBe(true);
+    expect(replica.readComponent(1, LinkReference)).toBeUndefined();
+    expect(replica.readComponent(1, NetworkedReference)).toEqual({ enabled: true });
   });
 });

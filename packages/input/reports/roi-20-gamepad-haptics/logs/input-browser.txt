@@ -1,0 +1,8 @@
+
+ RUN  v4.1.11 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics
+
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  18:33:19
+   Duration  4.95s (transform 0ms, setup 0ms, import 103ms, tests 271ms, environment 0ms)

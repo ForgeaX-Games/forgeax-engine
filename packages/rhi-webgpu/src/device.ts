@@ -74,7 +74,14 @@ import type {
   TextureViewDescriptor,
   TextureWriteDestination,
 } from '@forgeax/engine-rhi';
-import { err, ok, RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
+import {
+  err,
+  ok,
+  RhiError as RhiErrorClass,
+  rayQueryUnsupported,
+  validateRayQueryBindGroupLayout,
+  validateRayQueryBufferUsage,
+} from '@forgeax/engine-rhi';
 import {
   commandEncoderFinished,
   queueSubmitFailed,
@@ -82,7 +89,13 @@ import {
   renderPassNotEnded,
 } from './errors';
 import { probeR32FloatCapability } from './internal/r32float-capability';
+import {
+  hasExternalTextureCapability,
+  importExternalTexture,
+  validateImportedTexture,
+} from './internal/texture-import';
 import { resolveTimestampQueries } from './internal/timestamp-query';
+import { WebGpuAccelerationStructures, webgpuRayQueryCaps } from './ray-query';
 
 /**
  * Mirror forgeax `?: T | undefined` descriptor onto the spec GPUXxxDescriptor
@@ -210,6 +223,8 @@ interface TextureMeta {
    * rather than forwarding to the underlying spec idempotent void.
    */
   destroyed: boolean;
+  /** Caller-owned texture from importTexture: destroy releases bookkeeping only. */
+  readonly borrowed?: true;
 }
 const TEXTURE_META_MAP: WeakMap<Texture, TextureMeta> = new WeakMap();
 
@@ -379,6 +394,11 @@ function probeFloat32Filterable(device: GPUDevice, features: GPUSupportedFeature
  *  (rgba16floatRenderable / rg11b10ufloatRenderable / float32Filterable)
  *  added by feat-20260608-rhi-hdr-renderable-caps-and-warn-once M1 per
  *  D-1 + D-2 + D-2.1. */
+function timestampPeriodOf(rawDevice: GPUDevice): number {
+  const period = (rawDevice as GPUDevice & { readonly timestampPeriod?: unknown }).timestampPeriod;
+  return typeof period === 'number' && period > 0 ? period : 1;
+}
+
 function deriveCaps(
   rawDevice: GPUDevice,
   features: GPUSupportedFeatures,
@@ -408,7 +428,9 @@ function deriveCaps(
     backendKind: 'webgpu' as const,
     compute: true, // WebGPU spec mandates compute-pipeline support.
     timestampQuery: has('timestamp-query'),
-    timestampPeriodNanoseconds: has('timestamp-query') ? 1 : null,
+    // W3C WebGPU resolves timestamps in nanoseconds; a native wgpu GPU resolves raw
+    // ticks and publishes their period as `timestampPeriod`.
+    timestampPeriodNanoseconds: has('timestamp-query') ? timestampPeriodOf(rawDevice) : null,
     indirectDrawing: true, // WebGPU spec mandates drawIndirect / drawIndexedIndirect.
     textureCompressionBc,
     textureCompressionEtc2,
@@ -423,7 +445,12 @@ function deriveCaps(
     storageTexture: (limits.maxStorageTexturesPerShaderStage ?? 0) > 0,
     // HDR / filterable caps (feat-20260608 M1):
     ...hdrCaps,
+    textureImport: true,
+    externalTexture: hasExternalTextureCapability(rawDevice),
     maxColorAttachments: limits.maxColorAttachments ?? 4,
+    // Browser WebGPU and Dawn expose no acceleration structures; the native
+    // wgpu GPU adds the Ray Query extension (./ray-query.ts).
+    rayQuery: webgpuRayQueryCaps(rawDevice),
   };
 }
 
@@ -832,7 +859,10 @@ function mirrorRenderPipelineDescriptor(
  *   - render-pass-not-ended is detected by tracking activePass; finish()
  *     while a pass has not been end()-ed returns the structured error.
  */
-function makeCommandEncoder(rawEncoder: GPUCommandEncoder): RhiCommandEncoder {
+function makeCommandEncoder(
+  rawEncoder: GPUCommandEncoder,
+  accelerationStructures: WebGpuAccelerationStructures,
+): RhiCommandEncoder {
   function mirrorComputePassDescriptor(
     desc: ComputePassDescriptor | undefined,
   ): GPUComputePassDescriptor | undefined {
@@ -859,6 +889,10 @@ function makeCommandEncoder(rawEncoder: GPUCommandEncoder): RhiCommandEncoder {
   }
 
   const enc: RhiCommandEncoder = {
+    buildAccelerationStructures(blas, tlas) {
+      throwIfFinished(ENCODER_STATE.get(enc));
+      return accelerationStructures.build(rawEncoder, blas, tlas);
+    },
     beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder {
       const state = ENCODER_STATE.get(enc);
       throwIfFinished(state);
@@ -1509,6 +1543,12 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
   raw: GPUDevice;
 } {
   const caps = deriveCaps(rawDevice, rawDevice.features, rawDevice.limits);
+  const accelerationStructures = new WebGpuAccelerationStructures(
+    caps.rayQuery,
+    rawDevice,
+    (buffer) => (BUFFER_META_MAP.get(buffer)?.usage as number | undefined) ?? 0,
+    (buffer) => BUFFER_RAW_MAP.get(buffer) ?? (buffer as unknown as GPUBuffer),
+  );
   const features = rawDevice.features as unknown as RhiFeatures;
   const limits = rawDevice.limits as RhiLimits;
 
@@ -1525,6 +1565,31 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
     caps,
     features,
     limits,
+    nativeDevice: () => ok(rawDevice),
+    async importTexture(texture: GPUTexture): Promise<Result<Texture, RhiError>> {
+      const handle = texture as unknown as Texture;
+      const existing = TEXTURE_META_MAP.get(handle);
+      if (existing !== undefined && !existing.destroyed) {
+        return err(
+          new RhiErrorClass({
+            code: 'rhi-descriptor-invalid',
+            expected: 'a texture not already registered with this RHI device',
+            hint: 'reuse the Texture handle from the earlier import, or destroyTexture it first',
+          }),
+        );
+      }
+      const validated = await validateImportedTexture(rawDevice, texture);
+      if (!validated.ok) return validated;
+      TEXTURE_META_MAP.set(handle, {
+        format: validated.value.format,
+        usage: validated.value.usage,
+        viewFormats: [],
+        destroyed: false,
+        borrowed: true,
+      });
+      return ok(handle);
+    },
+    importExternalTexture: (desc) => importExternalTexture(rawDevice, desc),
     probeTextureFormatCapability(): Promise<
       Result<import('@forgeax/engine-rhi').RhiTextureFormatCapabilityReceipt, RhiError>
     > {
@@ -1544,6 +1609,11 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       readonly message: string;
     }>,
     createBuffer(desc: BufferDescriptor): Result<Buffer, RhiError> {
+      const usageGate = validateRayQueryBufferUsage(
+        caps.rayQuery,
+        (desc.usage as number | undefined) ?? 0,
+      );
+      if (!usageGate.ok) return usageGate;
       // M5 / K-7 / OQ-7 / D-R3: mappedAtCreation passthrough is delivered by
       // BUFFER_KEYS containing 'mappedAtCreation'; mirror() ships the field to
       // the raw GPUBufferDescriptor when present (`'mappedAtCreation' in desc`
@@ -1592,6 +1662,10 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       });
       return ok(handle);
     },
+    createBlas: (desc) => accelerationStructures.createBlas(desc),
+    createTlas: (desc) => accelerationStructures.createTlas(desc),
+    destroyBlas: (blas) => accelerationStructures.destroy(blas, 'destroyBlas'),
+    destroyTlas: (tlas) => accelerationStructures.destroy(tlas, 'destroyTlas'),
     destroyBuffer(buf: Buffer): Result<void, RhiError> {
       // feat-20260612 M1 / w4 — fail-fast over the spec idempotent-void
       // contract (plan-strategy D-7). The shim layer tracks
@@ -1644,7 +1718,7 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       }
       const rawTex = tex as unknown as { destroy?: () => void };
       try {
-        if (typeof rawTex.destroy === 'function') {
+        if (meta?.borrowed !== true && typeof rawTex.destroy === 'function') {
           rawTex.destroy();
         }
       } catch (e) {
@@ -1723,6 +1797,8 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
       return ok(out as unknown as Sampler);
     },
     createBindGroupLayout(desc: BindGroupLayoutDescriptor): Result<BindGroupLayout, RhiError> {
+      const gate = validateRayQueryBindGroupLayout(caps.rayQuery, desc);
+      if (!gate.ok) return gate;
       const out = rawDevice.createBindGroupLayout(
         mirror(desc, BGL_KEYS) as unknown as GPUBindGroupLayoutDescriptor,
       );
@@ -1780,8 +1856,27 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
             });
             break;
           }
+          case 'accelerationStructure': {
+            if (!caps.rayQuery.supported) {
+              return rayQueryUnsupported(`bind group entry ${entry.binding}`, caps.rayQuery);
+            }
+            if (!accelerationStructures.isBuiltTlas(resource.value)) {
+              return err(
+                new RhiErrorClass({
+                  code: 'rhi-descriptor-invalid',
+                  expected: 'a live TLAS built by encoder.buildAccelerationStructures',
+                  hint: `bind group entry ${entry.binding} binds a TLAS that is destroyed or was never built`,
+                }),
+              );
+            }
+            mirrored.entries.push({
+              binding: entry.binding,
+              resource: resource.value as unknown as GPUBindingResource,
+            });
+            break;
+          }
           default: {
-            // assertNever — adding a fifth kind would trip TS2367 here.
+            // assertNever — adding a sixth kind would trip TS2367 here.
             const _exhaustive: never = resource;
             void _exhaustive;
             throw new Error(`rhi-webgpu: unreachable RhiBindingResource kind in createBindGroup`);
@@ -1989,7 +2084,7 @@ export function makeRhiDevice(rawDevice: GPUDevice): {
           : rawDevice.createCommandEncoder(
               mirror(desc, ENC_KEYS) as unknown as GPUCommandEncoderDescriptor,
             );
-      return ok(makeCommandEncoder(rawEnc));
+      return ok(makeCommandEncoder(rawEnc, accelerationStructures));
     },
     // fix-f3: synchronous createShaderModule placeholder removed; the
     // shader-compile-failed path lives in the top-level async factory
@@ -2121,8 +2216,11 @@ export function makeCanvasContext(rawContext: GpuCanvasContextLike): RhiCanvasCo
       rawContext.unconfigure();
     },
     getConfiguration(): CanvasConfiguration | undefined {
+      // Offscreen hosts may provide a context without the query; absence of
+      // the record is data, never a configured-state guess.
+      if (typeof rawContext.getConfiguration !== 'function') return undefined;
       const conf = rawContext.getConfiguration();
-      if (conf === null) return undefined;
+      if (conf === null || conf === undefined) return undefined;
       // Project spec fields onto the forgeax record verbatim; missing fields
       // remain missing (feature-detection idiom).
       const out: Record<string, unknown> = {};

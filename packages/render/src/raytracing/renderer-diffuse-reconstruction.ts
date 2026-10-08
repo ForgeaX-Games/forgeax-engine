@@ -1,5 +1,5 @@
 import type { Buffer, RhiDevice, ShaderModule } from '@forgeax/engine-rhi';
-import type { StandardDiffuseGi } from '../pipeline/standard-profile';
+import type { StandardExactDiffuseGi } from '../pipeline/standard-profile';
 import type { CameraSnapshot } from '../render-contract';
 import type { TemporalResetReason, TemporalView } from '../temporal/view';
 import { createDiffuseReconstruction, DIFFUSE_HISTORY_BYTES } from './diffuse-reconstruction';
@@ -9,17 +9,19 @@ export function prepareRendererDiffuseReconstruction(
   device: RhiDevice,
   module: ShaderModule,
   pixels: number,
-  mode: NonNullable<StandardDiffuseGi['reconstruction']>,
+  mode: NonNullable<StandardExactDiffuseGi['reconstruction']>,
   allocate: (label: string, bytes: number, usage: number) => Buffer,
   submittedSamples: () => number,
+  /** Resource label prefix; Lite reflections reuse this owner for their signal. */
+  label: 'ray-diffuse' | 'ray-reflection' = 'ray-diffuse',
 ) {
   const histories = [
-    allocate('ray-diffuse.history-a', pixels * DIFFUSE_HISTORY_BYTES, 128 | 12),
-    allocate('ray-diffuse.history-b', pixels * DIFFUSE_HISTORY_BYTES, 128 | 12),
+    allocate(`${label}.history-a`, pixels * DIFFUSE_HISTORY_BYTES, 128 | 12),
+    allocate(`${label}.history-b`, pixels * DIFFUSE_HISTORY_BYTES, 128 | 12),
   ] as const;
-  const signal = allocate('ray-diffuse.signal', pixels * 16, 128 | 12);
-  const diagnostics = allocate('ray-diffuse.diagnostics', pixels * 16, 128 | 12);
-  const config = allocate('ray-diffuse.reconstruction-config', 48, 64 | 8);
+  const signal = allocate(`${label}.signal`, pixels * 16, 128 | 12);
+  const diagnostics = allocate(`${label}.diagnostics`, pixels * 16, 128 | 12);
+  const config = allocate(`${label}.reconstruction-config`, 48, 64 | 8);
   const kernel = createDiffuseReconstruction(device, module).unwrap();
   type HistoryCommit = {
     readonly view: TemporalView;
@@ -55,6 +57,7 @@ export function prepareRendererDiffuseReconstruction(
         camera.far,
         camera.fov,
         camera.aspect,
+        camera.eye?.frustumShift ?? 0,
         camera.orthoLeft,
         camera.orthoRight,
         camera.orthoTop,

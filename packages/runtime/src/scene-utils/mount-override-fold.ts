@@ -49,16 +49,14 @@ import {
 } from '@forgeax/engine-ecs';
 import { componentSchema } from '@forgeax/engine-ecs/internal';
 import { fillComponentDefaults } from '@forgeax/engine-ecs/projection';
-import type { MountOverride } from '@forgeax/engine-scene';
+import type { MountOverride, SceneInstanceState } from '@forgeax/engine-scene';
 import type { Handle, LocalEntityId, SceneAsset } from '@forgeax/engine-types';
 
-/** Minimal structural view of a SceneInstanceState the fold reads (D-4 boundary:
- * `world.getSceneInstanceState(root).value` is structurally assignable). */
-export interface FoldSceneInstanceState {
-  readonly source: Handle<'SceneAsset', 'shared'>;
-  readonly keyByLocalId: Map<number, string>;
-  readonly entityToLocalId: Map<EntityHandle, LocalEntityId>;
-}
+/** The SceneInstanceState fields the fold reads. */
+export type FoldSceneInstanceState = Pick<
+  SceneInstanceState,
+  'source' | 'keyByLocalId' | 'entityToLocalId'
+>;
 
 /** Component names that never participate in an authored baseline diff: the
  * essential row-identity column, and structural hierarchy relationship

@@ -22,4 +22,16 @@ describe('Batch B renderer reflection', () => {
       expect(new Set(reflected.value.map((entry) => entry.resource)).size).toBe(4);
     }
   });
+
+  it('reflects mesh explicitly and rejects an unknown renderer kind', () => {
+    const mesh = reflectVfxRenderer([{ kind: 'mesh', material: 'vfx', mesh: 'cube' }]);
+    expect(mesh.ok && mesh.value[0]?.shaderInputs).toEqual(['mesh']);
+
+    const unknown = reflectVfxRenderer([{ kind: 'sprite', material: 'vfx' }]);
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) {
+      expect(unknown.error.code).toBe('vfx-renderer-invalid');
+      expect(unknown.error.detail).toEqual({ path: 'renderers[0].kind' });
+    }
+  });
 });

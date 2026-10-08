@@ -1,3 +1,4 @@
+import type { StandardProfile } from '../pipeline/standard-profile';
 import type { RenderResourceScope } from '../publication/resource-scope';
 // @forgeax/engine-runtime - RenderSystem record stage: frame-snapshot.
 // Extracted from render-system-record.ts (feat-20260704 M3/w17, pure move).
@@ -34,7 +35,7 @@ import type { StandardLutGpuResources } from '../pipeline/standard-output/lut-gp
 import type { StandardLutCandidate, StandardLutState } from '../pipeline/standard-output/lut-state';
 import type { PointShadowInspection } from '../point-shadow-inspection';
 import type { SsrSpatialAdmission } from '../ssr/admission';
-import type { SsrHistoryCandidate, SsrHistoryOwner } from '../ssr/history';
+import type { SsrHistoryOwner } from '../ssr/history';
 import type { TemporalGpuState } from '../temporal/gpu';
 import type { TemporalView } from '../temporal/view';
 
@@ -133,23 +134,13 @@ import type {
   RenderableSnapshot,
   SpotLightSnapshot,
 } from '../render-system-extract';
-import type { ProbeBlendRecord } from '../scene/probe-blend-record';
 import type { PersistentShadowCasterProjection } from '../scene/render-scene';
 import type { ShadowAtlas } from '../shadow-atlas';
-import type {
-  TemporalFrame,
-  TemporalFrameInput,
-  TemporalFrameTransaction,
-} from '../temporal/frame';
+import type { TemporalFrame, TemporalFrameTransaction } from '../temporal/frame';
 import type { VolumetricFogInspection } from '../volume/inspection';
 import type { VolumeTemporalSignature } from '../volume/temporal';
+import type { DirectionalCascadeCadenceState } from './directional-cascade-cadence';
 import type { ShadowRasterLedger } from './shadow-raster-ledger';
-
-/** Retained probe record bytes carried with one extracted render frame. */
-export interface ProbeBlendFrameSnapshot {
-  readonly records: readonly ProbeBlendRecord[];
-  readonly recordByteLength: 160;
-}
 
 /** Renderer-owned GPU cache entry for one object's 160B probe record. */
 export interface ProbeBlendBufferCacheEntry {
@@ -393,6 +384,85 @@ export function makeZeroCameraFallbackSnapshot(): CameraSnapshot {
   };
 }
 
+/** A written volume parameter slot and the CPU copy of its payload. */
+export interface VolumetricFogParamsSlot {
+  readonly slot: 0 | 1;
+  readonly params: Float32Array;
+}
+
+/**
+ * Two renderer-owned parameter buffers; only the pending slot is writable.
+ * `pending` is promoted to `accepted` only after queue submission succeeds,
+ * and `accepted` keeps the payload for degraded-frame restaging.
+ */
+export interface VolumetricFogParamsState {
+  buffers: [Buffer | null, Buffer | null];
+  pending: VolumetricFogParamsSlot | null;
+  accepted: VolumetricFogParamsSlot | null;
+}
+
+/**
+ * Facts produced while recording one frame. They are cleared before the next
+ * recording starts and when device-bound frame state is dropped.
+ */
+export interface FrameRecordingOutputs {
+  /** A display or capture scene graph reached the physical submit barrier. */
+  sceneSubmitted: boolean;
+  directionalShadowView: TextureView | null;
+  spotShadowView: TextureView | null;
+  /** Physical outputs projected by typed graph passes for downstream observers. */
+  observationSource: FrameObservationSource | undefined;
+}
+
+export function emptyFrameRecordingOutputs(): FrameRecordingOutputs {
+  return {
+    sceneSubmitted: false,
+    directionalShadowView: null,
+    spotShadowView: null,
+    observationSource: undefined,
+  };
+}
+
+export function resetFrameRecordingOutputs(outputs: FrameRecordingOutputs): void {
+  outputs.sceneSubmitted = false;
+  outputs.directionalShadowView = null;
+  outputs.spotShadowView = null;
+  outputs.observationSource = undefined;
+}
+
+/**
+ * Inspection projections published together when a frame is submitted (or a
+ * recovery candidate is published) and dropped together with device-bound
+ * frame state.
+ */
+export interface SubmittedFrameInspection {
+  /** Prepared Standard transport facts. */
+  readonly standardLighting: StandardLightingInspection;
+  /** Point-shadow atlas budget. */
+  readonly pointShadow: PointShadowInspection;
+  /** Capsule-shadow admission. */
+  readonly capsuleShadow:
+    | import('../capsule-shadow/inspection').CapsuleShadowInspection
+    | undefined;
+  /** Display-view transparency resolution. */
+  readonly transparency: import('../oit/view').TransparencyInspection | undefined;
+}
+
+/** Color-target lookup minted with an installed compiled graph. */
+export interface FrameGraphTargets {
+  readonly getColorTargetDescriptor: (key: string) => ResolvedColorTargetDescriptor | undefined;
+  readonly getColorTargetView: (key: string) => TextureView | undefined;
+  readonly getColorTargetTexture: (key: string) => Texture | undefined;
+  readonly graphGeneration: number;
+}
+
+/** A compiled graph together with the topology key and target lookup installed with it. */
+export interface InstalledFrameGraph {
+  readonly graph: CompiledRenderGraph<RenderPipelineFrame>;
+  readonly topologyKey: string;
+  readonly targets: FrameGraphTargets;
+}
+
 /**
  * Per-RenderSystem mutable frame state.
  *
@@ -417,6 +487,17 @@ export interface RenderFrameState {
   renderBundleCounters?: import('./render-bundle-cache').RenderBundleCounters;
   dynamicResolution?: import('../pipeline/dynamic-resolution').DynamicResolutionController;
   rayDiffuse?: import('../raytracing/renderer-diffuse').RendererRayDiffuse | undefined;
+  irradianceField?:
+    | import('../raytracing/renderer-irradiance-field').RendererIrradianceField
+    | undefined;
+  screenProbe?: import('../raytracing/renderer-screen-probe').RendererScreenProbe | undefined;
+  bakedField?: import('../raytracing/renderer-baked-field').RendererBakedField | undefined;
+  probePlacement?:
+    | import('../raytracing/renderer-probe-placement').RendererProbePlacement
+    | undefined;
+  probePlacementFrame?:
+    | import('../raytracing/renderer-probe-placement').PreparedProbePlacement
+    | undefined;
   /** Actual Surface commands staged for the renderer-owned submission fence. */
   surfaceSubmissionObservation:
     | import('../surface/submission-observation').SurfaceSubmissionCandidate
@@ -435,9 +516,8 @@ export interface RenderFrameState {
   ssrRequested?: boolean | undefined;
   /** Current renderer-owned SSR spatial admission projection. */
   ssrSpatialAdmission?: SsrSpatialAdmission | undefined;
-  /** Persistent SSR history owner; candidate is promoted only after submit. */
+  /** Persistent SSR history owner; its `candidate` is promoted only after submit. */
   ssrHistoryOwner?: SsrHistoryOwner | undefined;
-  ssrHistoryCandidate?: SsrHistoryCandidate | undefined;
   /** Reused CPU parameter payload for the SSR temporal resolve. */
   ssrTemporalParamsPayload?: Uint8Array | undefined;
   /** Last camera identity used by the SSR history reset seam. */
@@ -451,20 +531,13 @@ export interface RenderFrameState {
   temporalFrame?: TemporalFrame | undefined;
   /** The sole transaction that advances temporal history after queue.submit. */
   readonly temporalFrameTransaction: TemporalFrameTransaction;
-  /** Staged input is consumed only by the graph submit owner. */
-  temporalFrameInput: TemporalFrameInput | undefined;
-  /** Optional graph resource lookup used by low-level record helpers and tests. */
-  perFrameGraph?: {
-    readonly getColorTargetDescriptor: (key: string) => ResolvedColorTargetDescriptor | undefined;
-    readonly getColorTargetView: (key: string) => TextureView | undefined;
-    readonly getColorTargetTexture: (key: string) => Texture | undefined;
-    readonly graphGeneration: number;
-  } | null;
   graphTargetCapture?: GraphTargetCaptureRequest | undefined;
   /** One-frame producer-owned copy target for fallback MRT readback. */
   reflectionFallbackReadback?: ReflectionFallbackReadbackRequest | undefined;
   /** Last successfully rendered static directional shadow atlas token. */
   directionalShadowCache: DirectionalShadowCache | null;
+  /** Projection/stale evidence promoted only by the last submitted CPU frame. */
+  directionalCascadeCadence?: DirectionalCascadeCadenceState | undefined;
   /** Last successfully submitted camera post-process mode. */
   lastSuccessfulBloom: 'off' | 'on';
   /** Bloom record receipts staged by this frame; cleared on abort. */
@@ -474,8 +547,7 @@ export interface RenderFrameState {
   /** Shadow view hit/miss decisions and draw counts of the staged and last submitted frame. */
   readonly shadowRaster: ShadowRasterLedger;
   /** The sole compiled owner for compute, copy, feature, and raster work. */
-  compiledFrameGraph: CompiledRenderGraph<RenderPipelineFrame> | null;
-  compiledFrameGraphTopologyKey: string | null;
+  compiledFrameGraph: InstalledFrameGraph | null;
   /** Monotonic generation of successfully promoted compiled graphs. */
   compiledFrameGraphGeneration: number;
   /** One candidate owns all graph facts until the frame submits or rolls back. */
@@ -483,9 +555,7 @@ export interface RenderFrameState {
     | {
         readonly graph: CompiledRenderGraph<RenderPipelineFrame>;
         readonly previous: {
-          readonly graph: CompiledRenderGraph<RenderPipelineFrame> | null;
-          readonly key: string | null;
-          readonly perFrameGraph: RenderFrameState['perFrameGraph'];
+          readonly installed: InstalledFrameGraph | null;
           readonly graphGeneration: number;
           readonly compiledGeneration: number;
           readonly lightingSignature: string;
@@ -502,16 +572,7 @@ export interface RenderFrameState {
     | undefined;
   /** A DoF candidate was present when the frame failed to submit. */
   depthOfFieldLastSubmitFailed?: boolean | undefined;
-  /** Two renderer-owned parameter slots; only the pending slot is writable. */
-  volumetricFogParamsBuffers: [Buffer | null, Buffer | null];
-  /** Candidate parameter slot, promoted only after queue submission succeeds. */
-  volumetricFogParamsPendingSlot: 0 | 1 | null;
-  /** Parameter slot consumed by the last accepted volume frame. */
-  volumetricFogParamsAcceptedSlot: 0 | 1 | null;
-  /** CPU copy of the accepted parameter payload for degraded-frame staging. */
-  volumetricFogAcceptedParams: Float32Array | undefined;
-  /** CPU copy of the current candidate payload before submit. */
-  volumetricFogPendingParams: Float32Array | undefined;
+  volumetricFogParams: VolumetricFogParamsState;
   /** Last candidate/accepted volume projection exposed through inspect(). */
   volumetricFogInspection: VolumetricFogInspection;
   /** Accepted volume POD/context retained while a later candidate degrades. */
@@ -522,8 +583,8 @@ export interface RenderFrameState {
   volumetricFogHistorySlot: 0 | 1 | null;
   volumetricFogHistorySignature: VolumeTemporalSignature | null;
   readonly retiredCompiledFrameGraphs: Set<CompiledRenderGraph<RenderPipelineFrame>>;
-  /** Physical outputs projected by typed graph passes for downstream observers. */
-  currentFrameObservationSource: FrameObservationSource | undefined;
+  /** Views and observation outputs projected by the current frame's recording. */
+  readonly frameOutputs: FrameRecordingOutputs;
   /** Completed-frame source for the producer-owned fallback MRT. */
   reflectionFallbackObservationSource?: FrameObservationSource | undefined;
   /** Completion fence for the producer-owned fallback row/readback promotion. */
@@ -568,8 +629,6 @@ export interface RenderFrameState {
   environmentFrame?: import('../environment/frame').SelectedEnvironmentFrame | undefined;
   pendingAtmospherePublish?: (() => void) | undefined;
   readonly environmentLifecycle: EnvironmentLifecycle | undefined;
-  currentDirectionalShadowView: TextureView | null;
-  currentSpotShadowView: TextureView | null;
   readonly instanceBuffers: Map<number, InstanceBufferCacheEntry>;
   /** Renderer-private World projection receiving record-stage residency facts. */
   readonly instanceCollections?: InstanceProjectionStore;
@@ -606,20 +665,12 @@ export interface RenderFrameState {
    * a failed candidate never changes it.
    */
   standardLightingGraphSignature: string;
-  /** Last prepared Standard transport facts projected for Renderer.inspect(). */
-  standardLightingInspection?: StandardLightingInspection | undefined;
-  /** Last submitted point-shadow atlas budget projection. */
-  pointShadowInspection?: PointShadowInspection | undefined;
-  /** Last submitted capsule-shadow admission projection. */
+  /** Renderer.inspect() projections of the last submitted frame. */
+  submittedInspection?: SubmittedFrameInspection | undefined;
   /** Capsule tile binning of the display view in the current frame. */
   capsuleShadowSubmission?:
     | import('../capsule-shadow/inspection').CapsuleShadowSubmission
     | undefined;
-  capsuleShadowInspection?:
-    | import('../capsule-shadow/inspection').CapsuleShadowInspection
-    | undefined;
-  /** Last submitted display-view transparency resolution. */
-  transparencyInspection?: import('../oit/view').TransparencyInspection | undefined;
   transientInstanceBuffers: InstanceBufferCacheEntry[];
   warnedZeroLightStandard: boolean;
   /**
@@ -764,6 +815,8 @@ export interface RenderFrameState {
    * Install-time config projected into `RenderPipelineTopology.config`.
    */
   installedPipelineConfig: RenderPipelineAsset['config'];
+  /** Effective Standard profile for this private view; never renderer author state. */
+  cameraStandardProfile?: StandardProfile | undefined;
   /**
    * feat-20260608-cluster-lighting M5 / w20 + M6 / w23 + M5 / w22:
    * once-per-frame fire dedup set for Standard per-frame fail-soft errors

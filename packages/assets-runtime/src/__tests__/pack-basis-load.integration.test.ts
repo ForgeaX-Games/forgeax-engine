@@ -1,18 +1,13 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { LoadContext, TextureAsset } from '@forgeax/engine-types';
+import type { LoadContext, LoaderAsyncResult, TextureAsset } from '@forgeax/engine-types';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   BasisEncoderModule,
   BasisModuleFactory,
 } from '../../../codec/src/wasm/basis-types.js';
 import type { CodecContextFailure } from '../loaders/pack-artifact.js';
-import {
-  loadVerifiedTexturePack,
-  PACK_ARTIFACT_LOADERS,
-  textureLoader,
-} from '../loaders/pack-artifact.js';
+import { PACK_ARTIFACT_LOADERS, textureLoader } from '../loaders/pack-artifact.js';
 
 const TRANSCODER_GLUE = new URL('../../../codec/pkg/basis_transcoder.mjs', import.meta.url);
 const ENCODER_GLUE = new URL('../../../codec/pkg/encode/basis_encoder.mjs', import.meta.url);
@@ -32,15 +27,16 @@ async function loadEncoder(): Promise<BasisEncoderModule> {
   return mod;
 }
 
-async function makeBasis(): Promise<Uint8Array> {
+async function makeBasis(ktx2 = false, mips = false): Promise<Uint8Array> {
   const mod = await loadEncoder();
   const encoder = new mod.BasisEncoder();
   try {
     encoder.setSliceSourceImage(0, new Uint8Array(4 * 4 * 4).fill(127), 4, 4, 0);
-    encoder.setCreateKTX2File(false);
+    encoder.setCreateKTX2File(ktx2);
     encoder.setFormatMode(mod.basis_tex_format.cUASTC_LDR_4x4.value);
     encoder.setPerceptual(false);
-    encoder.setMipGen(false);
+    encoder.setKTX2AndBasisSRGBTransferFunc(false);
+    encoder.setMipGen(mips);
     const bytes = new Uint8Array(1 << 20);
     const length = encoder.encode(bytes);
     if (length <= 0) throw new Error('raw Basis encode failed');
@@ -56,10 +52,6 @@ const context: LoadContext = {
   transcodeCaps: { bc: false, etc2: false, astc: false },
   device: undefined,
 };
-
-function digest(bytes: Uint8Array): string {
-  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-}
 
 describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
   it('keeps context failure code and detail correlated as a closed union', () => {
@@ -122,6 +114,52 @@ describe.skipIf(!pkgBuilt)('Pack runtime raw Basis loader', () => {
     expect(result.value.data.byteLength).toBeGreaterThan(0);
   });
 
+  it.each([
+    'basis',
+    'ktx2',
+  ] as const)('publishes the complete %s mip chain in order', async (container) => {
+    const bytes = await makeBasis(container === 'ktx2', true);
+    const loadPack = textureLoader.loadPack;
+    if (loadPack === undefined) throw new Error('textureLoader.loadPack must be registered');
+    const result = (await loadPack(
+      {
+        guid: '019f0000-0000-7000-8000-000000000306',
+        kind: 'texture',
+        payload: { colorSpace: 'linear' },
+        refs: [],
+        artifacts: {
+          body: {
+            bytes,
+            descriptor: {
+              path: `texture.${container}`,
+              mediaType: `image/${container}`,
+              assetCodec: { name: 'basis', container, profile: 'uastc-ldr' },
+            },
+          },
+        },
+      },
+      context,
+    )) as LoaderAsyncResult<TextureAsset>;
+    if (!result.ok) throw result.error;
+    expect(result.ok).toBe(true);
+    expect(result.value).toMatchObject({
+      format: 'rgba8unorm',
+      colorSpace: 'linear',
+      shape: { viewDimension: '2d', extent: { width: 4, height: 4 } },
+      mips: { kind: 'packed', levelCount: 3 },
+    });
+    // 4x4, 2x2 and 1x1 RGBA mips, largest first, with the same authored color.
+    const texture = result.value as TextureAsset;
+    expect(texture.data.byteLength).toBe((16 + 4 + 1) * 4);
+    const pixels = new Uint8Array(
+      texture.data.buffer,
+      texture.data.byteOffset,
+      texture.data.byteLength,
+    );
+    for (const offset of [0, 64, 80])
+      expect(Array.from(pixels.slice(offset, offset + 3))).toEqual([127, 127, 127]);
+  });
+
   it('preserves codec context for a malformed KTX2 Pack artifact', async () => {
     const loadPack = textureLoader.loadPack;
     if (loadPack === undefined) throw new Error('textureLoader.loadPack must be registered');
@@ -179,49 +217,5 @@ describe('Pack artifact loader matrix', () => {
     expect(PACK_ARTIFACT_LOADERS.map((loader) => loader.kind).sort()).toEqual(
       ['equirect', 'font', 'render-pipeline', 'texture', 'tileset'].sort(),
     );
-  });
-
-  it('preserves array shape and generation provenance through verified loading', async () => {
-    const bytes = new Uint8Array(8 * 4 * 3).fill(91);
-    const artifactDigest = digest(bytes);
-    const result = await loadVerifiedTexturePack(
-      {
-        sourceKey: 'array/layers',
-        generation: 4,
-        expectedDigest: artifactDigest,
-        pack: {
-          guid: '019f0000-0000-7000-8000-000000000306',
-          kind: 'texture',
-          payload: {
-            shape: { viewDimension: '2d-array', extent: { width: 8, height: 4, layers: 3 } },
-            format: 'r8unorm',
-            colorSpace: 'linear',
-            mips: { kind: 'none' },
-          },
-          refs: [],
-          artifacts: {
-            body: {
-              bytes,
-              descriptor: {
-                path: 'array.raw',
-                mediaType: 'application/x-forgeax-r8',
-                byteLength: bytes.byteLength,
-                integrity: { algorithm: 'sha256', digest: artifactDigest },
-              },
-            },
-          },
-        },
-      },
-      context,
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.value.asset.shape).toEqual({
-      viewDimension: '2d-array',
-      extent: { width: 8, height: 4, layers: 3 },
-    });
-    expect(result.value.generation).toBe(4);
-    expect(result.value.sourceKey).toBe('array/layers');
   });
 });

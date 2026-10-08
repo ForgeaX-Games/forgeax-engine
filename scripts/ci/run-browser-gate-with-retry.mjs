@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
 import { createOwnedProcessGroupStopper } from '../../apps/shared/scripts/rhi-debug-process.mjs';
+import { withLocalGpuLease } from './local-gpu-lease.mjs';
 
 const retryPatterns = Object.freeze({
   vitest: [
@@ -156,6 +157,8 @@ export function runBrowserCommand(
     timeoutMs,
     timeoutGraceMs = DEFAULT_TIMEOUT_GRACE_MS,
     label = Array.isArray(command) ? command[0] : 'smoke',
+    gpuLease = false,
+    excludeGpuLeaseQueue = false,
   } = {},
 ) {
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
@@ -164,6 +167,18 @@ export function runBrowserCommand(
   if (!Number.isFinite(timeoutGraceMs) || timeoutGraceMs <= 0) {
     throw new Error(`timeoutGraceMs must be a positive finite number, got ${timeoutGraceMs}`);
   }
+  if (gpuLease && env.FORGEAX_LOCAL_GPU_LEASE === '1' && env.FORGEAX_LOCAL_GPU_LEASE_HELD !== '1')
+    return withLocalGpuLease(
+      () =>
+        runBrowserCommand(command, {
+          cwd,
+          env: { ...env, FORGEAX_LOCAL_GPU_LEASE_HELD: '1' },
+          timeoutMs,
+          timeoutGraceMs,
+          label,
+        }),
+      { label },
+    );
   // Roster commands are repository-owned shell scripts; argv callers bypass the shell.
   const shell = typeof command === 'string';
   const [program, ...args] = shell ? [command] : command;
@@ -176,6 +191,53 @@ export function runBrowserCommand(
     let cancelled = null;
     let timeoutTimer;
     const startedAt = Date.now();
+    // A coordinator owns the existing bounded groups without holding their
+    // lease. Only intervals with queued groups and no executing group are
+    // excluded; concurrent execution and all CPU preparation still count.
+    const leaseStates = new Map();
+    let queuePausedAt;
+    let excludedGpuQueueMs = 0;
+    let queueLineTail = '';
+    const excludedQueueTime = () =>
+      excludedGpuQueueMs + (queuePausedAt === undefined ? 0 : Date.now() - queuePausedAt);
+    const armTimeout = () => {
+      clearTimeout(timeoutTimer);
+      if (timeoutMs === undefined || settled || timedOut || queuePausedAt !== undefined) return;
+      const remaining = excludeGpuLeaseQueue
+        ? timeoutMs - (Date.now() - startedAt - excludedQueueTime())
+        : timeoutMs;
+      timeoutTimer = setTimeout(
+        () => {
+          if (settled || queuePausedAt !== undefined) return;
+          timedOut = true;
+          diagnostic(
+            `timeout label=${label} pid=${child.pid} elapsedMs=${Date.now() - startedAt} timeoutMs=${timeoutMs}; reclaiming private process group`,
+          );
+          void cleanup().then(() => settle(child.exitCode, child.signalCode));
+        },
+        Math.max(0, remaining),
+      );
+    };
+    const observeLeaseQueue = (text) => {
+      if (!excludeGpuLeaseQueue) return;
+      queueLineTail += text;
+      const lines = queueLineTail.split('\n');
+      queueLineTail = lines.pop().slice(-8192);
+      for (const line of lines) {
+        const event =
+          /^\[local-gpu\] (queued|acquired|released) label=(.*?) (?:lock=|queueMs=)/.exec(line);
+        if (!event) continue;
+        if (queuePausedAt !== undefined) {
+          excludedGpuQueueMs += Date.now() - queuePausedAt;
+          queuePausedAt = undefined;
+        }
+        if (event[1] === 'released') leaseStates.delete(event[2]);
+        else leaseStates.set(event[2], event[1]);
+        if (leaseStates.size > 0 && ![...leaseStates.values()].includes('acquired'))
+          queuePausedAt = Date.now();
+        armTimeout();
+      }
+    };
     const child = spawn(program, args, {
       cwd,
       env,
@@ -196,6 +258,7 @@ export function runBrowserCommand(
     };
     const forward = (chunk, destination) => {
       const text = String(chunk);
+      if (destination === process.stderr) observeLeaseQueue(text);
       lastOutputAt = Date.now();
       childOutputTail = (childOutputTail + text).slice(-8192);
       output += text;
@@ -252,6 +315,7 @@ export function runBrowserCommand(
         cancelled,
         pid: child.pid,
         elapsedMs: Date.now() - startedAt,
+        ...(excludeGpuLeaseQueue ? { excludedGpuQueueMs: excludedQueueTime() } : {}),
         cleanup: cleanupResult,
       };
       const lastOutputAgeMs = Date.now() - lastOutputAt;
@@ -321,14 +385,7 @@ export function runBrowserCommand(
     child.once('exit', (status, signal) => {
       void settle(status, signal);
     });
-    if (timeoutMs !== undefined)
-      timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        diagnostic(
-          `timeout label=${label} pid=${child.pid} elapsedMs=${Date.now() - startedAt} timeoutMs=${timeoutMs}; reclaiming private process group`,
-        );
-        void cleanup().then(() => settle(child.exitCode, child.signalCode));
-      }, timeoutMs);
+    armTimeout();
   });
 }
 

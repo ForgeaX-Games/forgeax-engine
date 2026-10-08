@@ -7,7 +7,7 @@
 //   AudioError, AudioErrorCode, AudioErrorDetail, AUDIO_ERROR_HINTS
 //
 // Package-internal exports:
-//   AudioBackend interface, BusName, AudioPlayOptions, AudioState,
+//   AudioBackend interface, BusName, AudioPlayOptions, AudioSourcePose, AudioState,
 //   AUDIO_ENGINE_RESOURCE_KEY
 //   AudioSource component, AudioListener component
 
@@ -19,18 +19,30 @@ export {
   type AudioErrorDetail,
 } from '@forgeax/engine-types';
 export { audioContribution } from './assets/audio-decoder';
-export type { AudioListenerPose, AudioPlayOptions, AudioState } from './audio-backend';
+export type {
+  AudioListenerPose,
+  AudioPlayOptions,
+  AudioSourcePose,
+  AudioState,
+} from './audio-backend';
 export {
   AUDIO_ENGINE_RESOURCE_KEY,
   type AudioBackend,
   type BusName,
 } from './audio-backend';
 export {
+  type AudioBus,
+  type AudioBusSend,
+  DEFAULT_AUDIO_BUSES,
+  validateAudioBuses,
+} from './audio-buses';
+export {
   type AudioIntent,
   type AudioIntentBackendOptions,
   audioIntentErrorState,
   createAudioIntentBackend,
 } from './audio-intent';
+export { admitAudioStream, validAudioStream } from './audio-stream';
 export {
   audioTickSystem,
   createClipResolver,
@@ -38,6 +50,7 @@ export {
   detectRemovedEntities,
   type EdgeAction,
   listenerPoseFromWorldMatrix,
+  sourcePoseFromWorldMatrix,
 } from './audio-tick-system';
 export { AudioListener, AudioSource } from './components';
 export { AUDIO_TICK_SYSTEM_NAME, audioPlugin } from './plugin-factory';

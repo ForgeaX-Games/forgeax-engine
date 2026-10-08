@@ -84,9 +84,9 @@ describe('TAA history lifecycle', () => {
     );
     getTemporalBindGroupResources(state);
     expect(samplers.mock.calls.map(([desc]) => desc?.magFilter)).toEqual(['linear', 'nearest']);
-    const entries = layouts.mock.calls[0]?.[0].entries;
-    expect(entries?.find((entry) => entry.binding === 1)?.sampler?.type).toBe('filtering');
-    expect(entries?.find((entry) => entry.binding === 5)?.sampler?.type).toBe('non-filtering');
+    const entries = Array.from(layouts.mock.calls[0]?.[0].entries ?? []);
+    expect(entries.find((entry) => entry.binding === 1)?.sampler?.type).toBe('filtering');
+    expect(entries.find((entry) => entry.binding === 5)?.sampler?.type).toBe('non-filtering');
     retireTemporalGpuState(state);
   });
   it('accounts for color, temporal, and private stability histories only for TAA', () => {

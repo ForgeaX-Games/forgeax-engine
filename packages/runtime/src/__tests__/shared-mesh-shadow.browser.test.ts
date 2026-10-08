@@ -14,9 +14,10 @@ import { expect, it } from 'vitest';
 import { constructRuntimeRendererHost } from '../renderer-host';
 
 it.each([false, true])('preserves shared-mesh shadows with vertexColor=%s', async (vertexColor) => {
+  const size = import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 256 : 512;
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
+  canvas.width = size;
+  canvas.height = size;
   document.body.append(canvas);
   const host = await constructRuntimeRendererHost(
     canvas,
@@ -79,7 +80,7 @@ it.each([false, true])('preserves shared-mesh shadows with vertexColor=%s', asyn
         castShadow: true,
         cascadeCount: 4,
         shadowDistance: 35,
-        mapSize: 1024,
+        mapSize: import.meta.env.FORGEAX_BROWSER_CI_LIGHTWEIGHT === '1' ? 256 : 1024,
         normalBias: 0.01,
         depthBias: 0.00001,
       },
@@ -122,22 +123,22 @@ it.each([false, true])('preserves shared-mesh shadows with vertexColor=%s', asyn
     const encoded = canvas.toDataURL('image/png').split(',')[1] ?? '';
     const bytes = Uint8Array.from(atob(encoded), (value) => value.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-    const output = new OffscreenCanvas(512, 512);
+    const output = new OffscreenCanvas(size, size);
     const draw = output.getContext('2d');
     if (draw === null) throw new Error('pixel readback unavailable');
     draw.drawImage(bitmap, 0, 0);
     bitmap.close();
-    return draw.getImageData(0, 0, 512, 512).data;
+    return draw.getImageData(0, 0, size, size).data;
   };
   const receiverLuma = (pixels: Uint8ClampedArray, x: number) => {
     const focal = 1 / Math.tan(Math.PI / 6);
     const z = 2;
-    const px = Math.round((0.5 + ((x * focal) / (14 - z)) * 0.5) * 512);
-    const py = Math.round((0.5 + ((5 * focal) / (14 - z)) * 0.5) * 512);
+    const px = Math.round((0.5 + ((x * focal) / (14 - z)) * 0.5) * size);
+    const py = Math.round((0.5 + ((5 * focal) / (14 - z)) * 0.5) * size);
     let sum = 0;
     for (let dy = -2; dy <= 2; dy++)
       for (let dx = -2; dx <= 2; dx++) {
-        const index = ((py + dy) * 512 + px + dx) * 4;
+        const index = ((py + dy) * size + px + dx) * 4;
         sum += ((pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0)) / 3;
       }
     return sum / 25;

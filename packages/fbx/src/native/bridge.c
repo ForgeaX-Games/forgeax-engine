@@ -747,185 +747,152 @@ static void build_node_path(char *out, size_t out_size, ufbx_node *node) {
 
 /* ── Animation writing ─────────────────────────────────────────────── */
 
-/* Does an anim_value carry at least one keyframe on any of its curves? */
-static int anim_value_has_keys(const ufbx_anim_value *av) {
-    if (!av) return 0;
-    for (int i = 0; i < 3; i++) {
-        const ufbx_anim_curve *cv = av->curves[i];
-        if (cv && cv->keyframes.count > 0) return 1;
+static int source_property_has_keys(const ufbx_anim_stack *stack, const ufbx_node *node, const char *property) {
+    for (size_t i=0;i<stack->layers.count;i++) {
+        ufbx_anim_prop *prop=ufbx_find_anim_prop(stack->layers.data[i],&node->element,property);
+        if (prop && prop->anim_value) for (int c=0;c<3;c++) if (prop->anim_value->curves[c] && prop->anim_value->curves[c]->keyframes.count) return 1;
     }
     return 0;
 }
-
-/* Append every keyframe time (seconds) from an anim_value's curves. */
-static size_t append_key_times(const ufbx_anim_value *av, double *times,
-                               size_t n, size_t cap) {
-    if (!av) return n;
-    for (int i = 0; i < 3; i++) {
-        const ufbx_anim_curve *cv = av->curves[i];
-        if (!cv) continue;
-        for (size_t k = 0; k < cv->keyframes.count && n < cap; k++) {
-            times[n++] = cv->keyframes.data[k].time;
-        }
-    }
-    return n;
+typedef struct { double time; double values[4]; } AnimationKey;
+typedef struct { AnimationKey *data; size_t count, capacity; } AnimationKeys;
+/* Retained keys are ordinary Float32 runtime lerp/slerp samples. Error refinement
+ * evaluates the original composed source, never the already baked interpolant. */
+static AnimationKey animation_key(ufbx_anim *anim, ufbx_node *node, int property, double time, double origin) {
+    /* Translation includes pivot/rotation/scale dependencies. Rotation and scale
+     * can use ufbx's narrower evaluation without dropping their dependencies. */
+    uint32_t flags = property == 0 ? 0 : UFBX_TRANSFORM_FLAG_EXPLICIT_INCLUDES |
+        (property == 1 ? UFBX_TRANSFORM_FLAG_INCLUDE_ROTATION : UFBX_TRANSFORM_FLAG_INCLUDE_SCALE);
+    ufbx_transform t = ufbx_evaluate_transform_flags(anim, node, origin + time, flags);
+    AnimationKey key = {0}; key.time = time;
+    if (property == 1) { key.values[0]=t.rotation.x; key.values[1]=t.rotation.y; key.values[2]=t.rotation.z; key.values[3]=t.rotation.w; }
+    else { ufbx_vec3 v = property == 0 ? t.translation : t.scale; key.values[0]=v.x; key.values[1]=v.y; key.values[2]=v.z; }
+    return key;
 }
-
-/* Sort + dedupe an unordered times array in place; returns deduped count. */
-static int cmp_double(const void *a, const void *b) {
-    double x = *(const double *)a, y = *(const double *)b;
-    return (x < y) ? -1 : (x > y) ? 1 : 0;
-}
-static size_t sort_unique(double *times, size_t n) {
-    if (n == 0) return 0;
-    qsort(times, n, sizeof(double), cmp_double);
-    size_t m = 1;
-    for (size_t i = 1; i < n; i++) {
-        if (times[i] > times[m - 1] + 1e-9) times[m++] = times[i];
-    }
-    return m;
-}
-
-/* An anim_stack is empty (produces no clip) when it has zero duration, no
- * layers, or no layer carries any animated property (KB §4.3). */
-static int anim_stack_is_empty(const ufbx_anim_stack *stack) {
-    if (stack->time_begin == stack->time_end) return 1;
-    if (stack->layers.count == 0) return 1;
-    for (size_t i = 0; i < stack->layers.count; i++) {
-        if (stack->layers.data[i]->anim_props.count > 0) return 0;
-    }
+/* Nine significant decimal digits round-trip the runtime's Float32 values.
+ * Keep source evaluation in double precision; narrow only at POD publication. */
+static int buf_animation_value(Buf *b, double value) {
+    if (!isfinite((float)value)) return 0;
+    char text[32];
+    snprintf(text, sizeof(text), "%.9g", (double)(float)value);
+    buf_str(b, text);
     return 1;
 }
-
-/* Locate the anim_value bound to a node's Lcl property on a layer, if any. */
-static ufbx_anim_value *find_lcl_value(const ufbx_anim_layer *layer,
-                                       const ufbx_node *node, const char *prop) {
-    ufbx_anim_prop *ap = ufbx_find_anim_prop(layer, &node->element, prop);
-    return (ap && anim_value_has_keys(ap->anim_value)) ? ap->anim_value : NULL;
-}
-
-/* Emit one animation channel: keyTimes = union of the node's animated
- * properties' key times, keyValues = ufbx_evaluate_transform sampled at each
- * key time and decomposed to the requested TRS component. Matches the SDK
- * binding (EvaluateLocalTransform + quaternion sign canonicalization). */
-static void write_channel(Buf *b, ufbx_anim *anim, ufbx_node *node,
-                          const char *node_path, const char *property,
-                          const double *times, size_t nt, double time_begin) {
-    buf_str(b, "{\"targetNode\":");
-    buf_quoted(b, node_path);
-    buf_str(b, ",\"property\":\"");
-    buf_str(b, property);
-    buf_str(b, "\",\"keyTimes\":[");
-    for (size_t k = 0; k < nt; k++) {
-        if (k > 0) buf_char(b, ',');
-        buf_double(b, times[k] - time_begin);
+static int append_animation_key(AnimationKeys *keys, AnimationKey key, size_t *total) {
+    if (++(*total) > 2000000) return 0;
+    if (keys->count == keys->capacity) {
+        size_t capacity = keys->capacity ? keys->capacity*2 : 256;
+        AnimationKey *data = realloc(keys->data, capacity*sizeof(AnimationKey));
+        if (!data) return 0; keys->data=data; keys->capacity=capacity;
     }
-    buf_str(b, "],\"keyValues\":[");
-
-    int is_rot = strcmp(property, "rotation") == 0;
-    int is_trans = strcmp(property, "translation") == 0;
-    double pqx = 0, pqy = 0, pqz = 0, pqw = 1;
-
-    for (size_t k = 0; k < nt; k++) {
-        ufbx_transform tr = ufbx_evaluate_transform(anim, node, times[k]);
-        if (k > 0) buf_char(b, ',');
-        if (is_rot) {
-            double cx = tr.rotation.x, cy = tr.rotation.y,
-                   cz = tr.rotation.z, cw = tr.rotation.w;
-            /* Canonicalize sign for short-arc continuity across keys. */
-            if (cx * pqx + cy * pqy + cz * pqz + cw * pqw < 0) {
-                cx = -cx; cy = -cy; cz = -cz; cw = -cw;
-            }
-            pqx = cx; pqy = cy; pqz = cz; pqw = cw;
-            buf_double(b, cx); buf_char(b, ',');
-            buf_double(b, cy); buf_char(b, ',');
-            buf_double(b, cz); buf_char(b, ',');
-            buf_double(b, cw);
+    keys->data[keys->count++]=key; return 1;
+}
+static int refine_animation_segment(AnimationKeys *keys, size_t *total, ufbx_anim *anim, ufbx_node *node, int property, AnimationKey a, AnimationKey b, double origin, int depth, const AnimationKey *midpoint) {
+    AnimationKey references[3];
+    int split = 0;
+    for (int i=1; i<=3; i++) {
+        double alpha=i*0.25;
+        AnimationKey reference = i == 2 && midpoint ? *midpoint :
+            animation_key(anim,node,property,a.time+(b.time-a.time)*alpha,origin);
+        references[i-1] = reference;
+        if (property == 1) {
+            ufbx_quat qa={a.values[0],a.values[1],a.values[2],a.values[3]}, qb={b.values[0],b.values[1],b.values[2],b.values[3]};
+            ufbx_quat q=ufbx_quat_slerp(qa,qb,alpha);
+            double dot=fabs(q.x*reference.values[0]+q.y*reference.values[1]+q.z*reference.values[2]+q.w*reference.values[3]);
+            if (dot < cos(0.01*3.141592653589793/360.0)) split=1;
         } else {
-            ufbx_vec3 v = is_trans ? tr.translation : tr.scale;
-            buf_double(b, v.x); buf_char(b, ',');
-            buf_double(b, v.y); buf_char(b, ',');
-            buf_double(b, v.z);
+            double error=0; for (int c=0;c<3;c++) { double delta=a.values[c]+(b.values[c]-a.values[c])*alpha-reference.values[c]; error+=delta*delta; }
+            double epsilon=property == 0 ? 2e-4 : 1e-5;
+            if (error > epsilon*epsilon) split=1;
         }
     }
-    buf_str(b, "]}");
+    /* Mixed source steps have a bounded <=10us transition in the LINEAR POD.
+     * Refining below Float32 time precision cannot improve runtime evidence. */
+    if (!split || b.time-a.time <= fmax(1e-5,4.76837158203125e-7*fmax(fabs(a.time),fabs(b.time)))) return append_animation_key(keys,b,total);
+    if (depth >= 14) return 0;
+    /* Parent quarter points are the child midpoints. Keep their source values
+     * instead of evaluating the same times again at each recursion level. */
+    AnimationKey mid = references[1];
+    return refine_animation_segment(keys,total,anim,node,property,a,mid,origin,depth+1,&references[0]) && refine_animation_segment(keys,total,anim,node,property,mid,b,origin,depth+1,&references[2]);
 }
 
-static void write_animation(Buf *b, ufbx_scene *scene) {
-    if (scene->anim_stacks.count == 0) return;
-
-    /* Buffer for union key times; humanoid clips have <= a few hundred keys. */
-    enum { MAX_KEYS = 8192 };
-    double *times = (double *)malloc(MAX_KEYS * sizeof(double));
-
+/* ufbx provides source knots, composed layers and bounded non-linear seed samples.
+ * Retain those knots and adapt to measured source error; runtime stays format-free. */
+static int write_animation(Buf *b, ufbx_scene *scene) {
+    if (scene->anim_stacks.count == 0) return 1;
     buf_str(b, ",\"clips\":[");
     int first_clip = 1;
+    size_t total_keys = 0;
     for (size_t si = 0; si < scene->anim_stacks.count; si++) {
         ufbx_anim_stack *stack = scene->anim_stacks.data[si];
-
-        /* Empty-take filter: no clip for zero-duration / no-layer / no-prop
-         * stacks (KB §4.3), and no assigning a fake 1.0 duration. */
-        if (anim_stack_is_empty(stack)) continue;
-        ufbx_anim_layer *layer = stack->layers.data[0];
-
-        double duration = stack->time_end - stack->time_begin;
-
+        if (stack->time_end <= stack->time_begin || stack->layers.count == 0) continue;
+        ufbx_bake_opts opts = { 0 };
+        opts.trim_start_time = true;
+        opts.resample_rate = 60.0;
+        opts.minimum_sample_rate = 1e30;
+        opts.max_keyframe_segments = 4096;
+        opts.key_reduction_enabled = true;
+        opts.key_reduction_rotation = true;
+        opts.key_reduction_threshold = 1e-6;
+        opts.step_handling = UFBX_BAKE_STEP_HANDLING_CUSTOM_DURATION;
+        opts.step_custom_duration = 1e-5;
+        opts.step_custom_epsilon = 1e-6;
+        opts.temp_allocator.memory_limit = 256 * 1024 * 1024;
+        opts.result_allocator.memory_limit = 256 * 1024 * 1024;
+        ufbx_error error;
+        ufbx_baked_anim *bake = ufbx_bake_anim(scene, stack->anim, &opts, &error);
+        if (!bake) return 0;
+        if (bake->nodes.count == 0) { ufbx_free_baked_anim(bake); continue; }
         if (!first_clip) buf_char(b, ',');
         first_clip = 0;
-
-        buf_char(b, '{');
-        buf_str(b, "\"name\":");
-        buf_quoted(b, stack->name.data ? stack->name.data : "");
-        buf_str(b, ",\"duration\":"); buf_double(b, duration);
+        buf_str(b, "{\"name\":"); buf_quoted(b, stack->name.data ? stack->name.data : "");
+        buf_str(b, ",\"duration\":"); buf_double(b, bake->playback_duration);
         buf_str(b, ",\"channels\":[");
-
         int first_channel = 1;
-        for (size_t ni = 0; ni < scene->nodes.count; ni++) {
-            ufbx_node *node = scene->nodes.data[ni];
+        for (size_t ni = 0; ni < bake->nodes.count; ni++) {
+            const ufbx_baked_node *bn = &bake->nodes.data[ni];
+            ufbx_node *node = scene->nodes.data[bn->typed_id];
             if (skip_node(node)) continue;
-
-            ufbx_anim_value *tv = find_lcl_value(layer, node, UFBX_Lcl_Translation);
-            ufbx_anim_value *rv = find_lcl_value(layer, node, UFBX_Lcl_Rotation);
-            ufbx_anim_value *sv = find_lcl_value(layer, node, UFBX_Lcl_Scaling);
-            if (!tv && !rv && !sv) continue;
-
-            char node_path[1024];
-            build_node_path(node_path, sizeof(node_path), node);
-
-            /* One shared timeline per node = union of every animated property's
-             * key times, so a single evaluate feeds each channel (SDK parity). */
-            size_t nraw = 0;
-            nraw = append_key_times(tv, times, nraw, MAX_KEYS);
-            nraw = append_key_times(rv, times, nraw, MAX_KEYS);
-            nraw = append_key_times(sv, times, nraw, MAX_KEYS);
-            size_t nt = sort_unique(times, nraw);
-
-            /* A property gets a channel only if it owns curves (no static
-             * slots), mirroring glTF / the SDK binding. */
-            if (tv) {
+            char path[1024]; build_node_path(path, sizeof(path), node);
+            for (int property = 0; property < 3; property++) {
+                const ufbx_baked_vec3_list vecs = property == 0 ? bn->translation_keys : bn->scale_keys;
+                const ufbx_baked_quat_list rots = bn->rotation_keys;
+                size_t count = property == 1 ? rots.count : vecs.count;
+                if (count == 0) continue;
+                int authored=source_property_has_keys(stack,node,property==0?UFBX_Lcl_Translation:property==1?UFBX_Lcl_Rotation:UFBX_Lcl_Scaling);
+                if (!authored && property == 1 && bn->constant_rotation) {
+                    ufbx_quat a = rots.data[0].value, v = node->local_transform.rotation;
+                    if (fabs(fabs(a.x*v.x+a.y*v.y+a.z*v.z+a.w*v.w)-1.0) < 1e-10) continue;
+                } else if (!authored && ((property == 0 && bn->constant_translation) || (property == 2 && bn->constant_scale))) {
+                    ufbx_vec3 a = vecs.data[0].value, v = property == 0 ? node->local_transform.translation : node->local_transform.scale;
+                    if (fabs(a.x-v.x) < 1e-10 && fabs(a.y-v.y) < 1e-10 && fabs(a.z-v.z) < 1e-10) continue;
+                }
+                AnimationKeys keys = {0};
+                AnimationKey previous = {0};
+                for (size_t k=0;k<count;k++) {
+                    double time = property == 1 ? rots.data[k].time : vecs.data[k].time;
+                    AnimationKey key=animation_key(stack->anim,node,property,time,stack->time_begin);
+                    int ok = k == 0 ? append_animation_key(&keys,key,&total_keys) : refine_animation_segment(&keys,&total_keys,stack->anim,node,property,previous,key,stack->time_begin,0,NULL);
+                    if (!ok) { free(keys.data); ufbx_free_baked_anim(bake); return 0; }
+                    previous=key;
+                }
                 if (!first_channel) buf_char(b, ','); first_channel = 0;
-                write_channel(b, stack->anim, node, node_path, "translation",
-                              times, nt, stack->time_begin);
-            }
-            if (rv) {
-                if (!first_channel) buf_char(b, ','); first_channel = 0;
-                write_channel(b, stack->anim, node, node_path, "rotation",
-                              times, nt, stack->time_begin);
-            }
-            if (sv) {
-                if (!first_channel) buf_char(b, ','); first_channel = 0;
-                write_channel(b, stack->anim, node, node_path, "scale",
-                              times, nt, stack->time_begin);
+                buf_str(b, "{\"targetNode\":"); buf_quoted(b, path);
+                buf_str(b, ",\"property\":"); buf_quoted(b, property == 0 ? "translation" : property == 1 ? "rotation" : "scale");
+                buf_str(b, ",\"keyTimes\":[");
+                for (size_t k = 0; k < keys.count; k++) { if (k) buf_char(b, ','); buf_double(b,keys.data[k].time); }
+                buf_str(b, "],\"keyValues\":[");
+                for (size_t k = 0; k < keys.count; k++) {
+                    for (int c=0;c<(property==1?4:3);c++) { if (k||c) buf_char(b,','); if (!buf_animation_value(b,keys.data[k].values[c])) { free(keys.data); ufbx_free_baked_anim(bake); return 0; } }
+                }
+                free(keys.data);
+                buf_str(b,"]}");
             }
         }
-
-        buf_str(b, "]}");
+        buf_str(b,"]}"); ufbx_free_baked_anim(bake);
     }
-    buf_char(b, ']');
-    free(times);
+    buf_char(b,']'); return 1;
 }
-
-/* ── Main entry point ──────────────────────────────────────────────── */
 
 static char *g_result = NULL;
 static size_t g_result_len = 0;
@@ -983,7 +950,11 @@ void parseFbxWasm(const void *data, size_t size) {
     write_skin(&b, scene);
 
     /* Animation */
-    write_animation(&b, scene);
+    if (!write_animation(&b, scene)) {
+        free(b.data); b = (Buf){ 0 };
+        buf_str(&b, "{\"error\":{\"code\":\"fbx-parse-failed\",\"message\":\"bounded ufbx animation bake failed\"}}");
+        g_result = b.data; g_result_len = b.len; ufbx_free_scene(scene); return;
+    }
 
     buf_char(&b, '}');
 

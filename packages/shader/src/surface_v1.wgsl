@@ -22,6 +22,10 @@ struct SurfaceInput {
   // Conservative UV diameters for explicit ray-cone filtering; raster uses derivatives.
   uvFootprint0 : vec4<f32>,
   uvFootprint1 : vec4<f32>,
+  // Linear object-to-world basis: object-space projection and normal maps.
+  objectToWorld : mat3x3<f32>,
+  // Renderer frame elapsed seconds; ray hit shading without a View uses zero.
+  frameTime : f32,
 };
 
 // Surface output is consumed by the Standard BRDF and pass family.
@@ -35,3 +39,16 @@ struct SurfaceData {
   opacity : f32,
   alphaClipThreshold : f32,
 };
+
+// Scaling each edge before the cross preserves the plane normal at every
+// representable world scale, including magnified microscopic geometry.
+// Raster callers evaluate derivatives before clipping or alpha discard.
+fn surfaceGeometryNormal(dx : vec3<f32>, dy : vec3<f32>, fallback : vec3<f32>) -> vec3<f32> {
+  let scaleX = max(max(abs(dx.x), abs(dx.y)), abs(dx.z));
+  let scaleY = max(max(abs(dy.x), abs(dy.y)), abs(dy.z));
+  if (!(scaleX > 0.0 && scaleY > 0.0)) { return fallback; }
+  let geometric = cross(dy / scaleY, dx / scaleX);
+  let lengthSquared = dot(geometric, geometric);
+  if (!(lengthSquared > 0.0)) { return fallback; }
+  return geometric * inverseSqrt(lengthSquared);
+}

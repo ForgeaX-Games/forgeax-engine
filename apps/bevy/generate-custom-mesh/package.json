@@ -20,7 +20,10 @@
       "status": "implemented"
     },
     "rhiDebug": {
-      "riskFamilies": ["geometry-scale", "materials-textures"]
+      "riskFamilies": [
+        "geometry-scale",
+        "materials-textures"
+      ]
     },
     "smokeInvocation": "pnpm --filter @forgeax/bevy-generate-custom-mesh smoke",
     "metrics": {
@@ -60,8 +63,8 @@
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@forgeax/engine-vite-plugin-rhi-debug": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

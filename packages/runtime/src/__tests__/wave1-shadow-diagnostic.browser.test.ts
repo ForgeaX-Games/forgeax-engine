@@ -214,7 +214,7 @@ function sourceKind(work: WorkEntry): 'shadow' | 'forward' | 'unavailable' {
 function isStandardForwardWork(work: WorkEntry): boolean {
   if (work.pipeline.kind !== 'render' || work.pipeline.status !== 'available') return false;
   const entries = new Set(work.pipeline.shaders.map((shader) => shader.entryPoint));
-  return entries.has('vs_scene_index') && entries.has('fs_main');
+  return entries.has('vs_scene_index') && (entries.has('fs_main') || entries.has('fs_opaque'));
 }
 
 function workEvidence(model: FrameModel): readonly Record<string, unknown>[] {

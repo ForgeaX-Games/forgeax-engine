@@ -633,7 +633,7 @@ fn derive_entry(
             };
             entry.sampler = Some(SamplerBinding { ty: ty_str });
         }
-        (AddressSpace::Handle, TypeInner::Image { dim, arrayed: _, class }) => match class {
+        (AddressSpace::Handle, TypeInner::Image { dim, arrayed, class }) => match class {
             ImageClass::Storage { format, access } => {
                 let access_str: &'static str = if access.contains(StorageAccess::LOAD) && access.contains(StorageAccess::STORE) {
                     "read-write"
@@ -645,7 +645,7 @@ fn derive_entry(
                 entry.storage_texture = Some(StorageTextureBinding {
                     access: access_str,
                     format: storage_format_str(*format),
-                    view_dimension: image_dim_str(*dim),
+                    view_dimension: image_dim_str(*dim, *arrayed),
                 });
             }
             ImageClass::Sampled { kind, multi } => {
@@ -663,14 +663,14 @@ fn derive_entry(
                 };
                 entry.texture = Some(TextureBinding {
                     sample_type,
-                    view_dimension: image_dim_str(*dim),
+                    view_dimension: image_dim_str(*dim, *arrayed),
                     multisampled: *multi,
                 });
             }
             ImageClass::Depth { multi } => {
                 entry.texture = Some(TextureBinding {
                     sample_type: "depth",
-                    view_dimension: image_dim_str(*dim),
+                    view_dimension: image_dim_str(*dim, *arrayed),
                     multisampled: *multi,
                 });
             }
@@ -689,12 +689,16 @@ fn is_dynamic_offset(rb: &Option<naga::ResourceBinding>, options: &ReflectionOpt
         .any(|d| d.group == rb.group && d.binding == rb.binding)
 }
 
-fn image_dim_str(dim: ImageDimension) -> &'static str {
-    match dim {
-        ImageDimension::D1 => "1d",
-        ImageDimension::D2 => "2d",
-        ImageDimension::D3 => "3d",
-        ImageDimension::Cube => "cube",
+/// WebGPU view dimension of a reflected image; `arrayed` selects the array
+/// forms, so `texture_2d_array` / `texture_cube_array` round-trip into a BGL.
+fn image_dim_str(dim: ImageDimension, arrayed: bool) -> &'static str {
+    match (dim, arrayed) {
+        (ImageDimension::D1, _) => "1d",
+        (ImageDimension::D2, false) => "2d",
+        (ImageDimension::D2, true) => "2d-array",
+        (ImageDimension::D3, _) => "3d",
+        (ImageDimension::Cube, false) => "cube",
+        (ImageDimension::Cube, true) => "cube-array",
     }
 }
 

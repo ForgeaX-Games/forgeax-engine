@@ -1,0 +1,28 @@
+
+ RUN  v4.1.11 /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app
+
+ ❯ |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts (4 tests | 2 failed) 55296ms
+   × installs new ts plugin assets against real native module identities and independent Cordis Fibers 10014ms
+   × consumes inherited ts Mesh and Scene in independent Worlds and restores the anchor in a fresh process 15026ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts > installs new ts plugin assets against real native module identities and independent Cordis Fibers
+Error: Command failed: /opt/homebrew/Cellar/node/26.4.0/bin/node /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app/src/__tests__/fixtures/runtime-packs.mjs ts /var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/runtime-pack-recovery-LlJ1o5/source.json
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |@forgeax/engine-app| src/__tests__/runtime-packs.integration.test.ts > consumes inherited ts Mesh and Scene in independent Worlds and restores the anchor in a fresh process
+Error: Command failed: /opt/homebrew/Cellar/node/26.4.0/bin/node /Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app/src/__tests__/fixtures/runtime-pack-scenes.mjs ts /var/folders/cr/gl6fbh8n3dvdyktlp93mfyj80000gn/T/runtime-pack-scene-recovery-ILxFbz/scene.json
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 2 passed (4)
+   Start at  18:18:49
+   Duration  56.39s (transform 40ms, setup 0ms, import 65ms, tests 55.30s, environment 0ms)
+
+undefined
+/Users/you/projects/ForgeaX-Games/forgeax-engine/.worktrees/roi-20-gamepad-haptics/packages/app:
+[ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL] Command failed with exit code 1: vitest run src/__tests__/runtime-packs.integration.test.ts '--maxWorkers=1' '--typecheck.enabled=false'

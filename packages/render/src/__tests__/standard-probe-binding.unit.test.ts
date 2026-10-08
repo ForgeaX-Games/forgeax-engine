@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { resolveReflectionProbeBinding } from '../record/frame-lighting';
-import { standardReflectionProbeIndex } from '../record/main-pass';
 
 describe('Standard scene reflection probe binding', () => {
   it('maps a selected scene probe to both Standard lanes', () => {
@@ -11,7 +10,6 @@ describe('Standard scene reflection probe binding', () => {
       normalizedDistance: 0.25,
     };
     expect(resolveReflectionProbeBinding(selection)).toEqual({ probeIndex: 7, useSkylight: false });
-    expect(standardReflectionProbeIndex(selection)).toBe(7);
   });
 
   it('uses Skylight without a per-material probe identity', () => {
@@ -20,6 +18,5 @@ describe('Standard scene reflection probe binding', () => {
       probeIndex: undefined,
       useSkylight: true,
     });
-    expect(standardReflectionProbeIndex(selection)).toBeUndefined();
   });
 });

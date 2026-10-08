@@ -184,7 +184,3 @@ export function inspectTransmissionFromAdmission(
     ...(input.fallbackCount === undefined ? {} : { fallbackCount: input.fallbackCount }),
   });
 }
-
-export function transmissionInspectionToJson(inspection: TransmissionInspection): string {
-  return JSON.stringify(inspection);
-}

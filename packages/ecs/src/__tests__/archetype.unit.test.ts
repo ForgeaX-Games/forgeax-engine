@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BufferPool, SIZE_CLASSES } from '../buffer-pool';
-import type { ComponentSchema, ScalarFieldType } from '../component';
+import type { ScalarFieldType } from '../component';
 import {
   componentId,
   componentSchema,
@@ -38,7 +38,7 @@ import {
   getOrCreateArchetype,
   getRemoveEdge,
 } from '../storage/archetype-graph';
-import { createColumn, growColumn, HAS_TRANSFER, isHotSchema } from '../storage/column';
+import { createColumn, growColumn, HAS_TRANSFER } from '../storage/column';
 import {
   appendTableRow,
   createTable as createArchetype,
@@ -930,43 +930,6 @@ function appendEntity(table: Table, entity: number): number {
         expect(grown.view[0]).toBe(0xdeadbeef);
         expect(grown.view[1]).toBe(0xcafebabe);
         expect(grown.view[2]).toBe(0x12345678);
-      });
-    });
-
-    describe('isHotSchema', () => {
-      it('returns true for all-scalar schema', () => {
-        const schema: ComponentSchema = { x: 'f32', y: 'f32', z: 'f32' };
-        expect(isHotSchema(schema)).toBe(true);
-      });
-
-      it('returns true for single scalar field', () => {
-        expect(isHotSchema({ hp: 'i32' })).toBe(true);
-      });
-
-      it('returns true for all 11 scalar types mixed', () => {
-        const schema: ComponentSchema = {
-          a: 'f32',
-          b: 'f64',
-          c: 'i32',
-          d: 'u32',
-          e: 'i16',
-          f: 'u16',
-          g: 'i8',
-          h: 'u8',
-          i: 'bool',
-          j: 'enum',
-          k: 'ref',
-        };
-        expect(isHotSchema(schema)).toBe(true);
-      });
-
-      it('returns true for empty schema (tag component)', () => {
-        expect(isHotSchema({})).toBe(true);
-      });
-
-      it('returns false for schema with unsupported field type (cold-table path)', () => {
-        const nonScalarSchema = { data: 'string' as unknown as 'f32' };
-        expect(isHotSchema(nonScalarSchema)).toBe(false);
       });
     });
   });

@@ -13,12 +13,6 @@ export type RelationshipTargetComponent<C extends Component = Component> = C & {
   readonly [relationshipTargetBrand]: true;
 };
 
-/** The two immutable roles produced by one relationship declaration. */
-export interface RelationshipDefinition {
-  readonly source: Component<string, ComponentSchema>;
-  readonly target: RelationshipTargetComponent<Component<string, ComponentSchema>>;
-}
-
 export interface RelationshipOptions {
   readonly sourceName: string;
   readonly sourceField: string;

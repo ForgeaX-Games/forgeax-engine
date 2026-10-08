@@ -50,7 +50,7 @@ export async function runInvalidBundleOffsetFixture() {
 }
 
 /** Shared real Browser/Dawn case: cached commands, live buffer data, fresh replay. */
-export async function runRenderBundleFixture() {
+export async function runRenderBundleFixture(warmupFrames = 60) {
   const recorder = value(attachRecorder(backend));
   const adapter = value(await recorder.backend.rhi.requestAdapter());
   const device = value(await adapter.requestDevice());
@@ -128,7 +128,7 @@ export async function runRenderBundleFixture() {
     await device.queue.onSubmittedWorkDone();
   };
   try {
-    for (let i = 0; i < 60; i++) await frame();
+    for (let i = 0; i < warmupFrames; i++) await frame();
     const red = await readbackTexturePixels(device, texture, 32, 32);
     expect(Array.from(red.slice(0, 4))).toEqual([255, 0, 0, 255]);
     // The bundle still references the same uniform; no re-record is necessary.

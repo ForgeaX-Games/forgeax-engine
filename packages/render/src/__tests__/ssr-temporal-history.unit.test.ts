@@ -154,6 +154,35 @@ describe('SSR temporal history owner', () => {
     consumer.abort(afterReset.value, 'build');
   });
 
+  it('holds the only pending candidate copy across commit, abort, reset, resize and dispose', async () => {
+    const device = await createDevice();
+    const scope = DeviceScope.create(47, 'renderer');
+    const owner = createSsrHistoryOwner({ device, scope, width: 4, height: 4 }).unwrap();
+    expect(owner.candidate).toBeUndefined();
+
+    const first = owner.beginFrame().unwrap();
+    expect(owner.candidate).toBe(first);
+    expect(owner.commitFrame(first).ok).toBe(true);
+    expect(owner.candidate).toBeUndefined();
+
+    const aborted = owner.beginFrame().unwrap();
+    owner.abortFrame(aborted, 'submit');
+    expect(owner.candidate).toBeUndefined();
+    expect(owner.commitFrame(aborted).ok).toBe(false);
+
+    owner.beginFrame().unwrap();
+    owner.reset('reflection-generation');
+    expect(owner.candidate).toBeUndefined();
+
+    owner.beginFrame().unwrap();
+    expect(owner.resize(8, 8).ok).toBe(true);
+    expect(owner.candidate).toBeUndefined();
+
+    owner.beginFrame().unwrap();
+    owner.dispose();
+    expect(owner.candidate).toBeUndefined();
+  });
+
   it('retires resized and disabled allocations only after the shared queue fence', async () => {
     const device = await createDevice();
     const scope = DeviceScope.create(45, 'renderer');

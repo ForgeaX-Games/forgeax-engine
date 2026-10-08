@@ -166,6 +166,8 @@ describe('ReplaySession', () => {
           rhiCaps: {
             rgba16floatRenderable: true,
             float32Filterable: true,
+            textureImport: false,
+            externalTexture: false,
             textureCompressionBc: true,
             textureCompressionEtc2: true,
             textureCompressionAstc: true,

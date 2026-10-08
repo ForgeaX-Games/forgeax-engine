@@ -311,3 +311,20 @@ describe('inferAtlasExtent', () => {
     ).toEqual({ atlasWidth: 128, atlasHeight: 128 });
   });
 });
+
+it('accepts sparse Landscape LOD indices into a complete shared vertex allocation', () => {
+  const asset = {
+    kind: 'mesh',
+    attributes: {},
+    vertices: new Float32Array(4 * 12),
+    indices: new Uint16Array([0, 1, 2]),
+    materialSlots: [{ slotName: 'Default' }],
+    submeshes: [
+      { indexOffset: 0, indexCount: 3, vertexCount: 4, topology: 'triangle-list', materialSlot: 0 },
+    ],
+  } as import('@forgeax/engine-types').MeshAsset;
+  expect(validateMeshPayload(asset)).toBeNull();
+  expect(validateMeshPayload({ ...asset, indices: new Uint16Array([0, 1, 4]) })?.code).toBe(
+    'mesh-vertex-stride-mismatch',
+  );
+});

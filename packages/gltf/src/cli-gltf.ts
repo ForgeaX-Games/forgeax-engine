@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { dracoDecoder, meshoptDecoder } from './node-importer-entry.js';
 // @forgeax/engine-gltf/src/cli-gltf — internal producer used by DevKit's
 // unified `forgeax asset import` command. It is deliberately not a package bin.
 //
@@ -253,7 +254,7 @@ async function runWrite(target: string, ctx: AssetCtx): Promise<number> {
       });
     }
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-    docResult = await parseGlb(ab, sourcePath);
+    docResult = await parseGlb(ab, sourcePath, { draco: dracoDecoder, meshopt: meshoptDecoder });
   } else {
     let text: string;
     try {
@@ -285,7 +286,10 @@ async function runWrite(target: string, ctx: AssetCtx): Promise<number> {
       const buf = await readFile(abs);
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
     };
-    docResult = await parseGltf(json, externalLoader, sourcePath);
+    docResult = await parseGltf(json, externalLoader, sourcePath, {
+      draco: dracoDecoder,
+      meshopt: meshoptDecoder,
+    });
   }
   if (!docResult.ok) {
     return emitError(ctx, {

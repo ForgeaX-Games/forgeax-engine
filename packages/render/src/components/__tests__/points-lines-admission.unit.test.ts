@@ -49,7 +49,7 @@ function pointsInput(
 function linesInput(overrides: Partial<PointsLinesAdmissionInput> = {}): PointsLinesAdmissionInput {
   return {
     entity: 8,
-    lines: { widthPx: 1 },
+    lines: { width: 1 },
     mesh: mesh('line-list', 4),
     material: unlitMaterial,
     ...overrides,
@@ -90,9 +90,9 @@ describe('Points and Lines admission', () => {
   });
 
   it('rejects component conflicts and invalid numeric styles before topology', () => {
-    const conflict = admitPointsLines(pointsInput({ lines: { widthPx: 1 } }));
+    const conflict = admitPointsLines(pointsInput({ lines: { width: 1 } }));
     const invalidSize = admitPointsLines(pointsInput({ points: { sizePx: Number.NaN, shape: 0 } }));
-    const invalidWidth = admitPointsLines(linesInput({ lines: { widthPx: 0 } }));
+    const invalidWidth = admitPointsLines(linesInput({ lines: { width: 0 } }));
 
     expectRefusal(conflict, 'points-lines-invalid-style', {
       entity: 7,
@@ -108,9 +108,30 @@ describe('Points and Lines admission', () => {
     expectRefusal(invalidWidth, 'points-lines-invalid-style', {
       entity: 8,
       component: 'Lines',
-      field: 'widthPx',
+      field: 'width',
       value: 0,
     });
+  });
+
+  it('decodes line width units and caps, refusing unknown labels', () => {
+    const admitted = admitPointsLines(linesInput({ lines: { width: 0.5, widthUnits: 1, cap: 1 } }));
+    expect(admitted.ok && admitted.value).toMatchObject({
+      width: 0.5,
+      widthUnits: 'world',
+      cap: 'round',
+    });
+    const defaults = admitPointsLines(linesInput());
+    expect(defaults.ok && defaults.value).toMatchObject({ widthUnits: 'pixels', cap: 'butt' });
+    expectRefusal(
+      admitPointsLines(linesInput({ lines: { width: 1, widthUnits: 7 } })),
+      'points-lines-invalid-style',
+      { entity: 8, component: 'Lines', field: 'widthUnits', value: 7 },
+    );
+    expectRefusal(
+      admitPointsLines(linesInput({ lines: { width: 1, cap: 3 } })),
+      'points-lines-invalid-style',
+      { entity: 8, component: 'Lines', field: 'cap', value: 3 },
+    );
   });
 
   it('rejects unsupported topologies, odd line tails, and mixed candidates atomically', () => {

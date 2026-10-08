@@ -1,4 +1,5 @@
 #define_import_path forgeax_pbr::ibl_shared
+#import forgeax_pbr::brdf::{specularF90}
 
 // @forgeax/engine-shader - ibl-shared.wgsl (feat-20260520-skylight-ibl-cubemap M3 / t42).
 //
@@ -126,7 +127,7 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
 
 // Fresnel-Schlick with roughness dampening for IBL specular.
 fn fresnelSchlickRoughness(cosTheta: f32, F0: vec3<f32>, roughness: f32) -> vec3<f32> {
-  let oneMinusRough = max(vec3<f32>(1.0 - roughness), F0);
+  let oneMinusRough = max(vec3<f32>((1.0 - roughness) * specularF90(F0)), F0);
   let cosineComplement = clamp(1.0 - cosTheta, 0.0, 1.0);
   let squared = cosineComplement * cosineComplement;
   return F0 + (oneMinusRough - F0) * (squared * squared * cosineComplement);

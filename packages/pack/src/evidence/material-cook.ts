@@ -15,6 +15,7 @@ import {
   err,
   isMaterialProgramAbi,
   isMaterialSurfaceDeclaration,
+  isMaterialTextureParameterType,
   MATERIAL_TEXTURE_SLOTS,
   ok,
 } from '@forgeax/engine-types';
@@ -39,24 +40,24 @@ export interface MaterialCookArtifact {
 /** Domain-owned inputs used to compile and select a material program. */
 export interface MaterialCookRasterContext {
   readonly backend: 'webgpu' | 'webgl2' | 'wgpu-native';
-  readonly capability: 'storage-buffer' | 'uniform-fallback';
+  readonly capability: 'storage-buffer' | 'storage-buffer-atmosphere' | 'uniform-fallback';
   readonly pipeline: 'forward' | 'deferred';
   /** Absent is the ordinary material ABI; enabled by the receiving renderer. */
   readonly visibleSurface?: true;
-  readonly geometry: 'mesh' | 'skinned' | 'sprite' | 'sprite-instances';
+  readonly geometry: 'mesh' | 'skinned' | 'sprite' | 'sprite-instances' | 'terrain';
   readonly pass: 'forward' | 'shadow' | 'depth';
   readonly profile: 'forgeax-material-wgsl-v1';
   readonly toolchain: 'naga-oil';
   readonly instrumentation: 'none' | 'validation';
 }
 
-/** The same authored Surface evaluated at a ray hit, with no raster address ABI. */
+/** The same authored Surface evaluated at a ray hit or Card capture, without a submission address ABI. */
 export interface MaterialCookRayContext {
   readonly backend: 'webgpu' | 'wgpu-native';
   readonly capability: 'storage-buffer';
   readonly pipeline: 'ray';
   readonly geometry: 'mesh';
-  readonly pass: 'ray-hit';
+  readonly pass: 'ray-hit' | 'card-capture';
   readonly profile: 'forgeax-material-ray-v1';
   readonly toolchain: 'naga-oil';
   readonly instrumentation: 'none';
@@ -166,6 +167,7 @@ const STANDARD_ROOT_MODULES = new Set([
   'forgeax::default-standard-pbr',
   'forgeax::pbr-skin',
   'forgeax_material::standard',
+  'forgeax_material::terrain',
   'forgeax_material::pbr-skin',
 ]);
 
@@ -228,9 +230,7 @@ export function collectMaterialCookRefs(material: Partial<MaterialAsset>): Mater
       ? new Set<string>(MATERIAL_TEXTURE_SLOTS)
       : new Set(
           material.parameters
-            .filter(
-              (parameter) => parameter.type === 'texture' || parameter.type === 'texture_cube',
-            )
+            .filter((parameter) => isMaterialTextureParameterType(parameter.type))
             .map((parameter) => parameter.name),
         );
   const textures = textureValues(material.values, textureFields);
@@ -567,17 +567,21 @@ export function validateCookedMaterialRecord(
         if (selection.address !== undefined || selection.abi !== undefined)
           return invalid(
             selectionField,
-            'ray-hit programs have no raster submission address or ABI',
+            'Surface derivatives have no raster submission address or ABI',
           );
-        if (selection.entry !== 'cs_surface')
-          return invalid(`${selectionField}.entry`, 'ray-hit Surface entry must be cs_surface');
+        const entry = context.value.pass === 'ray-hit' ? 'cs_surface' : 'vs_card';
+        if (selection.entry !== entry)
+          return invalid(
+            `${selectionField}.entry`,
+            `${context.value.pass} Surface entry must be ${entry}`,
+          );
         const key = JSON.stringify([selection.pass, materialProgramContextKey(context.value)]);
         if (selections.has(key)) return invalid(selectionField, 'ambiguous Pass/context selection');
         selections.add(key);
         programSelections.push({
           pass: selection.pass,
           context: context.value,
-          entry: 'cs_surface',
+          entry,
         });
         continue;
       }
@@ -606,19 +610,26 @@ export function validateCookedMaterialRecord(
         const expectedEntry = address === 'direct' ? abi.directEntry : abi.sceneIndexEntry;
         if (entry !== expectedEntry)
           return invalid(`${selectionField}.entry`, 'entry does not match published ABI');
-        const submissionKey = JSON.stringify([
-          selection.pass,
-          materialProgramContextKey(context.value),
-        ]);
-        const addresses =
-          submissionSelections.get(submissionKey) ?? new Set<MaterialProgramAddress>();
-        addresses.add(address);
-        submissionSelections.set(submissionKey, addresses);
+        if (abi.sceneIndexEntry !== undefined) {
+          const submissionKey = JSON.stringify([
+            selection.pass,
+            materialProgramContextKey(context.value),
+            abi.vertexInputs.some((input) => input.semantic === 'color'),
+          ]);
+          const addresses =
+            submissionSelections.get(submissionKey) ?? new Set<MaterialProgramAddress>();
+          addresses.add(address);
+          submissionSelections.set(submissionKey, addresses);
+        }
       }
       const key = JSON.stringify([
         selection.pass,
         materialProgramContextKey(context.value),
         address,
+        hasAddressFacts &&
+          (selection.abi as MaterialProgramAbi).vertexInputs.some(
+            (input) => input.semantic === 'color',
+          ),
       ]);
       if (selections.has(key)) return invalid(selectionField, 'ambiguous Pass/context selection');
       selections.add(key);
@@ -734,7 +745,7 @@ export function validateMaterialCookProgramContext(
       capability: ['storage-buffer'],
       pipeline: ['ray'],
       geometry: ['mesh'],
-      pass: ['ray-hit'],
+      pass: ['ray-hit', 'card-capture'],
       profile: ['forgeax-material-ray-v1'],
       toolchain: ['naga-oil'],
       instrumentation: ['none'],
@@ -748,9 +759,9 @@ export function validateMaterialCookProgramContext(
   }
   const fields = {
     backend: ['webgpu', 'webgl2', 'wgpu-native'],
-    capability: ['storage-buffer', 'uniform-fallback'],
+    capability: ['storage-buffer', 'storage-buffer-atmosphere', 'uniform-fallback'],
     pipeline: ['forward', 'deferred'],
-    geometry: ['mesh', 'skinned', 'sprite', 'sprite-instances'],
+    geometry: ['mesh', 'skinned', 'sprite', 'sprite-instances', 'terrain'],
     pass: ['forward', 'shadow', 'depth'],
     profile: ['forgeax-material-wgsl-v1'],
     toolchain: ['naga-oil'],

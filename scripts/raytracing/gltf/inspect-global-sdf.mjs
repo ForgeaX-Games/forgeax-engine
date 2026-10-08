@@ -4,11 +4,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   decodeMeshDistanceField,
+  distanceFieldTexel,
   sampleMeshDistanceField,
 } from '../../../packages/geometry/dist/index.mjs';
 import { mat4 } from '../../../packages/math/dist/index.mjs';
 import { packSdfScene } from '../../../packages/render/src/raytracing/sdf-query.ts';
 import { buildFrameModel, decodeTape } from '../../../packages/rhi-debug/dist/index.mjs';
+import { sdfStorageCode } from './sdf-storage.mjs';
 
 const input = resolve(process.argv[2]),
   output = resolve(process.argv[3]);
@@ -136,18 +138,33 @@ for (const row of manifest.cases) {
   );
   for (const [index, source] of sources.entries()) {
     if (source.field.policy?.kind !== 'sampled-visibility') continue;
-    const start = instances.getUint32(index * 144 + 80, true) * 4;
+    const start = instances.getUint32(index * 144 + 80, true);
     const band = instances.getFloat32(index * 144 + 124, true);
     assert.equal(band, source.field.policy.distanceBand);
+    const field = source.field,
+      [nx, ny, nz] = field.dimensions;
+    for (let i = 0; i < nx * ny * nz; i++) {
+      const value = distanceFieldTexel(
+        field,
+        i % nx,
+        Math.floor(i / nx) % ny,
+        Math.floor(i / (nx * ny)),
+      );
+      const code = sdfStorageCode(encoded, start, field.dimensions, i);
+      const expected = Math.max(-32767, Math.min(32767, Math.round((value / band) * 32767)));
+      assert(code === expected, 'captured SDF code must equal original quantized sample');
+    }
     source.field = {
-      ...source.field,
-      // Composition consumes decoded GPU samples, whose quantization is
-      // separately bounded by the storage regression and scalar diagnostics.
-      values: Float32Array.from(source.field.values, (_, i) =>
-        Math.fround((encoded.getInt16(start + i * 2, true) / 32767) * band),
+      ...field,
+      // CPU interpolation consumes the same quantized samples as the captured GPU field.
+      values: Float32Array.from(field.values, (value) =>
+        Math.fround(
+          (Math.max(-32767, Math.min(32767, Math.round((value / band) * 32767))) / 32767) * band,
+        ),
       ),
     };
   }
+
   const bytes = await readFile(resolve(output, `${row.name}.bin`));
   assert.equal(bytes.length, count * 16);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

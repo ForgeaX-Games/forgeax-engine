@@ -12,6 +12,7 @@ import {
   validatePluginAssetSource,
 } from './plugin-asset.js';
 import type { ScriptablePackSceneComponentInput } from './scriptable-pack.js';
+import { isScriptablePackField } from './scriptable-pack-wire.js';
 
 /** Values deliberately stay finite and serialisable at the authoring boundary. */
 export type PackParameterScalar = boolean | number | string;
@@ -788,18 +789,7 @@ export function validatePackDefinition(
     return failure(
       parameterFailure('$', 'a Pack definition object', value, 'definition is not an object'),
     );
-  const unknown = Object.keys(value).find(
-    (key) =>
-      ![
-        'schemaVersion',
-        'packageId',
-        'name',
-        'parameters',
-        'sceneComponents',
-        'runtime',
-        'build',
-      ].includes(key),
-  );
+  const unknown = Object.keys(value).find((key) => !isScriptablePackField(key));
   if (unknown !== undefined) {
     return failure(
       parameterFailure(
@@ -1218,32 +1208,18 @@ export interface DirectPackProjection {
 }
 
 /** Add the computed GUIDs needed by the ordinary Pack v2 publication path. */
-export function projectDirectPackJson(
-  value: ParsedDirectPackJson | DirectPackJson,
-): Result<DirectPackProjection, PackAuthoringError> {
-  const parsed = 'format' in value ? ok(value) : parsePackSourceJson(value);
-  if (!parsed.ok) return parsed;
-  if (parsed.value.format !== 'direct') {
-    return failure(
-      authoringError(
-        'pack-parameter-invalid',
-        'a direct v3 pack.json',
-        'projectDirectPackJson accepts the direct branch only',
-        { observed: parsed.value.format },
-      ),
-    );
-  }
+export function projectDirectPackJson(value: ParsedDirectPackJson): DirectPackProjection {
   const assets: DirectPackAssetProjection[] = [];
-  for (const [sourceKey, entry] of Object.entries(parsed.value.assets).sort(([left], [right]) =>
+  for (const [sourceKey, entry] of Object.entries(value.assets).sort(([left], [right]) =>
     left.localeCompare(right),
   )) {
     assets.push({
       ...entry,
-      guid: AssetGuidCodec.format(AssetGuidCodec.derive(parsed.value.packageId, sourceKey)),
+      guid: AssetGuidCodec.format(AssetGuidCodec.derive(value.packageId, sourceKey)),
       sourceKey,
     });
   }
-  return ok({ packageId: PackageId.format(parsed.value.packageId), assets: Object.freeze(assets) });
+  return { packageId: PackageId.format(value.packageId), assets: Object.freeze(assets) };
 }
 
 export interface PackParameterRootSubject {
@@ -1405,8 +1381,6 @@ export async function resolvePackParameterInheritance(
 
   return visit(subject, []);
 }
-
-export const resolvePackInheritance = resolvePackParameterInheritance;
 
 export const PACK_AUTHORING_OPERATION_IDS = [
   'asset.list',

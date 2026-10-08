@@ -1030,7 +1030,7 @@ describe('incremental physics ECS reconciliation', () => {
     expect(pw.getBodyCount()).toBe(0);
     expect(pw.getKinematicControllerStates()).toEqual([]);
     expect(() => pw._syncFromEcs(world, Transform)).toThrow(/disposed/);
-    expect(() => pw.setMoveContext(world, Transform, CharacterController)).toThrow(/disposed/);
+    expect(() => pw.setMoveContext(world, Transform)).toThrow(/disposed/);
   });
 
   it('bootstraps once, then performs no query, materialization, or Rapier setters on warm static ticks', async () => {
@@ -1620,6 +1620,36 @@ describe('incremental physics ECS reconciliation', () => {
     }
 
     describe('moveAndSlide basic motion (AC-01/02/03)', () => {
+      it('unparented KCC motion does not manufacture component absence errors', async () => {
+        const RAPIER = await loadOrNull();
+        expect(RAPIER).toBeDefined();
+        if (!RAPIER) throw new Error('Real Rapier is required for this regression');
+        const world = prepareWorld();
+        const pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        registerPhysicsSystems(world);
+        spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [10, 0.5, 10] });
+        const character = spawnCharacter(world, [0, 0, 0]);
+        runPhysicsTicks(world, 2);
+        const reads = vi.spyOn(world, 'get');
+        try {
+          for (let step = 0; step < 20; step++) {
+            pw.moveAndSlide(character, Float32Array.of(0.05, -0.01, 0) as never);
+          }
+          expect(tfPos(world, character).x).toBeGreaterThan(0.9);
+          const missing = reads.mock.results.filter(
+            (result) =>
+              result.type === 'return' &&
+              !result.value.ok &&
+              result.value.error.code === 'component-not-present',
+          );
+          expect(missing).toHaveLength(0);
+        } finally {
+          reads.mockRestore();
+          pw.dispose();
+        }
+      });
+
       it('AC-01 flat walk: actualDelta tracks desiredDelta and grounded=true', async () => {
         const RAPIER = await loadOrNull();
         if (!RAPIER) return;
@@ -1724,6 +1754,34 @@ describe('incremental physics ECS reconciliation', () => {
         expect(tfPos(world, a).x - startA).toBeGreaterThan(0.3);
         // Character B moved the other way by a similar magnitude.
         expect(tfPos(world, b).x).toBeLessThan(10 - 0.3);
+      });
+
+      it('updates attached collider world positions without changing their local offsets', async () => {
+        const RAPIER = await loadOrNull();
+        if (!RAPIER) return;
+        const world = prepareWorld(),
+          pw = createRapier3DPhysicsWorld(RAPIER);
+        world.insertResource('PhysicsWorld', pw);
+        registerPhysicsSystems(world);
+        spawnStaticBox(world, { pos: [0, -0.85, 0], halfExtents: [30, 0.5, 30] });
+        const character = spawnCharacter(world, [0, 0, 0]);
+        runPhysicsTicks(world, 2);
+        const body = rapierBodyFor(pw, character);
+        const attached = pw.raw.createCollider(
+          RAPIER.ColliderDesc.ball(0.1).setTranslation(0, 3, 0).setSensor(true),
+          body,
+        );
+        for (let step = 0; step < 5; step++) {
+          pw.moveAndSlide(character, Float32Array.of(0.1, -0.01, 0) as never);
+          pw.moveAndSlide(character, Float32Array.of(0.1, -0.01, 0) as never);
+          expect(attached.translation().x).toBeCloseTo(body.translation().x, 5);
+          expect(attached.translation().y - body.translation().y).toBeCloseTo(3, 5);
+          expect(attached.translationWrtParent()).toEqual({ x: 0, y: 3, z: 0 });
+          runPhysicsTicks(world);
+          expect(attached.translation().x).toBeCloseTo(body.translation().x, 5);
+        }
+        expect(tfPos(world, character).x).toBeGreaterThan(0.8);
+        pw.dispose();
       });
 
       it('overlapping SENSOR does not jam a grounded character (sensors are not obstacles)', async () => {

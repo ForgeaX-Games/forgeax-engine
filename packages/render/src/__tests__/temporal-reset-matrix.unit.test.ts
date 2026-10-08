@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TEMPORAL_TAAU_DEPENDENCY_STATUS } from '../temporal/temporal-view';
 import { createTemporalView, HALTON_23_8, resolveTemporalReset } from '../temporal/view';
-import { VOLUME_TAAU_DEPENDENCY } from '../volume/temporal';
 
 const base = () =>
   createTemporalView({
@@ -107,10 +106,7 @@ describe('TemporalView reset matrix', () => {
     expect(next.jitter).toEqual(HALTON_23_8[1]);
   });
 
-  it('records the renderer TAAU owner as available while volume stays deferred', () => {
+  it('records the renderer TAAU owner as available', () => {
     expect(TEMPORAL_TAAU_DEPENDENCY_STATUS).toBe('available');
-    expect(VOLUME_TAAU_DEPENDENCY.status).toBe('dependency-deferred');
-    expect(VOLUME_TAAU_DEPENDENCY.siblingFeature).toBe('feat-20260831-taau-dynamic-resolution');
-    expect(VOLUME_TAAU_DEPENDENCY.candidateShas).toHaveLength(2);
   });
 });

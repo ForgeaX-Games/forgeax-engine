@@ -31,7 +31,7 @@
     "@forgeax/engine-shader": "workspace:*",
     "@forgeax/engine-types": "workspace:*",
     "@noble/hashes": "^2.2.0",
-    "@webgpu/types": "^0.1.71"
+    "@webgpu/types": "^0.1.74"
   },
   "devDependencies": {
     "@types/node": "^20.14.0"

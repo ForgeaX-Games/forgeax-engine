@@ -4,8 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import {
   expandShaderManifestPublication,
-  type MaterialShaderArtifactReceipt,
-  readShaderManifestPublication,
+  type MaterialShaderManifestEntry,
 } from '@forgeax/engine-shader';
 import { SURFACE_SLOT_MODULE } from './engine-inputs/load-engine-shader-entries.js';
 import {
@@ -20,43 +19,38 @@ export interface ShaderManifestInput {
   readonly bindings: string;
 }
 
-export interface SharedMaterialShaderManifestEntry {
-  readonly identifier: string;
-  readonly sourcePath: string;
-  readonly composedWgsl: string;
-  readonly paramSchema: string;
-  readonly variants: readonly {
-    readonly definesKey: string;
-    readonly defines: Record<string, boolean>;
-    readonly composedWgsl: string;
-    readonly receipt?: MaterialShaderArtifactReceipt;
-  }[];
-  readonly uvSetCount?: number;
-  readonly receipt?: MaterialShaderArtifactReceipt;
-}
-
-export const SHARED_ENGINE_SHADERS_CLASS = 'shared-engine-shaders';
-export const SHARED_ENGINE_SHADERS_MANIFEST = 'shared-build-inputs/shaders/manifest.json';
-
-/** Packaged profiles are read during synchronous Vite plugin construction. */
-function readPackagedPublication(value: unknown): {
+/** Node publications share strict expansion and native source-byte verification. */
+function readNodePublication(value: unknown): {
   entries: ShaderManifestInput[];
-  materialShaders: SharedMaterialShaderManifestEntry[];
+  materialShaders: MaterialShaderManifestEntry[];
+  sourceFragments: ReadonlyMap<string, readonly string[]>;
 } {
   const expanded = expandShaderManifestPublication(value);
+  // Retain the admitted transport blocks with these inputs, never in a process-global cache.
+  const sourceFragments = new Map<string, readonly string[]>();
+  const publication = value as {
+    fragments: string[];
+    sources: Record<string, number[]>;
+  };
   for (const [digest, source] of expanded.sources) {
     if (createHash('sha256').update(source).digest('hex') !== digest) {
-      throw new Error(`packaged shader source digest mismatch: ${digest}`);
+      throw new Error(`shader source digest mismatch: ${digest}`);
     }
+    sourceFragments.set(
+      source,
+      (publication.sources[digest] as number[]).map(
+        (index) => publication.fragments[index] as string,
+      ),
+    );
   }
   const manifest = expanded.manifest as {
     entries?: ShaderManifestInput[];
-    materialShaders?: SharedMaterialShaderManifestEntry[];
+    materialShaders?: MaterialShaderManifestEntry[];
   };
   if (!Array.isArray(manifest?.entries) || !Array.isArray(manifest.materialShaders)) {
-    throw new Error('packaged shader manifest is missing rows');
+    throw new Error('shader manifest is missing rows');
   }
-  return { entries: manifest.entries, materialShaders: manifest.materialShaders };
+  return { entries: manifest.entries, materialShaders: manifest.materialShaders, sourceFragments };
 }
 
 /**
@@ -68,7 +62,7 @@ function readPackagedPublication(value: unknown): {
  */
 export function hasUsablePackagedEngineShaderInputs(input: {
   readonly entries: readonly ShaderManifestInput[];
-  readonly materialShaders: readonly SharedMaterialShaderManifestEntry[];
+  readonly materialShaders: readonly MaterialShaderManifestEntry[];
 }): boolean {
   return (
     input.entries.length > 0 &&
@@ -115,8 +109,9 @@ export function loadPackagedEngineShaderInputs(
   hdrpSsao: boolean,
 ): {
   readonly entries: ShaderManifestInput[];
-  readonly materialShaders: SharedMaterialShaderManifestEntry[];
+  readonly materialShaders: MaterialShaderManifestEntry[];
   readonly imports: Record<string, string>;
+  readonly sourceFragments: ReadonlyMap<string, readonly string[]>;
 } | null {
   if (process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD === '1') return null;
   const require = createRequire(import.meta.url);
@@ -142,21 +137,9 @@ export function loadPackagedEngineShaderInputs(
     shaderSourceRoot = undefined;
   }
   if (!packagedProfileMatchesSource(inputRoot, shaderSourceRoot)) return null;
-  const manifest = readPackagedPublication(JSON.parse(readFileSync(manifestPath, 'utf8')));
+  const manifest = readNodePublication(JSON.parse(readFileSync(manifestPath, 'utf8')));
   const imports = JSON.parse(readFileSync(importsPath, 'utf8')) as Record<string, string>;
-  if (manifest.entries === undefined || manifest.materialShaders === undefined) {
-    throw new Error(`packaged engine shader manifest is incomplete: ${manifestPath}`);
-  }
-  if (
-    !hasUsablePackagedEngineShaderInputs(
-      manifest as {
-        readonly entries: ShaderManifestInput[];
-        readonly materialShaders: SharedMaterialShaderManifestEntry[];
-      },
-    )
-  ) {
-    return null;
-  }
+  if (!hasUsablePackagedEngineShaderInputs(manifest)) return null;
   if (typeof imports[SURFACE_SLOT_MODULE] !== 'string') {
     throw new Error(
       `packaged engine shader imports are missing ${SURFACE_SLOT_MODULE}: ${importsPath}`,
@@ -166,6 +149,7 @@ export function loadPackagedEngineShaderInputs(
     entries: projectOptionalEngineEntries(manifest.entries, hdrpSsao),
     materialShaders: manifest.materialShaders,
     imports,
+    sourceFragments: manifest.sourceFragments,
   };
 }
 
@@ -194,19 +178,10 @@ export function projectShaderManifestEntries(
   return [...entries.values()].map((entry) => ({ ...entry, glsl: '' }));
 }
 
-export function mergeSharedEngineShaderEntries<T extends ShaderManifestInput>(
-  appEntries: ReadonlyMap<string, T>,
-  sharedEntries: readonly T[] = [],
-): Map<string, T> {
-  const merged = new Map<string, T>();
-  for (const entry of sharedEntries) merged.set(`shared:${entry.hash}`, entry);
-  for (const [key, entry] of appEntries) merged.set(key, entry);
-  return merged;
-}
-
 export async function loadSharedEngineShaderManifest(manifestPath: string): Promise<{
   readonly entries: ShaderManifestInput[];
-  readonly materialShaders: SharedMaterialShaderManifestEntry[];
+  readonly materialShaders: MaterialShaderManifestEntry[];
+  readonly sourceFragments: ReadonlyMap<string, readonly string[]>;
 }> {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
     readonly schemaVersion?: number;
@@ -234,17 +209,5 @@ export async function loadSharedEngineShaderManifest(manifestPath: string): Prom
       }
     }
   }
-  const shaderManifest = (await readShaderManifestPublication(
-    JSON.parse(readFileSync(resolve(repositoryRoot, path), 'utf8')),
-  )) as {
-    readonly entries?: ShaderManifestInput[];
-    readonly materialShaders?: SharedMaterialShaderManifestEntry[];
-  };
-  if (shaderManifest.entries === undefined) {
-    throw new Error(`shared engine shader payload lacks entries: ${manifestPath}`);
-  }
-  if (shaderManifest.materialShaders === undefined) {
-    throw new Error(`shared engine shader payload lacks material shaders: ${manifestPath}`);
-  }
-  return { entries: shaderManifest.entries, materialShaders: shaderManifest.materialShaders };
+  return readNodePublication(JSON.parse(readFileSync(resolve(repositoryRoot, path), 'utf8')));
 }

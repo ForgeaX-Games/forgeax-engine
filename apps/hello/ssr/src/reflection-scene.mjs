@@ -1,15 +1,17 @@
 import { HANDLE_CUBE, HANDLE_SPHERE } from '@forgeax/engine-assets-runtime';
 import { createPlaneGeometry } from '@forgeax/engine-geometry';
 import {
-  ANTIALIAS_NONE, ANTIALIAS_TAA, Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer,
+  ANTIALIAS_NONE, ANTIALIAS_TAA, Camera, DirectionalLight, DynamicResolution, Materials, MeshFilter, MeshRenderer,
   ReflectionProbe, ScreenSpaceReflection, Skylight, perspective,
 } from '@forgeax/engine-render';
 import { Transform } from '@forgeax/engine-scene';
+import { spawnAtmosphereScene } from './atmosphere-scene.mjs';
 import { createReflectionTexture } from './reflection-texture.mjs';
 
 // Browser, Dawn correctness, and performance share this authored scene.
-export const SSR_FIXTURE_REVISION = 'textured-reflection-scenes-v8';
-export const SSR_FIXTURES = Object.freeze(['cube', 'tiles', 'objects', 'probe-updates', 'underside']);
+export const SSR_FIXTURE_REVISION = 'textured-reflection-scenes-v9';
+export const SSR_ANTIALIAS_MODES = Object.freeze(['none', 'taa', 'taau', 'taa-dynamic']);
+export const SSR_FIXTURES = Object.freeze(['cube', 'tiles', 'objects', 'no-hit', 'probe-updates', 'underside', 'atmosphere']);
 export const SSR_PARAMETERS = Object.freeze({ maxDistance: 12, thickness: 0.2, maxRoughness: 0.65 });
 
 export function resolveSsrFixture(value = 'tiles') {
@@ -19,7 +21,8 @@ export function resolveSsrFixture(value = 'tiles') {
 
 export function spawnReflectionScene(world, aspect = 1, fixture = 'tiles', antialias = 'none') {
   resolveSsrFixture(fixture);
-  if (antialias !== 'none' && antialias !== 'taa') throw new Error(`Unknown SSR antialias: ${antialias}`);
+  if (!SSR_ANTIALIAS_MODES.includes(antialias)) throw new Error(`Unknown SSR antialias: ${antialias}`);
+  if (fixture === 'atmosphere') return spawnAtmosphereScene(world,aspect);
   const texture = world.allocSharedRef('TextureAsset', createReflectionTexture());
   let movingObject;
   let receiver;
@@ -28,7 +31,12 @@ export function spawnReflectionScene(world, aspect = 1, fixture = 'tiles', antia
     { component: MeshFilter, data: { assetHandle: geometry } },
     { component: MeshRenderer, data: { materials: [world.allocSharedRef('MaterialAsset', Materials.standard(material))] } },
   ).unwrap();
-  if (fixture === 'cube') {
+  if (fixture === 'no-hit') {
+    // A reflective receiver without reflected scene objects still traces the
+    // admitted distance. Keep the normal ray budget, not an early-exit setting.
+    receiver = mesh(HANDLE_CUBE, [0, -1.1, 0], [9, 0.15, 9],
+      { baseColor: [0.75, 0.8, 0.85, 1], metallic: 0.92, roughness: 0.12 });
+  } else if (fixture === 'cube') {
     const plane = createPlaneGeometry(10, 10);
     if (!plane.ok) throw plane.error;
     mesh(world.allocSharedRef('MeshAsset', plane.value), [0, -1, 0], [1, 1, 1],
@@ -108,14 +116,14 @@ export function spawnReflectionScene(world, aspect = 1, fixture = 'tiles', antia
       }
     }
   }
-  world.spawn({ component: DirectionalLight,
+  const sun = world.spawn({ component: DirectionalLight,
     data: { direction: [-0.4, -1, -0.3], color: [1, 1, 1], intensity: 2, castShadow: false },
   }).unwrap();
   const skylight = world.spawn({ component: Skylight,
     data: { color: [0.55, 0.7, 1], intensity: 1 },
   }).unwrap();
   let reflectionProbe;
-  if (fixture !== 'objects') {
+  if (fixture !== 'objects' && fixture !== 'no-hit') {
     // The bounded fixtures exercise local-probe selection. The objects
     // showcase intentionally stays Skylight-lit + SSR with no local probe:
     // its large floor extends far beyond any small probe box and would
@@ -130,7 +138,7 @@ export function spawnReflectionScene(world, aspect = 1, fixture = 'tiles', antia
           resolution: 64, updateIntent: 0, invalidationVersion: 1 } },
     ).unwrap();
   }
-  const objectShowcase = fixture === 'objects' || fixture === 'probe-updates';
+  const objectShowcase = fixture === 'objects' || fixture === 'probe-updates' || fixture === 'no-hit';
   const eyeHeight = (objectShowcase || fixture === 'cube') ? 3 : fixture === 'underside' ? -0.3 : 0.8;
   const targetHeight = (objectShowcase || fixture === 'cube') ? 0 : -0.45;
   const pitch = -Math.atan2(eyeHeight - targetHeight, Math.hypot(6, 6));
@@ -142,10 +150,17 @@ export function spawnReflectionScene(world, aspect = 1, fixture = 'tiles', antia
         -Math.sin(pitch / 2) * Math.sin(yaw / 2),
         Math.cos(pitch / 2) * Math.cos(yaw / 2)] } },
     { component: Camera, data: { ...perspective({ fov: Math.PI / 3, aspect, near: 0.1, far: 20 }),
-      clearColor: [0.04, 0.06, 0.1, 1], antialias: antialias === 'taa' ? ANTIALIAS_TAA : ANTIALIAS_NONE } },
+      clearColor: [0.04, 0.06, 0.1, 1], antialias: antialias === 'none' ? ANTIALIAS_NONE : ANTIALIAS_TAA } },
     { component: ScreenSpaceReflection, data: SSR_PARAMETERS },
   ).unwrap();
+  if (antialias === 'taau' || antialias === 'taa-dynamic') {
+    world.addComponent(camera, { component: DynamicResolution, data:
+      antialias === 'taau' ? { targetGpuMs: 16.67, minScale: 0.67, maxScale: 0.67 }
+        : { targetGpuMs: 1, minScale: 0.5, maxScale: 1 },
+    }).unwrap();
+  }
   return {
+    sun,
     skylight,
     ...(reflectionProbe === undefined ? {} : { reflectionProbe }),
     camera,

@@ -1,4 +1,7 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#if TERRAIN_GEOMETRY_AVAILABLE == true
+#import forgeax_material::terrain_vertex::{terrainVertex, terrainNormal}
+#endif
 #pragma variant_axis SKINNING_DISABLED
 #pragma variant_axis GPU_DRIVEN_SCENE_INDEX_AVAILABLE
 #pragma variant_axis GPU_DRIVEN_SCENE_INDEX_EXPLICIT
@@ -25,6 +28,7 @@
 
 struct VsInput {
   @location(0) position : vec3<f32>,
+#ifndef OPAQUE_SHADOW_COVERAGE_AVAILABLE
   @location(1) normal : vec3<f32>,
   @location(2) uv : vec2<f32>,
   @location(3) tangent : vec4<f32>,
@@ -38,6 +42,7 @@ struct VsInput {
   @location(10) uv5 : vec2<f32>,
   @location(11) uv6 : vec2<f32>,
   @location(12) uv7 : vec2<f32>,
+#endif
 #if SKINNING_DISABLED == false
   @location(4) skinIndex : vec4<u32>,
   @location(5) skinWeight : vec4<f32>,
@@ -45,20 +50,24 @@ struct VsInput {
 };
 
 struct VsOut {
-  @builtin(position) clip : vec4<f32>,
-  @location(0) positionOS : vec3<f32>,
+  // Surface specialization must not perturb identical caster position arithmetic.
+  @builtin(position) @invariant clip : vec4<f32>,
   @location(1) positionWS : vec3<f32>,
+#ifndef OPAQUE_SHADOW_COVERAGE_AVAILABLE
+  @location(0) positionOS : vec3<f32>,
   @location(2) normalWS : vec3<f32>,
   @location(3) tangentWS : vec4<f32>,
-  @location(4) surfaceUv : vec2<f32>,
-  @location(5) uv1 : vec2<f32>,
-  @location(6) uv2 : vec2<f32>,
-  @location(7) uv3 : vec2<f32>,
-  @location(8) uv4 : vec2<f32>,
-  @location(9) uv5 : vec2<f32>,
+  // UV sets travel in pairs so the flat object basis fits the same budget.
+  @location(4) uv0And1 : vec4<f32>,
+  @location(5) uv2And3 : vec4<f32>,
+  @location(6) uv4And5 : vec4<f32>,
   @location(10) uv6And7 : vec4<f32>,
+  @location(7) @interpolate(flat) objectBasis0 : vec3<f32>,
+  @location(8) @interpolate(flat) objectBasis1 : vec3<f32>,
+  @location(9) @interpolate(flat) objectBasis2 : vec3<f32>,
 #if VERTEX_COLOR_AVAILABLE == true
   @location(12) color : vec4<f32>,
+#endif
 #endif
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
   @location(11) @interpolate(flat) materialAddress : vec2<u32>,
@@ -88,6 +97,9 @@ fn _cascadeLightViewProj(layer : u32) -> mat4x4<f32> {
 }
 
 fn standardVertexPosition(in : VsInput) -> vec3<f32> {
+#if TERRAIN_GEOMETRY_AVAILABLE == true
+  return terrainVertex(in.position, terrainHeightTexture, material.terrainSection, material.terrainLod, material.terrainNeighbors);
+#else
 #ifdef DISPLACEMENT_TEXTURE_AVAILABLE
   if (standardUsesDisplacementTexture()) {
     return displaceVertex(in.position, in.normal, displacementTexture, displacementTexture_sampler,
@@ -97,6 +109,7 @@ fn standardVertexPosition(in : VsInput) -> vec3<f32> {
   }
 #endif
   return in.position;
+#endif
 }
 
 fn shadowVertex(in : VsInput, idx : u32) -> VsOut {
@@ -122,8 +135,11 @@ fn shadowVertex(in : VsInput, idx : u32) -> VsOut {
     palette[paletteBase + in.skinIndex.z] * in.skinWeight.z +
     palette[paletteBase + in.skinIndex.w] * in.skinWeight.w;
   let worldPos = skinMatrix * vec4<f32>(localPosition, 1.0);
+#ifndef OPAQUE_SHADOW_COVERAGE_AVAILABLE
   let worldNormal = normalize((skinMatrix * vec4<f32>(in.normal, 0.0)).xyz);
   let worldTangent = normalize((skinMatrix * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
+  let objectToWorld = skinMatrix;
+#endif
 #else
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
   let worldMatrix = sceneDraw.world * SCENE_INDEX_LOCAL_IDENTITY;
@@ -131,8 +147,11 @@ fn shadowVertex(in : VsInput, idx : u32) -> VsOut {
   let worldMatrix = meshes[0u].worldFromLocal * instances[idx].localFromInstance;
 #endif
   let worldPos = worldMatrix * vec4<f32>(localPosition, 1.0);
+#ifndef OPAQUE_SHADOW_COVERAGE_AVAILABLE
   let worldNormal = normalize((worldMatrix * vec4<f32>(in.normal, 0.0)).xyz);
   let worldTangent = normalize((worldMatrix * vec4<f32>(in.tangent.xyz, 0.0)).xyz);
+  let objectToWorld = worldMatrix;
+#endif
 #endif
 
   var out : VsOut;
@@ -141,19 +160,35 @@ fn shadowVertex(in : VsInput, idx : u32) -> VsOut {
   } else {
     out.clip = _cascadeLightViewProj(shadowCasterCascade.index) * worldPos;
   }
-  out.positionOS = localPosition;
   out.positionWS = worldPos.xyz;
+#ifndef OPAQUE_SHADOW_COVERAGE_AVAILABLE
+  out.positionOS = localPosition;
+  #if TERRAIN_GEOMETRY_AVAILABLE == true
+  let terrainN = terrainNormal(in.position, terrainHeightTexture, material.terrainSection, material.terrainLod, material.terrainNeighbors);
+  out.normalWS = normalize((objectToWorld * vec4<f32>(terrainN, 0.0)).xyz);
+#else
   out.normalWS = worldNormal;
+#endif
+  #if TERRAIN_GEOMETRY_AVAILABLE == true
+  let terrainT = normalize(vec3<f32>(terrainN.y, -terrainN.x, 0.0));
+  out.tangentWS = vec4<f32>(normalize((objectToWorld * vec4<f32>(terrainT, 0.0)).xyz), -1.0);
+#else
   out.tangentWS = vec4<f32>(worldTangent, in.tangent.w);
-  out.surfaceUv = in.uv;
-  out.uv1 = in.uv1;
-  out.uv2 = in.uv2;
-  out.uv3 = in.uv3;
-  out.uv4 = in.uv4;
-  out.uv5 = in.uv5;
+#endif
+  #if TERRAIN_GEOMETRY_AVAILABLE == true
+  out.uv0And1 = vec4<f32>((localPosition.xz - material.terrainSection.xy) / material.terrainSection.z, in.uv1);
+#else
+  out.uv0And1 = vec4<f32>(in.uv, in.uv1);
+#endif
+  out.uv2And3 = vec4<f32>(in.uv2, in.uv3);
+  out.uv4And5 = vec4<f32>(in.uv4, in.uv5);
+  out.objectBasis0 = objectToWorld[0].xyz;
+  out.objectBasis1 = objectToWorld[1].xyz;
+  out.objectBasis2 = objectToWorld[2].xyz;
   out.uv6And7 = vec4<f32>(in.uv6, in.uv7);
 #if VERTEX_COLOR_AVAILABLE == true
   out.color = in.color;
+#endif
 #endif
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
   out.materialAddress = vec2<u32>(materialIndex, lodFadeBits);
@@ -186,6 +221,11 @@ fn evaluateShadowSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
 #ifdef MATERIAL_CLIPPING_AVAILABLE
   applyLocalClipping(in.positionWS, true, array<vec4<f32>, 6>(material.clippingPlaneA, material.clippingPlaneB, material.clippingPlaneC, material.clippingPlaneD, material.clippingPlaneE, material.clippingPlaneF), material.clippingControl);
 #endif
+#ifdef OPAQUE_SHADOW_COVERAGE_AVAILABLE
+  // The selected opaque Surface has no geometry inputs. Keep clipping and
+  // LOD coverage above, without asking its caster for unused UVs or tangents.
+  return evaluate_surface(SurfaceInput());
+#else
   let viewDirectionWS = normalize(view.cameraPos - in.positionWS);
   let input = SurfaceInput(
     in.positionOS,
@@ -194,12 +234,12 @@ fn evaluateShadowSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
     in.normalWS,
     in.tangentWS,
     viewDirectionWS,
-    in.surfaceUv,
-    in.uv1,
-    in.uv2,
-    in.uv3,
-    in.uv4,
-    in.uv5,
+    in.uv0And1.xy,
+    in.uv0And1.zw,
+    in.uv2And3.xy,
+    in.uv2And3.zw,
+    in.uv4And5.xy,
+    in.uv4And5.zw,
     in.uv6And7.xy,
     in.uv6And7.zw,
 #if VERTEX_COLOR_AVAILABLE == true
@@ -209,6 +249,8 @@ fn evaluateShadowSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
 #endif
     frontFacing,
     vec4<f32>(0.0), vec4<f32>(0.0),
+    mat3x3<f32>(in.objectBasis0, in.objectBasis1, in.objectBasis2),
+    view.fogHeightOpacity.w,
   );
 #if GPU_DRIVEN_SCENE_INDEX_AVAILABLE == true
 #if ALPHA_MASK == true
@@ -218,6 +260,7 @@ fn evaluateShadowSurface(in : VsOut, frontFacing : bool) -> SurfaceData {
 #endif
 #else
   return evaluate_surface(input);
+#endif
 #endif
 }
 

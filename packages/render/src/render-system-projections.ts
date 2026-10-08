@@ -1,10 +1,6 @@
 import type { World } from '@forgeax/engine-ecs';
 import type { RenderReadLease } from '@forgeax/engine-ecs/projection';
-import type {
-  LodOcclusionInspection,
-  LodOcclusionInspectionRow,
-  LodOcclusionWorldInspection,
-} from './inspection-types';
+import type { LodOcclusionInspectionRow, LodOcclusionWorldInspection } from './inspection-types';
 import type { RenderResourceScope } from './publication/resource-scope';
 import { worldEntityKey } from './record/frame-snapshot';
 import type { CameraSnapshot, DrawOwnerOptions } from './render-contract';
@@ -39,11 +35,6 @@ export function canonicalizeWorldComposition(
   };
 }
 
-interface LodInspectionQuerySummary {
-  readonly used: number;
-  readonly capacity: number;
-}
-
 export function createLodWorldInspections(
   worlds: readonly RenderResourceScope[],
   renderables: readonly RenderableSnapshot[],
@@ -52,12 +43,9 @@ export function createLodWorldInspections(
   frameId: number,
   worldKeys: readonly number[],
   slots: ReadonlyMap<number, { readonly slot: number; readonly generation: number }>,
-  query: LodInspectionQuerySummary,
-  fallback: LodOcclusionInspection['fallback'],
-  degradation: LodOcclusionInspection['degradation'],
 ): readonly LodOcclusionWorldInspection[] {
   // The CPU projection knows which renderables belong to each World, but it
-  // does not receive the GPU selector/query counters split by World from the
+  // does not receive the GPU selector counters split by World from the
   // same submit. Keep these rows available for diagnostics while explicitly
   // marking their attribution unavailable; producers must not promote them
   // to World-reorder evidence by inferring facts from array order.
@@ -128,10 +116,6 @@ export function createLodWorldInspections(
       generation: frameId,
       count: { candidates: candidateCount, visible, occluded: candidateCount - visible },
       lodHistogram: [{ level: 0, count: candidateCount }],
-      queryLatencyUs: { median: 0, p95: 0, last: 0 },
-      pagePressure: query,
-      fallback,
-      degradation,
       samples: samples.map((candidate, index) => ({
         primitiveSlot:
           slots.get(

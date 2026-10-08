@@ -44,12 +44,7 @@ describe('recovery candidate preparation contract', () => {
     const start = recoveryCandidateSource.indexOf('const createRecoveryCandidateFrameState');
     const end = recoveryCandidateSource.indexOf('const publishRecoveryGraphCandidate', start);
     const candidate = recoveryCandidateSource.slice(start, end);
-    for (const field of [
-      'ssrHistoryOwner',
-      'ssrHistoryCandidate',
-      'ssrSpatialAdmission',
-      'ssrTemporalParamsPayload',
-    ]) {
+    for (const field of ['ssrHistoryOwner', 'ssrSpatialAdmission', 'ssrTemporalParamsPayload']) {
       expect(candidate).toContain(`${field}: undefined`);
     }
     // Initial readiness and recovery await the same pipeline preparation owner.
@@ -238,7 +233,5 @@ describe('recovery candidate preparation contract', () => {
     expect(retire).toBeGreaterThanOrEqual(0);
     expect(publication).toBeGreaterThan(retire);
     expect(publish).toContain('candidate.frameState.compiledFrameGraph = null');
-    expect(publish).toContain('candidate.frameState.compiledFrameGraphTopologyKey = null');
-    expect(publish).toContain('candidate.frameState.perFrameGraph = null');
   });
 });

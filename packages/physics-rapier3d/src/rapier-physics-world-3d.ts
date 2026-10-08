@@ -1,4 +1,8 @@
+import type { ColliderDesc, Shape } from '@dimforge/rapier3d-compat';
+import { RuntimeMeshVertices, resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import { componentDefinition, Disabled, FixedTime, FixedUpdate } from '@forgeax/engine-ecs';
+import { validateMeshCollisionAttachment } from '@forgeax/engine-geometry';
+import type { MeshAsset, MeshCollision } from '@forgeax/engine-types';
 // @forgeax/engine-physics-rapier3d — RapierPhysicsWorld3D class and three-phase
 // tick systems (syncBackend / stepSimulation / writeback).
 //
@@ -23,7 +27,11 @@ import { createStateProjection, type StateProjection } from '@forgeax/engine-ecs
 import { mat4, quat, type Vec3, vec3 } from '@forgeax/engine-math';
 import {
   CharacterController,
+  type CharacterControllerData,
   Collider,
+  type ColliderData,
+  ColliderShapeValue,
+  type ColliderSnapshot,
   CollidingEntities,
   cloneDerivedPhysicsInput,
   colliderShapeFromF32,
@@ -36,9 +44,11 @@ import {
   type DerivedPhysicsMotion,
   type DerivedPhysicsPublication,
   type DerivedPhysicsSnapshot,
+  type DerivedShapeInput,
   type DerivedShapeSeamInput,
   type DerivedShapeState,
   estimateDerivedPhysicsInputBytes,
+  type NormalizedDerivedShapeInput,
   PHYSICS_ERROR_HINTS,
   type PhysicsConstraintInput,
   type PhysicsContactObservation,
@@ -54,10 +64,11 @@ import {
   RigidBody,
   registerPhysicsComponents,
   rigidBodyTypeFromF32,
-  type VoxelShapeInput,
+  snapshotCollider,
+  syncTerrainHeightfields,
   validateMassProperties,
 } from '@forgeax/engine-physics';
-import { ChildOf } from '@forgeax/engine-scene';
+import { ChildOf, GlobalTransform } from '@forgeax/engine-scene';
 import { err, ok, type Result } from '@forgeax/engine-types';
 import type { Rapier3DModule } from './wasm-loader.js';
 
@@ -91,19 +102,6 @@ interface PhysicsTransform3D {
   readonly scale: { readonly x: number; readonly y: number; readonly z: number };
 }
 
-interface PhysicsCollider3D {
-  readonly shape: number;
-  readonly halfExtents: readonly [number, number, number];
-  readonly radius: number;
-  readonly halfHeight: number;
-  readonly friction: number;
-  readonly restitution: number;
-  readonly density: number;
-  readonly isSensor: number;
-  readonly collisionGroups: number;
-  readonly solverGroups: number;
-}
-
 interface PhysicsSyncQueryRow {
   readonly entity: EntityHandle;
   has(component: Component): boolean;
@@ -134,7 +132,7 @@ interface PhysicsSyncDescriptor {
     readonly gravityScale: number;
     readonly ccdEnabled: number;
   };
-  readonly collider: PhysicsCollider3D | undefined;
+  readonly collider: ColliderSnapshot | undefined;
   readonly hasCharacterController: boolean;
   readonly characterControllerOffset: number | undefined;
 }
@@ -166,6 +164,21 @@ function samePhysicsValue(left: unknown, right: unknown): boolean {
   );
 }
 
+/** Four Float32 epsilons enclose matrix decomposition noise, relative to committed geometry. */
+function sameColliderScale(
+  left: PhysicsTransform3D['scale'] | undefined,
+  right: PhysicsTransform3D['scale'],
+): boolean {
+  return (
+    left !== undefined &&
+    (['x', 'y', 'z'] as const).every((axis) => {
+      const a = Math.abs(left[axis]),
+        b = Math.abs(right[axis]);
+      return Math.abs(a - b) <= Math.max(a, b) * 2 ** -21;
+    })
+  );
+}
+
 export interface Rapier3DCollisionEvent {
   readonly type: 'started' | 'stopped';
   readonly entityA: number;
@@ -176,11 +189,7 @@ export interface Rapier3DCollisionEvent {
 }
 
 interface DerivedShapeRecord {
-  readonly input: VoxelShapeInput & {
-    readonly cells: Int32Array;
-    readonly origin: PhysicsVector;
-    readonly rotation: PhysicsQuaternion;
-  };
+  readonly input: NormalizedDerivedShapeInput;
   readonly colliderHandle: number;
 }
 
@@ -230,16 +239,6 @@ type RapierEventQueue = any;
 // biome-ignore lint/suspicious/noExplicitAny: Rapier types from dynamically loaded module
 type RapierRigidBody = any;
 
-/** CharacterController tuning fields read per moveAndSlide call (degrees + world units). */
-interface CharacterControllerTuning {
-  offset: number;
-  maxSlopeClimbDeg: number;
-  minSlopeSlideDeg: number;
-  autoStepMaxHeight: number;
-  autoStepMinWidth: number;
-  snapToGroundDist: number;
-}
-
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
@@ -249,7 +248,7 @@ const DEG_TO_RAD = Math.PI / 180;
  * for auto-step / snap calls `disable*()` rather than `enable*(0)`.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Rapier KinematicCharacterController from dynamic module
-function applyKccTuning(ctrl: any, cc: CharacterControllerTuning): void {
+function applyKccTuning(ctrl: any, cc: CharacterControllerData): void {
   ctrl.setMaxSlopeClimbAngle(cc.maxSlopeClimbDeg * DEG_TO_RAD);
   ctrl.setMinSlopeSlideAngle(cc.minSlopeSlideDeg * DEG_TO_RAD);
   ctrl.setSlideEnabled(true);
@@ -378,6 +377,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    */
   private readonly collisionPairs = new Map<number, Set<number>>();
 
+  /** Removed authored handles remain event-resolvable until the next native drain. */
+  private readonly retiredColliderOwners = new Map<number, number>();
+
   private readonly pendingCollisionEvents: Rapier3DCollisionEvent[] = [];
 
   private readonly collisionEventHistory: Rapier3DCollisionEvent[] = [];
@@ -400,7 +402,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   private backendGeneration = 1;
   private fixedStep = 0;
   private derivedPublicationPending = false;
-  private worldIdentity: object | undefined;
+  private worldIdentity: World | undefined;
   private activeDerivedAdmission: DerivedCandidateRecord | undefined;
 
   private currentGravity: { x: number; y: number; z: number };
@@ -423,9 +425,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * error paths (body / collider) fire before these are read, so direct
    * `pw.moveAndSlide()` calls in error tests need no World.
    */
-  private moveContext:
-    | { world: World; transform: Component; characterController: Component }
-    | undefined;
+  private moveContext: { world: World; transform: Component } | undefined;
 
   /** Persistent ECS query + projection cursor for incremental backend sync. */
   private syncState: PhysicsSyncState | undefined;
@@ -596,7 +596,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
         handle1,
         handle2,
       );
-      const changed = started ? this.addPair(a, b) : this.removePair(a, b);
+      const changed = started
+        ? this.addPair(a, b)
+        : !this.bodiesShareCollision(a, b) && this.removePair(a, b);
       if (!changed) return;
       this.pushCollisionEvent({
         type: started ? 'started' : 'stopped',
@@ -607,6 +609,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
         ...(shapeB === undefined ? {} : { shapeB: shapeB.id }),
       });
     });
+    this.retiredColliderOwners.clear();
   }
 
   private recordContactObservation(
@@ -703,7 +706,10 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     const collider = (this.raw as any).getCollider(colliderHandle) as {
       parent(): { userData: number } | null;
     } | null;
-    if (collider === null || collider === undefined) return undefined;
+    if (collider === null || collider === undefined) {
+      const owner = this.retiredColliderOwners.get(colliderHandle);
+      return owner !== undefined && this.entityMap.has(owner) ? owner : undefined;
+    }
     const body = collider.parent();
     if (body === null || body === undefined) return undefined;
     return body.userData;
@@ -1378,7 +1384,15 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       id: shape.input.id,
       revision: shape.input.revision,
       entity,
-      voxelSize: [...shape.input.voxelSize] as PhysicsVector,
+      ...(shape.input.kind === 'heightfield'
+        ? {
+            heightfield: {
+              rows: shape.input.rows,
+              columns: shape.input.columns,
+              scale: [...shape.input.scale] as PhysicsVector,
+            },
+          }
+        : { voxelSize: [...shape.input.voxelSize] as PhysicsVector }),
       origin: [...shape.input.origin] as PhysicsVector,
       rotation: [...shape.input.rotation] as PhysicsQuaternion,
       generation: body.generation,
@@ -1400,8 +1414,18 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
           shapes: Object.freeze(
             body.shapes.map((shape) => ({
               ...shape.input,
-              cells: new Int32Array(shape.input.cells),
-              voxelSize: [...shape.input.voxelSize] as PhysicsVector,
+              ...(shape.input.kind === 'heightfield'
+                ? {
+                    heights: new Float32Array(shape.input.heights),
+                    scale: [...shape.input.scale] as PhysicsVector,
+                  }
+                : {
+                    cells:
+                      shape.input.cells instanceof Int32Array
+                        ? new Int32Array(shape.input.cells)
+                        : new Int32Array(shape.input.cells.flat()),
+                    voxelSize: [...shape.input.voxelSize] as PhysicsVector,
+                  }),
               origin: [...shape.input.origin] as PhysicsVector,
               rotation: [...shape.input.rotation] as PhysicsQuaternion,
             })),
@@ -1504,15 +1528,24 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
 
   private createDerivedCollider(
     body: RapierRigidBody,
-    shape: VoxelShapeInput,
+    shape: DerivedShapeInput,
   ): { readonly handle: number } {
     const RAPIER = this.rapierModule as RapierWorld;
-    const desc = RAPIER.ColliderDesc.voxels(
-      shape.cells instanceof Int32Array
-        ? new Int32Array(shape.cells)
-        : new Int32Array(shape.cells.flat()),
-      { x: shape.voxelSize[0], y: shape.voxelSize[1], z: shape.voxelSize[2] },
-    )
+    const geometry =
+      shape.kind === 'heightfield'
+        ? RAPIER.ColliderDesc.heightfield(
+            shape.rows,
+            shape.columns,
+            new Float32Array(shape.heights),
+            { x: shape.scale[0], y: shape.scale[1], z: shape.scale[2] },
+          )
+        : RAPIER.ColliderDesc.voxels(
+            shape.cells instanceof Int32Array
+              ? new Int32Array(shape.cells)
+              : new Int32Array(shape.cells.flat()),
+            { x: shape.voxelSize[0], y: shape.voxelSize[1], z: shape.voxelSize[2] },
+          );
+    const desc = geometry
       .setTranslation(shape.origin?.[0] ?? 0, shape.origin?.[1] ?? 0, shape.origin?.[2] ?? 0)
       .setRotation({
         x: shape.rotation?.[0] ?? 0,
@@ -1890,7 +1923,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
             collider.setEnabled(true);
           }
           const nativeById = new Map(
-            record.input.shapes.map((shape: VoxelShapeInput, index: number) => [
+            record.input.shapes.map((shape: DerivedShapeInput, index: number) => [
               shape.id,
               record.nativeColliders[index]?.handle as number,
             ]),
@@ -1990,7 +2023,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
             if (staged !== undefined) this.derivedConstraints.set(constraint.id, staged);
           }
           const shapes: DerivedShapeRecord[] = record.input.shapes.map(
-            (shape: VoxelShapeInput, index: number) => ({
+            (shape: DerivedShapeInput, index: number) => ({
               input: shape as DerivedShapeRecord['input'],
               colliderHandle: record.nativeColliders[index]?.handle as number,
             }),
@@ -2115,7 +2148,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     velocityPolicy: 'preserve' | 'reset',
     authoredAdditionalMass: number,
     entity: number,
-    candidateShapes: readonly VoxelShapeInput[],
+    candidateShapes: readonly DerivedShapeInput[],
     candidateColliders: readonly { readonly handle: number }[],
   ): void {
     const oldVelocity = body.linvel();
@@ -2230,7 +2263,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     entity: number,
     body: RapierRigidBody,
     overrideDensity: number | undefined,
-    candidateShapes: readonly VoxelShapeInput[],
+    candidateShapes: readonly DerivedShapeInput[],
     candidateColliders: readonly { readonly handle: number }[],
   ): void {
     const record = this.entityMap.get(entity);
@@ -2541,6 +2574,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     this.retiredDerivedBodies.length = 0;
     this.derivedCandidateBytes = 0;
     this.backendGeneration += 1;
+    this.authoredMeshShapes.clear();
     this.syncState = undefined;
     this.moveContext = undefined;
     if (typeof this.raw.free === 'function') this.raw.free();
@@ -2548,6 +2582,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     this.entityMap.clear();
     this.pendingTeleports.clear();
     this.collisionPairs.clear();
+    this.retiredColliderOwners.clear();
     this.pendingCollisionEvents.length = 0;
     this.collisionEventHistory.length = 0;
     this.kccCache.clear();
@@ -2568,9 +2603,9 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * `moveAndSlide` to read tuning and write back pose + grounded. Called once by
    * `registerPhysicsSystems` (plan-strategy D-1/D-7).
    */
-  setMoveContext(world: World, transform: Component, characterController: Component): void {
+  setMoveContext(world: World, transform: Component): void {
     this.assertActive('setMoveContext');
-    this.moveContext = { world, transform, characterController };
+    this.moveContext = { world, transform };
     this.worldIdentity = world;
   }
 
@@ -2689,19 +2724,32 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     // next computeColliderMovement reads the new position.
     body.setNextKinematicTranslation(next);
     body.setTranslation(next, true);
-    // setTranslation marks the body modified but does not re-place its collider
-    // in the collider set; propagate so the next computeColliderMovement
-    // shape-casts the character from its updated pose.
-    // biome-ignore lint/suspicious/noExplicitAny: Rapier World.propagateModifiedBodyPositionsToColliders
-    (this.raw as any).propagateModifiedBodyPositionsToColliders();
+    // Translation-only KCC motion preserves each collider's parent-local pose.
+    // Update this body's colliders directly instead of repeatedly propagating
+    // the accumulating modified-body roster for every character in the frame.
+    for (let index = 0; index < body.numColliders(); index++) {
+      const attached = body.collider(index);
+      const position = attached.translation();
+      attached.setTranslation({
+        x: position.x + movement.x,
+        y: position.y + movement.y,
+        z: position.z + movement.z,
+      });
+    }
 
     const ctx = this.moveContext;
     if (ctx) {
       // D-6: writeback Result ignored — entry checks already guard liveness.
-      ctx.world.set(entity as EntityHandle, ctx.transform, {
-        pos: [next.x, next.y, next.z],
-      });
-      ctx.world.set(entity as EntityHandle, ctx.characterController, { grounded });
+      const local = vec3.create(next.x, next.y, next.z);
+      if (ctx.world.hasComponent(entity as EntityHandle, ChildOf)) {
+        const child = ctx.world.get(entity as EntityHandle, ChildOf).unwrap();
+        const parent = ctx.world.get(child.parent as EntityHandle, GlobalTransform).unwrap().world;
+        const inverse = mat4.create();
+        mat4.invert(inverse, parent);
+        mat4.transformPoint(local, inverse, local);
+      }
+      ctx.world.set(entity as EntityHandle, ctx.transform, { pos: local }).unwrap();
+      ctx.world.set(entity as EntityHandle, CharacterController, { grounded });
     }
 
     return vec3.create(movement.x, movement.y, movement.z);
@@ -2712,26 +2760,12 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * falling back to schema defaults when the World is not wired (defensive;
    * the kinematic check upstream means a valid character always has the World).
    */
-  private readCharacterController(entity: number): CharacterControllerTuning {
-    const ctx = this.moveContext;
-    if (ctx) {
-      const r = ctx.world.get(entity as EntityHandle, ctx.characterController);
-      if (r.ok) {
-        const v = r.value as Record<string, number>;
-        return {
-          offset: v.offset as number,
-          maxSlopeClimbDeg: v.maxSlopeClimbDeg as number,
-          minSlopeSlideDeg: v.minSlopeSlideDeg as number,
-          autoStepMaxHeight: v.autoStepMaxHeight as number,
-          autoStepMinWidth: v.autoStepMinWidth as number,
-          snapToGroundDist: v.snapToGroundDist as number,
-        };
-      }
-    }
+  private readCharacterController(entity: number): CharacterControllerData {
+    const r = this.moveContext?.world.get(entity as EntityHandle, CharacterController);
+    if (r?.ok) return r.value;
     // The ECS token owns the defaults; keep the defensive no-context path on
     // that projection so 3D cannot drift from the shared CharacterController schema.
-    return componentDefinition(CharacterController)
-      .defaults as unknown as CharacterControllerTuning;
+    return componentDefinition(CharacterController).defaults as unknown as CharacterControllerData;
   }
 
   /**
@@ -2753,6 +2787,149 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     for (const entity of this.entityMap.keys()) {
       if (!active.has(entity)) this.removeEntity(entity);
     }
+  }
+
+  private readonly meshCollisionCache = new WeakMap<MeshAsset, MeshCollision>();
+  private readonly authoredMeshShapes = new Map<
+    number,
+    { mesh: MeshAsset; scale: PhysicsTransform3D['scale']; kind: number; shape: Shape }
+  >();
+
+  private colliderFailure(reason: string): never {
+    throw new PhysicsError({
+      code: 'invalid-body-config',
+      expected: 'a supported finite collider and a cooked static mesh collision product',
+      hint: 'Repair Collider or cook meshCollision through the source producer; retry the same entity.',
+      detail: { code: 'invalid-body-config', field: 'Collider', value: reason },
+    });
+  }
+
+  private resolveColliderMesh(collider: ColliderSnapshot): MeshAsset {
+    if (this.worldIdentity === undefined || Number(collider.mesh) === 0)
+      return this.colliderFailure('mesh collider requires a World and a bound mesh handle');
+    const resolved = resolveAssetHandle<MeshAsset>(this.worldIdentity, collider.mesh);
+    if (!resolved.ok) throw resolved.error;
+    if (resolved.value.kind !== 'mesh' || resolved.value.collision === undefined)
+      return this.colliderFailure('mesh collider requires the source meshCollision cook product');
+    return resolved.value;
+  }
+
+  /** Prepare before changing a native body; reuse shape parameters for unchanged source/scale. */
+  private authoredColliderDesc(
+    entity: number,
+    transform: PhysicsTransform3D,
+    collider: ColliderSnapshot,
+    bodyType: string,
+  ): ColliderDesc {
+    const RAPIER = this.rapierModule;
+    const x = Math.abs(transform.scale.x),
+      y = Math.abs(transform.scale.y),
+      z = Math.abs(transform.scale.z);
+    if (
+      ![
+        x,
+        y,
+        z,
+        ...(collider.shape === ColliderShapeValue.cuboid
+          ? collider.halfExtents
+          : collider.shape === ColliderShapeValue.sphere
+            ? [collider.radius]
+            : collider.shape <= ColliderShapeValue.cone
+              ? [collider.radius, collider.halfHeight]
+              : []),
+      ].every((v) => Number.isFinite(v) && v > 0)
+    )
+      return this.colliderFailure(
+        'collider dimensions and world scale must be finite and positive',
+      );
+    let desc: ColliderDesc;
+    switch (colliderShapeFromF32(collider.shape)) {
+      case 'cuboid':
+        desc = RAPIER.ColliderDesc.cuboid(
+          collider.halfExtents[0] * x,
+          collider.halfExtents[1] * y,
+          collider.halfExtents[2] * z,
+        );
+        break;
+      case 'sphere':
+        desc = RAPIER.ColliderDesc.ball(collider.radius * Math.max(x, y, z));
+        break;
+      case 'capsule':
+        desc = RAPIER.ColliderDesc.capsule(
+          collider.halfHeight * y,
+          collider.radius * Math.max(x, z),
+        );
+        break;
+      case 'cylinder':
+        desc = RAPIER.ColliderDesc.cylinder(
+          collider.halfHeight * y,
+          collider.radius * Math.max(x, z),
+        );
+        break;
+      case 'cone':
+        desc = RAPIER.ColliderDesc.cone(collider.halfHeight * y, collider.radius * Math.max(x, z));
+        break;
+      case 'convexHull':
+      case 'trimesh': {
+        if (collider.shape === ColliderShapeValue.trimesh && bodyType === 'dynamic')
+          return this.colliderFailure(
+            'concave trimesh is static/kinematic only; use convexHull for dynamic bodies',
+          );
+        const mesh = this.resolveColliderMesh(collider);
+        const scale = { x, y, z };
+        const cached = this.authoredMeshShapes.get(entity);
+        if (
+          cached?.mesh === mesh &&
+          sameColliderScale(cached.scale, scale) &&
+          cached.kind === collider.shape
+        ) {
+          desc = new RAPIER.ColliderDesc(cached.shape);
+          break;
+        }
+        let cooked = this.meshCollisionCache.get(mesh);
+        if (cooked === undefined) {
+          const valid = validateMeshCollisionAttachment(mesh, mesh.collision);
+          if (!valid.ok) throw valid.error;
+          cooked = valid.value;
+          this.meshCollisionCache.set(mesh, cooked);
+        }
+        const positions = new Float32Array(cooked.positions.length);
+        for (let i = 0; i < positions.length; i += 3) {
+          positions[i] = Number(cooked.positions[i]) * x;
+          positions[i + 1] = Number(cooked.positions[i + 1]) * y;
+          positions[i + 2] = Number(cooked.positions[i + 2]) * z;
+        }
+        const candidate =
+          collider.shape === ColliderShapeValue.trimesh
+            ? RAPIER.ColliderDesc.trimesh(
+                positions,
+                cooked.indices,
+                RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES,
+              )
+            : RAPIER.ColliderDesc.convexHull(positions);
+        if (candidate === null)
+          return this.colliderFailure(
+            'convexHull cannot be constructed from this collision geometry',
+          );
+        desc = candidate;
+        this.authoredMeshShapes.set(entity, {
+          mesh,
+          scale,
+          kind: collider.shape,
+          shape: desc.shape,
+        });
+        break;
+      }
+    }
+    return desc
+      .setFriction(collider.friction)
+      .setRestitution(collider.restitution)
+      .setDensity(collider.density)
+      .setCollisionGroups(collider.collisionGroups)
+      .setSolverGroups(collider.solverGroups)
+      .setSensor(Boolean(collider.isSensor))
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
+      .setActiveCollisionTypes(RAPIER.ActiveCollisionTypes.ALL);
   }
 
   private bodyForEntity(entity: number): RapierRigidBody | undefined {
@@ -2855,25 +3032,49 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
     const body = this.bodyForEntity(entity);
     if (body === undefined) return;
     const bodyType = rigidBodyTypeFromF32(descriptor.rigidBody.type);
+    const previousMeshShape = this.authoredMeshShapes.get(entity);
+    const prepared =
+      descriptor.collider === undefined
+        ? undefined
+        : this.authoredColliderDesc(entity, descriptor.transform, descriptor.collider, bodyType);
     const RAPIER = this.rapierModule as RapierWorld;
     // The native body is shared, but authored and derived colliders have
     // distinct owners. Never address an authored collider by array position.
+    const oldColliders = this.bodyColliders(body);
+    const committed = this.derivedBodies.get(entity);
+    if (prepared !== undefined) {
+      try {
+        this.raw.createCollider(
+          prepared.setDensity(
+            committed?.massProperties?.mode === 'explicit'
+              ? 0
+              : (descriptor.collider?.density ?? 0),
+          ),
+          body,
+        );
+      } catch (cause) {
+        if (previousMeshShape === undefined) this.authoredMeshShapes.delete(entity);
+        else this.authoredMeshShapes.set(entity, previousMeshShape);
+        throw cause;
+      }
+    }
     let removedAuthoredCollider = false;
-    for (const collider of this.bodyColliders(body)) {
+    for (const collider of oldColliders) {
       if (!this.derivedColliderToShape.has(collider.handle)) {
+        this.retiredColliderOwners.set(collider.handle, entity);
         (this.raw as RapierWorld).removeCollider(collider, true);
         removedAuthoredCollider = true;
       }
     }
-    const committed = this.derivedBodies.get(entity);
+    if (
+      descriptor.collider === undefined ||
+      (descriptor.collider.shape !== ColliderShapeValue.convexHull &&
+        descriptor.collider.shape !== ColliderShapeValue.trimesh)
+    )
+      this.authoredMeshShapes.delete(entity);
     const record = this.entityMap.get(entity);
     if (record !== undefined) record.authoredDensity = descriptor.collider?.density;
-    if (descriptor.collider !== undefined) {
-      this.createAuthoredCollider(body, descriptor.transform, {
-        ...descriptor.collider,
-        density: committed?.massProperties?.mode === 'explicit' ? 0 : descriptor.collider.density,
-      });
-    } else if (removedAuthoredCollider) {
+    if (descriptor.collider === undefined && removedAuthoredCollider) {
       this.retireRemovedColliderPairs(entity);
     }
     if (bodyType === 'static') {
@@ -2907,7 +3108,10 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   ): void {
     this.assertActive('syncFromEcs');
     this.worldIdentity = world;
-    if (globalTransformComponent === undefined) return;
+    if (globalTransformComponent === undefined) {
+      syncTerrainHeightfields(world, this, this.derivedBodies.keys());
+      return;
+    }
     let state = this.syncState;
     if (
       state === undefined ||
@@ -2947,6 +3151,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
             CharacterController,
             ChildOf,
             Disabled,
+            RuntimeMeshVertices,
           ],
           [Collider, RigidBody],
         ),
@@ -2955,7 +3160,27 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       this.syncState = state;
     }
 
-    const batch = state.projection.read();
+    let batch = state.projection.read();
+    const changedMeshEntities = new Set<number>();
+    // Shared references are immutable. Only the managed geometry owner can change
+    // a payload without rebinding Collider.mesh, so use its World change evidence.
+    if (batch.changedComponents.includes(RuntimeMeshVertices)) {
+      for (const [entity, cached] of this.authoredMeshShapes) {
+        const collider = world.get(entity as EntityHandle, Collider);
+        if (
+          !collider.ok ||
+          (collider.value.shape !== ColliderShapeValue.convexHull &&
+            collider.value.shape !== ColliderShapeValue.trimesh)
+        )
+          continue;
+        const current = this.resolveColliderMesh(snapshotCollider(collider.value));
+        if (current !== cached.mesh) changedMeshEntities.add(entity);
+      }
+    }
+    if (changedMeshEntities.size) {
+      state.projection.invalidate();
+      batch = state.projection.read();
+    }
     const updates: { index: number; descriptor: PhysicsSyncDescriptor | undefined }[] = [];
     for (const index of batch.indices) {
       const entity = state.projection.entity(index);
@@ -2984,9 +3209,17 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       const delta: PhysicsEntityDelta = {
         transformChanged: !samePhysicsValue(prior?.transform, descriptor?.transform),
         colliderChanged:
-          descriptor === undefined
+          changedMeshEntities.has(entity) ||
+          (descriptor === undefined
             ? state.projection.changed(entity, Collider)
-            : !samePhysicsValue(prior?.collider, descriptor.collider),
+            : !samePhysicsValue(prior?.collider, descriptor.collider) ||
+              // Scale changes geometry even when Rapier owns a dynamic body's pose.
+              ((descriptor.collider?.shape === ColliderShapeValue.convexHull ||
+                descriptor.collider?.shape === ColliderShapeValue.trimesh) &&
+                !sameColliderScale(
+                  this.authoredMeshShapes.get(entity)?.scale,
+                  descriptor.transform.scale,
+                ))),
         rigidBodyChanged:
           descriptor === undefined
             ? state.projection.changed(entity, RigidBody)
@@ -3005,6 +3238,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       if (descriptor === undefined) state.accepted.delete(index);
       else state.accepted.set(index, descriptor);
     }
+    syncTerrainHeightfields(world, this, this.derivedBodies.keys());
   }
 
   /**
@@ -3050,7 +3284,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       gravityScale: number;
       ccdEnabled: number;
     },
-    collider: PhysicsCollider3D | undefined,
+    collider: ColliderSnapshot | undefined,
   ): void {
     this.assertActive('ensureBody');
     if (this.entityMap.has(entity)) return; // M1 idempotent guard (D-2)
@@ -3059,6 +3293,10 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
 
     // ── Create RigidBodyDesc ──
     const rbType = rigidBodyTypeFromF32(rigidBody.type);
+    const prepared =
+      collider === undefined
+        ? undefined
+        : this.authoredColliderDesc(entity, transform, collider, rbType);
     let body: RapierRigidBody;
     switch (rbType) {
       case 'dynamic': {
@@ -3123,83 +3361,13 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       return;
     }
 
-    this.createAuthoredCollider(body, transform, collider);
-  }
-
-  private createAuthoredCollider(
-    body: RapierRigidBody,
-    transform: PhysicsTransform3D,
-    collider: PhysicsCollider3D,
-  ): void {
-    const RAPIER = this.rapierModule;
-    // ── Create ColliderDesc ──
-    const scaleX = Math.abs(transform.scale.x);
-    const scaleY = Math.abs(transform.scale.y);
-    const scaleZ = Math.abs(transform.scale.z);
-    // Enable collision events + all body-type combinations so sensors register
-    // overlaps against kinematic/fixed bodies too (the default omits non-dynamic
-    // pairs, which would silence kinematic-sensor-vs-kinematic-body pickup).
-    // biome-ignore lint/suspicious/noExplicitAny: Rapier enums from dynamic module
-    const activeEvents = (RAPIER as any).ActiveEvents.COLLISION_EVENTS as number;
-    // biome-ignore lint/suspicious/noExplicitAny: Rapier enums from dynamic module
-    const activeCollisionTypes = (RAPIER as any).ActiveCollisionTypes.ALL as number;
-    const cShape = colliderShapeFromF32(collider.shape);
-    switch (cShape) {
-      case 'cuboid': {
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
-        const desc = (RAPIER as any).ColliderDesc.cuboid(
-          collider.halfExtents[0] * scaleX,
-          collider.halfExtents[1] * scaleY,
-          collider.halfExtents[2] * scaleZ,
-        )
-          .setFriction(collider.friction)
-          .setRestitution(collider.restitution)
-          .setDensity(collider.density)
-          .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups)
-          .setActiveEvents(activeEvents)
-          .setActiveCollisionTypes(activeCollisionTypes);
-        if (collider.isSensor) desc.setSensor(true);
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
-        (this.raw as any).createCollider(desc, body);
-        break;
+    if (prepared !== undefined) {
+      try {
+        this.raw.createCollider(prepared, body);
+      } catch (cause) {
+        this.removeEntity(entity);
+        throw cause;
       }
-      case 'sphere': {
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
-        const desc = (RAPIER as any).ColliderDesc.ball(
-          collider.radius * Math.max(scaleX, scaleY, scaleZ),
-        )
-          .setFriction(collider.friction)
-          .setRestitution(collider.restitution)
-          .setDensity(collider.density)
-          .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups)
-          .setActiveEvents(activeEvents)
-          .setActiveCollisionTypes(activeCollisionTypes);
-        if (collider.isSensor) desc.setSensor(true);
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
-        (this.raw as any).createCollider(desc, body);
-        break;
-      }
-      case 'capsule': {
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier ColliderDesc
-        const desc = (RAPIER as any).ColliderDesc.capsule(
-          collider.halfHeight * scaleY,
-          collider.radius * Math.max(scaleX, scaleZ),
-        )
-          .setFriction(collider.friction)
-          .setRestitution(collider.restitution)
-          .setDensity(collider.density)
-          .setCollisionGroups(collider.collisionGroups)
-          .setSolverGroups(collider.solverGroups)
-          .setActiveEvents(activeEvents)
-          .setActiveCollisionTypes(activeCollisionTypes);
-        if (collider.isSensor) desc.setSensor(true);
-        // biome-ignore lint/suspicious/noExplicitAny: Rapier World.createCollider
-        (this.raw as any).createCollider(desc, body);
-        break;
-      }
-      // No default — colliderShapeFromF32 ensures only 3 arms; TS guards completeness.
     }
   }
 
@@ -3210,7 +3378,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
   syncAuthoredPose(
     entity: number,
     transform: PhysicsTransform3D,
-    collider: PhysicsCollider3D | undefined,
+    collider: ColliderSnapshot | undefined,
     bodyType: 'static' | 'kinematic',
   ): void {
     this.assertActive('syncAuthoredPose');
@@ -3247,9 +3415,15 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
       case 'sphere':
         rapierCollider.setRadius(collider.radius * Math.max(scaleX, scaleY, scaleZ));
         break;
+      case 'cone':
+      case 'cylinder':
       case 'capsule':
         rapierCollider.setHalfHeight(collider.halfHeight * scaleY);
         rapierCollider.setRadius(collider.radius * Math.max(scaleX, scaleZ));
+        break;
+      case 'convexHull':
+      case 'trimesh':
+        // Source and scale changes use the same staged authored replacement above.
         break;
     }
   }
@@ -3367,6 +3541,7 @@ export class RapierPhysicsWorld3D implements PhysicsWorld {
    * Remove a Rapier body and its colliders when the ECS entity is despawned.
    */
   removeEntity(entity: number): void {
+    this.authoredMeshShapes.delete(entity);
     const record = this.entityMap.get(entity);
     if (!record) return;
     for (const candidate of this.derivedCandidates.values()) {
@@ -3468,18 +3643,7 @@ function readPhysicsSyncDescriptor(
     | { readonly world: Float32Array }
     | undefined;
   const colliderData = (row.has(Collider) ? row.get(Collider) : undefined) as
-    | {
-        readonly shape: number;
-        readonly halfExtents: Float32Array;
-        readonly radius: number;
-        readonly halfHeight: number;
-        readonly friction: number;
-        readonly restitution: number;
-        readonly density: number;
-        readonly isSensor: number | boolean;
-        readonly collisionGroups: number;
-        readonly solverGroups: number;
-      }
+    | ColliderData
     | undefined;
   if (transformData === undefined || (colliderData === undefined && !row.has(RigidBody)))
     return undefined;
@@ -3559,25 +3723,7 @@ function readPhysicsSyncDescriptor(
             gravityScale: rigidBodyData.gravityScale,
             ccdEnabled: Number(rigidBodyData.ccdEnabled),
           },
-    collider:
-      colliderData === undefined
-        ? undefined
-        : {
-            shape: colliderData.shape,
-            halfExtents: [
-              colliderData.halfExtents[0] ?? 0,
-              colliderData.halfExtents[1] ?? 0,
-              colliderData.halfExtents[2] ?? 0,
-            ],
-            radius: colliderData.radius,
-            halfHeight: colliderData.halfHeight,
-            friction: colliderData.friction,
-            restitution: colliderData.restitution,
-            density: colliderData.density,
-            isSensor: Number(colliderData.isSensor),
-            collisionGroups: colliderData.collisionGroups,
-            solverGroups: colliderData.solverGroups,
-          },
+    collider: colliderData === undefined ? undefined : snapshotCollider(colliderData),
     hasCharacterController: row.has(CharacterController),
     characterControllerOffset: characterControllerData?.offset,
   };
@@ -3760,7 +3906,7 @@ export function registerPhysicsSystems(world: World): () => void {
   try {
     const pw = world.getResource<RapierPhysicsWorld3D>('PhysicsWorld');
     if (transformComponent !== undefined) {
-      pw.setMoveContext(world, transformComponent, CharacterController);
+      pw.setMoveContext(world, transformComponent);
     }
   } catch {
     // PhysicsWorld resource not yet inserted — moveAndSlide falls back to

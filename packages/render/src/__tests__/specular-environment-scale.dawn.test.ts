@@ -40,6 +40,7 @@ it('decodes regular and probe-sentinel specular environment scales without tint 
           resolve('packages/shader/src/ibl-shared.wgsl'),
           'utf8',
         ),
+        'forgeax_pbr::brdf': readFileSync(resolve('packages/shader/src/brdf.wgsl'), 'utf8'),
       },
     },
   );

@@ -163,12 +163,11 @@ test('short TERM grace still waits for delayed inherited-pipe close', {
       `
     const { spawn } = require('node:child_process');
     const writer = spawn(process.execPath, ['-e', \`
+      process.on('SIGTERM', () => process.exit(0));
+      setInterval(() => {}, 1000);
       process.send('ready');
-      process.on('message', () => setTimeout(() => process.exit(0), 300));
     \`], { detached: true, stdio: ['ignore', 1, 2, 'ipc'] });
     process.on('SIGTERM', () => {
-      writer.send('finish');
-      writer.disconnect();
       process.exit(0);
     });
     writer.once('message', () => process.send(writer.pid));
@@ -182,8 +181,28 @@ test('short TERM grace still waits for delayed inherited-pipe close', {
   child.once('close', () => {
     closed = true;
   });
+  const exited = once(child, 'exit');
+  let settled = false;
+  const stopped = stop().then(
+    (value) => {
+      settled = true;
+      return { value };
+    },
+    (error) => {
+      settled = true;
+      return { error };
+    },
+  );
   try {
-    assert.deepEqual(await stop(), { kind: 'sigterm' });
+    await exited;
+    assert.equal(closed, false);
+    // The writer deliberately holds the inherited pipe beyond TERM grace.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(settled, false, 'cleanup must wait for inherited-pipe close');
+    process.kill(writerPid, 'SIGTERM');
+    const outcome = await stopped;
+    if (outcome.error !== undefined) throw outcome.error;
+    assert.ok(['sigterm', 'sigkill'].includes(outcome.value.kind));
     assert.equal(closed, true);
   } finally {
     for (const pid of [child.pid, writerPid]) {

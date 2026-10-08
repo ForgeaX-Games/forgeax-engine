@@ -31,6 +31,7 @@ describe('memory recovery integration', () => {
     replicaSession.attachReplica(replica, replication.limits);
     authoritySession.receiveEvents();
     replicaSession.receiveEvents();
+    authoritySession.receiveEvents();
     const sessionId = replicaSession.getRecoverySnapshot().sessionId;
 
     expect(authoritySession.publish().ok).toBe(true);

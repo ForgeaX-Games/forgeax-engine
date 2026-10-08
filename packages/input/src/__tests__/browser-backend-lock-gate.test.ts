@@ -21,6 +21,7 @@ function buildEnvForClickTest(opts?: {
 }): {
   backend: ReturnType<typeof attachBrowserInputBackend>['backend'];
   fireClick(): void;
+  fireMove(x: number, y: number): void;
   requestPointerLockCalls: { count: number };
   requestLockCalls: { count: number };
   exitLockCalls: { count: number };
@@ -115,6 +116,20 @@ function buildEnvForClickTest(opts?: {
         for (const h of handlers) h(ev as Event);
       }
     },
+    fireMove(x, y) {
+      const event = {
+        pointerType: 'mouse',
+        pointerId: 1,
+        buttons: 0,
+        movementX: x,
+        movementY: y,
+        clientX: 4,
+        clientY: 4,
+      };
+      for (const handler of listeners.get('canvas')?.get('pointermove') ?? []) {
+        handler(event as unknown as Event);
+      }
+    },
     requestPointerLockCalls,
     exitPointerLockCalls,
     requestLockCalls,
@@ -135,6 +150,34 @@ function buildEnvForClickTest(opts?: {
 // ---------------------------------------------------------------------------
 
 describe('browser-backend-lock-gate.test.ts (w2)', () => {
+  it('discards pre-lock movement while retaining deltas within the acquired W3C lock', () => {
+    const env = buildEnvForClickTest();
+    env.fireMove(-480, -266);
+    env.setPointerLockElement(env.canvas);
+    env.fireMove(8, 2);
+    env.setPointerLockElement(env.canvas);
+    env.fireMove(7, 3);
+    expect(env.backend.sample()).toMatchObject({
+      pointerLocked: true,
+      movementX: 15,
+      movementY: 5,
+    });
+  });
+
+  it('discards pre-lock movement on provider acquisition without losing later locked deltas', () => {
+    const env = buildEnvForClickTest({ lockProvider: { requestLock() {}, exitLock() {} } });
+    env.fireMove(-480, -266);
+    env.fireClick();
+    env.fireMove(8, 2);
+    env.fireClick();
+    env.fireMove(7, 3);
+    expect(env.backend.sample()).toMatchObject({
+      pointerLocked: true,
+      movementX: 15,
+      movementY: 5,
+    });
+  });
+
   describe('gate four-quadrant matrix', () => {
     it('gameGate=true (default), hostPredicate=true -> lock requested (W3C path)', () => {
       const env = buildEnvForClickTest({

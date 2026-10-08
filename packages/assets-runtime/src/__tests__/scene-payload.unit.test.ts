@@ -174,3 +174,57 @@ describe('parseScenePayload with refs', () => {
     ).toBeUndefined();
   });
 });
+
+describe('shared null wire sentinel', () => {
+  it('restores empty shared values while retaining reference index zero', () => {
+    const payload = {
+      entities: {
+        car: {
+          components: {
+            MeshFilter: { assetHandle: null },
+            MeshRenderer: { materials: [null, 0, 1, null] },
+            VolumetricFog: { density: null, light: null },
+            Transform: { pos: [0, 1, 0] },
+          },
+        },
+      },
+    };
+    expect(parseScenePayload(payload, ['material-a', 'material-b'])).toMatchObject({
+      entities: {
+        car: {
+          components: {
+            MeshFilter: { assetHandle: 0 },
+            MeshRenderer: { materials: [0, 'material-a', 'material-b', 0] },
+            VolumetricFog: { density: 0, light: null },
+            Transform: { pos: [0, 1, 0] },
+          },
+        },
+      },
+    });
+  });
+  it('restores empty shared values in inline payloads without a reference table', () => {
+    expect(
+      parseScenePayload({
+        entities: {
+          car: {
+            components: {
+              MeshFilter: { assetHandle: null },
+              MeshRenderer: { materials: [null, 'material-a', null] },
+              Transform: { pos: [0, 1, 0] },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      entities: {
+        car: {
+          components: {
+            MeshFilter: { assetHandle: 0 },
+            MeshRenderer: { materials: [0, 'material-a', 0] },
+            Transform: { pos: [0, 1, 0] },
+          },
+        },
+      },
+    });
+  });
+});

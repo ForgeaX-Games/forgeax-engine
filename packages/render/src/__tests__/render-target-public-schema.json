@@ -26,6 +26,7 @@
           "advanceProbeFilter",
           "buildCubeCameraFaceViews",
           "buildReflectionProbeTable",
+          "renderTargetLayerCount",
           "selectReflectionProbe"
         ]
       },
@@ -37,9 +38,15 @@
         "enum": [
           "RenderTarget",
           "RenderTargetDescriptor",
+          "RenderTargetShape",
+          "RenderTargetLayeredShape",
           "RenderTargetTextureSource",
           "RenderTargetReadbackTicket",
           "RenderTargetReadbackData",
+          "FramebufferSnapshotRequest",
+          "FramebufferSnapshotTicket",
+          "FramebufferSnapshotData",
+          "FramebufferSnapshotFailedDetail",
           "CubeCameraSnapshot",
           "ReflectionProbeData",
           "ReflectionProbeInspection",
@@ -67,6 +74,7 @@
               "Renderer.resizeRenderTarget",
               "Renderer.createRenderTargetTextureSource",
               "Renderer.requestTargetReadback",
+              "Renderer.requestFramebufferSnapshot",
               "Renderer.observe",
               "Renderer.inspect",
               "Renderer.recover",
@@ -85,8 +93,10 @@
         "enum": [
           "render-target-descriptor-invalid",
           "render-target-capability-missing",
+          "render-target-layer-invalid",
           "render-target-state-invalid",
           "render-target-operation-failed",
+          "framebuffer-snapshot-failed",
           "reflection-probe-budget-exceeded",
           "render-intent-invalid"
         ]

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { decodeCatalogWire } from '@forgeax/engine-pack';
 import { createSmokeRenderer, drawSmokeFrame, rendererBackend, subscribeSmokeErrors } from "../../scripts/renderer-smoke.mjs";
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -14,7 +15,7 @@ const targetFrames = Number.parseInt(process.env.SMOKE_MIN_FRAMES ?? '60', 10);
 const hdrGuid = '019e4a26-3c29-7420-af5d-20f2724a16b0';
 const tintGuid = '019e3969-1d46-79d1-9d22-ffd8c6859c64';
 const errors = [];
-const { create, globals } = await import('webgpu');
+const { create, globals } = await import('@forgeax/engine-dawn-node');
 Object.assign(globalThis, globals);
 if (!globalThis.navigator) Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 const gpu = create([]);
@@ -44,7 +45,8 @@ const { unwrapHandle } = await import('@forgeax/engine-types');
 const { createDevImportTransport } = await import('@forgeax/engine-runtime');
 const { buildSpecularTintWorld } = await import(resolve(appRoot, 'src', 'specular-tint.ts'));
 const distDir = resolve(appRoot, 'dist');
-const packIndex = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), 'utf8'));
+const packIndexWire = JSON.parse(readFileSync(resolve(distDir, 'pack-index.json'), 'utf8'));
+const packIndex = decodeCatalogWire(packIndexWire).unwrap();
 const hdrEntry = packIndex.find((entry) => entry.guid === hdrGuid);
 const tintEntry = packIndex.find((entry) => entry.guid === tintGuid);
 if (!hdrEntry || !tintEntry) { console.error('[smoke] missing specular tint assets'); process.exit(1); }
@@ -65,7 +67,7 @@ const hdrData = packageData(hdrEntry); const tintData = packageData(tintEntry);
 const hdrBytes = hdrData.bytes; const tintBytes = tintData.bytes;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
-  if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndex), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
+  if (url === '/pack-index.json') return { ok: true, json: () => Promise.resolve(packIndexWire), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) };
   if (url === hdrEntry.packageUrl) return { ok: true, json: () => Promise.resolve(hdrData.pack), arrayBuffer: () => Promise.resolve(hdrData.packageBytes.buffer.slice(hdrData.packageBytes.byteOffset, hdrData.packageBytes.byteOffset + hdrData.packageBytes.byteLength)) };
   if (url === hdrData.artifactUrl) return { ok: true, json: () => Promise.resolve({}), arrayBuffer: () => Promise.resolve(hdrBytes.buffer.slice(hdrBytes.byteOffset, hdrBytes.byteOffset + hdrBytes.byteLength)) };
   if (url === tintEntry.packageUrl) return { ok: true, json: () => Promise.resolve(tintData.pack), arrayBuffer: () => Promise.resolve(tintData.packageBytes.buffer.slice(tintData.packageBytes.byteOffset, tintData.packageBytes.byteOffset + tintData.packageBytes.byteLength)) };

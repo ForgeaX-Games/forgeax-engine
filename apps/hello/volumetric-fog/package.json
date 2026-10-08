@@ -17,14 +17,27 @@
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-volumetric-fog smoke",
     "metrics": {
-      "bundle-size": { "enabled": false, "reason": "MVD app bundle follows the Engine runtime package budget" },
-      "fps": { "enabled": true, "sampleCount": 5, "frameCount": 60 },
+      "bundle-size": {
+        "enabled": false,
+        "reason": "MVD app bundle follows the Engine runtime package budget"
+      },
+      "fps": {
+        "enabled": true,
+        "sampleCount": 5,
+        "frameCount": 60
+      },
       "bench": {
         "enabled": false,
         "reason": "qualified GPU timestamp receipt uses the dedicated MVD bench, not the generic Vitest bench reporter"
       },
-      "gate": { "enabled": true, "command": "pnpm --filter @forgeax/hello-volumetric-fog smoke" },
-      "spike-report": { "enabled": false, "reason": "MVD acceptance is a product smoke, not a spike" }
+      "gate": {
+        "enabled": true,
+        "command": "pnpm --filter @forgeax/hello-volumetric-fog smoke"
+      },
+      "spike-report": {
+        "enabled": false,
+        "reason": "MVD acceptance is a product smoke, not a spike"
+      }
     }
   },
   "dependencies": {
@@ -42,9 +55,9 @@
     "@forgeax/engine-vite-plugin-pack": "workspace:*",
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
     "@types/node": "^25.8.0",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "playwright": "1.56.1",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   }
 }

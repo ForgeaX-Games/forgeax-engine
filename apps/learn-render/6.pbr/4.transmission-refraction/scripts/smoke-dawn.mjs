@@ -4,6 +4,7 @@
 import { runDawnPartitions } from '../../../../../scripts/ci/run-dawn-partitions.mjs';
 
 process.exitCode = await runDawnPartitions('transmission', {
+  smokeOwner: process.argv[2],
   env: {
     ...process.env,
     FORGEAX_DAWN_ISOLATED: '1',

@@ -28,8 +28,10 @@ test('authority audit covers the named asset categories exactly once', async () 
       'fbx',
       'image',
       'font',
+      'navigation-mesh',
       'audio',
       'plugin',
+      'mesh-interchange',
     ],
   );
   for (const category of result.value.categories) {
@@ -103,7 +105,7 @@ test('authority schema is itself machine-readable JSON', async () => {
     ),
   );
   assert.equal(schema.$id, 'https://forgeax.dev/schema/asset-authority.schema.json');
-  assert.equal(schema['x-forgeax-audit'].categories.length, 11);
+  assert.equal(schema['x-forgeax-audit'].categories.length, 13);
   assert.equal(schema['x-forgeax-audit'].producers.length >= 10, true);
 });
 

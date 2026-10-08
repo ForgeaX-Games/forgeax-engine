@@ -7,6 +7,8 @@ import {
   err,
   ok,
 } from '@forgeax/engine-types';
+import { AnimationPlaybackError } from '../playback-errors';
+import { validateAnimationTimeline } from '../timeline';
 
 const invalid = (guid: string, expected: string) =>
   err({
@@ -61,6 +63,13 @@ export const animationClipContribution: AssetDecoderContribution<AnimationClip, 
     consumer: 'AnimationPlayer',
     decoder: {
       async decode({ envelope }) {
+        try {
+          validateAnimationTimeline(envelope.payload);
+        } catch (failure) {
+          if (failure instanceof AnimationPlaybackError)
+            return invalid(envelope.guid, failure.expected);
+          throw failure;
+        }
         return envelope.payload.kind === 'animation-clip' &&
           Array.isArray(envelope.payload.channels) &&
           Number.isFinite(envelope.payload.duration) &&

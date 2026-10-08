@@ -8,6 +8,37 @@ const createDevice = async () =>
   (await (await rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
 
 describe('admitted graph descriptors', () => {
+  it('keeps raster names on reused execution and preserves explicit instrumentation labels', async () => {
+    const device = await createDevice();
+    const builder = new RenderGraphBuilder();
+    builder
+      .addRasterPass('surface.capture', { accesses: [], colorAttachments: [], encode() {} })
+      .unwrap();
+    const compiled = builder.compile({ device, surfaceSize: { width: 1, height: 1 } }).unwrap();
+    const labels: (string | undefined)[] = [];
+    for (const override of [undefined, 'capture.explicit', '', undefined]) {
+      const encoder = device.createCommandEncoder().unwrap();
+      const begin = encoder.beginRenderPass.bind(encoder);
+      encoder.beginRenderPass = (descriptor) => {
+        labels.push(descriptor.label);
+        return begin(descriptor);
+      };
+      compiled
+        .execute(
+          { encoder },
+          undefined,
+          override === undefined
+            ? undefined
+            : { begin: () => ({ renderPassDescriptor: (desc) => ({ ...desc, label: override }) }) },
+        )
+        .unwrap();
+      device.queue.submit([encoder.finish().unwrap()]).unwrap();
+    }
+    expect(labels).toEqual(['surface.capture', 'capture.explicit', '', 'surface.capture']);
+    expect(compiled.inspect().passes[0]?.name).toBe('surface.capture');
+    (await compiled.retire()).unwrap();
+  });
+
   it('resolves query sets per execution across idle frames and page rotation', async () => {
     const device = await createDevice();
     type Frame = RenderGraphFrame & { querySet: QuerySet | undefined };

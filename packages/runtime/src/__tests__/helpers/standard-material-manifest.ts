@@ -3,6 +3,7 @@ export interface StandardMaterialShaderVariant {
   readonly defines: {
     readonly CLUSTER_FORWARD_AVAILABLE: boolean;
     readonly STORAGE_BUFFER_AVAILABLE: boolean;
+    readonly TRANSMISSION_AVAILABLE: boolean;
     readonly VERTEX_COLOR_AVAILABLE: boolean;
   };
   readonly composedWgsl: string;
@@ -24,16 +25,19 @@ export function standardMaterialShaderVariants(
   for (const cluster of [false, true]) {
     for (const storage of [false, true]) {
       for (const vertexColor of [false, true]) {
-        const defines = {
-          CLUSTER_FORWARD_AVAILABLE: cluster,
-          STORAGE_BUFFER_AVAILABLE: storage,
-          VERTEX_COLOR_AVAILABLE: vertexColor,
-        } as const;
-        variants.push({
-          definesKey: variantKey(defines),
-          defines,
-          composedWgsl,
-        });
+        for (const transmission of [false, true]) {
+          const defines = {
+            CLUSTER_FORWARD_AVAILABLE: cluster,
+            STORAGE_BUFFER_AVAILABLE: storage,
+            TRANSMISSION_AVAILABLE: transmission,
+            VERTEX_COLOR_AVAILABLE: vertexColor,
+          } as const;
+          variants.push({
+            definesKey: variantKey(defines),
+            defines,
+            composedWgsl,
+          });
+        }
       }
     }
   }

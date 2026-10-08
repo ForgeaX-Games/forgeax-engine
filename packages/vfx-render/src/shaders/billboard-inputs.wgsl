@@ -1,4 +1,6 @@
 #define_import_path forgeax::vfx-render.particles.billboard-inputs
+#pragma variant_axis ATMOSPHERE_AVAILABLE
+#pragma variant_axis STORAGE_BUFFER_AVAILABLE
 #import forgeax_view::common::{View, view}
 #import forgeax_view::fog::{translucent_fog, ndc_world}
 @group(0) @binding(1) var scene_depth: texture_depth_2d;

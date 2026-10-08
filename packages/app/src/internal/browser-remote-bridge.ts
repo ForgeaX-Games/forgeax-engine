@@ -34,23 +34,6 @@ export type BrowserBridgeResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: Record<string, unknown> };
 
-type ExecuteModule = {
-  executeScript: (
-    script: string,
-    ctx: {
-      world: unknown;
-      renderer: unknown;
-      assets: AssetRegistry;
-      rhiCapture?: unknown;
-      profiler?: unknown;
-      execution?: unknown;
-      plugins?: unknown;
-      simulation?: unknown;
-      importModule?: (specifier: string) => Promise<unknown>;
-    },
-  ) => Promise<ExecuteResult>;
-};
-
 export interface BrowserRemoteBridgeDeps {
   readonly world: World;
   readonly renderer: unknown;
@@ -362,13 +345,14 @@ export function serializeBridgeResult(result: ExecuteResult): BrowserBridgeResul
     const serialized = JSON.stringify(envelope);
     if (serialized === undefined) throw new TypeError('undefined JSON envelope');
     return envelope;
-  } catch {
+  } catch (cause) {
     return {
       ok: false,
       error: {
         code: 'script-result-unserializable',
         expected: 'a JSON-serializable eval result',
         hint: 'return plain JSON data; omit cyclic values, BigInt, functions, and engine handles',
+        detail: { cause: cause instanceof Error ? cause.message : String(cause) },
       },
     };
   }
@@ -399,7 +383,7 @@ export async function installBrowserRemoteBridge(
   // The ws-free eval core. Dynamic import keeps @forgeax/engine-app free of a
   // static @forgeax/engine-remote dependency while allowing the consumer's
   // Vite config to resolve the focused package through its SDK alias.
-  const mod = (await import('@forgeax/engine-remote/execute')) as ExecuteModule;
+  const mod = await import('@forgeax/engine-remote/execute');
   const executeScript = mod.executeScript;
   const importModule = createCanonicalEcsImportModule(
     world,

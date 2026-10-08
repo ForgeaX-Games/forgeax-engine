@@ -48,11 +48,6 @@ export interface GenerationPublication<TAggregate> {
   current: TAggregate;
 }
 
-export interface GenerationAllocator {
-  readonly activeGeneration: number;
-  next(): number;
-}
-
 const ROOT_ORDER = new Map<DeviceResourceKind, number>([
   ['listener', 0],
   ['surface', 1],
@@ -126,16 +121,4 @@ export function publishGeneration<TAggregate>(
     throw new Error('Generation candidate failed its final publication check.');
   }
   publication.current = candidate;
-}
-
-/** Allocate unique candidate generations while leaving the active value unchanged. */
-export function createGenerationAllocator(activeGeneration: number): GenerationAllocator {
-  if (!Number.isSafeInteger(activeGeneration) || activeGeneration < 0) {
-    throw new RangeError('Active generation must be a non-negative safe integer.');
-  }
-  let nextGeneration = activeGeneration + 1;
-  return {
-    activeGeneration,
-    next: () => nextGeneration++,
-  };
 }

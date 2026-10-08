@@ -1,0 +1,219 @@
+{
+  "generatedAt": "2026-10-01",
+  "platform": "darwin-arm64 Apple M4 Pro, Dawn-node Metal (CDP 9791 unavailable)",
+  "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+  "baselineCommit": "77f13638038b7e42e62af9509e4aa201c82ee171",
+  "runs": {
+    "procedural/cornell": {
+      "settings": {
+        "size": 128,
+        "frames": 64,
+        "samples": 1024,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "diffuse"
+      },
+      "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+      "indirectRatio": 1.0003211852180023,
+      "indirectRelRmse": 0.45866488270236133,
+      "directRatio": 1.0007052052024537,
+      "laneIndirectMean": 0.07064333412953906,
+      "referenceIndirectMean": 0.07062065182008877,
+      "giFrameGpuMs": 5.308416,
+      "giTransportGpuMs": 1.507328,
+      "giPassCount": 29,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.composite",
+          "ms": 0.917504
+        },
+        {
+          "name": "forward",
+          "ms": 0.917504
+        },
+        {
+          "name": "transparent",
+          "ms": 0.917504
+        }
+      ],
+      "perGiFrameWallMs": 5.5290957031249945,
+      "contactSheet": "procedural/contact-sheet.png"
+    },
+    "procedural/leak": {
+      "settings": {
+        "size": 128,
+        "frames": 64,
+        "samples": 1024,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "diffuse"
+      },
+      "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+      "indirectRatio": 0.9953629694911232,
+      "indirectRelRmse": 0.37186925244996416,
+      "directRatio": 1.005095334199115,
+      "laneIndirectMean": 0.313457279768908,
+      "referenceIndirectMean": 0.3149175621122034,
+      "giFrameGpuMs": 3.866624,
+      "giTransportGpuMs": 1.048576,
+      "giPassCount": 29,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.composite",
+          "ms": 0.65536
+        },
+        {
+          "name": "forward",
+          "ms": 0.65536
+        },
+        {
+          "name": "transparent",
+          "ms": 0.65536
+        }
+      ],
+      "perGiFrameWallMs": 4.9696634062499925,
+      "contactSheet": "procedural/contact-sheet.png"
+    },
+    "procedural/courtyard": {
+      "settings": {
+        "size": 128,
+        "frames": 64,
+        "samples": 1024,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "diffuse"
+      },
+      "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+      "indirectRatio": 0.998623503528405,
+      "indirectRelRmse": 0.09829809188034885,
+      "directRatio": 1.0006158912202325,
+      "laneIndirectMean": 0.12245500188082142,
+      "referenceIndirectMean": 0.12262379309935628,
+      "giFrameGpuMs": 4.521984,
+      "giTransportGpuMs": 1.376256,
+      "giPassCount": 27,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.composite",
+          "ms": 0.851968
+        },
+        {
+          "name": "forward",
+          "ms": 0.851968
+        },
+        {
+          "name": "transparent",
+          "ms": 0.851968
+        }
+      ],
+      "perGiFrameWallMs": 4.6690442812500805,
+      "contactSheet": "procedural/contact-sheet.png"
+    },
+    "sponza/sponza": {
+      "settings": {
+        "size": 512,
+        "frames": 64,
+        "samples": 256,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "diffuse"
+      },
+      "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+      "indirectRatio": 1.0042737074583374,
+      "indirectRelRmse": 0.4862584002873433,
+      "directRatio": 1.103931976037144,
+      "laneIndirectMean": 0.004830734406704505,
+      "referenceIndirectMean": 0.004810177116884153,
+      "giFrameGpuMs": 73.596928,
+      "giTransportGpuMs": 64.48742400000067,
+      "giPassCount": 517,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.transport.2.ray-path.trace-0",
+          "ms": 4.390912
+        },
+        {
+          "name": "ray-diffuse.transport.346.ray-path.traceShadow-0",
+          "ms": 2.686976
+        },
+        {
+          "name": "ray-diffuse.transport.7.ray-path.trace-0",
+          "ms": 1.31072
+        }
+      ],
+      "perGiFrameWallMs": 172.4601321718751,
+      "contactSheet": "sponza/contact-sheet.png"
+    },
+    "sponza-full-receiver/sponza": {
+      "settings": {
+        "size": 512,
+        "frames": 64,
+        "samples": 256,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "full"
+      },
+      "commit": "71c09aee37a434285aa20d1d74ab8106ca2d072f",
+      "indirectRatio": 0.6751405559049708,
+      "indirectRelRmse": 0.9326186223281819,
+      "directRatio": 1.103931976037144,
+      "laneIndirectMean": 0.004830734406704505,
+      "referenceIndirectMean": 0.00715515364090267,
+      "giFrameGpuMs": 73.269248,
+      "giTransportGpuMs": 64.55296000000067,
+      "giPassCount": 517,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.transport.2.ray-path.trace-0",
+          "ms": 4.390912
+        },
+        {
+          "name": "ray-diffuse.transport.346.ray-path.traceShadow-0",
+          "ms": 2.686976
+        },
+        {
+          "name": "ray-diffuse.transport.7.ray-path.trace-0",
+          "ms": 1.31072
+        }
+      ],
+      "perGiFrameWallMs": 171.8838821562499,
+      "contactSheet": "sponza-full-receiver/contact-sheet.png"
+    },
+    "sponza-before/sponza": {
+      "settings": {
+        "size": 512,
+        "frames": 64,
+        "samples": 256,
+        "gather": "exact",
+        "bounces": 1,
+        "receiver": "full"
+      },
+      "commit": "77f13638038b7e42e62af9509e4aa201c82ee171",
+      "indirectRatio": 0.6751405559049708,
+      "indirectRelRmse": 0.9326186223281819,
+      "directRatio": 1.103931976037144,
+      "laneIndirectMean": 0.004830734406704505,
+      "referenceIndirectMean": 0.00715515364090267,
+      "giFrameGpuMs": 278.069248,
+      "giTransportGpuMs": 265.8795520000031,
+      "giPassCount": 517,
+      "topPasses": [
+        {
+          "name": "ray-diffuse.transport.2.ray-path.trace-0",
+          "ms": 68.354048
+        },
+        {
+          "name": "ray-diffuse.transport.346.ray-path.traceShadow-0",
+          "ms": 47.18592
+        },
+        {
+          "name": "ray-diffuse.transport.7.ray-path.trace-0",
+          "ms": 15.269888
+        }
+      ],
+      "perGiFrameWallMs": 502.09480598437494,
+      "contactSheet": "sponza-before/contact-sheet.png"
+    }
+  },
+  "notes": "sponza-before = baseline engine (median stackless BVH) traced with --receiver full; sponza = fixed engine with diffuse receiver reference; sponza-full-receiver = fixed engine, old reference definition. Lane image identical across receivers."
+}

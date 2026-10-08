@@ -32,10 +32,7 @@ describe('volumetric fog Point and Spot accumulation', () => {
     expect(passes).toContain("'volume-composite'");
     expect(passes).not.toContain('volume-beam');
     expect(passes).not.toContain('godray');
-    const declaredOrder = passes.match(
-      /export const VOLUMETRIC_FOG_PASS_ORDER = \[([\s\S]*?)\] as const/,
-    )?.[1];
-    expect(declaredOrder?.match(/'volume-[a-z-]+'/g)).toHaveLength(4);
+    expect(passes.match(/graph\.add(?:Compute|Raster)Pass\('volume-[a-z-]+'/g)).toHaveLength(4);
   });
 
   it('retains falsifier hooks for off lights, occluders, and shadow visibility', () => {

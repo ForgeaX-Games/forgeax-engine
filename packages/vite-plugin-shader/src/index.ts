@@ -25,28 +25,22 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { availableParallelism } from 'node:os';
 import { dirname, isAbsolute, normalize, resolve, sep } from 'node:path';
-import { Worker } from 'node:worker_threads';
 import { isStandardRootModule } from '@forgeax/engine-pack';
 import { parsePackSourceJson, projectDirectPackJson } from '@forgeax/engine-pack/source';
 import {
   createStandardPbrArtifactReceipt,
-  DEFAULT_UNLIT_PARAM_SCHEMA,
   type MaterialShaderArtifactReceipt,
-  PARTICLE_MESH_SURFACE_PARAM_SCHEMA,
-  STANDARD_PIPELINE_PARAM_SCHEMA,
+  type MaterialShaderManifestEntry,
+  type MaterialShaderManifestVariant,
+  standardSharedTransmissionDefines,
 } from '@forgeax/engine-shader';
 import {
   buildMaterialSourceCatalog,
   checkBindGroupOverflow,
   collectMaterialSources,
   cookMaterialAsset,
-  generateParameterModule,
-  lowerStandardContract,
-  lowerStandardPhysicalBindings,
-  type MaterialCookError,
-  prepareStandardSource,
+  createMaterialProgramCompiler,
   projectShaderConditionals,
   standardMaterialDefines,
 } from '@forgeax/engine-shader-compiler';
@@ -54,18 +48,27 @@ import {
   assertMaterialAsset,
   type BindGroupLayoutDescriptor,
   type MaterialAsset,
-  type MaterialError,
   type MaterialPass,
   type ParamSchemaEntry,
 } from '@forgeax/engine-types';
 import { loadEngineImportsMap } from './engine-imports-map.js';
 import {
+  compileMaterialSources,
+  type MaterialCompileJob,
+  type MaterialCompileResult,
+} from './engine-inputs/compile-material-sources.js';
+import {
   type EngineShaderFile,
   extractDefineImportPath,
   loadEngineShaderEntries,
   loadPackageMaterialShaderEntries,
-  SURFACE_SLOT_MODULE,
 } from './engine-inputs/load-engine-shader-entries.js';
+import {
+  engineMaterialParamSchema,
+  filterImportsByDefines,
+  resolveImportModuleId,
+  throwAuthoredMaterialError,
+} from './engine-inputs/prepare-engine-shader-source.js';
 
 export {
   engineShaderSourceDigest,
@@ -104,41 +107,6 @@ export { toRollupLog } from './wrap.js';
 
 const materialSourceProvider = createMaterialSourceProvider((path) => readFile(path, 'utf8'));
 
-// The built-in MSDF material has a compact numeric UBO followed by three
-// sampler/texture pairs. Keep this schema beside the engine shader manifest
-// producer so reflection and runtime binding derive from the same contract.
-const MSDF_TEXT_PARAM_SCHEMA: readonly ParamSchemaEntry[] = [
-  { name: 'tintColor', type: 'color', default: [1, 1, 1, 1] },
-  { name: 'distanceRange', type: 'vec4', default: [4, 512, 512, 0] },
-  { name: 'baseColorTexture', type: 'texture2d' },
-  { name: 'metallicRoughnessTexture', type: 'texture2d' },
-  { name: 'normalTexture', type: 'texture2d' },
-];
-
-function engineMaterialParamSchema(identifier: string): readonly ParamSchemaEntry[] {
-  switch (identifier) {
-    case 'forgeax::default-standard-pbr':
-    case 'forgeax::pbr-skin':
-    case 'forgeax::default-shadow-caster':
-      return STANDARD_PIPELINE_PARAM_SCHEMA;
-    // Mesh particles reuse the engine Standard Surface entry point. Their
-    // shader therefore owns the fixed surface material ABI (including the
-    // module's specular-tint pair) even though the particle feature is not one
-    // of the canonical Standard roots. Leaving these entries at [] builds a
-    // compact per-shader BGL and the first mesh draw fails validation as soon
-    // as it references the Standard bindings.
-    case 'forgeax::vfx-render.particles.mesh':
-    case 'forgeax::vfx-render.particles.mesh-inputs':
-      return PARTICLE_MESH_SURFACE_PARAM_SCHEMA;
-    case 'forgeax::msdf-text':
-      return MSDF_TEXT_PARAM_SCHEMA;
-    case 'forgeax::points-lines':
-      return DEFAULT_UNLIT_PARAM_SCHEMA;
-    default:
-      return [];
-  }
-}
-
 function engineMaterialArtifactReceipt(
   identifier: string,
   vertexColorAvailable = false,
@@ -161,99 +129,6 @@ function engineMaterialArtifactReceipt(
 }
 
 /**
- * Build the interface-only schema for a built-in Standard variant. Numeric
- * fields stay before texture fields because that is the root UBO packing
- * convention. The projection is delegated to the Engine shader schema SSOT;
- * this producer does not maintain a clearcoat or layer field list.
- */
-function engineSurfaceParameterSchema(
-  identifier: string,
-  defines: Readonly<Record<string, boolean>>,
-): readonly ParamSchemaEntry[] {
-  const base = engineMaterialParamSchema(identifier);
-  if (identifier !== 'forgeax::default-standard-pbr' && identifier !== 'forgeax::pbr-skin') {
-    return base;
-  }
-  void defines;
-  return base;
-}
-
-/**
- * Lower the built-in Standard Surface slot before the standalone manifest
- * compiler sees the source. The Vite entry path and the Pack cooker must feed
- * naga the same lexical Surface entry; importing SurfaceData directly makes
- * naga_oil lose the entry's shared material namespace on the rigid variant.
- */
-function lowerEngineSurfaceEntry(
-  file: EngineShaderFile,
-  imports: Readonly<Record<string, string>>,
-  fallbackImports: Readonly<Record<string, string>> = imports,
-  defines: Readonly<Record<string, boolean>> = {},
-): { readonly source: string; readonly imports: Readonly<Record<string, string>> } {
-  if (!file.source.includes('#pragma material_slot surface')) {
-    return { source: file.source, imports };
-  }
-  const templateModule = extractDefineImportPath(file.source);
-  if (templateModule === undefined) {
-    throw new Error(`Standard Surface entry has no module identity: ${file.id}`);
-  }
-  const surfaceImports = { ...imports };
-  for (const moduleId of [
-    'forgeax_material::surface_v1',
-    'forgeax_material::surface_sampling',
-    'forgeax_material::default_standard_surface',
-    SURFACE_SLOT_MODULE,
-    // standard-cluster keeps the projector import behind PROJECTOR_AVAILABLE;
-    // the source-closure preparer still needs the catalog record before the
-    // selected variant can prune that guarded edge.
-    'forgeax_pbr::lighting_spot_projector',
-  ]) {
-    const source = fallbackImports[moduleId];
-    if (surfaceImports[moduleId] === undefined && source !== undefined) {
-      surfaceImports[moduleId] = source;
-    }
-  }
-  const composed = prepareStandardSource({
-    material: file.reservedIdentifier ?? templateModule,
-    pass: 'Forward',
-    templateModule,
-    templatePath: file.id,
-    templateSource: file.source,
-    surfaceModule: 'forgeax_material::default_standard_surface',
-    sourceRecords: Object.entries(surfaceImports).map(([path, source]) => ({ path, source })),
-    generatedParameters: generateParameterModule(
-      engineSurfaceParameterSchema(file.reservedIdentifier ?? templateModule, defines),
-      {
-        includeResources:
-          (file.reservedIdentifier ?? templateModule) === 'forgeax::default-shadow-caster',
-        sceneIndex: defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE === true,
-        sceneIndexDeclarations: false,
-        sceneMaterialPrivate: defines.GPU_DRIVEN_SCENE_INDEX_AVAILABLE === true,
-      },
-    ),
-  });
-  if (!composed.ok) throwAuthoredMaterialError(composed.error);
-  const identifier = file.reservedIdentifier ?? templateModule;
-  const loweredSource =
-    identifier === 'forgeax::default-standard-pbr' ||
-    identifier === 'forgeax::pbr-skin' ||
-    identifier === 'forgeax::default-shadow-caster'
-      ? lowerStandardPhysicalBindings(
-          composed.value.source,
-          engineSurfaceParameterSchema(identifier, defines),
-          true,
-        )
-      : composed.value.source;
-  const loweredImports = filterImportsByDefines(
-    composed.value.imports,
-    composed.value.source,
-    defines,
-    Object.keys(defines),
-  );
-  return { source: loweredSource, imports: loweredImports };
-}
-
-/**
  * Build a `shaders/manifest.json`-shaped payload by compiling the engine's
  * shipped `@forgeax/engine-shader/src/{pbr,unlit}.wgsl` (with common.wgsl
  * + brdf.wgsl supplied as naga_oil `#import` peers). Useful for non-Vite
@@ -271,152 +146,6 @@ export interface BuildEngineShaderManifestOptions {
   readonly materialPackages?: readonly string[];
   /** Compile Standard engine entries with the point-shadow cube-array lane. */
   readonly pointShadows?: boolean;
-}
-
-type MaterialCompileJob = {
-  readonly defines: Record<string, boolean> | undefined;
-  readonly source: string;
-  readonly options: Parameters<typeof cookMaterialSource>[1];
-};
-
-type MaterialCompileResult = Awaited<ReturnType<typeof cookMaterialSource>>;
-
-/**
- * `compileShader` is pure but its naga/WASM call is synchronous after the
- * initial `ensureReady()` await. Promise concurrency therefore cannot use the
- * available build CPUs; a small worker pool keeps build-time production
- * bounded while leaving the runtime compiler single-threaded.
- */
-const shaderCompilerModulePath = import.meta.resolve('@forgeax/engine-shader-compiler');
-const SHADER_COMPILE_WORKER_SOURCE = `
-const compilerPromise = import(${JSON.stringify(shaderCompilerModulePath)});
-import('node:worker_threads').then(({ parentPort }) => {
-  parentPort.on('message', async (message) => {
-    try {
-      const { compileShader } = await compilerPromise;
-      const result = await compileShader(message.source, message.options);
-      if (result.ok) {
-        parentPort.postMessage({ id: message.id, result: { ok: true, value: result.value } });
-        return;
-      }
-      const error = result.error;
-      parentPort.postMessage({
-        id: message.id,
-        result: {
-          ok: false,
-          error: {
-            code: error.code,
-            expected: error.expected,
-            hint: error.hint,
-            message: error.message,
-            lineNum: error.lineNum,
-            linePos: error.linePos,
-            detail: error.detail,
-          },
-        },
-      });
-    } catch (error) {
-      parentPort.postMessage({
-        id: message.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-});
-`;
-
-interface ShaderCompileWorkerResponse {
-  readonly id: number;
-  readonly result?: MaterialCompileResult;
-  readonly error?: string;
-}
-
-function runShaderCompileWorkerJob(
-  worker: Worker,
-  id: number,
-  job: MaterialCompileJob,
-): Promise<MaterialCompileResult> {
-  return new Promise((resolve, reject) => {
-    const onMessage = (message: ShaderCompileWorkerResponse): void => {
-      if (message.id !== id) return;
-      cleanup();
-      if (message.error !== undefined) {
-        reject(new Error(`shader compile worker failed: ${message.error}`));
-        return;
-      }
-      if (message.result === undefined) {
-        reject(new Error('shader compile worker returned no result'));
-        return;
-      }
-      resolve(message.result);
-    };
-    const onError = (error: Error): void => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = (): void => {
-      worker.removeListener('message', onMessage);
-      worker.removeListener('error', onError);
-    };
-    worker.addListener('message', onMessage);
-    worker.addListener('error', onError);
-    worker.postMessage({ id, source: job.source, options: job.options });
-  });
-}
-
-/** Each worker holds its own naga/WASM instance; beyond this, memory outgrows the gain. */
-const MAX_DEFAULT_SHADER_COMPILE_WORKERS = 16;
-
-async function compileMaterialSources(
-  jobs: readonly MaterialCompileJob[],
-): Promise<MaterialCompileResult[]> {
-  if (jobs.length < 2) {
-    return Promise.all(jobs.map((job) => cookMaterialSource(job.source, job.options)));
-  }
-  const requestedWorkers = Number.parseInt(process.env.FORGEAX_SHADER_COMPILE_WORKERS ?? '', 10);
-  const workerCount = Math.min(
-    jobs.length,
-    Number.isFinite(requestedWorkers) && requestedWorkers > 0
-      ? requestedWorkers
-      : Math.max(1, Math.min(MAX_DEFAULT_SHADER_COMPILE_WORKERS, availableParallelism() - 1)),
-  );
-  if (workerCount === 1) {
-    return Promise.all(jobs.map((job) => cookMaterialSource(job.source, job.options)));
-  }
-
-  const workers = Array.from(
-    { length: workerCount },
-    () => new Worker(SHADER_COMPILE_WORKER_SOURCE, { eval: true } as never),
-  );
-  const results: Array<MaterialCompileResult | undefined> = Array.from(
-    { length: jobs.length },
-    () => undefined,
-  );
-  // Variant costs differ by an order of magnitude, so workers pull from one
-  // shared cursor instead of a static stride; results stay index-ordered.
-  let nextJob = 0;
-  const tasks = workers.map(async (worker) => {
-    try {
-      for (let jobIndex = nextJob++; jobIndex < jobs.length; jobIndex = nextJob++) {
-        results[jobIndex] = await runShaderCompileWorkerJob(
-          worker,
-          jobIndex,
-          jobs[jobIndex] as MaterialCompileJob,
-        );
-      }
-    } finally {
-      await worker.terminate();
-    }
-  });
-  const settled = await Promise.allSettled(tasks);
-  const rejected = settled.find(
-    (result): result is PromiseRejectedResult => result.status === 'rejected',
-  );
-  if (rejected !== undefined) throw rejected.reason;
-  return results.map((result, index) => {
-    if (result === undefined) throw new Error(`shader compile worker missed job ${index}`);
-    return result;
-  });
 }
 
 const engineShaderManifestCache = new Map<
@@ -459,6 +188,27 @@ async function loadSharedEngineManifestForBuilder(
 }
 
 /**
+ * The expanded manifest repeats every Standard variant's full WGSL, which
+ * exceeds V8's string limit once stringified. Hosts hand the manifest to the
+ * registry through `JSON.stringify`, so it serializes as the deduplicated
+ * publication the registry already reads; in-process consumers keep the
+ * expanded fields.
+ */
+function serializeAsPublication<
+  M extends Awaited<ReturnType<typeof buildEngineShaderManifestUncached>>,
+>(manifest: M): M {
+  let publication: ReturnType<typeof publishShaderManifest> | undefined;
+  Object.defineProperty(manifest, 'toJSON', {
+    enumerable: false,
+    value: () => {
+      publication ??= publishShaderManifest(manifest.entries, manifest.materialShaders);
+      return publication;
+    },
+  });
+  return manifest;
+}
+
+/**
  * Build the manifest once per option set within a host process. Dawn files
  * commonly boot several independent renderers, but the composed WGSL payload
  * is immutable; recompiling the same shader fleet for every test file only
@@ -476,11 +226,11 @@ export function buildEngineShaderManifest(
   });
   const cached = engineShaderManifestCache.get(cacheKey);
   if (cached !== undefined) return cached;
-  // The prepared point profile has already passed the producer admission gate.
-  // Keep authored package composition and absent/forced-source inputs on source.
+  // Prepared profiles have already passed the producer admission gate.
+  // Authored packages still cook from source against that engine projection.
   const packaged =
-    options.pointShadows === true && (options.materialPackages?.length ?? 0) === 0
-      ? loadPackagedEngineShaderInputs(true, false)
+    sharedManifestPath === null && (options.materialPackages?.length ?? 0) === 0
+      ? loadPackagedEngineShaderInputs(options.pointShadows === true, true)
       : null;
   const pending =
     packaged !== null
@@ -494,9 +244,10 @@ export function buildEngineShaderManifest(
         : (options.materialPackages?.length ?? 0) > 0
           ? buildEngineShaderManifestUncached(options, sharedManifestPath)
           : loadSharedEngineManifestForBuilder(sharedManifestPath);
-  engineShaderManifestCache.set(cacheKey, pending);
-  return pending.catch((error: unknown) => {
-    if (engineShaderManifestCache.get(cacheKey) === pending) {
+  const published = pending.then(serializeAsPublication);
+  engineShaderManifestCache.set(cacheKey, published);
+  return published.catch((error: unknown) => {
+    if (engineShaderManifestCache.get(cacheKey) === published) {
       engineShaderManifestCache.delete(cacheKey);
     }
     throw error;
@@ -524,7 +275,7 @@ async function buildEngineShaderManifestUncached(
 }> {
   const shared =
     sharedManifestPath === null
-      ? undefined
+      ? (loadPackagedEngineShaderInputs(options.pointShadows === true, true) ?? undefined)
       : await loadSharedEngineManifestForBuilder(sharedManifestPath);
   const pointShadows = options.pointShadows === true;
   const eng = await loadEngineShaderEntries();
@@ -535,7 +286,7 @@ async function buildEngineShaderManifestUncached(
     glsl: '';
     bindings: string;
     uvSetCount?: number;
-  }> = [...(shared?.entries ?? [])];
+  }> = (shared?.entries ?? []).map((entry) => ({ ...entry, glsl: '' }));
   const materialShaders: Array<{
     identifier: string;
     sourcePath: string;
@@ -587,6 +338,9 @@ async function buildEngineShaderManifestUncached(
     eng.atmosphereCube,
     eng.atmosphereBackground,
     eng.atmosphereIbl,
+    eng.atmosphereLuts,
+    eng.atmosphereCompose,
+    ...eng.cloudAtmosphere,
     eng.volumeInject,
     eng.volumeTemporal,
     eng.volumeIntegrate,
@@ -599,8 +353,13 @@ async function buildEngineShaderManifestUncached(
     eng.rayQuery,
     eng.rayPathTracer,
     eng.rayRasterSource,
+    eng.rayProbePlacement,
     eng.rayDiffuseComposite,
     eng.rayDiffuseReconstruct,
+    eng.rayIrradianceField,
+    eng.rayBakedField,
+    eng.rayScreenProbe,
+    eng.rayReflectionComposite,
     eng.standardDeferred,
     eng.decalProject,
     eng.decalApply,
@@ -608,20 +367,21 @@ async function buildEngineShaderManifestUncached(
   ];
   for (const file of shared === undefined ? engineFiles : []) {
     const axes = scanVariantAxes(file.source);
+    const transitiveImports = extractTransitiveImports(file.source, eng.imports);
     const variantDefines =
       axes.length === 0 ? [undefined] : cartesianDefines(axes).filter(isSupportedVariantDefines);
-    const compiled = [] as Array<{
+    const compiled: Array<{
       definesKey: string;
       defines: Record<string, boolean>;
-      composedWgsl: string;
-      manifestEntry: { hash: string; wgsl: string; bindings: string | unknown };
-      uvSetCount: number;
+      manifestEntry: ManifestEntryValue;
       receipt?: MaterialShaderArtifactReceipt;
-    }>;
+    }> = [];
     const variantTasks = variantDefines.map((defines) => {
       const effectiveDefines = {
+        ...file.defines,
         STORAGE_BUFFER_AVAILABLE: true,
         PER_INSTANCE_REGION: false,
+        TERRAIN_GEOMETRY_AVAILABLE: false,
         ...standardMaterialDefines(engineMaterialParamSchema(file.reservedIdentifier ?? '')),
         ...defines,
         // Match the Vite buildStart path: the minimum 16-texture Standard
@@ -630,6 +390,7 @@ async function buildEngineShaderManifestUncached(
         ...(defines?.PROJECTOR_AVAILABLE === false && defines?.EXTENDED_LIGHTING_AVAILABLE === false
           ? { CLOUD_SHADOW_LOW_LIMIT: true }
           : {}),
+        ...standardSharedTransmissionDefines(defines),
         ...(pointShadows && defines?.CLUSTER_FORWARD_AVAILABLE === true
           ? { POINT_SHADOW_AVAILABLE: true }
           : defines?.POINT_SHADOW_AVAILABLE === true
@@ -638,40 +399,29 @@ async function buildEngineShaderManifestUncached(
       };
       const variantImports =
         defines === undefined
-          ? eng.imports
+          ? transitiveImports
           : stripFalseImportSources(
-              filterImportsByDefines(
-                extractTransitiveImports(file.source, eng.imports),
-                file.source,
-                effectiveDefines,
-                axes,
-              ),
+              filterImportsByDefines(transitiveImports, file.source, effectiveDefines, axes),
               effectiveDefines,
             );
-      const lowered = lowerEngineSurfaceEntry(
-        {
+      return {
+        defines,
+        file: {
           ...file,
           source:
             defines === undefined ? file.source : stripFalseImports(file.source, effectiveDefines),
         },
-        variantImports,
-        eng.imports,
-        effectiveDefines,
-      );
-      return {
-        defines,
-        source: lowered.source,
         options: {
           id:
             defines === undefined || buildVariantKey(defines) === ''
               ? file.id
               : `${file.id}#${buildVariantKey(defines)}`,
-          imports: lowered.imports,
+          imports: variantImports,
           defines: effectiveDefines,
         },
       } satisfies MaterialCompileJob;
     });
-    const compiledResults = await compileMaterialSources(variantTasks);
+    const compiledResults = await compileMaterialSources(variantTasks, eng.imports);
     for (let variantIndex = 0; variantIndex < variantTasks.length; variantIndex += 1) {
       const defines = variantTasks[variantIndex]?.defines;
       const r = compiledResults[variantIndex];
@@ -692,9 +442,15 @@ async function buildEngineShaderManifestUncached(
       compiled.push({
         definesKey: defines === undefined ? '' : buildVariantKey(defines),
         defines: defines ?? {},
-        composedWgsl: r.value.manifestEntry.wgsl,
-        manifestEntry: r.value.manifestEntry,
-        uvSetCount: r.value.uvSetCount,
+        manifestEntry: {
+          hash: r.value.manifestEntry.hash,
+          wgsl: r.value.manifestEntry.wgsl,
+          bindings:
+            typeof r.value.manifestEntry.bindings === 'string'
+              ? r.value.manifestEntry.bindings
+              : JSON.stringify(r.value.manifestEntry.bindings),
+          uvSetCount: r.value.uvSetCount,
+        },
         ...(receipt === undefined ? {} : { receipt }),
       });
     }
@@ -710,7 +466,7 @@ async function buildEngineShaderManifestUncached(
       typeof manifestEntry.bindings === 'string'
         ? manifestEntry.bindings
         : JSON.stringify(manifestEntry.bindings);
-    const engineUvSetCount = primary.uvSetCount;
+    const engineUvSetCount = primary.manifestEntry.uvSetCount;
     entries.push({
       hash: manifestEntry.hash,
       wgsl: manifestEntry.wgsl,
@@ -726,16 +482,17 @@ async function buildEngineShaderManifestUncached(
         sourcePath: file.id,
         composedWgsl: manifestEntry.wgsl,
         paramSchema: paramSchemaJson,
-        variants: compiled.map(({ definesKey, defines, composedWgsl, receipt }) => ({
+        variants: compiled.map(({ definesKey, defines, manifestEntry, receipt }) => ({
           definesKey,
           defines,
-          composedWgsl,
+          composedWgsl: manifestEntry.wgsl,
           ...(receipt === undefined ? {} : { receipt }),
         })),
         ...(primary.receipt === undefined ? {} : { receipt: primary.receipt }),
       });
     }
   }
+  const authoredMaterialCompiler = createMaterialProgramCompiler();
   for (const packagePath of options.materialPackages ?? []) {
     const resolvedPackagePath = resolve(process.cwd(), packagePath);
     const materialPackage = parseMaterialPackage(
@@ -746,6 +503,7 @@ async function buildEngineShaderManifestUncached(
       resolvedPackagePath,
       materialPackage,
       eng.imports,
+      authoredMaterialCompiler,
     );
     for (const prepared of programs) {
       const primary = prepared.primary;
@@ -753,8 +511,8 @@ async function buildEngineShaderManifestUncached(
         hash: primary.manifestEntry.hash,
         wgsl: primary.manifestEntry.wgsl,
         glsl: '',
-        bindings: primary.bindingsJson,
-        uvSetCount: primary.uvSetCount,
+        bindings: primary.manifestEntry.bindings,
+        uvSetCount: primary.manifestEntry.uvSetCount,
       });
       materialShaders.push({
         identifier: prepared.moduleId,
@@ -854,21 +612,6 @@ export interface EngineShaderEntriesOptions {
  * longer prefixes (full path, then one segment less, etc.) until a match
  * is found in `allImports`.
  */
-function resolveImportModuleId(
-  rawId: string,
-  allImports: Readonly<Record<string, string>>,
-): string | undefined {
-  // Try the full id first, then progressively strip trailing `::segment` parts.
-  let candidate = rawId;
-  while (candidate.length > 0) {
-    if (allImports[candidate] !== undefined) return candidate;
-    const lastSep = candidate.lastIndexOf('::');
-    if (lastSep === -1) break;
-    candidate = candidate.slice(0, lastSep);
-  }
-  return undefined;
-}
-
 function extractTransitiveImports(
   source: string,
   allImports: Readonly<Record<string, string>>,
@@ -918,41 +661,6 @@ interface ManifestEntryValue {
   readonly uvSetCount: number;
 }
 
-/**
- * Single variant within a material-shader manifest entry.
- * key = canonical defines string (sorted `key=value` pairs joined with `+`).
- * Empty key `""` denotes the default variant (all axes `true`), per plan-strategy D-2.
- *
- * feat-20260613 fix-issue-2: bindingLayout sidecar field gone -- the
- * runtime derives the BGL from `derive(paramSchema).bglEntries`. The
- * superset gate that used to consume bindingLayout now reads the freshly
- * compiled `manifestEntry.bindings` directly inline at the call site.
- */
-interface MaterialShaderManifestVariant {
-  readonly definesKey: string;
-  readonly defines: Record<string, boolean>;
-  readonly composedWgsl: string;
-  /** ABI facts for this exact composed engine variant. */
-  readonly receipt?: MaterialShaderArtifactReceipt;
-}
-
-/** Single material-shader entry in the manifest (plan-strategy §3.10 + D-1 variants). */
-interface MaterialShaderManifestEntry {
-  readonly identifier: string;
-  readonly sourcePath: string;
-  readonly composedWgsl: string;
-  readonly paramSchema: string;
-  /**
-   * Variant array produced by Cartesian-product compile of {@link MaterialShaderManifestVariant}.
-   * Empty array when the source carries no `#pragma variant_axis` directives (single-variant entry).
-   */
-  readonly variants: readonly MaterialShaderManifestVariant[];
-  /** feat-20260629 M4: uvSetCount from naga vertex @location reflection. */
-  readonly uvSetCount?: number;
-  /** Producer-owned ABI receipt shared by direct and scene-index consumers. */
-  readonly receipt?: MaterialShaderArtifactReceipt;
-}
-
 interface ManifestEntries {
   readonly entries: Map<string, ManifestEntryValue>;
   readonly materialShaders: MaterialShaderManifestEntry[];
@@ -997,17 +705,12 @@ function parseMaterialPackage(value: unknown, packagePath: string): MaterialPack
       throw new Error(`material pack must use the direct v3 branch: ${packagePath}`);
     }
     const projected = projectDirectPackJson(parsed.value);
-    if (!projected.ok) {
-      throw new Error(
-        `material pack has invalid v3 authoring: ${packagePath}; ${projected.error.hint}`,
-      );
-    }
-    if (projected.value.assets.length !== 1) {
+    if (projected.assets.length !== 1) {
       throw new Error(
         `material pack must contain exactly one direct material asset: ${packagePath}`,
       );
     }
-    const asset = projected.value.assets[0];
+    const asset = projected.assets[0];
     if (asset === undefined || asset.kind !== 'material') {
       throw new Error(`direct v3 material pack must contain one material asset: ${packagePath}`);
     }
@@ -1091,8 +794,6 @@ interface CompiledUserMaterialVariant {
   readonly defines: Record<string, boolean>;
   readonly manifestEntry: ManifestEntryValue;
   readonly bindings: readonly BindGroupLayoutDescriptor[];
-  readonly bindingsJson: string;
-  readonly uvSetCount: number;
   readonly receipt?: MaterialShaderArtifactReceipt;
 }
 
@@ -1135,6 +836,7 @@ async function compileUserMaterialVariants(
     const effectiveDefines = {
       STORAGE_BUFFER_AVAILABLE: true,
       PER_INSTANCE_REGION: false,
+      TERRAIN_GEOMETRY_AVAILABLE: false,
       ...(defines ?? {}),
       ...(defines?.POINT_SHADOW_AVAILABLE === true ? { POINT_SHADOW_AVAILABLE: true } : {}),
     };
@@ -1184,8 +886,6 @@ async function compileUserMaterialVariants(
         uvSetCount,
       },
       bindings: r.value.bindings,
-      bindingsJson,
-      uvSetCount,
       ...(receipt === undefined ? {} : { receipt }),
     });
   }
@@ -1200,28 +900,11 @@ async function compileUserMaterialVariants(
   };
 }
 
-function throwAuthoredMaterialError(error: MaterialCookError | MaterialError): never {
-  if (error instanceof Error) {
-    const log = toRollupLog(error);
-    throw Object.assign(new Error(error.message), log);
-  }
-  throw Object.assign(new Error(error.message), {
-    code: error.code,
-    expected: error.expected,
-    hint: error.hint,
-    detail: error.detail,
-    meta: {
-      expected: error.expected,
-      hint: error.hint,
-      detail: error.detail,
-    },
-  });
-}
-
 async function prepareAuthoredMaterial(
   packagePath: string,
   materialPackage: MaterialPackageFile,
   engineImports: Readonly<Record<string, string>>,
+  compile: ReturnType<typeof createMaterialProgramCompiler>,
   sourceOverride?: { readonly path: string; readonly source: string },
 ): Promise<readonly PreparedAuthoredMaterial[]> {
   const sourcePath = resolve(dirname(packagePath), materialPackage.source);
@@ -1285,22 +968,21 @@ async function prepareAuthoredMaterial(
       const moduleId = extractDefineImportPath(record.source);
       return moduleId === undefined || engineImports[moduleId] !== record.source;
     });
-  const sources = [
-    ...Object.entries(engineImports).map(([path, value]) => ({
-      path,
-      source: path === compileModule && standardTemplate ? source : value,
-      engine: true,
-    })),
-    ...(standardTemplate && sourceModule !== undefined && engineImports[sourceModule] === undefined
-      ? [{ path: sourceModule, source, engine: true }]
-      : []),
-    ...projectSources.map((record) => ({ ...record, engine: false })),
-    ...(standardTemplate ? [] : [{ path: sourcePath, source, engine: false }]),
-  ];
-  const catalog = buildMaterialSourceCatalog({
-    engine: sources.filter((record) => record.engine),
-    project: sources.filter((record) => !record.engine),
-  });
+  const sources = {
+    engine: [
+      ...Object.entries(engineImports).map(([path, value]) => ({
+        path,
+        source: path === compileModule && standardTemplate ? source : value,
+      })),
+      ...(standardTemplate &&
+      sourceModule !== undefined &&
+      engineImports[sourceModule] === undefined
+        ? [{ path: sourceModule, source }]
+        : []),
+    ],
+    project: [...projectSources, ...(standardTemplate ? [] : [{ path: sourcePath, source }])],
+  };
+  const catalog = buildMaterialSourceCatalog(sources);
   if (!catalog.ok) throwAuthoredMaterialError(catalog.error);
   const programModules = [...new Set(material.passes.map((pass) => pass.program.module))];
   const axes = [
@@ -1314,49 +996,55 @@ async function prepareAuthoredMaterial(
       }),
     ),
   ].sort();
-  let preservedPhysicalAxes: Readonly<Record<string, boolean>> = {};
-  if (programModules.some(isStandardRootModule)) {
-    const contract = lowerStandardContract(material.parameters ?? [], material.passes);
-    if (!contract.ok) throwAuthoredMaterialError(contract.error);
-    preservedPhysicalAxes = contract.value.defines;
-  }
+  // Standard cooking owns its context and physical selectors. Projecting the
+  // catalog here erases branches (scene-index, clustered lights, skinning)
+  // before that owner can select and validate them.
+  const standardRoot = programModules.some(isStandardRootModule);
   const combinations = axes.length > 0 ? cartesianDefines(axes) : [undefined];
   const compiled = new Map<string, CompiledUserMaterialVariant[]>();
   let paramSchema: readonly ParamSchemaEntry[] = [];
   for (const defines of combinations) {
-    const variantSources = sources.map((record) => ({
-      ...record,
-      source:
-        defines === undefined
-          ? record.source
-          : stripFalseImports(
-              record.source,
-              { ...preservedPhysicalAxes, ...defines },
-              scanVariantAxes(record.source),
-            ),
-    }));
+    const projectVariantSources = (records: typeof sources.engine) =>
+      records.map((record) => ({
+        ...record,
+        source:
+          defines === undefined || standardRoot
+            ? record.source
+            : stripFalseImports(record.source, defines, scanVariantAxes(record.source)),
+      }));
     const variantCatalog = buildMaterialSourceCatalog({
-      engine: variantSources.filter((record) => record.engine),
-      project: variantSources.filter((record) => !record.engine),
+      engine: projectVariantSources(sources.engine),
+      project: projectVariantSources(sources.project),
     });
     if (!variantCatalog.ok) throwAuthoredMaterialError(variantCatalog.error);
-    const cooked = await cookMaterialAsset({
-      material: 'root',
-      table: { root: material },
-      sources: variantCatalog.value,
-      context: {
-        backend: defines?.WEBGL2_COMPAT === true ? 'webgl2' : 'webgpu',
-        capability:
-          defines?.STORAGE_BUFFER_AVAILABLE === false ? 'uniform-fallback' : 'storage-buffer',
-        pipeline: 'forward',
-        geometry: 'mesh',
-        pass: 'forward',
-        profile: 'forgeax-material-wgsl-v1',
-        toolchain: 'naga-oil',
-        instrumentation: 'none',
+    const cooked = await cookMaterialAsset(
+      {
+        material: 'root',
+        table: { root: material },
+        sources: variantCatalog.value,
+        context: {
+          backend: defines?.WEBGL2_COMPAT === true ? 'webgl2' : 'webgpu',
+          capability:
+            defines?.STORAGE_BUFFER_AVAILABLE === false
+              ? 'uniform-fallback'
+              : defines?.ATMOSPHERE_AVAILABLE === true
+                ? 'storage-buffer-atmosphere'
+                : 'storage-buffer',
+          pipeline: 'forward',
+          geometry: programModules.some(
+            (module) => module === 'forgeax::pbr-skin' || module === 'forgeax_material::pbr-skin',
+          )
+            ? 'skinned'
+            : 'mesh',
+          pass: 'forward',
+          profile: 'forgeax-material-wgsl-v1',
+          toolchain: 'naga-oil',
+          instrumentation: 'none',
+        },
+        vertexColorAvailable: defines?.VERTEX_COLOR_AVAILABLE === true,
       },
-      vertexColorAvailable: defines?.VERTEX_COLOR_AVAILABLE === true,
-    });
+      compile,
+    );
     if (!cooked.ok) throwAuthoredMaterialError(cooked.error);
     // Cook validates every selected entry before any manifest state changes.
     // A module shared by multiple entries is emitted once per code variant.
@@ -1365,29 +1053,45 @@ async function prepareAuthoredMaterial(
       if (seen.has(pass.module)) continue;
       seen.add(pass.module);
       paramSchema = pass.paramSchema;
-      const bindings = pass.compile.bindings;
-      const bindingsJson = JSON.stringify(bindings);
       const variants = compiled.get(pass.module) ?? [];
-      variants.push({
-        definesKey: defines === undefined ? '' : buildVariantKey(defines),
-        defines: defines ?? {},
-        manifestEntry: {
-          ...pass.compile.manifestEntry,
-          bindings: bindingsJson,
-          uvSetCount: pass.compile.uvSetCount,
-        },
-        bindings,
-        bindingsJson,
-        uvSetCount: pass.compile.uvSetCount,
-        ...(pass.abi === undefined ? {} : { receipt: pass.abi }),
-      });
+      for (const program of [
+        { compile: pass.compile, sceneIndex: false },
+        ...(pass.sceneCompile === undefined
+          ? []
+          : [{ compile: pass.sceneCompile, sceneIndex: true }]),
+      ]) {
+        const programDefines = {
+          ...(defines ?? {}),
+          ...(standardRoot ? { GPU_DRIVEN_SCENE_INDEX_AVAILABLE: program.sceneIndex } : {}),
+        };
+        const bindings = program.compile.bindings;
+        const bindingsJson = JSON.stringify(bindings);
+        variants.push({
+          definesKey: buildVariantKey(programDefines),
+          defines: programDefines,
+          manifestEntry: {
+            ...program.compile.manifestEntry,
+            bindings: bindingsJson,
+            uvSetCount: program.compile.uvSetCount,
+          },
+          bindings,
+          ...(pass.abi === undefined ? {} : { receipt: pass.abi }),
+        });
+      }
       compiled.set(pass.module, variants);
     }
   }
   return programModules.map((moduleId) => {
     const variants = compiled.get(moduleId) ?? [];
     const primary = variants.find(
-      (candidate) => candidate.definesKey === buildEntryVariantKey(axes),
+      (candidate) =>
+        candidate.definesKey ===
+        (standardRoot
+          ? buildVariantKey({
+              ...Object.fromEntries(axes.map((axis) => [axis, true])),
+              GPU_DRIVEN_SCENE_INDEX_AVAILABLE: false,
+            })
+          : buildEntryVariantKey(axes)),
     );
     if (primary === undefined)
       throw new Error(`no material variant compiled: ${packagePath} (${moduleId})`);
@@ -1432,6 +1136,7 @@ async function findAuthoredMaterialForSource(
       resolvedPackagePath,
       materialPackage,
       engineImports,
+      createMaterialProgramCompiler(),
       sourceOverride === undefined ? undefined : { path: sourcePath, source: sourceOverride },
     );
     if (prepared.some((program) => program.sourcePath === sourcePath)) return prepared;
@@ -1556,6 +1261,8 @@ export function isSupportedVariantDefines(
   defines: Readonly<Record<string, boolean>> | undefined,
 ): boolean {
   return !(
+    (defines?.ATMOSPHERE_AVAILABLE === true && defines?.STORAGE_BUFFER_AVAILABLE === false) ||
+    (defines?.ATMOSPHERE_AVAILABLE === true && defines?.EXTENDED_LIGHTING_AVAILABLE === false) ||
     (defines?.CLUSTER_FORWARD_AVAILABLE === true && defines?.STORAGE_BUFFER_AVAILABLE === false) ||
     (defines?.PROBE_BLEND_AVAILABLE === true && defines?.STORAGE_BUFFER_AVAILABLE === false) ||
     (defines?.EXTENDED_LIGHTING_AVAILABLE === true &&
@@ -2153,8 +1860,6 @@ async function compileEngineEntry(
   // synthetic `forgeax::engine-<basename>` identifier — the runtime treats
   // these the same way it treats material-shader entries (variant lookup
   // by identifier) but does NOT call installMaterialArtifact on them.
-  const hasVariantAxis = scanVariantAxes(file.source).length > 0;
-  const surfaceVariants = isMaterialShader || hasVariantAxis;
   // Material parameter declarations are part of the authored MaterialAsset
   // contract. Runtime shader compilation no longer reads a WGSL sidecar.
   const baseIdentifier = file.reservedIdentifier ?? extractDefineImportPath(file.source) ?? file.id;
@@ -2164,16 +1869,10 @@ async function compileEngineEntry(
     variantAxes.length > 0 ? cartesianDefines(variantAxes).filter(isSupportedVariantDefines) : [{}];
 
   const variants: MaterialShaderManifestVariant[] = [];
-  // feat-20260613 fix-issue-2: bindingLayout is no longer a manifest field;
-  // the variant-axis superset gate (below) needs the freshly compiled
-  // bindings JSON for the default variant, so we keep a parallel string
-  // array indexed alongside `variants` (same length, same order).
-  const variantBindingsJson: string[] = [];
   // feat-20260629 M4: uvSetCount from first variant compile result
   let engineUvSetCount = 0;
   const sourceForRouting = file.source;
-  const allTransitiveImports =
-    variantAxes.length > 0 ? extractTransitiveImports(sourceForRouting, imports) : imports;
+  const allTransitiveImports = extractTransitiveImports(sourceForRouting, imports);
 
   // Variant compiles are independent; batch them through the worker pool and
   // consume the results in combo order so emission stays deterministic.
@@ -2185,8 +1884,10 @@ async function compileEngineEntry(
   }> = [];
   for (const defines of axisCombos) {
     const effectiveDefines = {
+      ...file.defines,
       STORAGE_BUFFER_AVAILABLE: true,
       PER_INSTANCE_REGION: false,
+      TERRAIN_GEOMETRY_AVAILABLE: false,
       ...standardMaterialDefines(engineMaterialParamSchema(baseIdentifier)),
       ...defines,
       // The minimum WebGPU profile has no spare sampled texture lane for the
@@ -2195,6 +1896,7 @@ async function compileEngineEntry(
       ...(defines.PROJECTOR_AVAILABLE === false && defines.EXTENDED_LIGHTING_AVAILABLE === false
         ? { CLOUD_SHADOW_LOW_LIMIT: true }
         : {}),
+      ...standardSharedTransmissionDefines(defines),
       ...(pointShadows && defines.CLUSTER_FORWARD_AVAILABLE === true
         ? { POINT_SHADOW_AVAILABLE: true }
         : {}),
@@ -2223,22 +1925,16 @@ async function compileEngineEntry(
       variantAxes.length > 0
         ? stripFalseImports(sourceForRouting, effectiveDefines)
         : sourceForRouting;
-    const lowered = lowerEngineSurfaceEntry(
-      { ...file, source: perVariantSource },
-      perVariantImports,
-      imports,
-      effectiveDefines,
-    );
     variantJobs.push({
       defines,
       definesKey,
       uniqueId,
       job: {
         defines: effectiveDefines,
-        source: lowered.source,
+        file: { ...file, source: perVariantSource },
         options: {
           id: uniqueId,
-          imports: lowered.imports,
+          imports: perVariantImports,
           // Non-variant entries always compile with STORAGE_BUFFER_AVAILABLE=true
           // because common.wgsl has #ifdef STORAGE_BUFFER_AVAILABLE for mesh/
           // pointLight/spotLight bindings. Without the define the WGSL falls to
@@ -2259,7 +1955,10 @@ async function compileEngineEntry(
     });
   }
 
-  const variantResults = await compileMaterialSources(variantJobs.map((variant) => variant.job));
+  const variantResults = await compileMaterialSources(
+    variantJobs.map((variant) => variant.job),
+    imports,
+  );
   for (const [variantIndex, { defines, definesKey, uniqueId }] of variantJobs.entries()) {
     const r = variantResults[variantIndex] as MaterialCompileResult;
     if (!r.ok) {
@@ -2324,7 +2023,6 @@ async function compileEngineEntry(
       composedWgsl: `./${hash}.composed.wgsl`,
       ...(variantReceipt === undefined ? {} : { receipt: variantReceipt }),
     });
-    variantBindingsJson.push(bindingsJson);
     // Issue #1 fix (M4-repair): only the default (all-true) variant lands in
     // state.entries. Variant entries get a separate map for generateBundle
     // sidecar emission — they must not pollute the hash-based entries array
@@ -2356,12 +2054,7 @@ async function compileEngineEntry(
 
   if (variantAxes.length > 0) {
     const defaultVariant = variants[0];
-    const defaultVariantBindingsJson = variantBindingsJson[0];
-    if (
-      defaultVariant !== undefined &&
-      defaultVariantBindingsJson !== undefined &&
-      surfaceVariants
-    ) {
+    if (defaultVariant !== undefined) {
       // bug-20260610: derive a synthetic identifier for non-material engine
       // entries (shadow_caster etc.) so the runtime variant-resolution path
       // can find them via materialShaderManifestEntries(). Material shaders
@@ -2434,8 +2127,9 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   const wantPointShadows =
     typeof wantEngineEntries === 'object' && wantEngineEntries.pointShadows === true;
   let isServeMode = false;
-  const buildRevision = currentBuildRevision();
-  let usablePackagedEngineInputs = loadPackagedEngineShaderInputs(wantPointShadows, wantHdrpSsao);
+  // Workspace discovery constructs plugins for unselected projects too. Expand
+  // a publication only when this plugin actually builds, within its lifecycle.
+  let usablePackagedEngineInputs: ReturnType<typeof loadPackagedEngineShaderInputs> = null;
 
   let engineShaderRoots: string[];
   try {
@@ -2472,11 +2166,15 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   const authoredMaterialSources = new Set<string>();
   let loadedEngineShaderState = false;
   let loadedSharedEngineManifestPath: string | null = null;
+  let sharedEngineSourceFragments: ReadonlyMap<string, readonly string[]> | undefined;
   let devManifestPrimeInFlight: Promise<void> | undefined;
+  // One immutable HTTP response for the current committed shader state.
+  let devManifestBody: string | undefined;
   const sharedEngineEntryKeys = new Set<string>();
   const sharedEngineMaterialShaders = new Set<MaterialShaderManifestEntry>();
 
   const clearSharedEngineInputs = (): void => {
+    devManifestBody = undefined;
     for (const key of sharedEngineEntryKeys) {
       state.entries.delete(key);
     }
@@ -2487,6 +2185,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     sharedEngineEntryKeys.clear();
     sharedEngineMaterialShaders.clear();
     loadedSharedEngineManifestPath = null;
+    sharedEngineSourceFragments = undefined;
   };
 
   const replaceSharedEngineInputs = async (manifestPath: string): Promise<void> => {
@@ -2504,9 +2203,11 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       sharedEngineMaterialShaders.add(entry);
     }
     loadedSharedEngineManifestPath = manifestPath;
+    sharedEngineSourceFragments = shared.sourceFragments;
   };
 
   const removeAuthoredMaterial = (sourcePath: string, moduleId?: string): void => {
+    devManifestBody = undefined;
     const previous = state.authoredMaterials.get(sourcePath);
     const identifier = previous?.moduleId ?? moduleId;
     if (identifier !== undefined) {
@@ -2534,13 +2235,14 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
   };
 
   const installAuthoredMaterial = (prepared: PreparedAuthoredMaterial): void => {
+    devManifestBody = undefined;
     state.authoredMaterials.set(prepared.sourcePath, prepared);
     const primary = prepared.primary;
     state.entries.set(prepared.moduleId, {
       hash: primary.manifestEntry.hash,
       wgsl: primary.manifestEntry.wgsl,
-      bindings: primary.bindingsJson,
-      uvSetCount: primary.uvSetCount,
+      bindings: primary.manifestEntry.bindings,
+      uvSetCount: primary.manifestEntry.uvSetCount,
     });
     for (const variant of prepared.variants) {
       state.variantWgsl.set(
@@ -2560,7 +2262,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
           composedWgsl: `./${variant.manifestEntry.hash}.composed.wgsl`,
           ...(variant.receipt === undefined ? {} : { receipt: variant.receipt }),
         })),
-        uvSetCount: primary.uvSetCount,
+        uvSetCount: primary.manifestEntry.uvSetCount,
         ...(primary.receipt === undefined ? {} : { receipt: primary.receipt }),
       });
     }
@@ -2592,6 +2294,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         load = materialPackageLoadTail.then(async () => {
           if (loadedMaterialPackageKey === key) return;
           const preparedMaterials: PreparedAuthoredMaterial[] = [];
+          const compile = createMaterialProgramCompiler();
           for (const packagePath of requestedPaths) {
             const materialPackage = parseMaterialPackage(
               JSON.parse(await readFile(packagePath, 'utf8')) as unknown,
@@ -2600,7 +2303,12 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
             if (!isAbsolute(materialPackage.source) && materialPackage.source.includes(':'))
               continue;
             preparedMaterials.push(
-              ...(await prepareAuthoredMaterial(packagePath, materialPackage, engineImports)),
+              ...(await prepareAuthoredMaterial(
+                packagePath,
+                materialPackage,
+                engineImports,
+                compile,
+              )),
             );
           }
           // A game switch may happen while compilation is in flight. Do not
@@ -2683,13 +2391,19 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     // shaders are SSOT — a compile failure here is a real bug, not a soft
     // skip).
     async buildStart(this: MinimalPluginContext): Promise<void> {
-      usablePackagedEngineInputs ??= loadPackagedEngineShaderInputs(wantPointShadows, wantHdrpSsao);
+      devManifestBody = undefined;
       const materialPackages = currentMaterialPackages();
       if (!wantEngineEntries && materialPackages.length === 0) return;
       const sharedManifest =
         process.env.FORGEAX_ENGINE_SHADER_SOURCE_BUILD === '1' || wantEngineEntries === false
           ? undefined
           : process.env.FORGEAX_SHARED_APP_INPUTS_MANIFEST;
+      if (sharedManifest === undefined && wantEngineEntries) {
+        usablePackagedEngineInputs ??= loadPackagedEngineShaderInputs(
+          wantPointShadows,
+          wantHdrpSsao,
+        );
+      }
       const eng = usablePackagedEngineInputs === null ? await loadEngineShaderEntries() : null;
       if (sharedManifest !== undefined) {
         await replaceSharedEngineInputs(resolve(sharedManifest));
@@ -2810,8 +2524,13 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       await compileEngineEntry(this, state, eng.rayQuery, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.rayPathTracer, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.rayRasterSource, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.rayProbePlacement, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.rayDiffuseComposite, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.rayDiffuseReconstruct, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.rayIrradianceField, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.rayBakedField, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.rayScreenProbe, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.rayReflectionComposite, eng.imports, isServeMode);
       await compileEngineEntry(
         this,
         state,
@@ -2827,6 +2546,10 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       await compileEngineEntry(this, state, eng.atmosphereCube, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.atmosphereBackground, eng.imports, isServeMode);
       await compileEngineEntry(this, state, eng.atmosphereIbl, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.atmosphereLuts, eng.imports, isServeMode);
+      await compileEngineEntry(this, state, eng.atmosphereCompose, eng.imports, isServeMode);
+      for (const entry of eng.cloudAtmosphere)
+        await compileEngineEntry(this, state, entry, eng.imports, isServeMode);
       for (const file of packageMaterialShaders) {
         // Package-owned material entries participate in the same render
         // topology as the built-in Standard roots. When point shadows are
@@ -2868,7 +2591,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
     //       SHADER_MANIFEST_URL SSOT -- D-4 q7-A reverse-coupling guard means
     //       NO `@forgeax/engine-app` import inside this source.
     load(id: string): string | null {
-      if (id === VIRTUAL_BUNDLER_ID) return virtualBundlerSource(buildRevision);
+      if (id === VIRTUAL_BUNDLER_ID) return virtualBundlerSource(currentBuildRevision());
       return null;
     },
 
@@ -2907,14 +2630,20 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
             .map((program) => program.sourcePath.replaceAll('\\', '/')),
         ]);
         if (!isServeMode) {
-          emitShaderTriplet(this, hash, primary.manifestEntry.wgsl, primary.bindingsJson, false);
+          emitShaderTriplet(
+            this,
+            hash,
+            primary.manifestEntry.wgsl,
+            primary.manifestEntry.bindings,
+            false,
+          );
         }
         return {
           code: [
             '// generated by @forgeax/engine-vite-plugin-shader',
             `export default ${JSON.stringify({ hash, wgsl: primary.manifestEntry.wgsl })};`,
             `export const reflection = ${JSON.stringify(bindings)};`,
-            `export const uvSetCount = ${primary.uvSetCount};`,
+            `export const uvSetCount = ${primary.manifestEntry.uvSetCount};`,
             'if (import.meta.hot) { import.meta.hot.accept(() => {}); }',
           ].join('\n'),
           map: null,
@@ -2962,7 +2691,8 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
 
       const compiledMaterial = await compileUserMaterialVariants(code, id, imports);
       const { primary, variants: compiledVariants } = compiledMaterial;
-      const { manifestEntry, bindingsJson, uvSetCount } = primary;
+      const { manifestEntry } = primary;
+      const { bindings: bindingsJson, uvSetCount } = manifestEntry;
       // Keep schema/BGL validation anchored to the non-downlevel branch when
       // present. `textureSampleLevel` legitimately reflects a non-filtering
       // sampler in naga, while the authored `texture2d` param remains the
@@ -2971,12 +2701,25 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
         compiledVariants.find((variant) => variant.defines.WEBGL2_COMPAT === false) ?? primary;
       const bindings = validationVariant.bindings;
       const hash = manifestEntry.hash;
+      // Reject the complete candidate before changing the published generation.
+      // Authored packages own parameter schemas; direct modules still obey the
+      // WebGPU binding-group limit.
+      if (isMaterialShader) {
+        const overflowResult = checkBindGroupOverflow(bindings, id);
+        if (!overflowResult.ok) {
+          throw Object.assign(
+            new Error(overflowResult.error.message),
+            toRollupLog(overflowResult.error),
+          );
+        }
+      }
       // feat-20260523-shader-template-instance-split M9-T05 (incidental fix):
       // store the post-naga_oil composed source from `manifestEntry.wgsl`,
       // not the raw `code` (which still carries #import directives the WGSL
       // tokenizer rejects). Engine entries already use this shape via
       // `compileEngineEntry` line 621; user-shader transform now matches
       // (charter P4 consistent abstraction across the two compile paths).
+      devManifestBody = undefined;
       state.entries.set(id, { hash, wgsl: manifestEntry.wgsl, bindings: bindingsJson, uvSetCount });
       for (const key of state.variantWgsl.keys()) {
         if (key.startsWith(`${id}#`)) state.variantWgsl.delete(key);
@@ -2988,7 +2731,7 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
             this,
             variant.manifestEntry.hash,
             variant.manifestEntry.wgsl,
-            variant.bindingsJson,
+            variant.manifestEntry.bindings,
             isServeMode,
           );
         }
@@ -2997,26 +2740,10 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       // T-16 / D-10: seed reverseDeps from this source's #import directives so
       // handleHotUpdate can fan out to the downstream Vite ModuleNodes when a
       // dep file is saved.
-      updateReverseDeps(id, scanImportDirectives(code, id));
+      const viteSourcePath = sourcePath.replaceAll('\\', '/');
+      updateReverseDeps(viteSourcePath, scanImportDirectives(code, viteSourcePath));
 
-      // For material-shader entries, run schema-vs-BGL comparison after
-      // successful compile (build-time fail-fast, plan-strategy D-OptionalBinding).
-      // The schema is sourced from the authored Pack payload; when no package
-      // is registered for the .wgsl the schema check is skipped (M9-T05:
-      // deferred to runtime
-      // installMaterialArtifact, which validates values against the
-      // user-supplied paramSchema -- charter P3 explicit failure: bad
-      // shape surfaces at register time, not silently). The bind-group
-      // overflow gate (AC-07) still runs unconditionally.
       if (isMaterialShader) {
-        const overflowResult = checkBindGroupOverflow(bindings, id);
-        if (!overflowResult.ok) {
-          throw Object.assign(
-            new Error(overflowResult.error.message),
-            toRollupLog(overflowResult.error),
-          );
-        }
-
         // Push a module inspection entry; authored parameter declarations stay
         // in MaterialAsset values and are not reconstructed from WGSL.
         // composedWgsl is a path-only index -- the actual composed wgsl is
@@ -3199,11 +2926,11 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
       const importers = collectTransitiveImporters(ctx.file);
       if (importers.length === 0) return direct;
 
-      const getModulesByFile = ctx.server?.moduleGraph.getModulesByFile;
+      const moduleGraph = ctx.server?.moduleGraph;
       const downstream: HmrModuleNodeLike[] = [];
-      if (getModulesByFile !== undefined) {
+      if (moduleGraph !== undefined) {
         for (const importer of importers) {
-          const nodes = getModulesByFile(importer) ?? new Set<HmrModuleNodeLike>();
+          const nodes = moduleGraph.getModulesByFile(importer) ?? new Set<HmrModuleNodeLike>();
           for (const node of nodes) downstream.push(node);
         }
       }
@@ -3262,20 +2989,24 @@ export function forgeaxShader(options: ForgeaXShaderOptions = {}): ForgeaXShader
 
         await primeDevManifest(server);
 
-        const entries = projectShaderManifestEntries(state.entries);
-        const payload = publishShaderManifest(
-          entries,
-          projectManifestMaterialSourcePaths(
-            inlineMaterialShaderComposedWgsl(
-              state.materialShaders,
-              state.entries,
-              state.variantWgsl,
+        if (devManifestBody === undefined) {
+          const entries = projectShaderManifestEntries(state.entries);
+          const payload = publishShaderManifest(
+            entries,
+            projectManifestMaterialSourcePaths(
+              inlineMaterialShaderComposedWgsl(
+                state.materialShaders,
+                state.entries,
+                state.variantWgsl,
+              ),
             ),
-          ),
-        );
+            sharedEngineSourceFragments ?? usablePackagedEngineInputs?.sourceFragments,
+          );
+          // Publish only after complete serialization succeeds; failures are retried.
+          devManifestBody = JSON.stringify(payload);
+        }
         res.setHeader('Content-Type', 'application/json');
-        const body = JSON.stringify(payload);
-        res.end(body);
+        res.end(devManifestBody);
       });
     },
   };
@@ -3346,90 +3077,4 @@ function isEngineShaderPath(id: string, roots: readonly string[]): boolean {
     id.includes('/packages/shader/src/') ||
     id.includes('/node_modules/@forgeax/engine-shader/src/')
   );
-}
-function activeImportModuleIds(source: string, defines: Record<string, boolean>): Set<string> {
-  const activeModules = new Set<string>();
-  const lines = source.split(/\r?\n/);
-  // Track disabled depth: each element is [disabled: boolean, seenElse: boolean].
-  // This must be applied to every module in the closure, not just the entry:
-  // naga_oil parses the supplied module map before resolving imports, so a
-  // resource helper behind a false axis can otherwise poison an unrelated
-  // variant even when its entry import was stripped.
-  const disableStack: Array<[boolean, boolean]> = [];
-  for (const line of lines) {
-    const ifMatch = /^\s*#if\s+(\w+)\s*(?:==\s*(true|false))?\s*$/.exec(line);
-    const ifdefMatch = /^\s*#ifdef\s+(\w+)/.exec(line);
-    const ifndefMatch = /^\s*#ifndef\s+(\w+)/.exec(line);
-    if (ifMatch || ifdefMatch || ifndefMatch) {
-      const axis = ifMatch?.[1] ?? ifdefMatch?.[1] ?? ifndefMatch?.[1] ?? '';
-      const expected = ifMatch?.[2] !== 'false';
-      const parentDisabled = disableStack.length > 0 && disableStack[disableStack.length - 1]?.[0];
-      const enabled = ifMatch
-        ? (defines[axis] ?? false) === expected
-        : ifdefMatch
-          ? (defines[axis] ?? false)
-          : !(defines[axis] ?? false);
-      disableStack.push([parentDisabled || !enabled, false]);
-      continue;
-    }
-    if (/^\s*#else\b/.exec(line)) {
-      if (disableStack.length > 0) {
-        const top = disableStack[disableStack.length - 1];
-        if (top !== undefined && !top[1]) {
-          // Only flip once per #else and never re-enable a branch whose
-          // parent is disabled.
-          const parentDisabled =
-            disableStack.length > 1 && disableStack[disableStack.length - 2]?.[0];
-          if (!parentDisabled) top[0] = !top[0];
-          top[1] = true;
-        }
-      }
-      continue;
-    }
-    if (/^\s*#endif/.exec(line)) {
-      if (disableStack.length > 0) disableStack.pop();
-      continue;
-    }
-    if (disableStack.length > 0 && disableStack[disableStack.length - 1]?.[0]) continue;
-    const importMatch = /^\s*(?:\/\/\s*)?#import\s+([A-Za-z0-9_:]+)/.exec(line);
-    if (importMatch?.[1]) activeModules.add(importMatch[1].replace(/::$/, ''));
-  }
-  return activeModules;
-}
-
-function filterImportsByDefines(
-  allImports: Record<string, string>,
-  source: string,
-  defines: Record<string, boolean>,
-  axes: readonly string[],
-): Record<string, string> {
-  if (axes.length === 0) return allImports;
-  // Step A: scan source for active direct #import lines (respecting #if/#ifdef state).
-  const activeDirectModules = activeImportModuleIds(source, defines);
-  // Step B: BFS from active direct imports through allImports to collect
-  // the full transitive closure. A module like ibl_sampling may be active
-  // directly but its own #import of ibl_shared only appears inside
-  // ibl_sampling.wgsl, not in the entry source — skipping this BFS would
-  // drop ibl_shared and cause naga_oil compose failure.
-  const activeModules = new Set(activeDirectModules);
-  const queue = [...activeDirectModules];
-  while (queue.length > 0) {
-    const cur = queue.shift();
-    if (cur === undefined) break;
-    const modSource = allImports[cur];
-    if (modSource === undefined) continue;
-    const childIds = activeImportModuleIds(modSource, defines);
-    for (const childRawId of childIds) {
-      const childId = resolveImportModuleId(childRawId, allImports);
-      if (childId !== undefined && !activeModules.has(childId)) {
-        activeModules.add(childId);
-        queue.push(childId);
-      }
-    }
-  }
-  const result: Record<string, string> = {};
-  for (const [modId, src] of Object.entries(allImports)) {
-    if (activeModules.has(modId)) result[modId] = src;
-  }
-  return result;
 }

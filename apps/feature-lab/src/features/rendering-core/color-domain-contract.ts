@@ -57,7 +57,7 @@ export default defineFeature({
             typeof facts.output.displayEncoded === 'boolean',
             `displayEncoded=${facts.output.displayEncoded} surface=${facts.output.surfaceStorage}/${facts.output.surfaceDisplay}`,
           );
-        const outcome = await observeNextFrame(app, ['linear-hdr', 'linear-ldr', 'final-srgb']);
+        const outcome = await observeNextFrame(app, ['linear-hdr', 'linear-ldr', 'final-display']);
         checks.ok(
           'three-domain observation resolved',
           outcome.ok,
@@ -69,7 +69,7 @@ export default defineFeature({
           observations.find((entry) => entry.domain === domain)?.metadata.format;
         checks
           .equal('domains', observations.map((entry) => entry.domain).sort(), [
-            'final-srgb',
+            'final-display',
             'linear-hdr',
             'linear-ldr',
           ])
@@ -80,8 +80,8 @@ export default defineFeature({
           .equal('linear HDR format', format('linear-hdr'), 'rgba16float')
           .ok(
             'LDR and final are distinct captures',
-            format('linear-ldr') !== undefined && format('final-srgb') !== undefined,
-            `ldr=${format('linear-ldr')} final=${format('final-srgb')}`,
+            format('linear-ldr') !== undefined && format('final-display') !== undefined,
+            `ldr=${format('linear-ldr')} final=${format('final-display')}`,
           );
         return checks.items;
       },

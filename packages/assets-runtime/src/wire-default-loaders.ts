@@ -22,8 +22,10 @@ import { createUiLoader, type UiAsset } from '@forgeax/engine-ui';
 import { LoaderRegistry } from './loader-registry';
 import { iesProfileLoader } from './loaders/ies-profile';
 import { INLINE_PACK_LOADERS } from './loaders/inline-pack';
+import { navigationMeshLoader } from './loaders/navigation-mesh.js';
 import { PACK_ARTIFACT_LOADERS } from './loaders/pack-artifact';
 import { pluginAssetLoader } from './loaders/plugin.js';
+import { terrainLoader } from './loaders/terrain.js';
 
 const uiPayloadLoader = createUiLoader();
 const uiLoader: Loader<UiAsset> = {
@@ -58,6 +60,8 @@ export function wireDefaultLoaders(
     ...INLINE_PACK_LOADERS,
     ...PACK_ARTIFACT_LOADERS,
     iesProfileLoader,
+    terrainLoader,
+    navigationMeshLoader,
     pluginAssetLoader,
   ]) {
     if (extraKinds.has(loader.kind)) continue;

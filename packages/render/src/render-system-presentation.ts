@@ -30,9 +30,11 @@ export function projectFramePresentation(input: {
       displayRenderableIndices.add(entry.renderableIndex);
   }
   const renderables = input.submissionRenderables.filter(
-    (_, index) =>
+    (renderable, index) =>
       displayRenderableIndices.has(index) &&
-      input.submissionRenderables[index]?.authorVisible !== false,
+      renderable.authorVisible !== false &&
+      renderable.instances?.instanceCount !== 0 &&
+      renderable.spriteInstances?.instanceCount !== 0,
   );
 
   let presentation: FramePresentation = 'ready';

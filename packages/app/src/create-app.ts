@@ -24,7 +24,7 @@
 // separates the canvas argument from the AppAssembleArgs plain object.
 
 import { type AssetRegistry, createCatalogSource } from '@forgeax/engine-assets-runtime';
-import type { AudioBackend } from '@forgeax/engine-audio';
+import { type AudioBackend, createAudioIntentBackend } from '@forgeax/engine-audio';
 import type { DebugDraw } from '@forgeax/engine-debug-draw';
 import { createWorldContext, Update, World, worldPlugin } from '@forgeax/engine-ecs';
 import type { InputBackend } from '@forgeax/engine-input';
@@ -432,6 +432,9 @@ async function createAppFromCanvas(
   if (opts?.standardProfile !== undefined) {
     Object.assign(rendererOpts, { standardProfile: opts.standardProfile });
   }
+  if (opts?.outputColorSpace !== undefined) {
+    Object.assign(rendererOpts, { outputColorSpace: opts.outputColorSpace });
+  }
   if (opts?.rhiInstrumentation !== undefined) {
     Object.assign(rendererOpts, { rhiInstrumentation: opts.rhiInstrumentation });
   }
@@ -443,8 +446,9 @@ async function createAppFromCanvas(
       captureReflectionFallbackReadback: opts.captureReflectionFallbackReadback,
     });
   }
-  if (opts?.ssrIdentity !== undefined) {
-    Object.assign(rendererOpts, { ssrIdentity: opts.ssrIdentity });
+  const ssrIdentity = preparedExecutionBootstrap?.ssrIdentity ?? opts?.ssrIdentity;
+  if (ssrIdentity !== undefined) {
+    Object.assign(rendererOpts, { ssrIdentity });
   }
 
   // FORGEAX_ENGINE_RHI_DEBUG=1 attaches the recorder at the Runtime backend
@@ -643,14 +647,17 @@ async function createAppFromCanvas(
     preparedExecutionBootstrap === undefined
       ? (opts?.plugins ?? [])
       : [
-          executionBootstrapHostPlugin({
-            canvas,
-            renderTargets: renderer,
-            ...(opts?.execution?.bootstrapPort === undefined
-              ? {}
-              : { port: opts.execution.bootstrapPort }),
-            setPointerLockAllowed: (allowed) => inputBackend?.setPointerLockAllowed?.(allowed),
-          }),
+          executionBootstrapHostPlugin(
+            {
+              canvas,
+              renderTargets: renderer,
+              ...(opts?.execution?.bootstrapPort === undefined
+                ? {}
+                : { port: opts.execution.bootstrapPort }),
+              setPointerLockAllowed: (allowed) => inputBackend?.setPointerLockAllowed?.(allowed),
+            },
+            renderer,
+          ),
           ...(preparedExecutionBootstrap.plugins ?? []),
         ];
   let pluginContext: Context;
@@ -674,6 +681,7 @@ async function createAppFromCanvas(
   const localProfiler = opts?.profiler;
   const pluginPrograms = preparedExecutionBootstrap?.pluginPrograms ?? opts?.pluginPrograms;
   const runtimePacks = preparedExecutionBootstrap?.runtimePacks ?? opts?.runtimePacks;
+  const hostAudioFactory = opts?.execution?.createHostAudio;
   const profile = mainEngineProfile({
     renderer,
     ...(assetAssembly === undefined ? {} : { assetAssembly }),
@@ -690,6 +698,25 @@ async function createAppFromCanvas(
       debugDraw = value;
     },
     extensions: [
+      ...(hostAudioFactory === undefined
+        ? []
+        : [
+            {
+              name: 'execution-host-audio',
+              provide: 'audio',
+              apply(ctx: Context) {
+                const consumer = hostAudioFactory();
+                ctx.effect(() => () => consumer.dispose(), 'execution/host-audio');
+                ctx.provide(
+                  'audio',
+                  createAudioIntentBackend({
+                    emit: (intent) => consumer.consume(intent),
+                    state: () => consumer.state(),
+                  }),
+                );
+              },
+            },
+          ]),
       ...(localProfiler === undefined || opts?.context !== undefined
         ? []
         : [
@@ -1120,27 +1147,7 @@ async function startRemoteServer(
   plugins?: unknown,
 ): Promise<{ readonly port: number; close(): Promise<void> } | undefined> {
   try {
-    const remoteServerMod = (await import(
-      /* @vite-ignore */ '@forgeax/engine-remote/server'
-    )) as unknown as {
-      startServer: (opts: {
-        port: number;
-        host?: string;
-        world: unknown;
-        renderer?: unknown;
-        assets?: unknown;
-        rhiCapture?: unknown;
-        introspection?: readonly unknown[];
-        profiler?: unknown;
-        execution?: unknown;
-        simulation?: unknown;
-        importModule?: (specifier: string) => Promise<unknown>;
-        plugins?: unknown;
-      }) => Promise<{
-        ok: boolean;
-        value?: { port: number; close(): Promise<void> };
-      }>;
-    };
+    const remoteServerMod = await import(/* @vite-ignore */ '@forgeax/engine-remote/server');
     const serverResult = await remoteServerMod.startServer({
       port: 0,
       host: '127.0.0.1',
@@ -1156,9 +1163,7 @@ async function startRemoteServer(
         import(/* @vite-ignore */ imports?.[specifier]?.url ?? specifier),
       ...(plugins !== undefined ? { plugins } : {}),
     });
-    if (serverResult.ok && serverResult.value !== undefined) {
-      return { port: serverResult.value.port, close: serverResult.value.close };
-    }
+    if (serverResult.ok) return serverResult.value;
   } catch (_error) {
     // Dynamic import or server start failed; the app continues without remote.
   }

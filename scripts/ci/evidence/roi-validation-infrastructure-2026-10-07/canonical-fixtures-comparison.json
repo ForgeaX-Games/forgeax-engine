@@ -1,0 +1,158 @@
+{
+  "scope": "Six DevKit test fixture roots only; no Engine/Host production change",
+  "delivered_change": "Canonicalize mkdtemp roots through realpath; existing symlink regression retained",
+  "local_acceptance": "NOT QUALIFIED: original five session cases were not all green on this Mac; native browser cleanup is an external dependency failure",
+  "full_six_original_run": {
+    "log": "devkit-six-first.log",
+    "process_exit": 1,
+    "tests_passed": 21,
+    "tests_failed": 7,
+    "test_files_passed": 4,
+    "test_files_failed": 2,
+    "failures": {
+      "dev-plugin-session": {
+        "failed": 5,
+        "budget_ms": 30000
+      },
+      "shader-check.integration": {
+        "failed": 2,
+        "budget_ms": 120000
+      }
+    },
+    "command_assignments": {
+      "PATH": "Node 22",
+      "vitest_maxWorkers": 1,
+      "vitest_file_parallelism": false,
+      "package_build_concurrency": "not explicitly assigned",
+      "shader_compile_workers": "not explicitly assigned",
+      "cargo_build_jobs": "not explicitly assigned"
+    }
+  },
+  "original_five_channel_run": {
+    "log": "devkit-session-five-chrome-beta.log",
+    "provider": "chrome-beta",
+    "process_exit": 1,
+    "passed": ["raw"],
+    "timed_out": ["js", "json", "virtual", "external"],
+    "original_budget_ms": 30000,
+    "concurrency_assignments": {
+      "FORGEAX_PACKAGE_BUILD_CONCURRENCY": "1",
+      "FORGEAX_SHADER_COMPILE_WORKERS": "1",
+      "CARGO_BUILD_JOBS": "1"
+    }
+  },
+  "diagnostic_comparison": [
+    {
+      "provider": "bundled",
+      "verified_executable_version": "148.0.7778.96",
+      "raw_log": "devkit-session-js-diagnostic.log",
+      "selected_diagnostic_tests": 1,
+      "unselected_tests": 4,
+      "test_process_exit": 0,
+      "original_case_budget_ms": 30000,
+      "native_shutdown_status": "not observed: no pw:browser debug log",
+      "measured_durations_ms": {
+        "browser-launch": 540.452,
+        "browser-close": 26821.333,
+        "old-vite-close": 0.84,
+        "vite-1-close": 0.072,
+        "vite-2-close": 0.842,
+        "vite-3-close": 0.33,
+        "http-close": 0.295
+      },
+      "assertions_complete_ms": 2093.238,
+      "browser_close_begin_ms": 2111.147,
+      "browser_close_end_ms": 28932.48
+    },
+    {
+      "provider": "chrome-beta",
+      "verified_executable_version": "149.0.7827.3",
+      "raw_log": "devkit-session-js-chrome-beta-diagnostic.log",
+      "selected_diagnostic_tests": 1,
+      "unselected_tests": 4,
+      "test_process_exit": 0,
+      "original_case_budget_ms": 30000,
+      "native_shutdown_status": "not observed: no pw:browser debug log",
+      "measured_durations_ms": {
+        "browser-launch": 1882.915,
+        "browser-close": 14436.434,
+        "old-vite-close": 1.567,
+        "vite-1-close": 0.059,
+        "vite-2-close": 0.535,
+        "vite-3-close": 0.43,
+        "http-close": 0.157
+      },
+      "assertions_complete_ms": 7208.791,
+      "browser_close_begin_ms": 7230.728,
+      "browser_close_end_ms": 21667.162
+    },
+    {
+      "provider": "chrome-beta",
+      "verified_executable_version": "149.0.7827.3",
+      "raw_log": "devkit-session-context-close-diagnostic.log",
+      "selected_diagnostic_tests": 1,
+      "unselected_tests": 4,
+      "test_process_exit": 1,
+      "original_case_budget_ms": 30000,
+      "native_shutdown_status": "Vitest test timed out; Playwright teardown killed Chromium with SIGKILL",
+      "measured_durations_ms": {
+        "browser-launch": 1078.284,
+        "context-1-close": 50.819,
+        "context-2-close": 4.153,
+        "old-vite-close": 29.004
+      },
+      "assertions_complete_ms": 5649.994,
+      "browser_close_begin_ms": 5837.454,
+      "browser_close_end_ms": null
+    },
+    {
+      "provider": "chrome",
+      "verified_executable_version": "155.0.8059.39",
+      "raw_log": "devkit-session-chrome-stable-diagnostic.log",
+      "selected_diagnostic_tests": 1,
+      "unselected_tests": 4,
+      "test_process_exit": 0,
+      "original_case_budget_ms": 30000,
+      "native_shutdown_status": "Chromium teardown watchdog expired; process exited with code 2; not qualified",
+      "measured_durations_ms": {
+        "browser-launch": 1642.048,
+        "browser-close": 17369.032,
+        "context-1-close": 11.826,
+        "context-2-close": 19.173,
+        "old-vite-close": 0.933,
+        "vite-1-close": 0.074,
+        "vite-2-close": 9.098,
+        "vite-3-close": 0.277,
+        "http-close": 0.217
+      },
+      "assertions_complete_ms": 4090.217,
+      "browser_close_begin_ms": 4254.373,
+      "browser_close_end_ms": 21623.405
+    }
+  ],
+  "retained_contracts": [
+    "all original assertions",
+    "same real Vite/module/browser paths",
+    "headless launch",
+    "no-sandbox and disable-gpu flags",
+    "30000ms session case budget",
+    "120000ms shader case budget"
+  ],
+  "temporary_changes": "All stage probes and explicit diagnostic context closes restored; canonicalization diff only",
+  "remaining_validation": "Full exact-head CI must cover unchanged original five session cases on Linux; local Mac native Chromium shutdown is unqualified.",
+  "prepared_original_shader_run": {
+    "log": "devkit-shader-prepared-final.log",
+    "node": "v22.23.2",
+    "manifest": "shared-build-inputs/manifest.json",
+    "process_exit": 0,
+    "tests_passed": 2,
+    "original_case_budget_ms": 120000,
+    "test_durations_ms": [12558, 25042],
+    "concurrency_assignments": {
+      "FORGEAX_PACKAGE_BUILD_CONCURRENCY": "1",
+      "FORGEAX_SHADER_COMPILE_WORKERS": "1",
+      "CARGO_BUILD_JOBS": "1"
+    },
+    "note": "Broken named WGSL rejection is expected; both original Result assertions pass with strict prepared engine inputs"
+  }
+}

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { type EntityHandle, FixedUpdate, Update, World } from '@forgeax/engine-ecs';
 import { describe, expect, it } from 'vitest';
 import { GlobalTransform, propagateTransforms, Transform } from '../index';
-import { registerPropagateTransforms } from '../systems';
+import { registerPropagateTransforms } from '../systems/propagate-transforms';
 
 const COUNTS = [10_000, 100_000] as const;
 const MOVERS = [1, 100, 10_000] as const;
@@ -99,7 +99,10 @@ describe('flat Transform propagation contract', () => {
   });
 
   it('does not retain an entity collection or a second lane in the flat owner', async () => {
-    const source = readFileSync('packages/scene/src/systems/propagate-transforms.ts', 'utf8');
+    const source = readFileSync(
+      new URL('../systems/propagate-transforms.ts', import.meta.url),
+      'utf8',
+    );
     expect(source.slice(0, source.indexOf('function walkChildren('))).not.toMatch(
       /new (Map|Set)|\b(Map|Set)</,
     );

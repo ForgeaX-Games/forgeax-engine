@@ -1,16 +1,28 @@
+import type { Buffer } from '@forgeax/engine-rhi';
 import { attachRecorder, buildFrameModel, decodeTape, openReplay } from '@forgeax/engine-rhi-debug';
 import * as webgpu from '@forgeax/engine-rhi-webgpu';
 import { assert, expect } from 'vitest';
-import { CARD_LOOKUP_STRIDE, CardLookupStatus } from '../../raytracing/card-lookup';
+import {
+  CARD_LOOKUP_STRIDE,
+  CardLookupStatus,
+  packCardLookupProjections,
+} from '../../raytracing/card-lookup';
 import {
   createGlobalSdfCardLookup,
+  createGlobalSdfCardLookupRecorder,
   GLOBAL_CARD_CANDIDATE_STRIDE,
+  GLOBAL_SDF_CARD_LOOKUP_WGSL,
   GlobalCardCandidateFlags,
+  type GlobalSdfCardLookupInputs,
 } from '../../raytracing/global-card-lookup';
-import { createGlobalSdfComposition } from '../../raytracing/global-sdf';
+import { createGlobalSdfComposition, packGlobalSdfComposition } from '../../raytracing/global-sdf';
 import { createGlobalSdfQuery, GlobalSdfQueryStatus } from '../../raytracing/global-sdf-query';
 import type { SdfMeshInstance } from '../../raytracing/sdf-query';
-import { createSurfaceCapture, type SurfaceCardSource } from '../../raytracing/surface-cards';
+import {
+  CARD_TEXTURES,
+  createSurfaceCapture,
+  type SurfaceCardSource,
+} from '../../raytracing/surface-cards';
 import { readBuffer } from './path-tracer.fixture';
 import type { SdfCardsFixture } from './sdf-cards.commands';
 import { sdfCubeInstance } from './sdf-cards.fixture';
@@ -27,7 +39,11 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
   assert(raw);
   const errors: string[] = [];
   raw.addEventListener('uncapturederror', (e) => errors.push(e.error.message));
-  const field = { ...fixture.field, values: Float32Array.from(fixture.field.values) };
+  const field = {
+    ...fixture.field,
+    bricks: Uint32Array.from(fixture.field.bricks),
+    values: Float32Array.from(fixture.field.values),
+  };
   const source = (id: number, z: number, color: number[]): SurfaceCardSource => ({
     instance: {
       ...sdfCubeInstance,
@@ -69,6 +85,9 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
     candidates: Uint8Array;
     samples: Uint8Array;
     hits: Uint8Array;
+    borrowedCandidates: Uint8Array;
+    borrowedSamples: Uint8Array;
+    borrowedOffset: number;
   }[] = [];
   try {
     for (const mode of modes) {
@@ -132,6 +151,64 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
           expected,
         )
       ).unwrap();
+      const borrowedOwned: Buffer[] = [];
+      const borrowedOffset = Math.max(
+        256,
+        device.limits.minStorageBufferOffsetAlignment,
+        device.limits.minUniformBufferOffsetAlignment,
+      );
+      const makeBorrowed = (label: string, data: Uint8Array) => {
+        const bytes = new Uint8Array(borrowedOffset + data.byteLength + 256).fill(0xcd);
+        bytes.set(data, borrowedOffset);
+        const buffer = device.createBuffer({ label, size: bytes.byteLength, usage: 0xcc }).unwrap();
+        borrowedOwned.push(buffer);
+        device.queue.writeBuffer(buffer, 0, bytes).unwrap();
+        return { buffer, offset: borrowedOffset, size: data.byteLength };
+      };
+      const packed = packGlobalSdfComposition(objects, composition.grid).unwrap();
+      const projections = packCardLookupProjections(
+        cards,
+        composition.sources.map((source) => ({
+          instanceId: source.instanceId,
+          key: source.geometryKey,
+        })),
+        expected,
+      );
+      const inputs: GlobalSdfCardLookupInputs = {
+        hits: { buffer: query.buffers.hits, size: query.rayCount * 64 },
+        instances: {
+          buffer: composition.buffers.instances,
+          size: packed.data.instances.byteLength,
+        },
+        fields: { buffer: composition.buffers.fields, size: packed.data.fields.byteLength },
+        bounds: { buffer: composition.buffers.bounds, size: packed.data.bounds.byteLength },
+        grid: { buffer: composition.buffers.settings, size: 48 },
+        candidates: makeBorrowed(
+          'global-cards.borrowed-candidates',
+          new Uint8Array(query.rayCount * GLOBAL_CARD_CANDIDATE_STRIDE),
+        ),
+        cards: makeBorrowed('global-cards.borrowed-projections', projections.bytes),
+        output: makeBorrowed(
+          'global-cards.borrowed-samples',
+          new Uint8Array(query.rayCount * 4 * CARD_LOOKUP_STRIDE),
+        ),
+        settings: makeBorrowed(
+          'global-cards.borrowed-settings',
+          new Uint8Array(new Uint32Array([projections.count, cards.resolution, 0, 0]).buffer),
+        ),
+        textures: Object.fromEntries(
+          CARD_TEXTURES.map((name) => [
+            name,
+            device.createTextureView(cards.textures[name], {}).unwrap(),
+          ]),
+        ) as GlobalSdfCardLookupInputs['textures'],
+      };
+      const borrowed = createGlobalSdfCardLookupRecorder(
+        device,
+        (
+          await recorder.backend.createShaderModule(device, { code: GLOBAL_SDF_CARD_LOOKUP_WGSL })
+        ).unwrap(),
+      ).unwrap();
       const statuses = [1, 1, 2, 0, 3, 4, 5, 1, 1];
       if (mode !== 'live') {
         const bytes = new Uint8Array(9 * 64),
@@ -154,6 +231,11 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
         }
         cards.record(encoder).unwrap();
         lookup.record(encoder).unwrap();
+        for (const stage of ['selectCandidates', 'sampleCards'] as const) {
+          const pass = encoder.beginComputePass({ label: `global-cards.borrowed.${stage}` });
+          borrowed.record(pass, inputs, query.rayCount, stage).unwrap();
+          pass.end();
+        }
         device.queue.submit([encoder.finish().unwrap()]).unwrap();
         (await recorder.frameBoundary()).unwrap();
         const tape = (await pending).unwrap().bytes;
@@ -164,6 +246,29 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
         );
         const samples = await readBuffer(device, lookup.buffer, 9 * 4 * CARD_LOOKUP_STRIDE);
         const hits = await readBuffer(device, query.buffers.hits, 9 * 64);
+        const borrowedCandidates = await readBuffer(
+          device,
+          inputs.candidates.buffer,
+          borrowedOffset + inputs.candidates.size + 256,
+        );
+        const borrowedSamples = await readBuffer(
+          device,
+          inputs.output.buffer,
+          borrowedOffset + inputs.output.size + 256,
+        );
+        expect(
+          borrowedCandidates.subarray(borrowedOffset, borrowedOffset + candidates.byteLength),
+        ).toEqual(candidates);
+        expect(
+          borrowedSamples.subarray(borrowedOffset, borrowedOffset + samples.byteLength),
+        ).toEqual(samples);
+        for (const [bytes, size] of [
+          [borrowedCandidates, candidates.byteLength],
+          [borrowedSamples, samples.byteLength],
+        ] as const) {
+          expect(bytes.subarray(0, borrowedOffset).every((value) => value === 0xcd)).toBe(true);
+          expect(bytes.subarray(borrowedOffset + size).every((value) => value === 0xcd)).toBe(true);
+        }
         const c = new DataView(candidates.buffer),
           s = new DataView(samples.buffer),
           h = new DataView(hits.buffer);
@@ -211,8 +316,18 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
           for (let tap = 0; tap < 4; tap++) weight += s.getFloat32(offset + 96 + tap * 4, true);
           expect(weight).toBeCloseTo(mapped ? 1 : 0, 6);
         }
-        evidence.push({ mode, tape, candidates, samples, hits });
+        evidence.push({
+          mode,
+          tape,
+          candidates,
+          samples,
+          hits,
+          borrowedCandidates,
+          borrowedSamples,
+          borrowedOffset,
+        });
       } finally {
+        for (const buffer of borrowedOwned) device.destroyBuffer(buffer).unwrap();
         lookup.dispose();
         cards.dispose();
         query.dispose();
@@ -227,9 +342,11 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
     const tape = decodeTape(item.tape).unwrap(),
       model = buildFrameModel(tape);
     expect(model.unseededResources).toEqual([]);
-    const selection = model.works.at(-2),
-      sampling = model.works.at(-1);
-    assert(selection && sampling);
+    const selection = model.works.at(-4),
+      sampling = model.works.at(-3),
+      borrowedSelection = model.works.at(-2),
+      borrowedSampling = model.works.at(-1);
+    assert(selection && sampling && borrowedSelection && borrowedSampling);
     const fresh = (await (await webgpu.rhi.requestAdapter()).unwrap().requestDevice()).unwrap();
     const native = webgpu._internal_getRawDevice(fresh);
     assert(native);
@@ -238,13 +355,24 @@ export async function verifyGlobalCards(fixture: SdfCardsFixture) {
       await openReplay(tape, { device: fresh, createShaderModule: webgpu.createShaderModule })
     ).unwrap();
     try {
-      for (const [work, binding, expected] of [
-        [selection, 5, item.candidates],
-        [sampling, 7, item.samples],
+      for (const [work, binding, expected, offset] of [
+        [selection, 5, item.candidates, 0],
+        [sampling, 7, item.samples, 0],
+        [borrowedSelection, 5, item.borrowedCandidates, item.borrowedOffset],
+        [borrowedSampling, 7, item.borrowedSamples, item.borrowedOffset],
       ] as const) {
         const id = work.bindings.find((b) => b.binding === binding)?.resourceId;
         assert(id);
-        expect((await replay.readResource(id)).unwrap().bytes.every((b) => b === 0)).toBe(true);
+        const before = (await replay.readResource(id)).unwrap().bytes;
+        const size = binding === 5 ? item.candidates.byteLength : item.samples.byteLength;
+        expect(before.subarray(offset, offset + size).every((b) => b === 0)).toBe(true);
+        if (offset) {
+          const range = work.bindings.find((b) => b.binding === binding);
+          expect(range?.bufferOffset).toBe(offset);
+          expect(range?.bufferSize).toBe(size);
+          expect(before.subarray(0, offset).every((b) => b === 0xcd)).toBe(true);
+          expect(before.subarray(offset + size).every((b) => b === 0xcd)).toBe(true);
+        }
         expect((await replay.readResourceAtWork(id, work.workIndex)).unwrap().bytes).toEqual(
           expected,
         );

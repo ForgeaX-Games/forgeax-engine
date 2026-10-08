@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMaterialLoader } from '@forgeax/engine-assets-runtime';
-import { create, globals } from 'webgpu';
+import { create, globals } from '@forgeax/engine-dawn-node';
 
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_PATH = resolve(APP_ROOT, 'assets', 'pulse-material.pack.json');
@@ -167,6 +167,6 @@ console.log(JSON.stringify({
   backend: 'dawn-webgpu',
   variant,
   pixel,
-  rootArtifactDigest: material.artifactDigest,
+  rootArtifactDigest: material.record.artifactDigest,
   normalTextureSlot: authoredNormalTextureGuid,
 }));

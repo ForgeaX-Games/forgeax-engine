@@ -93,8 +93,8 @@ describe('Point/Spot and shared-light regression guard', () => {
     const pointSlot = packDirectLightSlot({ ...point, shadowAtlasLayer: 2 });
     const spotSlot = packDirectLightSlot(spot);
 
-    expect(pointSlot.byteLength).toBe(80);
-    expect(spotSlot.byteLength).toBe(80);
+    expect(pointSlot.byteLength).toBe(96);
+    expect(spotSlot.byteLength).toBe(96);
     expect(new Uint32Array(pointSlot.buffer)[16]).toBe(0);
     expect(new Uint32Array(pointSlot.buffer)[17]).toBe(2);
     expect((new Uint32Array(spotSlot.buffer)[16] ?? 0) & DIRECT_LIGHT_SLOT_KIND_MASK).toBe(1);

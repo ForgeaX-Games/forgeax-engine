@@ -18,33 +18,28 @@ import { UniqueRefStaleError } from '../errors';
 import { UniqueRefStore } from '../unique-ref-store';
 
 describe('UniqueRefStore release ordering + throw-safety (feat-20260614 M1)', () => {
-  it('AC-01: releaseCallbacks entry is removed BEFORE onRelease fires', () => {
+  it('AC-01: retires payload and generation before cleanup can re-enter', () => {
     const store = new UniqueRefStore();
-    let observedHasCallback: boolean | null = null;
-
-    // Spy reads the private releaseCallbacks Map at the moment cb fires.
-    // After the M1 fix (w2) the entry is deleted before invocation, so the
-    // observation is `false`. Before the fix the entry is still live so
-    // observation is `true` -> assertion fails (red).
     const onRelease = vi.fn((_payload: { id: number }) => {
-      // biome-ignore lint/suspicious/noExplicitAny: targeted private read for the order assertion
-      const internalCallbacks = (store as any).releaseCallbacks as Map<number, unknown>;
-      // biome-ignore lint/suspicious/noExplicitAny: handle raw u32 read for the lookup
-      const raw = (store as any).payloads as Map<number, unknown>;
-      // The handle is a u32 brand. Re-derive raw via the live keys snapshot
-      // since the handle isn't directly in scope inside the cb closure.
-      void raw;
-      // Use the callbacks map's keys: at the moment of cb invocation, the
-      // entry MUST already be gone -> map size 0 (only one alloc was made).
-      observedHasCallback = internalCallbacks.size > 0;
+      expect(store._liveCount()).toBe(0);
+      expect(store.isLive(handle)).toBe(false);
+      expect(store.resolve(handle)).toMatchObject({
+        ok: false,
+        error: { code: 'unique-ref-stale' },
+      });
+      const next = store.alloc('Test', { id: 8 });
+      expect(handleSlot(next)).toBe(handleSlot(handle));
+      expect(handleGeneration(next)).toBe(handleGeneration(handle) + 1);
+      expect(store.release(handle)).toMatchObject({
+        ok: false,
+        error: { code: 'unique-ref-stale' },
+      });
+      store.release(next).unwrap();
     });
-
     const handle = store.alloc('Test', { id: 7 }, onRelease);
-    const result = store.release(handle);
-
-    expect(result.ok).toBe(true);
+    expect(store.release(handle).ok).toBe(true);
     expect(onRelease).toHaveBeenCalledTimes(1);
-    expect(observedHasCallback).toBe(false);
+    expect(store._liveCount()).toBe(0);
   });
 
   it('AC-02 + AC-06: throwing onRelease re-throws once; second release returns Stale (gen incremented, M4)', () => {

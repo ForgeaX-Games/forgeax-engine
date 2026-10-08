@@ -148,36 +148,27 @@ function wrapSink(
       terminal = result;
       return result;
     }
+    let failureMessage: string | undefined;
     try {
       const sinkResult = sink.write(result.value);
-      if (sinkResult !== undefined && !sinkResult.ok) {
-        terminal = {
-          ok: false,
-          error: {
-            code: 'profile-sink-failed',
-            expected: 'a sink that accepts a partial or complete artifact',
-            hint: 'Replace the sink or retain the returned partial artifact for offline retry.',
-            detail: { message: sinkResult.error.detail?.message ?? 'sink rejected artifact' },
-          },
-        };
-        return terminal;
-      }
-      terminal = result;
-      return result;
+      if (sinkResult !== undefined && !sinkResult.ok)
+        failureMessage = sinkResult.error.detail?.message ?? 'sink rejected artifact';
     } catch (caught) {
-      terminal = {
-        ok: false,
-        error: {
-          code: 'profile-sink-failed',
-          expected: 'a sink that accepts a partial or complete artifact',
-          hint: 'Replace the sink or retain the returned partial artifact for offline retry.',
-          detail: {
-            message: caught instanceof Error ? caught.message : 'sink threw a non-Error value',
-          },
-        },
-      };
-      return terminal;
+      failureMessage = caught instanceof Error ? caught.message : 'sink threw a non-Error value';
     }
+    terminal =
+      failureMessage === undefined
+        ? result
+        : {
+            ok: false,
+            error: {
+              code: 'profile-sink-failed',
+              expected: 'a sink that accepts a partial or complete artifact',
+              hint: 'Replace the sink or retain the returned partial artifact for offline retry.',
+              detail: { message: failureMessage },
+            },
+          };
+    return terminal;
   }
 
   return {

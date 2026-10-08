@@ -16,6 +16,7 @@ import type {
 
 const expectedCodes = [
   'camera-view-invalid',
+  'stereo-camera-invalid',
   'projected-decal-invalid',
   'planar-reflection-invalid',
   'render-publication-invalid',
@@ -36,6 +37,7 @@ const expectedCodes = [
   'recovery-failed',
   'cleanup-failed',
   'frame-receipt-stale',
+  'frame-submit-rejected',
   'renderer-contract-failed',
   'observation-unavailable',
   'scene-data-unavailable',
@@ -45,6 +47,7 @@ const expectedCodes = [
   'dynamic-resolution-timing-unavailable',
   'barrel-distortion-invalid-parameter',
   'lens-effects-invalid-parameter',
+  'lens-flare-invalid-parameter',
   'outline-invalid-parameter',
   'motion-blur-invalid-params',
 
@@ -63,6 +66,7 @@ const expectedCodes = [
   'skin-material-mismatch',
   'material-skin-attr-missing',
   'transmission-capability-missing',
+  'material-sampled-texture-budget-exceeded',
   'render-feature-registration-conflict',
   'render-feature-stage-failed',
   'render-feature-capability-missing',
@@ -86,8 +90,10 @@ const expectedCodes = [
   'light-resource-unavailable',
   'render-target-descriptor-invalid',
   'render-target-capability-missing',
+  'render-target-layer-invalid',
   'render-target-state-invalid',
   'render-target-operation-failed',
+  'framebuffer-snapshot-failed',
   'reflection-probe-budget-exceeded',
   'render-intent-invalid',
   'volume-owner-conflict',
@@ -100,6 +106,8 @@ const expectedCodes = [
   'cloud-layer-cache-invalid',
   'cloud-layer-capability-missing',
   'cloud-layer-resource-failed',
+  'external-texture-invalid',
+  'external-texture-state-invalid',
 ] as const satisfies readonly RenderErrorCode[];
 type ExpectedCodeUnion = (typeof expectedCodes)[number];
 

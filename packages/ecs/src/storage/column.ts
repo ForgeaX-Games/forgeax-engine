@@ -17,7 +17,7 @@
 // elementBytes`; for fixed-capacity fields the schema-declared N is the
 // capacity.
 
-import { type ComponentSchema, type ScalarFieldType, TYPE_METADATA } from '../component';
+import { type ScalarFieldType, TYPE_METADATA } from '../component';
 
 // ────────────────────────────────────────────────────────────────────────────
 // ManagedColumnReader — read-only view onto a managed-vocab column
@@ -220,28 +220,4 @@ export function normalizeBufferWrite(raw: unknown): Uint8Array | null {
     return new Uint8Array(raw);
   }
   return null;
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Hot/cold classification
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Determine if a schema is "hot" (all fields are scalar → TypedArray SoA).
- * Returns true if all fields are in the scalar field type set.
- * Empty schema (tag component) returns true by convention (vacuously true).
- *
- * Schema-vocab keywords (`buffer:<N>` / `ref<T>` / `handle<T>` / `entity` /
- * `array<T,N>` / `array<T>`) are explicitly cold — their storage is owned by
- * separate subsystems (UniqueRefStore / BufferPool), not the column SoA path. The keyword check uses an unsafe narrowing because
- * `SchemaFieldType` is wider than the set's `ScalarFieldType` element type;
- * the `has` test is the runtime gate.
- */
-export function isHotSchema(schema: ComponentSchema): boolean {
-  for (const fieldType of Object.values(schema)) {
-    if (!TYPE_METADATA[fieldType]?.isScalar) {
-      return false;
-    }
-  }
-  return true;
 }

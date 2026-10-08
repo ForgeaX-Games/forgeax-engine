@@ -42,6 +42,7 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'graph-build-failed':
       return code;
+    case 'frame-submit-rejected':
     case 'device-operation-failed':
       return code;
     case 'surface-unavailable':
@@ -92,9 +93,14 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'cloud-layer-resource-failed':
       return code;
+    case 'external-texture-invalid':
+      return code;
+    case 'external-texture-state-invalid':
+      return code;
     case 'atmosphere-invalid-parameter':
       return code;
     case 'lens-effects-invalid-parameter':
+    case 'lens-flare-invalid-parameter':
     case 'barrel-distortion-invalid-parameter':
     case 'outline-invalid-parameter':
       return code;
@@ -113,6 +119,10 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
     case 'render-target-capability-missing':
       return code;
     case 'render-target-state-invalid':
+      return code;
+    case 'render-target-layer-invalid':
+      return code;
+    case 'framebuffer-snapshot-failed':
       return code;
     case 'render-target-operation-failed':
       return code;
@@ -154,6 +164,8 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
       return code;
     case 'transmission-capability-missing':
       return code;
+    case 'material-sampled-texture-budget-exceeded':
+      return code;
     case 'points-lines-invalid-style':
       return code;
     case 'points-lines-topology-mismatch':
@@ -178,6 +190,8 @@ function exhaustiveSwitchOnRenderCode(code: RenderErrorCode): string {
     case 'volume-invalid-parameters':
       return code;
     case 'camera-view-invalid':
+      return code;
+    case 'stereo-camera-invalid':
       return code;
     default: {
       const exhaustive: never = code;
@@ -247,6 +261,11 @@ function narrowRenderError(err: RenderError): void {
     case 'graph-build-failed':
       void err.detail.operation;
       void err.detail.cause;
+      break;
+    case 'frame-submit-rejected':
+      void err.detail.operation;
+      void err.detail.stage;
+      void err.detail.accepted;
       break;
     case 'device-operation-failed':
       void err.detail.operation;
@@ -371,6 +390,18 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.state;
       void err.detail.generation;
       break;
+    case 'render-target-layer-invalid':
+      void err.detail.operation;
+      void err.detail.layer;
+      void err.detail.shape;
+      void err.detail.layerCount;
+      break;
+    case 'framebuffer-snapshot-failed':
+      void err.detail.reason;
+      void err.detail.expected;
+      void err.detail.actual;
+      void err.detail.frameId;
+      break;
     case 'render-target-operation-failed':
       void err.detail.operation;
       void err.detail.stage;
@@ -494,6 +525,12 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.capability;
       void err.detail.stage;
       break;
+    case 'material-sampled-texture-budget-exceeded':
+      void err.detail.materialHandle;
+      void err.detail.limit;
+      void err.detail.required;
+      void err.detail.conflicts;
+      break;
     case 'projector-binding-failed':
       void err.detail.guid;
       void err.detail.status;
@@ -533,7 +570,16 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.generation;
       void err.detail.cause;
       break;
+    case 'external-texture-invalid':
+      void err.detail.operation;
+      void err.detail.reason;
+      break;
+    case 'external-texture-state-invalid':
+      void err.detail.reason;
+      void err.detail.generation;
+      break;
     case 'lens-effects-invalid-parameter':
+    case 'lens-flare-invalid-parameter':
       void err.detail.field;
       void err.detail.value;
       void err.detail.minimum;
@@ -554,6 +600,10 @@ function narrowRenderError(err: RenderError): void {
       void err.detail.value;
       break;
     case 'camera-view-invalid':
+      void err.detail.field;
+      void err.detail.value;
+      break;
+    case 'stereo-camera-invalid':
       void err.detail.field;
       void err.detail.value;
       break;

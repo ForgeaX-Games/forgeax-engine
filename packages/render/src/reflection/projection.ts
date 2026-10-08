@@ -185,18 +185,6 @@ export interface ReflectionFallbackProjection extends ReflectionFallbackProjecti
   readonly source: ReflectionFallbackSource;
 }
 
-export type ReflectionFallbackMismatchKind = 'source' | 'coverage' | 'extent' | 'brdf';
-
-export interface ReflectionFallbackMismatch {
-  readonly code:
-    | 'reflection-fallback-source-mismatch'
-    | 'reflection-fallback-coverage-mismatch'
-    | 'reflection-fallback-extent-mismatch'
-    | 'reflection-fallback-brdf-mismatch';
-  readonly expected: string;
-  readonly actual: string;
-}
-
 export interface ReflectionFallbackInputInvalid {
   readonly code: 'reflection-fallback-input-invalid';
   readonly field: string;
@@ -320,44 +308,6 @@ export function deriveReflectionFallbackProjection(
       brdfSignature: input.brdfSignature,
     }),
   };
-}
-
-export function validateReflectionFallbackCompatibility(
-  expected: ReflectionFallbackProjectionInput,
-  actual: ReflectionFallbackProjectionInput,
-): { readonly ok: true } | { readonly ok: false; readonly error: ReflectionFallbackMismatch } {
-  const mismatch = (
-    kind: ReflectionFallbackMismatchKind,
-    expectedValue: string,
-    actualValue: string,
-  ): { readonly ok: false; readonly error: ReflectionFallbackMismatch } => ({
-    ok: false,
-    error: {
-      code: `reflection-fallback-${kind}-mismatch` as ReflectionFallbackMismatch['code'],
-      expected: expectedValue,
-      actual: actualValue,
-    },
-  });
-  if (expected.source !== actual.source) {
-    return mismatch('source', expected.source, actual.source);
-  }
-  if (expected.coverage !== actual.coverage) {
-    return mismatch('coverage', String(expected.coverage), String(actual.coverage));
-  }
-  const expectedExtent = expected.extent;
-  const actualExtent = actual.extent;
-  if (
-    (expectedExtent === undefined && actualExtent !== undefined) ||
-    (expectedExtent !== undefined &&
-      (actualExtent === undefined ||
-        expectedExtent.some((value, index) => value !== actualExtent[index])))
-  ) {
-    return mismatch('extent', JSON.stringify(expectedExtent), JSON.stringify(actualExtent));
-  }
-  if (expected.brdfSignature !== actual.brdfSignature) {
-    return mismatch('brdf', expected.brdfSignature, actual.brdfSignature);
-  }
-  return { ok: true };
 }
 
 function contains(fact: ReflectionProbeFact, point: readonly [number, number, number]): boolean {

@@ -14,6 +14,7 @@
 //       transform / audio -- one mental model covers every wiring.
 
 import type { Plugin } from '@forgeax/engine-plugin';
+import { scenePlugin } from '@forgeax/engine-scene';
 import { registerPhysicsComponents } from './components.js';
 import { PhysicsError } from './errors.js';
 import { loadRapier2DBackend, loadRapier3DBackend } from './load-rapier-backend.mjs';
@@ -85,6 +86,7 @@ export function physicsPlugin(backend: PhysicsBackend): Plugin {
     inject: ['world'],
     provide: 'physics',
     async apply(ctx) {
+      await ctx.plugin(scenePlugin());
       const world = ctx.world;
       let physics: PhysicsWorld | PhysicsWorld2D;
       let registerSystems: () => () => void;

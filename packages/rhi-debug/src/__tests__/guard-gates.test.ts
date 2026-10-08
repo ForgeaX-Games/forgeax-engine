@@ -108,15 +108,6 @@ describe('RHI-debug error owner gate', () => {
   });
 });
 
-describe('W92: readback staging usage owner', () => {
-  it('keeps one COPY_DST | MAP_READ owner for all three readback paths', () => {
-    const readbackPath = path.resolve(__dirname, '..', '..', 'src', 'readback.ts');
-    const content = readFileSync(readbackPath, 'utf-8');
-    expect(content.match(/const COPY_DST_MAP_READ = 9/g)).toHaveLength(1);
-    expect(content.match(/usage: COPY_DST_MAP_READ/g)).toHaveLength(3);
-  });
-});
-
 describe('AC-08 partial: import.meta.hot in rhiDebugFlag guard', () => {
   it('all hotMeta.hot / import.meta.hot code references are inside rhiDebugFlag guard block', () => {
     const createAppPath = path.resolve(
@@ -214,7 +205,8 @@ describe('RHI-debug smoke roster gate', () => {
       frameCount: number;
       execution: { status: string; mode: string };
       entries: readonly {
-        frames: number;
+        frames: number | null;
+        oracle?: { kind: string };
         command: string;
         invocation: string;
         tokens: readonly string[];
@@ -228,7 +220,7 @@ describe('RHI-debug smoke roster gate', () => {
     expect(
       roster.entries.every(
         (entry) =>
-          entry.frames === 60 &&
+          entry.frames === (entry.oracle?.kind === 'assertion' ? null : 60) &&
           entry.command === entry.invocation &&
           entry.tokens.join(' ') === entry.invocation &&
           entry.tokens[0] === 'pnpm' &&

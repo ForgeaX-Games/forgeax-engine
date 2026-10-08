@@ -53,10 +53,19 @@ async function withRenderer<T>(
 
 it('strips specular AA from every composed Standard program for the baseline', () => {
   expect(stripped.patched).toBeGreaterThan(0);
-  const json = JSON.stringify(stripped.manifest);
-  const definitions = json.match(/fn specularAntiAliasedRoughness\w*\([^{]*\{/g) ?? [];
-  const identities =
-    json.match(/fn specularAntiAliasedRoughness\w*\((\w+)[^{]*\{ return \1;/g) ?? [];
+  const sources = [
+    ...stripped.manifest.entries.map((entry) => entry.wgsl),
+    ...stripped.manifest.materialShaders.flatMap((material) => [
+      material.composedWgsl,
+      ...material.variants.map((variant) => variant.composedWgsl),
+    ]),
+  ];
+  const definitions = sources.flatMap(
+    (source) => source.match(/fn specularAntiAliasedRoughness\w*\([^{]*\{/g) ?? [],
+  );
+  const identities = sources.flatMap(
+    (source) => source.match(/fn specularAntiAliasedRoughness\w*\((\w+)[^{]*\{ return \1;/g) ?? [],
+  );
   expect(definitions.length).toBeGreaterThan(0);
   expect(identities.length).toBe(definitions.length);
 });
@@ -190,16 +199,24 @@ it('records interleaved forward and deferred GPU pass cost with and without spec
   const timing = {
     gpuPassTiming: { maxPassesPerFrame: 64, maxFramesInFlight: 2, retentionFrames: 8 },
   };
-  // One host per variant for the whole run; rounds alternate which variant goes first.
-  await withRenderer(1024, withAaUrl, timing, (on) =>
-    withRenderer(1024, withoutAaUrl, timing, async (off) => {
+  const lightweight = process.env.FORGEAX_DAWN_LIGHTWEIGHT === '1';
+  const size = lightweight ? 384 : 1024;
+  const rounds = lightweight ? 2 : 4;
+  const samplesPerRound = lightweight ? 8 : 20;
+  // Diagnostic sampling retains both orderings; image-quality gates above stay unchanged.
+  await withRenderer(size, withAaUrl, timing, (on) =>
+    withRenderer(size, withoutAaUrl, timing, async (off) => {
       for (const renderPath of ['forward', 'deferred'] as const) {
         const samples = { on: new Map<string, number[]>(), off: new Map<string, number[]>() };
-        for (let round = 0; round < 4; round++)
+        for (let round = 0; round < rounds; round++)
           for (const variant of round % 2 === 0
             ? (['on', 'off'] as const)
             : (['off', 'on'] as const)) {
-            const cost = await measureSpecularAaCost(variant === 'on' ? on : off, renderPath, 20);
+            const cost = await measureSpecularAaCost(
+              variant === 'on' ? on : off,
+              renderPath,
+              samplesPerRound,
+            );
             if (cost === null) return;
             for (const { passName, nanoseconds } of cost)
               samples[variant].set(passName, [
@@ -219,7 +236,14 @@ it('records interleaved forward and deferred GPU pass cost with and without spec
             ];
           }),
         );
-        writeFileSync(`${directory}/cost-${renderPath}.json`, JSON.stringify(report, null, 2));
+        writeFileSync(
+          `${directory}/cost-${renderPath}.json`,
+          JSON.stringify(
+            { resolution: [size, size], rounds, samplesPerRound, passes: report },
+            null,
+            2,
+          ),
+        );
         expect(Object.keys(report).length).toBeGreaterThan(0);
       }
     }),

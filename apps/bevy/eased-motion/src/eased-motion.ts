@@ -9,7 +9,7 @@ import { HANDLE_CUBE } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
 import { Name, Transform } from '@forgeax/engine-scene';
 import { Camera, DirectionalLight, Materials, MeshFilter, MeshRenderer, perspective } from '@forgeax/engine-render';
-import type { AnimationChannel, AnimationClip, AnimationTargetIdValue, MaterialAsset } from '@forgeax/engine-types';
+import type { AnimationTransformChannel, AnimationClip, AnimationTargetIdValue, MaterialAsset } from '@forgeax/engine-types';
 import { easing, quat } from '@forgeax/engine-math';
 
 const START_X = -6;
@@ -23,10 +23,10 @@ export const EASED_MOTION_CLIP_GUID = 'demo/eased-motion/clip';
 
 const channel = (
   targetId: AnimationTargetIdValue,
-  property: AnimationChannel['property'],
+  property: AnimationTransformChannel['property'],
   input: number[],
   output: number[],
-): AnimationChannel => ({
+): AnimationTransformChannel => ({
   targetId,
   property,
   sampler: { input: new Float32Array(input), output: new Float32Array(output), interpolation: 'LINEAR' },

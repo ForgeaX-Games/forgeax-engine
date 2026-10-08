@@ -19,7 +19,7 @@ it('queries explicit sampled visibility, keeps incomplete states and replays act
   }
 }, 120000);
 
-it('reads shared SNORM16 and f32 fields after a partial word and replays both branches', async () => {
+it('decodes full small fields and large sparse-volume probes and replays both trace branches', async () => {
   const dir = process.env.FORGEAX_RAY_EVIDENCE;
   await verifySdfStorage(async (tape, live) => {
     if (!dir) return;

@@ -6,12 +6,48 @@ import {
   prepareBootstrapEntry,
   validateExecutionBootstrapData,
 } from '../execution';
+import { ssrIdentityFixture } from './execution-fixtures';
 
 function moduleUrl(source: string): string {
   return `data:text/javascript,${encodeURIComponent(source)}`;
 }
 
 describe('execution bootstrap isolation', () => {
+  it('retains the provided four-field SSR identity without deriving provenance', async () => {
+    const url = moduleUrl(`const identity=${JSON.stringify(ssrIdentityFixture)};
+      export default () => ({ ssrIdentity: identity }); export { identity };`);
+    const prepared = await prepareBootstrapEntry(url, undefined);
+    const module = await import(/* @vite-ignore */ url);
+    expect(prepared.ok).toBe(true);
+    if (prepared.ok) {
+      expect(prepared.value.ssrIdentity).toEqual(ssrIdentityFixture);
+      expect(prepared.value.ssrIdentity).toBe(module.identity);
+    }
+  });
+
+  it('does not synthesize an omitted SSR identity', async () => {
+    const prepared = await prepareBootstrapEntry(moduleUrl('export default () => ({})'), undefined);
+    expect(prepared).toMatchObject({ ok: true, value: {} });
+    if (prepared.ok) expect(prepared.value).not.toHaveProperty('ssrIdentity');
+  });
+
+  it.each([
+    null,
+    [],
+    'identity',
+    {},
+    ...Object.keys(ssrIdentityFixture).map((field) => ({ ...ssrIdentityFixture, [field]: 1 })),
+  ])('rejects a malformed SSR identity during prepare: %j', async (ssrIdentity) => {
+    const result = await prepareBootstrapEntry(
+      moduleUrl(`export default () => ({ssrIdentity:${JSON.stringify(ssrIdentity)}})`),
+      undefined,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'app-execution-bootstrap-failed', detail: { phase: 'prepare' } },
+    });
+  });
+
   it('activates realm-local bootstrap plugins and disposes their effects', async () => {
     const url = moduleUrl(`export default function(data){return {plugins:[{
       name:'test-bootstrap',inject:['world','executionBootstrapHost'],apply(ctx){

@@ -10,7 +10,7 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 async function project(fields: object = {}, packageFields: object = {}) {
-  const root = await mkdtemp(resolve(tmpdir(), 'forgeax-project-'));
+  const root = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-project-')));
   temporary.push(root);
   await writeFile(
     resolve(root, 'forge.json'),
@@ -33,7 +33,7 @@ describe('readProjectFacts', () => {
   });
   it('canonicalizes symlinked paths before generating host paths', async () => {
     const root = await project();
-    const parent = await mkdtemp(resolve(tmpdir(), 'forgeax-alias-'));
+    const parent = await realpath(await mkdtemp(resolve(tmpdir(), 'forgeax-alias-')));
     temporary.push(parent);
     await symlink(root, resolve(parent, 'game'), 'dir');
     expect(await readProjectFacts(resolve(parent, 'game'))).toMatchObject({

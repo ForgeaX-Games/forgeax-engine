@@ -2,6 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as canonical from '../canonical-json.js';
 import { DdcEntryStore, ddcOutputDigest } from '../entry-store.js';
 import { DdcStoreError } from '../errors.js';
 import { DdcLifecycle } from '../lifecycle.js';
@@ -183,6 +184,199 @@ describe('DDC lifecycle head', () => {
       await lifecycle.close(newer);
     } finally {
       clock.mockRestore();
+    }
+  });
+
+  it('fences expiry after immutable entry validation finishes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    await writeEntry(root, KEY_A);
+    const lifecycle = new DdcLifecycle(root, { leaseTtlMs: 100 });
+    let now = 1_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const read = DdcEntryStore.prototype.read;
+    try {
+      const lease = await lifecycle.begin(GUID, KEY_A);
+      const validation = vi
+        .spyOn(DdcEntryStore.prototype, 'read')
+        .mockImplementation(async function (this: DdcEntryStore, key) {
+          const result = await read.call(this, key);
+          now = 1_101;
+          return result;
+        });
+      try {
+        await expect(lifecycle.commit(lease, KEY_A)).rejects.toMatchObject({
+          code: 'ddc-lease-expired',
+        });
+        expect(
+          JSON.parse(await readFile(join(root, 'heads', `${GUID}.json`), 'utf8')).currentKey,
+        ).toBeUndefined();
+      } finally {
+        validation.mockRestore();
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('cannot revive an expired persisted lease with a heartbeat', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    const lifecycle = new DdcLifecycle(root, { leaseTtlMs: 100 });
+    let now = 1_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const lease = await lifecycle.begin(GUID, KEY_A);
+      const before = await snapshotFiles(root);
+      now = 1_101;
+      await expect(lifecycle.heartbeat(lease)).rejects.toMatchObject({ code: 'ddc-lease-expired' });
+      expect(await snapshotFiles(root)).toEqual(before);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects heartbeat tokens with a different expected revision or desired key', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    const lifecycle = new DdcLifecycle(root);
+    const lease = await lifecycle.begin(GUID, KEY_A);
+    const before = await snapshotFiles(root);
+    for (const token of [
+      { ...lease, expectedRevision: lease.expectedRevision + 1 },
+      { ...lease, desiredKey: KEY_B },
+    ]) {
+      await expect(lifecycle.heartbeat(token)).rejects.toMatchObject({ code: 'ddc-lease-expired' });
+      expect(await snapshotFiles(root)).toEqual(before);
+    }
+    await expect(lifecycle.heartbeat(lease)).resolves.toMatchObject({ attempt: lease.attempt });
+  });
+
+  it('permits an owner heartbeat while immutable entry validation is pending', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    await writeEntry(root, KEY_A);
+    const lifecycle = new DdcLifecycle(root);
+    const lease = await lifecycle.begin(GUID, KEY_A);
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const read = DdcEntryStore.prototype.read;
+    const validation = vi.spyOn(DdcEntryStore.prototype, 'read').mockImplementation(async function (
+      this: DdcEntryStore,
+      key,
+    ) {
+      const result = await read.call(this, key);
+      entered();
+      await barrier;
+      return result;
+    });
+    const committing = lifecycle.commit(lease, KEY_A);
+    await reading;
+    const heartbeat = lifecycle.heartbeat(lease);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const refreshed = await Promise.race([
+        heartbeat.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), 500);
+        }),
+      ]);
+      expect(refreshed).toBe(true);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      release();
+      await Promise.allSettled([committing, heartbeat]);
+      validation.mockRestore();
+    }
+  });
+
+  it('starts an owner heartbeat during numeric-payload integrity hashing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    const value = {
+      key: KEY_A,
+      guid: GUID,
+      payload: Array.from({ length: 1_000_000 }, (_, index) => index % 256),
+      refs: [],
+      artifacts: {},
+    };
+    await new DdcEntryStore(root).write({
+      ...value,
+      receipt: {
+        key: KEY_A,
+        guid: GUID,
+        producer: 'test',
+        inputFingerprint: KEY_A,
+        outputDigest: ddcOutputDigest(value),
+      },
+    });
+    const lifecycle = new DdcLifecycle(root);
+    const lease = await lifecycle.begin(GUID, KEY_A);
+    const digest = canonical.canonicalDdcReadbackDigest;
+    let hashing = false;
+    let startedWhileHashing = false;
+    let heartbeat: Promise<unknown> | undefined;
+    const validation = vi
+      .spyOn(canonical, 'canonicalDdcReadbackDigest')
+      .mockImplementation(async (input) => {
+        hashing = true;
+        if (heartbeat === undefined) {
+          heartbeat = new Promise<void>((resolve, reject) => {
+            setImmediate(() => {
+              startedWhileHashing = hashing;
+              lifecycle.heartbeat(lease).then(() => {
+                resolve();
+              }, reject);
+            });
+          });
+        }
+        try {
+          // Exercise the real canonical reader; observe only its active interval.
+          return await digest(input);
+        } finally {
+          hashing = false;
+        }
+      });
+    try {
+      await expect(lifecycle.commit(lease, KEY_A)).resolves.toMatchObject({ result: 'current' });
+      await heartbeat;
+      expect(startedWhileHashing).toBe(true);
+    } finally {
+      await heartbeat;
+      validation.mockRestore();
+    }
+  });
+
+  it('rejects a lease superseded while its immutable entry was being validated', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'forgeax-ddc-lifecycle-'));
+    roots.push(root);
+    await writeEntry(root, KEY_A);
+    const lifecycle = new DdcLifecycle(root);
+    const lease = await lifecycle.begin(GUID, KEY_A);
+    const read = DdcEntryStore.prototype.read;
+    let successor: Awaited<ReturnType<DdcLifecycle['begin']>> | undefined;
+    const validation = vi.spyOn(DdcEntryStore.prototype, 'read').mockImplementation(async function (
+      this: DdcEntryStore,
+      key,
+    ) {
+      const result = await read.call(this, key);
+      successor = await lifecycle.begin(GUID, KEY_B);
+      return result;
+    });
+    try {
+      await expect(lifecycle.commit(lease, KEY_A)).resolves.toMatchObject({ result: 'stale' });
+      const head = JSON.parse(await readFile(join(root, 'heads', `${GUID}.json`), 'utf8'));
+      expect(head.active.attempt).toBe(successor?.attempt);
+      expect(head.desiredKey).toBe(KEY_B);
+      expect(head.currentKey).toBeUndefined();
+    } finally {
+      validation.mockRestore();
     }
   });
 

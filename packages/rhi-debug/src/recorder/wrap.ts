@@ -32,8 +32,10 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     blobPool: new Map(),
     handleMap: new WeakMap(),
     textureViewHandleMap: new WeakMap(),
+    pendingExternalBindings: new WeakMap(),
     bootstrapCreates: new Map(),
     snapshotSeededHandles: new Set(),
+    omittedSeeds: new Set(),
     snapshotGeneration: 0,
     snapshotProgress: undefined,
     descriptorTable: new Map(),
@@ -41,8 +43,11 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     frameIdx: 0,
     bootstrap: true,
     recordedCaps: undefined,
+    canvasConfiguration: undefined,
     valid: true,
     capturedDevice: undefined,
+    frameEndReleases: [],
+    deferredAccelerationStructureBuilds: [],
   };
 
   const lifecycle = createRecorderLifecycle(s);
@@ -55,6 +60,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     getBlobPool,
     transitionToError,
     disposeError,
+    releaseTape,
     snapshotResource,
     snapshotAllLiveResources,
   } = lifecycle;
@@ -68,6 +74,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     getBlobPool,
     transitionToError,
     disposeError,
+    releaseTape,
     snapshotResource,
     snapshotAllLiveResources,
     pushExternalEvent(event: RhiCallEvent): void {
@@ -80,6 +87,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       const hId = registerHandle(s, handle, kind, event);
       pushEvent(s, event);
       return hId;
+    },
+    recordCanvasConfiguration(configuration): void {
+      s.canvasConfiguration = { ...configuration };
     },
     resetForDeviceLoss(): void {
       // A lost GPU device invalidates every opaque handle and every descriptor
@@ -102,6 +112,8 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
       s.recordedCaps = undefined;
       s.valid = true;
       s.capturedDevice = undefined;
+      s.frameEndReleases = [];
+      s.deferredAccelerationStructureBuilds = [];
     },
     valid(): boolean {
       return s.valid;
@@ -111,6 +123,9 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
     },
     bootstrapEvents(): readonly RhiCallEvent[] {
       return Array.from(s.bootstrapCreates.values());
+    },
+    omittedSeeds() {
+      return s.omittedSeeds;
     },
     descriptorTable() {
       return s.descriptorTable;
@@ -138,6 +153,7 @@ export function wrap(instance: RhiInstance): DebugRhiInstance {
             // default for this informational field while deriving every
             // device-backed capability from the captured device.
             canvasFormat: 'bgra8unorm' as GPUTextureFormat,
+            canvasColorSpace: 'srgb',
             rgba16floatRenderable: proxied.caps.rgba16floatRenderable,
             float32Filterable: proxied.caps.float32Filterable,
             textureCompressionBc: proxied.caps.textureCompressionBc,

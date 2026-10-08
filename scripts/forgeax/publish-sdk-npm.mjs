@@ -94,6 +94,7 @@ if (!carrierEntries.split('\n').some((entry) => entry === 'package/README.md')) 
 }
 const names = new Set(packageArchives.map(({ manifest }) => manifest.name));
 if (!names.has('@forgeax/engine')) throw new Error('npm-umbrella-package-missing');
+if (!names.has('@forgeax/view')) throw new Error('npm-view-tool-package-missing');
 if (carrier.manifest.name !== '@forgeax/engine-sdk') throw new Error('npm-sdk-carrier-name');
 for (const item of [...packageArchives, carrier]) {
   if (item.manifest.version !== version) {
@@ -102,7 +103,9 @@ for (const item of [...packageArchives, carrier]) {
   for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
     for (const [name, range] of Object.entries(item.manifest[section] ?? {})) {
       if (
-        (name === '@forgeax/engine' || name.startsWith('@forgeax/engine-')) &&
+        (name === '@forgeax/view' ||
+          name === '@forgeax/engine' ||
+          name.startsWith('@forgeax/engine-')) &&
         range !== version
       ) {
         throw new Error(
@@ -115,7 +118,7 @@ for (const item of [...packageArchives, carrier]) {
 const umbrella = packageArchives.find(({ manifest }) => manifest.name === '@forgeax/engine');
 const umbrellaDependencies = new Set(Object.keys(umbrella.manifest.dependencies ?? {}));
 for (const name of names) {
-  if (name !== '@forgeax/engine' && !umbrellaDependencies.has(name)) {
+  if (name !== '@forgeax/view' && name !== '@forgeax/engine' && !umbrellaDependencies.has(name)) {
     throw new Error(`npm-umbrella-dependency-missing: ${name}`);
   }
 }

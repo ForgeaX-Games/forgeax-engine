@@ -24,20 +24,12 @@
 //   handle's generation (mirrors EntityHandle via the isRetiredSlot SSOT).
 //
 //   AC-06 (unique-ref-double-release) remains payload-presence detected
-//   (`payloads.has(raw)`) for a handle whose generation still matches; the
+//   (`entries.has(raw)`) for a handle whose generation still matches; the
 //   generation check catches the orthogonal stale-by-reuse case first.
 //
-// Storage shape:
-//   - `payloads: Map<number, unknown>` - key = handle u32 = slot index.
-//                                    Strong reference; deleted on release.
-//                                    Type-erased (the store never inspects
-//                                    payload fields); `Handle<T, 'unique'>`
-//                                    carries `T` at the type level and the
-//                                    single read site (World.get's ref path)
-//                                    narrows `unknown -> T` at the boundary.
-//   - `freeSlots: number[]`        - LIFO stack of recyclable slot indices.
-//   - `releaseCallbacks: Map<...>` - per-slot onRelease cb cleared before fire.
-//   - `nextSlot`                   - bump counter for the never-recycled tail.
+// One live entry owns payload and optional cleanup. The entry is deleted
+// before invoking cleanup; generation history survives retired entries.
+// Free slots form a LIFO stack; fresh slots begin at 1.
 //
 // 24 bits = 16_777_215 simultaneous live managed handles - the same ceiling
 // as Entity, so an ECS that hit the entity ceiling cannot grow past the
@@ -73,6 +65,11 @@ import { UniqueRefDoubleReleaseError, UniqueRefReleasedError, UniqueRefStaleErro
 // MAX_SLOT is now imported from @forgeax/engine-types (codec SSOT, D-1).
 // The local constant is removed to avoid drift (AC-15).
 
+interface UniqueRefEntry {
+  payload: unknown;
+  readonly onRelease: ((payload: unknown) => void) | undefined;
+}
+
 /**
  * Per-slot singleton store for ECS-managed `Handle<T, 'unique'>` lifecycles.
  * World hooks the three release paths (despawn, removeComponent, set) into
@@ -100,9 +97,8 @@ import { UniqueRefDoubleReleaseError, UniqueRefReleasedError, UniqueRefStaleErro
  * (architecture-principles.md §1 SSOT).
  */
 export class UniqueRefStore {
-  private readonly payloads = new Map<number, unknown>();
+  private readonly entries = new Map<number, UniqueRefEntry>();
   private readonly freeSlots: number[] = [];
-  private readonly releaseCallbacks = new Map<number, ((payload: unknown) => void) | undefined>();
   private nextSlot = 1;
 
   /**
@@ -149,10 +145,10 @@ export class UniqueRefStore {
     }
     const gen = this._generations[slot] ?? 0;
     const raw = pack(slot, gen);
-    this.payloads.set(raw, payload);
-    if (onRelease !== undefined) {
-      this.releaseCallbacks.set(raw, onRelease as (payload: unknown) => void);
-    }
+    this.entries.set(raw, {
+      payload,
+      onRelease: onRelease as ((payload: unknown) => void) | undefined,
+    });
     return toUnique(raw);
   }
 
@@ -183,7 +179,8 @@ export class UniqueRefStore {
     if (handleGen !== storeGen) {
       return err(new UniqueRefStaleError(slot, handleGen, storeGen));
     }
-    const payload = this.payloads.get(raw);
+    const entry = this.entries.get(raw);
+    const payload = entry?.payload;
     if (payload === undefined) {
       // Slot 0 (sentinel) and any handle whose payload was already removed
       // both surface as released. The phantom Target is unavailable at
@@ -217,23 +214,15 @@ export class UniqueRefStore {
       // AC-03: stale release MUST NOT drop payload / fire callback / touch freeSlots.
       return err(new UniqueRefStaleError(slot, handleGen, storeGen));
     }
-    const payload = this.payloads.get(raw);
+    const entry = this.entries.get(raw);
+    const payload = entry?.payload;
     if (payload === undefined) {
       return err(new UniqueRefDoubleReleaseError(raw, '<unknown>'));
     }
-    // Order (feat-20260614 M1 D-1): clean up ALL store state BEFORE invoking
-    // onRelease. The payload is captured on the stack above so cb still
-    // observes the value (D-5 RAII-equivalent semantics preserved); both
-    // releaseCallbacks and payloads entries are dropped first, then the
-    // freelist push happens, and only then is cb invoked. A throwing cb
-    // leaves the store fully consistent: a second release sees
-    // `payloads.has(raw) === false` and returns UniqueRefDoubleReleaseError
-    // without re-firing the callback (AC-01, AC-02, AC-06). try/finally is
-    // explicitly NOT used (D-1 alternative (a) rejected — would swallow the
-    // first-release throw and violate spec section 3.1).
-    const cb = this.releaseCallbacks.get(raw);
-    this.releaseCallbacks.delete(raw);
-    this.payloads.delete(raw);
+    // Retire the complete entry and generation before user cleanup can
+    // re-enter or throw. A recycled slot must never expose its old callback.
+    const cb = entry?.onRelease;
+    this.entries.delete(raw);
     // Gen increment + retire (AC-07): bump gen; once it would exceed MAX_GEN
     // (gen 255 is still usable; the bump to 256 triggers retire) the slot is
     // permanently retired — NOT pushed to freeSlots.
@@ -251,10 +240,11 @@ export class UniqueRefStore {
   /** @internal Replace the payload of a live slot without changing its handle. */
   _setPayload<Target extends string, T>(handle: Handle<Target, 'unique'>, payload: T): void {
     const raw = unwrapHandle(handle);
-    if (!this.payloads.has(raw)) {
+    const entry = this.entries.get(raw);
+    if (entry === undefined) {
       throw new Error(`UniqueRefStore: cannot replace released payload ${raw}.`);
     }
-    this.payloads.set(raw, payload);
+    entry.payload = payload;
   }
 
   /**
@@ -268,11 +258,11 @@ export class UniqueRefStore {
   isLive<Target extends string>(handle: Handle<Target, 'unique'>): boolean {
     const raw = unwrapHandle(handle);
     if (raw === 0) return false;
-    return this.payloads.has(raw);
+    return this.entries.has(raw);
   }
 
   /** @internal Diagnostic count of live slots. Exposed for tests + inspector. */
   _liveCount(): number {
-    return this.payloads.size;
+    return this.entries.size;
   }
 }

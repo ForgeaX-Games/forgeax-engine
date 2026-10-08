@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildGpuLodRows,
-  encodeGpuLodRows,
-  GPU_LOD_ROW_LAYOUT,
-  GPU_LOD_ROW_SCHEMA,
-} from '../scene/visibility/gpu-lod';
+import { GPU_SCENE_SCHEMAS } from '../gpu-scene-schema';
+import { buildGpuLodRows, encodeGpuLodRows, GPU_LOD_ROW_LAYOUT } from '../scene/visibility/gpu-lod';
 
 describe('GPU LOD row schema', () => {
   it('projects absolute coverage and stable draw-template ranges into rows', () => {
@@ -30,7 +26,7 @@ describe('GPU LOD row schema', () => {
       ready: true,
     });
     expect(rows[2]?.ready).toBe(false);
-    expect(GPU_LOD_ROW_SCHEMA.fields.map((field) => field.name)).toEqual([
+    expect(GPU_SCENE_SCHEMAS.lod.fields.map((field) => field.name)).toEqual([
       'generation',
       'level',
       'firstIndex',

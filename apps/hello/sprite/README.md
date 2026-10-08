@@ -96,7 +96,7 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 
 ## 5-view selection table
 
-> Mirrors the JSDoc table in `packages/runtime/src/systems/transparent-sort-config.ts` so AI users browsing this demo see the full mode landscape without leaving the workspace (charter F1 progressive disclosure).
+> Mirrors the JSDoc table in `packages/render/src/systems/transparent-sort-config.ts` so AI users browsing this demo see the full mode landscape without leaving the workspace (charter F1 progressive disclosure).
 
 | view              | mode | yzAlpha | sortValue formula                          |
 |:------------------|:----:|:-------:|:-------------------------------------------|
@@ -140,4 +140,4 @@ The two scenes share the same texture + the same 3 `colorTint` slots (warm red /
 
 ## Relation to docs/roadmaps/2026-05-15-2d-roadmap.md M1
 
-This demo is the visible deliverable for **`docs/roadmaps/2026-05-15-2d-roadmap.md` v3 §4 M1 (2D Sprite + Layer + Sort MVP)**. The M1 roadmap line "1k sprites @ 60 fps + pixel-parity vs three.js Sprite" is gated by the runtime bench (`packages/runtime/src/systems/__tests__/transparent-sort.bench.ts`, 10k entities x 100 iterations); the demo itself runs 3 sprites per scene because the visual point is the sort order, not the throughput.
+This demo is the visible deliverable for **`docs/roadmaps/2026-05-15-2d-roadmap.md` v3 §4 M1 (2D Sprite + Layer + Sort MVP)**. The M1 roadmap line "1k sprites @ 60 fps + pixel-parity vs three.js Sprite" is gated by the render bench (`packages/render/bench/transparent-sort.bench.ts`, 10k entities x 100 iterations); the demo itself runs 3 sprites per scene because the visual point is the sort order, not the throughput.

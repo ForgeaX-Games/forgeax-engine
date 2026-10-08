@@ -91,6 +91,14 @@ describe('generated Engine Worker bootstrap production bundle', () => {
       const generatedRoot = config.root;
       if (generatedRoot === undefined) throw new Error('generated root is missing');
       const generatedHost = await readFile(resolve(generatedRoot, 'main.ts'), 'utf8');
+      const generatedBootstrap = await readFile(
+        resolve(generatedRoot, 'execution-bootstrap.ts'),
+        'utf8',
+      );
+      const identityJson = /ssrIdentity: (\{[^\n]+\}),/.exec(generatedBootstrap)?.[1];
+      if (identityJson === undefined) throw new Error('generated SSR identity missing');
+      const identity = JSON.parse(identityJson);
+      expect(identity.sourceHead).toBe('project:worker-bootstrap');
       expect(generatedHost).toContain("'./execution-bootstrap.js'");
       expect(generatedHost).toContain('virtual:forgeax/plugin-programs/frontend');
       expect(generatedHost).not.toMatch(/import\([^)]*assets\/backend\.ts/);
@@ -142,6 +150,7 @@ describe('generated Engine Worker bootstrap production bundle', () => {
       // copied as raw TypeScript or tree-shaken into an empty chunk.
       const module = await import(pathToFileURL(resolve(outDir, 'assets', bootstrap[0])).href);
       const value = await module.default?.();
+      expect(value?.ssrIdentity).toEqual(identity);
       expect(value?.plugins).toHaveLength(3);
       expect(value?.root?.guid).toBe(guid('probe'));
       const context = new Context();

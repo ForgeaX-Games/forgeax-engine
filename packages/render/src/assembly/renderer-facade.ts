@@ -1,5 +1,13 @@
 import { ProjectedDecalInvalidError } from '../decals/component';
 import { RenderPublicationError } from '../publication/contract';
+import {
+  freezeDiffuseGi,
+  freezeGlobalSdfGrid,
+  validateCardCapture,
+  validateDiffuseGi,
+  validateGlobalSdfRegion,
+} from '../raytracing/irradiance-field-plan';
+import { RAY_REFERENCE_LIMIT } from '../raytracing/scene';
 // Public renderer facade and profile validation.
 // This module narrows the lifetime-heavy host implementation to the stable
 // lease/receipt contract and owns the profile/error projection helpers.
@@ -12,6 +20,10 @@ import type {
 } from '../dynamic-geometry';
 import { type RecoverFailure, RecoveryFailedError } from '../errors/recover';
 import {
+  EquirectProjectionFailedError,
+  ExternalTextureInvalidError,
+  ExternalTextureStateInvalidError,
+  MaterialSampledTextureBudgetExceededError,
   type RenderError,
   RendererContractFailureError,
   type RendererOperationCause,
@@ -25,6 +37,7 @@ import {
 } from '../pipeline/standard-profile';
 import type {
   FrameObservationDomain,
+  FrameReceipt,
   Renderer,
   RendererError,
   RendererEventListener,
@@ -58,8 +71,14 @@ export function exposeRenderer(renderer: RendererHostImplementation): Renderer {
     if (previous === next || !lifecycle.transition(next)) return;
     emit(Object.freeze({ kind: 'state-changed', previous, current: next }));
   };
+  // Projection and texture-budget failures are public, asset-caused RenderErrors
+  // that name the source problem; wrapping them would hide it behind a device code.
   const eventError = (cause: RendererError): RenderError =>
-    cause instanceof RendererOperationError
+    cause instanceof RendererOperationError ||
+    cause instanceof EquirectProjectionFailedError ||
+    cause instanceof ExternalTextureInvalidError ||
+    cause instanceof ExternalTextureStateInvalidError ||
+    cause instanceof MaterialSampledTextureBudgetExceededError
       ? cause
       : new RendererOperationError('device-operation-failed', {
           operation: 'renderer-event',
@@ -131,7 +150,11 @@ export function exposeRenderer(renderer: RendererHostImplementation): Renderer {
     createRenderTargetTextureSource: (target, options) =>
       renderer.createRenderTargetTextureSource(target, options),
     requestTargetReadback: (target, request) => renderer.requestTargetReadback(target, request),
+    requestFramebufferSnapshot: (target, request) =>
+      renderer.requestFramebufferSnapshot(target, request),
     destroyRenderTarget: (target) => renderer.destroyRenderTarget(target),
+    importTexture: (input) => renderer.importTexture(input),
+    nativeDevice: () => renderer.nativeDevice(),
     setProfile: (profile) => {
       const state = lifecycle.state();
       if (!isRendererStateOperational(state)) {
@@ -144,6 +167,18 @@ export function exposeRenderer(renderer: RendererHostImplementation): Renderer {
       }
       return renderer.setProfile(profile);
     },
+    setOutputColorSpace: (colorSpace) => {
+      const state = lifecycle.state();
+      if (!isRendererStateOperational(state)) {
+        return err(
+          new RendererOperationError('renderer-state-invalid', {
+            operation: 'set-output-color-space',
+            state,
+          }),
+        );
+      }
+      return renderer.setOutputColorSpace(colorSpace);
+    },
     state: () => lifecycle.state(),
     draw: (request) => {
       const state = lifecycle.state();
@@ -155,8 +190,26 @@ export function exposeRenderer(renderer: RendererHostImplementation): Renderer {
           }),
         );
       }
-      const result = renderer.drawFrame(request);
-      if (!result.ok) return err(drawError(result.error));
+      // A failed record can publish its precise owner error before returning the
+      // generic no-submission guard. Preserve that same-call cause for the caller.
+      let frameFailure: RenderError | undefined;
+      const observeFailure: RendererEventListener = (event) => {
+        if (event.kind === 'error') frameFailure ??= event.error;
+      };
+      listeners.add(observeFailure);
+      let result: RenderResult<FrameReceipt, RhiError | RenderError>;
+      try {
+        result = renderer.drawFrame(request);
+      } finally {
+        listeners.delete(observeFailure);
+      }
+      if (!result.ok) {
+        return err(
+          result.error instanceof RendererContractFailureError && frameFailure !== undefined
+            ? frameFailure
+            : drawError(result.error),
+        );
+      }
       emit(
         Object.freeze({
           kind: 'frame-submitted',
@@ -343,10 +396,12 @@ const RENDER_PROFILE_KEYS = new Set([
   'renderPath',
   'visibleSurface',
   'diffuseGi',
-  'shadows',
+  'probePlacement',
   'pbr',
   'ibl',
   'ssao',
+  'volumetricFog',
+  'gpuOcclusion',
   'postStages',
 ]);
 
@@ -363,41 +418,87 @@ export function validateRenderProfile(profile: RenderProfile): string | undefine
   if (profile.renderPath !== 'forward' && profile.renderPath !== 'deferred') {
     return "RenderProfile.renderPath must be 'forward' or 'deferred'";
   }
+  if (profile.volumetricFog !== undefined) {
+    const volume = profile.volumetricFog;
+    if (
+      typeof volume !== 'object' ||
+      volume === null ||
+      Array.isArray(volume) ||
+      Object.keys(volume).some((key) => !['quality', 'depth', 'tileSize'].includes(key)) ||
+      (volume.quality !== 'low' && volume.quality !== 'high') ||
+      (volume.depth !== 48 && volume.depth !== 64) ||
+      (volume.tileSize !== 4 && volume.tileSize !== 16)
+    )
+      return 'RenderProfile.volumetricFog requires quality low/high, depth 48/64 and tileSize 4/16';
+  }
   if (profile.visibleSurface !== undefined && typeof profile.visibleSurface !== 'boolean')
     return 'RenderProfile.visibleSurface must be boolean';
+  if (profile.gpuOcclusion !== undefined && typeof profile.gpuOcclusion !== 'boolean')
+    return 'RenderProfile.gpuOcclusion must be boolean';
   if (profile.visibleSurface === true && profile.renderPath !== 'deferred')
     return 'Visible surfaces require the Standard deferred path';
-  if (profile.diffuseGi !== undefined) {
-    const gi = profile.diffuseGi;
+  if (profile.probePlacement !== undefined) {
+    const placement = profile.probePlacement;
     if (
-      typeof gi !== 'object' ||
-      gi === null ||
-      Object.keys(gi).some(
-        (key) =>
-          !['maxBounces', 'maxDistance', 'environment', 'seed', 'reconstruction'].includes(key),
-      ) ||
-      !Number.isInteger(gi.maxBounces) ||
-      (gi.reconstruction !== undefined &&
-        !['spatial', 'temporal', 'combined'].includes(gi.reconstruction)) ||
-      gi.maxBounces < 1 ||
-      gi.maxBounces > 8 ||
-      !Number.isFinite(Math.fround(gi.maxDistance)) ||
-      gi.maxDistance <= 0 ||
-      !Number.isInteger(gi.seed) ||
-      gi.seed < 0 ||
-      gi.seed > 0xffffffff ||
-      !Array.isArray(gi.environment) ||
-      gi.environment.length !== 3 ||
-      !gi.environment.every(
-        (v) => typeof v === 'number' && Number.isFinite(Math.fround(v)) && v >= 0,
+      typeof placement !== 'object' ||
+      placement === null ||
+      Array.isArray(placement) ||
+      Object.keys(placement).some((key) => !['seeds', 'global'].includes(key))
+    )
+      return 'Probe placement requires one seeds/global configuration object';
+    const seeds = placement.seeds;
+    if (profile.renderPath !== 'deferred') return 'Probe placement requires Standard deferred';
+    if (
+      !Array.isArray(seeds) ||
+      seeds.length < 1 ||
+      seeds.length > 4096 ||
+      new Set(seeds.map((seed) => seed?.id)).size !== seeds.length ||
+      seeds.some(
+        (seed) =>
+          typeof seed !== 'object' ||
+          seed === null ||
+          Object.keys(seed).some(
+            (key) => !['id', 'generation', 'position', 'cellSize', 'traced'].includes(key),
+          ) ||
+          ![seed.id, seed.generation].every(
+            (v) => Number.isInteger(v) && v > 0 && v <= 0xffffffff,
+          ) ||
+          typeof seed.traced !== 'boolean' ||
+          !Array.isArray(seed.position) ||
+          seed.position.length !== 3 ||
+          !seed.position.every(
+            (v: unknown) =>
+              typeof v === 'number' && Number.isFinite(Math.fround(v)) && Math.abs(v) < 1e30,
+          ) ||
+          typeof seed.cellSize !== 'number' ||
+          !(Math.fround(seed.cellSize) > 1e-20 && Math.fround(seed.cellSize) < 1e20),
       )
     )
-      return 'Diffuse GI requires 1..8 bounces, a positive f32 distance, a u32 seed and nonnegative linear RGB';
-    if (profile.renderPath !== 'deferred' || profile.ibl || !profile.pbr)
-      return 'The diffuse GI reference lane requires deferred PBR with IBL disabled';
+      return 'Probe placement requires 1..4096 unique nonzero u32 seed identities/generations, finite positions, bounded positive cells and explicit traced eligibility';
+    const global = placement.global;
+    if (global !== undefined) {
+      const region = validateGlobalSdfRegion(global, ['rayResolution', 'tMax', 'cards']);
+      if (!region.ok) return region.error.detail.cause;
+      if (
+        !Number.isInteger(global.rayResolution) ||
+        global.rayResolution < 1 ||
+        global.rayResolution > 256 ||
+        seeds.length * global.rayResolution ** 2 > RAY_REFERENCE_LIMIT ||
+        !(Math.fround(global.tMax) >= 2 ** -126 && Math.fround(global.tMax) < 1e30) ||
+        seeds.some((seed) => seed.position.some((v: number) => Math.abs(v) + global.tMax >= 1e30))
+      )
+        return 'Global probes require 1..256 ray texels/axis within the query ray limit and finite normal f32 endpoints';
+      if (global.cards !== undefined) {
+        const cards = validateCardCapture(global.cards);
+        if (!cards.ok) return cards.error.detail.cause;
+      }
+    }
   }
-  if (profile.shadows !== 'off' && profile.shadows !== 'hard' && profile.shadows !== 'filtered') {
-    return "RenderProfile.shadows must be 'off', 'hard', or 'filtered'";
+  if (profile.diffuseGi !== undefined) {
+    const gi = validateDiffuseGi(profile.diffuseGi);
+    if (!gi.ok) return gi.error.detail.cause;
+    if (profile.renderPath !== 'deferred' || profile.ibl || !profile.pbr)
+      return 'Diffuse GI requires deferred PBR with IBL disabled';
   }
   for (const field of ['pbr', 'ibl'] as const) {
     if (typeof profile[field] !== 'boolean') return `RenderProfile.${field} must be boolean`;
@@ -433,20 +534,39 @@ export function validateRenderProfile(profile: RenderProfile): string | undefine
 export function freezeRenderProfile(profile: RenderProfile): RenderProfile {
   return Object.freeze({
     ...profile,
-    ...(profile.diffuseGi === undefined
+    ...(profile.probePlacement === undefined
       ? {}
       : {
           visibleSurface: true,
-          diffuseGi: Object.freeze({
-            ...profile.diffuseGi,
-            environment: Object.freeze([...profile.diffuseGi.environment]) as readonly [
-              number,
-              number,
-              number,
-            ],
+          probePlacement: Object.freeze({
+            seeds: Object.freeze(
+              profile.probePlacement.seeds.map((seed) =>
+                Object.freeze({
+                  ...seed,
+                  position: Object.freeze([...seed.position]) as readonly [number, number, number],
+                }),
+              ),
+            ),
+            ...(profile.probePlacement.global === undefined
+              ? {}
+              : {
+                  global: Object.freeze({
+                    ...profile.probePlacement.global,
+                    ...(profile.probePlacement.global.cards === undefined
+                      ? {}
+                      : { cards: Object.freeze({ ...profile.probePlacement.global.cards }) }),
+                    grid: freezeGlobalSdfGrid(profile.probePlacement.global.grid),
+                  }),
+                }),
           }),
         }),
+    ...(profile.diffuseGi === undefined
+      ? {}
+      : { visibleSurface: true, diffuseGi: freezeDiffuseGi(profile.diffuseGi) }),
     ssao: typeof profile.ssao === 'object' ? Object.freeze({ ...profile.ssao }) : profile.ssao,
+    ...(profile.volumetricFog === undefined
+      ? {}
+      : { volumetricFog: Object.freeze({ ...profile.volumetricFog }) }),
     postStages: Object.freeze([...profile.postStages]) as RenderProfile['postStages'],
   });
 }

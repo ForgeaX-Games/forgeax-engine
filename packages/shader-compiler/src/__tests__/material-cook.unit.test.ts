@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { validateCookedMaterialRecord } from '@forgeax/engine-pack/material-cook';
 import {
   type MaterialAsset,
-  STANDARD_MATERIAL_PARAM_SCHEMA,
   standardMaterialParameters,
   standardSurfaceParameters,
 } from '@forgeax/engine-types';
@@ -52,7 +51,9 @@ function cookedPayload(value: { readonly payload: unknown }): unknown {
 }
 
 describe('cookMaterialAsset', () => {
-  it('publishes a shared ray-hit derivative of the ordinary Standard material', async () => {
+  it('publishes a shared ray-hit derivative of the ordinary Standard material', {
+    timeout: 30_000,
+  }, async () => {
     const source: MaterialAsset = {
       kind: 'material',
       parameters: standardSurfaceParameters(
@@ -78,7 +79,30 @@ describe('cookMaterialAsset', () => {
     const ray = record.programs.filter((program) =>
       program.selections.some((selection) => selection.context.pipeline === 'ray'),
     );
-    expect(ray).toHaveLength(1);
+    expect(ray).toHaveLength(2);
+    const card = ray.find((program) =>
+      program.selections.some((selection) => selection.context.pass === 'card-capture'),
+    );
+    expect(card?.selections).toEqual([
+      {
+        pass: 'Forward',
+        entry: 'vs_card',
+        context: {
+          backend: 'webgpu',
+          capability: 'storage-buffer',
+          pipeline: 'ray',
+          geometry: 'mesh',
+          pass: 'card-capture',
+          profile: 'forgeax-material-ray-v1',
+          toolchain: 'naga-oil',
+          instrumentation: 'none',
+        },
+      },
+    ]);
+    expect(new TextDecoder().decode(card?.artifact.bytes)).toMatch(/fn vs_card\(/);
+    expect(new TextDecoder().decode(card?.artifact.bytes)).toMatch(/fn fs_card\(/);
+    expect(card?.specializationKey).not.toBe(ray[0]?.specializationKey);
+    expect(card && output.artifacts[card.artifact.path]?.bytes).toEqual(card?.artifact.bytes);
     expect(ray[0]?.selections).toEqual([
       {
         pass: 'Forward',
@@ -113,6 +137,11 @@ describe('cookMaterialAsset', () => {
       program.selections.some((selection) => selection.context.pipeline === 'ray'),
     );
     expect(editedRay?.specializationKey).toBe(ray[0]?.specializationKey);
+    const editedCard = edited.programs.find((program) =>
+      program.selections.some((selection) => selection.context.pass === 'card-capture'),
+    );
+    expect(editedCard?.specializationKey).toBe(card?.specializationKey);
+    expect(editedCard?.artifact.bytes).toEqual(card?.artifact.bytes);
     expect(edited.receipt.identity.materialPublicationIdentity).not.toBe(
       record.receipt.identity.materialPublicationIdentity,
     );
@@ -281,15 +310,33 @@ fn fs_main() -> @location(0) vec4<f32> {
     const engineRoot = resolve(packageRoot, '../shader/src');
     const sourcePath = resolve(root, 'material-alias.pack.json');
     await writeFile(sourcePath, '{}');
+    // Alias identity needs the real Engine template and one simple depth Surface.
+    // Full Forward/physical/color/ray publications have dedicated real gates.
+    await writeFile(
+      join(root, 'surface.wgsl'),
+      `#define_import_path game::alias-surface
+#import forgeax_material::surface_v1::{SurfaceInput, SurfaceData}
+fn evaluate_surface(input: SurfaceInput) -> SurfaceData {
+  return SurfaceData(vec3<f32>(0.6), input.vertexNormalWS, 0.0, 0.5, vec3<f32>(0.0), 1.0, 1.0, 0.0);
+}`,
+    );
     try {
-      const draft = await createMaterialPackCooker([engineRoot]).cook({
+      const draft = await createMaterialPackCooker().cook({
         guid: 'material-standard-alias-test',
         source: {
           kind: 'material',
-          parameters: standardMaterialParameters(
-            new Set(STANDARD_MATERIAL_PARAM_SCHEMA.map((entry) => entry.name)),
-          ),
-          passes: [{ name: 'Forward', program: { module: 'game::standard-alias' } }],
+          // Alias identity needs one real Standard interface; the complete
+          // physical-layer fixture separately covers every texture binding.
+          parameters: standardSurfaceParameters([]),
+          passes: [
+            {
+              name: 'Depth',
+              program: {
+                module: 'game::standard-alias',
+                moduleSlots: { surface: 'game::alias-surface' },
+              },
+            },
+          ],
         },
         sourceKey: relative(root, resolve(engineRoot, 'default-standard-pbr.wgsl')),
         sourcePath,
@@ -306,6 +353,27 @@ fn fs_main() -> @location(0) vec4<f32> {
           },
         },
       });
+      const record = validateCookedMaterialRecord(
+        (draft.payload as { cooked: unknown }).cooked,
+      ).unwrap();
+      const raster = record.programs
+        .flatMap((program) => program.selections)
+        .filter((selection) => selection.context.pipeline !== 'ray');
+      expect(
+        raster.every(
+          (selection) =>
+            selection.address !== undefined &&
+            selection.entry !== undefined &&
+            selection.abi !== undefined,
+        ),
+      ).toBe(true);
+      expect(
+        new Set(
+          raster
+            .filter((selection) => selection.context.capability === 'uniform-fallback')
+            .map((selection) => selection.context.backend),
+        ),
+      ).toEqual(new Set(['webgpu', 'webgl2']));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -366,7 +434,10 @@ fn fs_main() -> @location(0) vec4<f32> {
       });
       const firstRecord = packRecord(cookedPayload(first));
       const secondRecord = packRecord(cookedPayload(second));
-      expect(firstRecord.programs).toHaveLength(1);
+      expect(firstRecord.programs).toHaveLength(2);
+      expect(
+        firstRecord.programs.map((program) => program.selections[0]?.context.capability),
+      ).toEqual(['storage-buffer', 'storage-buffer-atmosphere']);
       expect(secondRecord.programs).toEqual(firstRecord.programs);
       expect(secondRecord.receipt.identity.materialPublicationIdentity).not.toBe(
         firstRecord.receipt.identity.materialPublicationIdentity,

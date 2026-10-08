@@ -1,7 +1,7 @@
 import { World } from '@forgeax/engine-ecs';
 import { Transform } from '@forgeax/engine-scene';
 import { describe, expect, it, vi } from 'vitest';
-import { Atmosphere, Camera, DirectionalLight } from '../components';
+import { AmbientOcclusion, Atmosphere, Camera, DirectionalLight } from '../components';
 import { prepareExtractContext, selectCameraRoles } from '../render-system-extract';
 import { extractFrame, extractFrames } from '../render-system-extract-tail';
 import { setActiveCamera } from '../systems/active-camera';
@@ -162,4 +162,24 @@ describe('Atmosphere sun extraction', () => {
       sun: { color: [0, 0, 0], intensity: 0 },
     });
   });
+});
+
+it('extracts AO only from the explicitly selected camera, retaining direct-light strength', () => {
+  const world = new World();
+  const plain = spawnCamera(world, 1);
+  const ao = world
+    .spawn(
+      { component: Transform, data: {} },
+      { component: Camera, data: {} },
+      { component: AmbientOcclusion, data: { directLightingStrength: 0.6, radius: 0.8 } },
+    )
+    .unwrap() as unknown as number;
+  const selected = (cameraEntityKey: number) =>
+    extractFrame(world, prepareExtractContext(world, { cameraEntityKey, renderables: 'none' }))
+      .cameras[0];
+  expect(selected(ao)?.ambientOcclusion).toMatchObject({
+    directLightingStrength: expect.closeTo(0.6, 5),
+    radius: expect.closeTo(0.8, 5),
+  });
+  expect(selected(plain)?.ambientOcclusion).toBeUndefined();
 });

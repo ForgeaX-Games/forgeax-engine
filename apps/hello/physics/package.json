@@ -24,22 +24,48 @@
   },
   "devDependencies": {
     "@forgeax/engine-vite-plugin-shader": "workspace:*",
-    "@webgpu/types": "^0.1.71",
+    "@webgpu/types": "^0.1.74",
     "vite": "8.0.16",
-    "webgpu": "^0.4.0"
+    "@forgeax/engine-dawn-node": "workspace:*"
   },
   "forgeax": {
     "smokeInvocation": "pnpm --filter @forgeax/hello-physics smoke",
     "gauntletScenario": {
       "id": "hello-physics-large-delta-recovery",
       "script": "smoke",
-      "domains": ["World and host contract", "Simulation and media implementations"],
-      "packages": ["@forgeax/engine-ecs", "@forgeax/engine-physics", "@forgeax/engine-physics-rapier3d"],
-      "risks": ["baseline", "behavioral", "fault", "recovery", "cleanup"],
-      "phaseInputs": ["baseline", "behavioral", "fault", "recovery", "cleanup"],
+      "domains": [
+        "World and host contract",
+        "Simulation and media implementations"
+      ],
+      "packages": [
+        "@forgeax/engine-ecs",
+        "@forgeax/engine-physics",
+        "@forgeax/engine-physics-rapier3d"
+      ],
+      "risks": [
+        "baseline",
+        "behavioral",
+        "fault",
+        "recovery",
+        "cleanup"
+      ],
+      "phaseInputs": [
+        "baseline",
+        "behavioral",
+        "fault",
+        "recovery",
+        "cleanup"
+      ],
       "evidence": {
-        "frontDoors": ["physics-app", "dawn-node"],
-        "legs": ["semantic", "behavioral", "recovery"]
+        "frontDoors": [
+          "physics-app",
+          "dawn-node"
+        ],
+        "legs": [
+          "semantic",
+          "behavioral",
+          "recovery"
+        ]
       },
       "oracle": {
         "stdoutIncludes": [

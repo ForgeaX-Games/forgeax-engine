@@ -81,7 +81,7 @@ describe('IBL residency publication', () => {
     expect(iblSource).toContain('stage}-device-scope-generation');
   });
 
-  it('fences each irradiance face before the next face', () => {
+  it('retains each bounded irradiance-face submission before the next face', () => {
     const runStart = iblSource.indexOf('export async function runIblPrecompute(');
     const irradianceStart = iblSource.indexOf('// (b) irradiance convolve', runStart);
     const prefilterStart = iblSource.indexOf('// (c) prefilter env', irradianceStart);

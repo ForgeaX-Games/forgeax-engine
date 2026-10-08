@@ -3,7 +3,9 @@
 // function; exercise the accept + reject arms of all eight, plus the
 // wireDefaultLoaders / createDefaultLoaderRegistry seed-table helpers.
 
-import { packMeshBin } from '@forgeax/engine-import';
+import { createHash } from 'node:crypto';
+import { createBoxGeometry } from '@forgeax/engine-geometry';
+import { cookMeshDistanceFieldProduct, packMeshBin } from '@forgeax/engine-import';
 import { AssetGuid } from '@forgeax/engine-pack/guid';
 import type { LoadContext, MaterialAsset } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +26,79 @@ import { createDefaultLoaderRegistry, wireDefaultLoaders } from '../wire-default
 const emptyCtx = {} as LoadContext;
 
 describe('meshLoader', () => {
+  it('snapshots checked distance field identity before asynchronous attachment', async () => {
+    const mesh = createBoxGeometry(1, 1, 1).unwrap();
+    const product = await cookMeshDistanceFieldProduct(mesh, 'mesh-field', 0.5, [0]);
+    const field = product.artifacts['distance-field.bin'];
+    if (!field.assetCodec) throw new Error('expected field codec');
+    const artifact = {
+      integrity: {
+        algorithm: 'sha256' as const,
+        digest: `sha256:${createHash('sha256').update(field.bytes).digest('hex')}`,
+      },
+      assetCodec: { ...field.assetCodec },
+    };
+    const expected = structuredClone(artifact);
+    const registry = new LoaderRegistry();
+    registry.register(meshLoader);
+    const pending = registry.loadPack(
+      {
+        guid: 'mesh-field',
+        kind: 'mesh',
+        payload: { ...mesh, distanceField: product.payload },
+        refs: [],
+        artifacts: {
+          'distance-field.bin': {
+            descriptor: { path: 'distance-field.bin', mediaType: field.mediaType, ...artifact },
+            bytes: field.bytes,
+          },
+        },
+      },
+      emptyCtx,
+    );
+    artifact.integrity.digest = `sha256:${'0'.repeat(64)}`;
+    artifact.assetCodec.profile = 'changed-while-attachment-pending';
+    expect(await pending).toMatchObject({
+      ok: true,
+      value: { distanceField: { artifact: expected } },
+    });
+  });
+
+  it('requires artifact integrity before exposing distance field publication identity', async () => {
+    const mesh = createBoxGeometry(1, 1, 1).unwrap();
+    const product = await cookMeshDistanceFieldProduct(mesh, 'mesh-field', 0.5, [0]);
+    const field = product.artifacts['distance-field.bin'];
+    if (!field.assetCodec) throw new Error('expected field codec');
+    const registry = new LoaderRegistry();
+    registry.register(meshLoader);
+    const result = await registry.loadPack(
+      {
+        guid: 'mesh-field',
+        kind: 'mesh',
+        payload: { ...mesh, distanceField: product.payload },
+        refs: [],
+        artifacts: {
+          'distance-field.bin': {
+            descriptor: {
+              path: 'distance-field.bin',
+              mediaType: field.mediaType,
+              assetCodec: field.assetCodec,
+            },
+            bytes: field.bytes,
+          },
+        },
+      },
+      emptyCtx,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'asset-parse-failed',
+        detail: { reason: 'mesh distance field artifact integrity is missing' },
+      },
+    });
+  });
+
   it('rejects legacy mesh binaries without a white/default fallback', () => {
     const output = meshLoader.loadPack?.(
       {
@@ -616,6 +691,88 @@ describe('skinLoader', () => {
 });
 
 describe('animationClipLoader', () => {
+  it('retains cubic tangents through JSON Cook transport and rejects malformed samplers', () => {
+    const payload = {
+      duration: 2,
+      channels: [
+        {
+          targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
+          property: 'translation',
+          sampler: {
+            input: [0, 2],
+            output: [0, 0, 0, 0, 0, 0, 3, 0, 0, -3, 0, 0, 0, 0, 0, 0, 0, 0],
+            interpolation: 'CUBICSPLINE',
+          },
+        },
+      ],
+    };
+    const loaded = animationClipLoader.load(
+      JSON.parse(JSON.stringify(payload)),
+      undefined,
+      emptyCtx,
+    ) as unknown as {
+      channels: { sampler: { input: Float32Array; output: Float32Array; interpolation: string } }[];
+    };
+    expect(loaded.channels[0]?.sampler).toEqual({
+      input: new Float32Array([0, 2]),
+      output: new Float32Array(requireValue(payload.channels[0]).sampler.output),
+      interpolation: 'CUBICSPLINE',
+    });
+    for (const sampler of [
+      { input: [0, 0], output: requireValue(payload.channels[0]).sampler.output },
+      { input: [0, 2], output: [0, 0, 0, 1, 2, 3] },
+      {
+        input: [0, 2],
+        output: [...requireValue(payload.channels[0]).sampler.output.slice(0, -1), NaN],
+      },
+    ])
+      expect(
+        animationClipLoader.load(
+          {
+            ...payload,
+            channels: [
+              { ...payload.channels[0], sampler: { ...sampler, interpolation: 'CUBICSPLINE' } },
+            ],
+          },
+          undefined,
+          emptyCtx,
+        ),
+      ).toBeUndefined();
+  });
+  it('retains property bindings and STEP values across the JSON transport', () => {
+    const channel = (output: unknown, interpolation = 'STEP') => ({
+      targetId: 'a95da0ec669189f98273e8f86d8ad9f2',
+      property: 'property',
+      binding: 'state',
+      sampler: { input: [0, 1], output, interpolation },
+    });
+    for (const output of [
+      [false, true],
+      ['idle', 'run'],
+      [0, 1],
+    ]) {
+      const raw = JSON.parse(JSON.stringify({ duration: 1, channels: [channel(output)] }));
+      const decoded = animationClipLoader.load(raw, undefined, emptyCtx) as unknown as {
+        channels: [{ binding: string; sampler: { output: ArrayLike<unknown> } }];
+      };
+      expect(decoded.channels[0].binding).toBe('state');
+      expect(Array.from(decoded.channels[0].sampler.output)).toEqual(output);
+    }
+    expect(
+      animationClipLoader.load(
+        { channels: [channel(['idle', 'run'], 'LINEAR')] },
+        undefined,
+        emptyCtx,
+      ),
+    ).toBeUndefined();
+    expect(
+      animationClipLoader.load(
+        { channels: [{ ...channel([0, 1]), binding: '' }] },
+        undefined,
+        emptyCtx,
+      ),
+    ).toBeUndefined();
+  });
   it('accepts a valid channel with LINEAR sampler arrays', () => {
     const out = animationClipLoader.load(
       {
@@ -744,3 +901,8 @@ describe('wireDefaultLoaders / createDefaultLoaderRegistry', () => {
     expect(INLINE_PACK_LOADERS.length).toBe(12); // ordinary inline loader matrix
   });
 });
+
+function requireValue<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error('missing fixture value');
+  return value;
+}

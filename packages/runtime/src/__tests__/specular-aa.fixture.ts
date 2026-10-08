@@ -23,6 +23,7 @@ import {
 } from '@forgeax/engine-rhi-debug';
 import * as webgpu from '@forgeax/engine-rhi-webgpu';
 import { propagateTransforms, Transform } from '@forgeax/engine-scene';
+import type { buildEngineShaderManifest } from '@forgeax/engine-vite-plugin-shader';
 
 export type SaveEvidence = (name: string, bytes: Uint8Array) => void;
 
@@ -307,15 +308,33 @@ const stripSpecularAa = (wgsl: string) =>
   wgsl.replace(ROUGHNESS_CALL, (head, _name, roughness) => `${head} return ${roughness};`);
 
 /** The same engine manifest with specular AA removed from every composed program. */
-export function withoutSpecularAaManifest<T>(manifest: T): { manifest: T; patched: number } {
+export function withoutSpecularAaManifest(
+  manifest: Awaited<ReturnType<typeof buildEngineShaderManifest>>,
+) {
   let patched = 0;
-  const json = JSON.stringify(manifest, (_key, value: unknown) => {
-    if (typeof value !== 'string') return value;
-    const stripped = stripSpecularAa(value);
-    if (stripped !== value) patched++;
+  const sources = new Map<string, string>();
+  const replace = (source: string) => {
+    let stripped = sources.get(source);
+    if (stripped === undefined) {
+      stripped = stripSpecularAa(source);
+      sources.set(source, stripped);
+    }
+    if (stripped !== source) patched++;
     return stripped;
-  });
-  return { manifest: JSON.parse(json) as T, patched };
+  };
+  const changed = {
+    ...manifest,
+    entries: manifest.entries.map((entry) => ({ ...entry, wgsl: replace(entry.wgsl) })),
+    materialShaders: manifest.materialShaders.map((material) => ({
+      ...material,
+      composedWgsl: replace(material.composedWgsl),
+      variants: material.variants.map((variant) => ({
+        ...variant,
+        composedWgsl: replace(variant.composedWgsl),
+      })),
+    })),
+  };
+  return { manifest: changed, patched };
 }
 
 /** Removes only specular AA from the recorded G-buffer shader module, leaving every other resource intact. */
@@ -353,7 +372,7 @@ export async function verifySpecularAaGBuffer(
   const lease = unwrap(renderer.attach(world));
   const original = renderer.inspect().profile;
   try {
-    unwrap(renderer.setProfile({ ...original, renderPath: 'deferred', shadows: 'off' }));
+    unwrap(renderer.setProfile({ ...original, renderPath: 'deferred' }));
     const draw = async () => {
       world.update(1 / 60).unwrap();
       propagateTransforms(world).unwrap();
@@ -458,7 +477,7 @@ export async function measureSpecularAaCost(
   const original = renderer.inspect().profile;
   const samples = new Map<string, number[]>();
   try {
-    unwrap(renderer.setProfile({ ...original, renderPath, shadows: 'off' }));
+    unwrap(renderer.setProfile({ ...original, renderPath }));
     for (let index = 0; index < frames + 8; index++) {
       world.update(1 / 60).unwrap();
       propagateTransforms(world).unwrap();

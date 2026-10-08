@@ -1,3 +1,4 @@
+import { type AtmosphereViews, atmosphereBindings } from '../environment/bindings';
 // @forgeax/engine-runtime - RenderSystem record stage: per-frame lighting.
 // feat-20260704 M5/w31: further-split from frame.ts (AC-05 <=1500 lines/file).
 // Pure leaf helpers invoked once each from recordFrame; behavior verbatim.
@@ -160,6 +161,7 @@ export function buildPerFrameBindGroups(
     readonly directionalShadow?: TextureView | undefined;
     readonly spotShadow?: TextureView | undefined;
     readonly cloudShadow?: TextureView | undefined;
+    readonly atmosphere?: AtmosphereViews | undefined;
     readonly projector?: TextureView | undefined;
     readonly projectorSampler?: import('@forgeax/engine-rhi').Sampler | undefined;
   },
@@ -292,10 +294,12 @@ export function buildPerFrameBindGroups(
       const lowLimitCloudBindings = !extendedLighting && !projectorAvailable;
       const b11View = graphTargets?.projector ?? pipelineState.defaultWhiteTextureView;
       const b12Sampler = graphTargets?.projectorSampler ?? pipelineState.defaultSampler;
+      const atmosphereEntries = atmosphereBindings(pipelineState, graphTargets?.atmosphere);
       viewBindGroup = getOrCreateFromChain(
         frameState.viewBindGroupCache,
         [
           pipelineState.viewUniformBuffer,
+          ...atmosphereEntries.map((entry) => entry.resource.value as object),
           b3View,
           shadowSampler,
           b5View,
@@ -306,11 +310,14 @@ export function buildPerFrameBindGroups(
             ? [b11View, b12Sampler]
             : []),
           pipelineState.pointsLinesViewBuffer ?? pipelineState.viewUniformBuffer,
-          ...(lowLimitCloudBindings ? [] : [cloudShadowView, pipelineState.defaultSampler]),
+          ...(lowLimitCloudBindings
+            ? []
+            : [cloudShadowView, pipelineState.viewLinearSampler ?? pipelineState.defaultSampler]),
         ],
         'view-main',
         () => {
           const entries: BindGroupEntry[] = [
+            ...atmosphereEntries,
             {
               binding: 0,
               resource: {
@@ -468,7 +475,7 @@ export function buildPerFrameBindGroups(
                     binding: 17,
                     resource: {
                       kind: 'sampler' as const,
-                      value: pipelineState.defaultSampler,
+                      value: pipelineState.viewLinearSampler ?? pipelineState.defaultSampler,
                     },
                   },
                 ]),
@@ -727,7 +734,9 @@ export function prepareFrameLighting(
     far: camera.far,
     grid: clusterGrid,
     lightCount: internals.standardProfile?.lightCount ?? DEFAULT_STANDARD_PROFILE.lightCount,
-    renderPath: internals.standardProfile?.renderPath ?? DEFAULT_STANDARD_PROFILE.renderPath,
+    renderPath:
+      (frameState.cameraStandardProfile ?? internals.standardProfile)?.renderPath ??
+      DEFAULT_STANDARD_PROFILE.renderPath,
   });
   if (!prepared.ok) return prepared;
   // Storage-capable Standard frames keep the same Cluster ABI even when the

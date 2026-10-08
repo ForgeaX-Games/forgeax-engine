@@ -1,4 +1,4 @@
-import { World } from '@forgeax/engine-ecs';
+import { defineComponent, World } from '@forgeax/engine-ecs';
 import { addOnEnter, defineState, despawnOnExit, getState, registerStatesPlugin, setNextState } from '@forgeax/engine-state';
 import { expect, test } from 'vitest';
 
@@ -81,4 +81,59 @@ test('callback labels keep Unicode, separators, quotes and transition kinds dist
     }
     expect(events).toEqual(token.variants.slice(1));
   } finally { for (const unsubscribe of remove) unsubscribe(); dispose(); }
+});
+
+
+test('failed activation releases earlier token leases and resources without retiring another owner', () => {
+  const first = defineState('CompressionActivationFirst', ['off', 'on']);
+  const conflict = defineState('CompressionActivationConflict', ['off', 'on']);
+  const world = new World();
+  const foreign = defineComponent(`__scopedTo__${conflict.name}`, { foreign: 'f32' });
+  const foreignLease = world.components.register(foreign).unwrap();
+
+  expect(() => registerStatesPlugin(world)).toThrowError(
+    expect.objectContaining({ code: 'component-name-conflict' }),
+  );
+  expect(world.components.resolve(`__scopedTo__${first.name}`)).toBeUndefined();
+  expect(world.hasResource(`__state__${first.name}`)).toBe(false);
+  expect(world.components.resolve(foreign.name)).toBe(foreign);
+  expect(world.inspect().systems.some((system) => system.name === 'transitionStates')).toBe(false);
+
+  foreignLease.dispose().unwrap();
+  const dispose = registerStatesPlugin(world);
+  expect(getState(world, first).unwrap()).toBe('off');
+  dispose();
+});
+
+
+test('failed activation retains an in-use rollback lease until activation can retry', () => {
+  const first = defineState('CompressionActivationOccupied', ['off', 'on']);
+  const conflict = defineState('CompressionActivationOccupiedConflict', ['off', 'on']);
+  const world = new World();
+  const entity = world.spawn().unwrap();
+  despawnOnExit(world, entity, first, 'off');
+  const foreign = defineComponent(`__scopedTo__${conflict.name}`, { foreign: 'f32' });
+  const foreignLease = world.components.register(foreign).unwrap();
+
+  expect(() => registerStatesPlugin(world)).toThrowError(
+    expect.objectContaining({code: 'component-in-use'}),
+  );
+  expect(world.hasResource(`__state__${first.name}`)).toBe(false);
+  expect(world.components.resolve(foreign.name)).toBe(foreign);
+
+  const releasedKey = `__state__${first.name}`;
+  const laterResource = { owner: 'another contributor' };
+  world.insertResource(releasedKey, laterResource);
+  expect(() => registerStatesPlugin(world)).toThrowError(
+    expect.objectContaining({ code: 'component-in-use' }),
+  );
+  expect(world.getResource(releasedKey)).toBe(laterResource);
+  world.removeResource(releasedKey);
+  world.despawn(entity).unwrap();
+  foreignLease.dispose().unwrap();
+  const dispose = registerStatesPlugin(world);
+  expect(getState(world, first).unwrap()).toBe('off');
+  dispose();
+  expect(world.components.resolve(`__scopedTo__${first.name}`)).toBeUndefined();
+  expect(world.components.resolve(`__scopedTo__${conflict.name}`)).toBeUndefined();
 });

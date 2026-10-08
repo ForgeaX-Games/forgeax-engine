@@ -1,7 +1,7 @@
 import { derive } from '@forgeax/engine-types';
 import { describe, expect, it } from 'vitest';
 import { compileShader } from '../index.js';
-import { composeMaterial } from '../material/compose.js';
+import { composeMaterial } from '../material/compose-material.js';
 import { compareDerivedMaterialInterface, parseReflection } from '../reflection.js';
 import { materialReflectionFixture } from './fixtures/material-reflection.fixtures.js';
 

@@ -3,7 +3,6 @@ import {
   createToolPreviewRecipe,
   type ToolPreviewRecipeOptions,
   type ToolPreviewRunResult,
-  type ToolPreviewTrace,
 } from '@forgeax/engine-app';
 import type {
   CarrierLeaseRequest,
@@ -76,7 +75,8 @@ export interface PreviewCarrierRoute {
   readonly now?: () => number;
 }
 
-export interface PreviewHostResult {
+/** The browser run result plus the host-observed carrier and backend lane. */
+export interface PreviewHostResult extends ToolPreviewRunResult {
   readonly actualCarrier: 'headless-private' | 'headed-private' | 'visible-consumer';
   /** Requested and observed browser adapter lane for host-owned captures. */
   readonly backendRequested?: CaptureBackend;
@@ -86,20 +86,6 @@ export interface PreviewHostResult {
   readonly carrierTarget?: BrowserCarrierTarget;
   /** Explicit reason when the display host declined and private headed fallback ran. */
   readonly carrierFallbackReason?: string;
-  readonly trace: ToolPreviewTrace;
-  readonly captureId: string;
-  readonly drawCalls: number;
-  readonly committedDrawIndex: number;
-  readonly nonBlackPixels: number;
-  readonly actionTrace: ToolPreviewRunResult['actionTrace'];
-  readonly tape: ToolPreviewRunResult['tape'];
-  readonly profile: ToolPreviewRunResult['profile'];
-  readonly capturePng: ToolPreviewRunResult['capturePng'];
-  readonly png: ToolPreviewRunResult['png'];
-  readonly manifest: ToolPreviewRunResult['manifest'];
-  readonly artifacts: ToolPreviewRunResult['artifacts'];
-  readonly operationTiming: ToolPreviewRunResult['operationTiming'];
-  readonly resource?: import('@forgeax/engine-app').ToolPreviewResourceFacts;
   /** A completed capture can still carry a truthful capability limitation. */
   readonly capabilityFailure?: ToolDomainFailure;
 }

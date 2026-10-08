@@ -50,7 +50,7 @@ import type {
   RhiInstance,
   ShaderModule,
 } from '@forgeax/engine-rhi';
-import { err, ok, RhiError as RhiErrorClass } from '@forgeax/engine-rhi';
+import { err, ok, RhiError as RhiErrorClass, validateRayQueryShader } from '@forgeax/engine-rhi';
 import { _internal_getRawDevice, makeCanvasContext, makeRhiDevice } from './device';
 import {
   adapterUnavailable,
@@ -267,6 +267,8 @@ function createRawShaderModule(
       } as GPUCompilationMessage,
     ]);
   }
+  const rayQueryGate = validateRayQueryShader(device.caps.rayQuery, desc.code);
+  if (!rayQueryGate.ok) return rayQueryGate;
   const mirrored: { label?: string; code: string } = { code: desc.code };
   if ('label' in desc && desc.label !== undefined) mirrored.label = desc.label;
   try {
@@ -472,6 +474,20 @@ export async function requestAdapter(
     typeof globalThis !== 'undefined'
       ? (globalThis as { navigator?: Navigator }).navigator?.gpu
       : undefined;
+  return requestAdapterFrom(ambient, opts);
+}
+
+/**
+ * `requestAdapter` over an explicit WebGPU-shaped `GPU` instead of
+ * `navigator.gpu`. A non-browser provider (the native wgpu GPU of
+ * `@forgeax/engine-rhi-wgpu-native`) builds its `rhi` instance on this seam,
+ * so one shim serves every WebGPU-shaped implementation.
+ */
+export async function requestAdapterFrom(
+  gpu: GpuLike | undefined | null,
+  opts?: RequestAdapterOptions | undefined,
+): Promise<Result<RhiAdapter, RhiError>> {
+  const ambient = gpu;
   if (ambient === undefined || ambient === null) {
     return adapterUnavailable();
   }

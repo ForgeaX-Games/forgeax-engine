@@ -45,7 +45,7 @@ describe('SSR GPU dispatch Browser WebGPU probe', () => {
     }
   });
 
-  it('executes 60 stable Hi-Z, trace and temporal frames with finite visible hits', async () => {
+  it('executes 60 stable depth-pyramid, trace and temporal frames with finite visible hits', async () => {
     const hit = await runSsrGpuDispatch(device, sources, 60);
     expect(hit.passNames.filter((name) => name.startsWith('depth-pyramid-reduce'))).toHaveLength(1);
     expect(hit.passNames.filter((name) => name.startsWith('ssr-reflection-mip'))).toHaveLength(1);

@@ -7,9 +7,10 @@ import type {
   RuntimeAssetBinding,
 } from '@forgeax/engine-types';
 import { projectFailureCause } from '../errors.js';
+import { HttpArtifactCompression } from '../http-artifact.js';
 import { stringifyPluginDiagnostic } from '../structured-plugin-error.js';
 import type { DevSession } from './dev-session.js';
-import type { DispatcherHandler, DispatcherResponse } from './dispatcher.js';
+import type { DispatcherHandler, DispatcherRequest, DispatcherResponse } from './dispatcher.js';
 import type { PluginServerRouteCallbacks, PluginServerState } from './plugin-server.js';
 
 export interface TransportRouteContext {
@@ -69,14 +70,22 @@ interface ResolvedScopeRoute {
   readonly scopedBinding?: RuntimeAssetBinding;
 }
 
-function sendJson(res: DispatcherResponse, body: unknown, statusCode = 200): void {
+function sendJsonText(res: DispatcherResponse, text: string, statusCode = 200): void {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json');
   // Development catalog/import responses are mutable within one runtime
   // generation. Never let a browser or an intermediary replay an older
   // projection after a lazy import publishes a newer row.
   res.setHeader('Cache-Control', 'no-store');
-  res.end(statusCode >= 400 ? stringifyPluginDiagnostic(body) : JSON.stringify(body));
+  res.end(text);
+}
+
+function sendJson(res: DispatcherResponse, body: unknown, statusCode = 200): void {
+  sendJsonText(
+    res,
+    statusCode >= 400 ? stringifyPluginDiagnostic(body) : JSON.stringify(body),
+    statusCode,
+  );
 }
 
 export function catalogDiagnosticForSourcePackageError(
@@ -229,6 +238,33 @@ async function awaitStartupReady(
   }
 }
 
+async function awaitFreshness(
+  context: TransportRouteContext,
+  res: DispatcherResponse,
+): Promise<boolean> {
+  try {
+    await context.freshnessBarrier?.();
+    return true;
+  } catch (error) {
+    sendJson(
+      res,
+      {
+        error:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { readonly code: unknown }).code)
+            : 'watch-failed',
+        expected: 'the filesystem revision and accepted Catalog to settle before consume',
+        hint: 'inspect the watcher diagnostic, repair the source, rebuild, verify, and retry',
+        ...(typeof error === 'object' && error !== null && 'detail' in error
+          ? { detail: (error as { readonly detail: unknown }).detail }
+          : {}),
+      },
+      503,
+    );
+    return false;
+  }
+}
+
 async function resolveScopedRoute(
   context: TransportRouteContext,
   url: string,
@@ -262,26 +298,7 @@ async function resolveScopedRoute(
   }
 
   if (!(await awaitStartupReady(context, res))) return { handled: true, url };
-  try {
-    await context.freshnessBarrier?.();
-  } catch (error) {
-    sendJson(
-      res,
-      {
-        error:
-          typeof error === 'object' && error !== null && 'code' in error
-            ? String((error as { readonly code: unknown }).code)
-            : 'watch-failed',
-        expected: 'the filesystem revision and accepted Catalog to settle before consume',
-        hint: 'inspect the watcher diagnostic, repair the source, rebuild, verify, and retry',
-        ...(typeof error === 'object' && error !== null && 'detail' in error
-          ? { detail: (error as { readonly detail: unknown }).detail }
-          : {}),
-      },
-      503,
-    );
-    return { handled: true, url };
-  }
+  if (!(await awaitFreshness(context, res))) return { handled: true, url };
   if (!gateSession(context, res)) return { handled: true, url };
   const latest = context.devSession?.runtimeScope();
   if (latest === undefined || latest.generation !== parsed.generation) {
@@ -293,9 +310,7 @@ async function resolveScopedRoute(
     return { handled: true, url };
   }
   if (parsed.suffix === '/catalog.json') {
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Cache-Control', 'no-store');
-    res.end(context.scopedCatalogBody(latest));
+    sendJsonText(res, context.scopedCatalogBody(latest));
     return { handled: true, url };
   }
   const explicitRebuild =
@@ -444,7 +459,6 @@ async function handleImportRoute(
   const importPrefix = '/__import/';
   if (!url.startsWith(importPrefix)) return false;
   if (req.method !== 'POST') {
-    res.statusCode = 405;
     res.setHeader('Allow', 'POST');
     sendJson(res, { error: 'method-not-allowed', hint: 'use POST to trigger lazy import' }, 405);
     return true;
@@ -492,15 +506,6 @@ function handleScopedLookupRoute(
   return true;
 }
 
-function sendArtifact(
-  res: DispatcherResponse,
-  artifact: { readonly bytes: Uint8Array; readonly mimeType: string },
-): void {
-  res.statusCode = 200;
-  res.setHeader('Content-Type', artifact.mimeType);
-  res.end(artifact.bytes);
-}
-
 function devArtifactOwnerGuidForUrl(url: string): string | undefined {
   if (!url.startsWith(DEV_PACK_PREFIX)) return undefined;
   const suffix = url.slice(DEV_PACK_PREFIX.length);
@@ -511,6 +516,7 @@ function devArtifactOwnerGuidForUrl(url: string): string | undefined {
 }
 
 async function handlePackRoute(
+  req: DispatcherRequest,
   context: TransportRouteContext,
   url: string,
   scopedBinding: RuntimeAssetBinding | undefined,
@@ -518,7 +524,11 @@ async function handlePackRoute(
 ): Promise<boolean> {
   let artifactBody = context.state.devArtifactBodies.get(url);
   if (artifactBody !== undefined) {
-    sendArtifact(res, artifactBody);
+    (context.state.artifactCompression ?? new HttpArtifactCompression()).send(
+      req,
+      res,
+      artifactBody,
+    );
     return true;
   }
   const artifactOwnerGuid = devArtifactOwnerGuidForUrl(url);
@@ -536,7 +546,11 @@ async function handlePackRoute(
       artifactBody = context.state.devArtifactBodies.get(url);
       if (artifactBody !== undefined) {
         if (!gateSession(context, res)) return true;
-        sendArtifact(res, artifactBody);
+        (context.state.artifactCompression ?? new HttpArtifactCompression()).send(
+          req,
+          res,
+          artifactBody,
+        );
         return true;
       }
     }
@@ -573,10 +587,7 @@ async function handlePackRoute(
     );
     return true;
   }
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Cache-Control', 'no-store');
-  res.end(body);
+  sendJsonText(res, body);
   return true;
 }
 
@@ -601,26 +612,7 @@ async function handleTransportRequest(
       if (!(await awaitStartupReady(context, res))) return;
     }
     if (!gateSession(context, res)) return;
-    try {
-      await context.freshnessBarrier?.();
-    } catch (error) {
-      sendJson(
-        res,
-        {
-          error:
-            typeof error === 'object' && error !== null && 'code' in error
-              ? String((error as { readonly code: unknown }).code)
-              : 'watch-failed',
-          expected: 'the filesystem revision and accepted Catalog to settle before consume',
-          hint: 'inspect the watcher diagnostic, repair the source, rebuild, verify, and retry',
-          ...(typeof error === 'object' && error !== null && 'detail' in error
-            ? { detail: (error as { readonly detail: unknown }).detail }
-            : {}),
-        },
-        503,
-      );
-      return;
-    }
+    if (!(await awaitFreshness(context, res))) return;
   }
   if (requiresRuntimeScope && scopedBinding === undefined) {
     sendJson(res, { error: 'global-runtime-scope-route-disabled' }, 404);
@@ -628,6 +620,6 @@ async function handleTransportRequest(
   }
   if (handleScopedLookupRoute(context, url, scopedBinding, res)) return;
   if (await handleImportRoute(context, req, url, scopedBinding, res)) return;
-  if (await handlePackRoute(context, url, scopedBinding, res)) return;
+  if (await handlePackRoute(req, context, url, scopedBinding, res)) return;
   next();
 }

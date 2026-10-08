@@ -1,5 +1,6 @@
 import type { RuntimePackEnvelope } from '@forgeax/engine-pack/runtime';
 import { ShaderRegistry } from '@forgeax/engine-shader';
+import { terrainDerivedClosureValid } from '@forgeax/engine-terrain';
 import {
   type ArtifactDescriptor,
   type Asset,
@@ -180,6 +181,21 @@ export async function preparePublicationPayloads(
         (guid) => prepared.get(guid)?.kind ?? catalog.get(guid.toLowerCase())?.kind,
       );
       if (error) return err(error);
+    }
+    // Geometry is validated while all outputs are still private. A failed derived
+    // texture must not displace the currently accepted publication.
+    for (const asset of prepared.values()) {
+      if (asset.kind !== 'terrain') continue;
+      const closure = new Map<string, Asset>([
+        ...[...(services.dependencies ?? [])].map(
+          ([guid, value]) => [guid, value.asset as Asset] as const,
+        ),
+        ...prepared,
+      ]);
+      if (!terrainDerivedClosureValid(asset, closure))
+        throw new TypeError(
+          'terrain derived geometry/height/control/layer closure differs from its author samples',
+        );
     }
     return ok(prepared);
   } catch (cause) {

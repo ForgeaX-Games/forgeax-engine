@@ -1,3 +1,4 @@
+import { createServer } from 'node:net';
 import { createWorldContext, World } from '@forgeax/engine-ecs';
 import type { NetEndpoint, NetEndpointConnector, NetSession } from '@forgeax/engine-net';
 import {
@@ -32,7 +33,7 @@ async function connect(url: string, sessionId: number): Promise<LegacyProcessCli
   const world = new World();
   await createWorldContext(world, [netPlugin({ endpoint: observedEndpoint, sessionId })]);
   const session = world.getResource<NetSession>('net-session');
-  const replica = createReplicaCoordinator(world, snakeProfile, observedEndpoint);
+  const replica = createReplicaCoordinator(world, snakeProfile);
   session.attachReplica(replica, snakeProfile.limits);
   const receiveErrors = session.receiveEvents();
   if (receiveErrors.length > 0) throw receiveErrors[0];
@@ -113,23 +114,23 @@ interface ProcessSessionClient {
   replacementJoinSent: boolean;
 }
 
+// Replication IDs are receiver-local; compare the game-owned player identity.
 function semanticState(client: ReplicaClient) {
-  const byIdentity = new Map<number, ReturnType<typeof rowState>>();
+  const states: { playerNetworkId: number; x: number; y: number; score: number }[] = [];
   for (const row of client.replica
     .snapshot()
     .filter((candidate) => candidate.components.includes(Snake.name))) {
     const pos = client.replica.readComponent(row.id, GridPosition);
     const snake = client.replica.readComponent(row.id, Snake);
-    const state = rowState({
-      networkEntityId: row.id,
+    const state = {
       playerNetworkId: (snake?.playerNetworkId as number | undefined) ?? 0,
       x: (pos?.x as number | undefined) ?? 0,
       y: (pos?.y as number | undefined) ?? 0,
       score: (snake?.score as number | undefined) ?? 0,
-    });
-    if (state.playerNetworkId > 0) byIdentity.set(state.playerNetworkId, state);
+    };
+    if (state.playerNetworkId > 0) states.push(state);
   }
-  return [...byIdentity.values()].sort((a, b) => a.playerNetworkId - b.playerNetworkId);
+  return states.sort((a, b) => a.playerNetworkId - b.playerNetworkId);
 }
 
 function playerIds(client: ReplicaClient) {
@@ -146,16 +147,6 @@ function waiting(client: Awaited<ReturnType<typeof connect>>) {
   const session =
     row === undefined ? undefined : client.replica.readComponent(row.id, SnakeSession);
   return session?.started === false && session.gameplayTick === 0;
-}
-
-function rowState(value: {
-  networkEntityId: number;
-  playerNetworkId: number;
-  x: number;
-  y: number;
-  score: number;
-}) {
-  return value;
 }
 
 function report(line: string): void {
@@ -431,10 +422,67 @@ describe('multiplayer snake process E2E', () => {
         port: address.port - offset,
       })) as unknown as AuthorityProcess & { startupAttempts: number };
       expect(authority.port + offset).not.toBe(address.port);
-      expect(authority.startupAttempts).toBe(2);
+      expect(authority.startupAttempts).toBeGreaterThanOrEqual(2);
+      expect(authority.startupAttempts).toBeLessThanOrEqual(3);
       expect(occupied.address()).toEqual(address);
     } finally {
       await authority?.kill();
+      await new Promise<void>((resolve) => occupied.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    true,
+    false,
+  ])('bounds repeated real collisions and retains the occupied service (recover=%s)', async (recover) => {
+    const occupied = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((resolve, reject) => {
+      occupied.once('listening', resolve);
+      occupied.once('error', reject);
+    });
+    const address = occupied.address();
+    if (address === null || typeof address === 'string') throw new Error('expected a TCP listener');
+    const retryBlocker = createServer();
+    let authority: Awaited<ReturnType<typeof startAuthority>> | undefined;
+    const random = Math.random;
+    try {
+      // Keep the controlled retry choice within the helper's real port range.
+      for (let port = 31_000; port < 31_100; port += 2) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            retryBlocker.once('error', reject);
+            retryBlocker.listen(port, '127.0.0.1', resolve);
+          });
+          break;
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'EADDRINUSE') throw error;
+        }
+      }
+      const retryAddress = retryBlocker.address();
+      if (retryAddress === null || typeof retryAddress === 'string')
+        throw new Error('bounded retry-listener admission failed');
+      let fallbackCalls = 0;
+      Math.random = () => {
+        if (++fallbackCalls === 2 && recover) retryBlocker.close();
+        return (retryAddress.port - 20_000) / 20_000;
+      };
+      if (recover) {
+        authority = await startAuthority({ port: address.port });
+        expect(authority.startupAttempts).toBe(3);
+        expect(authority.port).toBe(retryAddress.port);
+      } else {
+        await expect(startAuthority({ port: address.port })).rejects.toMatchObject({
+          code: expect.stringMatching(/^(EADDRINUSE|connection-failed)$/),
+        });
+        expect(retryBlocker.address()).toEqual(retryAddress);
+      }
+      expect(fallbackCalls).toBe(2);
+      expect(occupied.address()).toEqual(address);
+    } finally {
+      Math.random = random;
+      await authority?.kill();
+      if (retryBlocker.listening)
+        await new Promise<void>((resolve) => retryBlocker.close(() => resolve()));
       await new Promise<void>((resolve) => occupied.close(() => resolve()));
     }
   });

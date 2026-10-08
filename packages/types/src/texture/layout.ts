@@ -1,11 +1,7 @@
 import { err, ok, type Result } from '../result.js';
 import type { TextureMipPolicy, TextureShape } from './asset.js';
-import {
-  isCompressedFormat,
-  type TextureError,
-  textureError,
-  validateTextureShape,
-} from './errors.js';
+import { textureFormatBlock } from './block.js';
+import { type TextureError, textureError, validateTextureShape } from './errors.js';
 
 export interface TextureLayoutInput {
   readonly shape: TextureShape;
@@ -34,51 +30,6 @@ export interface TextureLayout {
   readonly format: GPUTextureFormat;
   readonly levels: readonly TextureMipLayout[];
   readonly byteLength: number;
-}
-
-interface FormatLayout {
-  readonly bytesPerBlock: number;
-  readonly blockWidth: number;
-  readonly blockHeight: number;
-}
-
-function formatLayout(format: GPUTextureFormat): FormatLayout {
-  if (isCompressedFormat(format)) {
-    // RGB8 and RGB8A1 use 8-byte blocks; RGBA8 includes a separate alpha
-    // block and needs 16 bytes. The broader "etc2-rgb" prefix includes both.
-    if (format.startsWith('bc1') || format.startsWith('etc2-rgb8')) {
-      return { bytesPerBlock: 8, blockWidth: 4, blockHeight: 4 };
-    }
-    return { bytesPerBlock: 16, blockWidth: 4, blockHeight: 4 };
-  }
-  switch (format) {
-    case 'r8unorm':
-    case 'r8snorm':
-    case 'r8uint':
-    case 'r8sint':
-      return { bytesPerBlock: 1, blockWidth: 1, blockHeight: 1 };
-    case 'rg8unorm':
-    case 'rg8snorm':
-    case 'rg8uint':
-    case 'rg8sint':
-    case 'r16uint':
-    case 'r16sint':
-    case 'r16float':
-      return { bytesPerBlock: 2, blockWidth: 1, blockHeight: 1 };
-    case 'rgba16uint':
-    case 'rgba16sint':
-    case 'rgba16float':
-    case 'rg32uint':
-    case 'rg32sint':
-    case 'rg32float':
-      return { bytesPerBlock: 8, blockWidth: 1, blockHeight: 1 };
-    case 'rgba32uint':
-    case 'rgba32sint':
-    case 'rgba32float':
-      return { bytesPerBlock: 16, blockWidth: 1, blockHeight: 1 };
-    default:
-      return { bytesPerBlock: 4, blockWidth: 1, blockHeight: 1 };
-  }
 }
 
 function mipLevelCount(shape: TextureShape, mips: TextureMipPolicy): number {
@@ -123,7 +74,7 @@ export function deriveTextureLayout(
     );
   }
 
-  const params = formatLayout(input.format);
+  const params = textureFormatBlock(input.format);
   const levels: TextureMipLayout[] = [];
   let byteOffset = 0;
   const count = mipLevelCount(input.shape, input.mips);

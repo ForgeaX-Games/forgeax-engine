@@ -2,6 +2,7 @@
 // catalog/loader bridges, and the EngineMetrics protocol.  Kept as one leaf so
 // the public index remains a small, explicit barrel without duplicate values.
 
+import type { ArtifactDescriptor } from './asset.js';
 import type { Asset } from './core-contracts.js';
 
 // Closed union of runtime-layer error code literals. Defined here as the
@@ -106,7 +107,11 @@ export type VertexStepMode = GPUVertexStepMode;
 export type IndexFormat = GPUIndexFormat;
 
 /** GPU primitive topology ('point-list' / 'line-list' / 'line-strip' / 'triangle-list' / 'triangle-strip'). */
-export type { PrimitiveTopology } from './primitive-topology.js';
+export {
+  isStripTopology,
+  isTriangleTopology,
+  type PrimitiveTopology,
+} from './primitive-topology.js';
 
 /** GPU triangle cull mode ('none' / 'front' / 'back'). */
 export type CullMode = GPUCullMode;
@@ -366,6 +371,8 @@ export interface MaterialSchemaMismatchDetail {
 export interface MaterialShaderNotFoundDetail {
   readonly code: 'material-shader-not-found';
   readonly identifier: string;
+  /** Registered identifiers at lookup time, for enumeration without parsing `expected`. */
+  readonly registeredShaderIds: readonly string[];
 }
 
 /**
@@ -436,7 +443,7 @@ export interface MaterialShaderBindingMismatchDetail {
  * autocomplete (charter proposition 3 machine-readable union > prose +
  * proposition 4 explicit failure).
  *
- * The 7th member `'shader-not-found'` has no typed detail variant — the naga
+ * The `'shader-not-found'` member has no typed detail variant — the
  * `shaderNotFound` factory leaves `.detail` undefined because the surface
  * carries no per-instance payload (the `hash` is already embedded in
  * `.message` / `.expected`; OOS-11 deferring a typed variant).
@@ -489,9 +496,10 @@ export interface BindGroupLayoutDescriptor {
  * Single bind group layout entry — shape-aligned with
  * `@webgpu/types.GPUBindGroupLayoutEntry`.
  *
- * `binding` / `visibility` are required; the four resource layouts (buffer / sampler /
- * texture / storageTexture) form the "exactly one set" constraint per W3C spec §5
- * (`externalTexture` is out of scope for the forgeax MVP and is not surfaced here yet).
+ * `binding` / `visibility` are required; the five resource layouts (buffer / sampler /
+ * texture / storageTexture / externalTexture) form the "exactly one set" constraint
+ * per W3C spec §5. An `externalTexture` slot accepts either an imported video frame
+ * or an ordinary 2D texture view (the copy path shares the same layout).
  */
 export interface BindGroupLayoutEntry {
   readonly binding: GPUIndex32;
@@ -500,6 +508,7 @@ export interface BindGroupLayoutEntry {
   readonly sampler?: GPUSamplerBindingLayout | undefined;
   readonly texture?: GPUTextureBindingLayout | undefined;
   readonly storageTexture?: GPUStorageTextureBindingLayout | undefined;
+  readonly externalTexture?: GPUExternalTextureBindingLayout | undefined;
 }
 
 // === RemoteHandle (feat-20260629-inspector-two-layer-model M4 / w17) ========
@@ -1255,20 +1264,14 @@ export interface Loader<P = Asset> {
       readonly kind: string;
       readonly payload: Record<string, unknown>;
       readonly refs: readonly string[];
+      readonly streams?: Readonly<
+        Record<string, { readonly descriptor: ArtifactDescriptor; readonly url: string }>
+      >;
       readonly artifacts: Readonly<
         Record<
           string,
           {
-            readonly descriptor: {
-              readonly path: string;
-              readonly mediaType: string;
-              readonly assetCodec?: {
-                readonly name: string;
-                readonly container?: 'ktx2' | 'basis';
-                readonly profile?: string;
-                readonly version?: string;
-              };
-            };
+            readonly descriptor: ArtifactDescriptor;
             readonly bytes: Uint8Array;
           }
         >

@@ -14,7 +14,7 @@ export function deriveMotionBlurExecutionReceipt(
   frameState: RenderFrameState,
   plans: readonly RenderFeaturePlannedFrame[],
 ): MotionBlurExecutionReceipt | undefined {
-  const graph = frameState.compiledFrameGraph;
+  const graph = frameState.compiledFrameGraph?.graph ?? null;
   const deviceGeneration = internals.deviceScope?.generation;
   if (graph === null || deviceGeneration === undefined) return undefined;
   const info = graph.inspect();

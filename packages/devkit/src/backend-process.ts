@@ -17,7 +17,12 @@ import { fileURLToPath } from 'node:url';
 import { createHostWebSocketClient } from '@forgeax/engine-host/transport';
 import type { ToolTerminal } from '@forgeax/engine-tool-runtime';
 import { WebSocket } from 'ws';
-import { createDevKitBackend, devKitBackendServerPlugin } from './backend.js';
+import {
+  createDevKitBackend,
+  devKitBackendServerPlugin,
+  logBackendStartup,
+  traceBackendStartup,
+} from './backend.js';
 
 interface BackendState {
   readonly id: string;
@@ -211,6 +216,16 @@ export async function startDevKitBackend(
         env: process.env,
       },
     );
+    logBackendStartup(
+      {
+        stage: 'daemon-spawn',
+        event: 'spawned',
+        hostPid: process.pid,
+        childPid: child.pid,
+        time: new Date().toISOString(),
+      },
+      log,
+    );
   } catch (error) {
     removeState(root, id);
     throw error;
@@ -238,6 +253,12 @@ export async function startDevKitBackend(
 }
 
 export async function runDevKitBackendProcess(root: string, id: string): Promise<void> {
+  logBackendStartup({
+    stage: 'daemon-entry',
+    event: 'begin',
+    pid: process.pid,
+    time: new Date().toISOString(),
+  });
   const claim = readState(root);
   if (claim?.id !== id) throw new Error('Backend startup claim was replaced');
   const hostPack = claim.hostPack;
@@ -256,8 +277,13 @@ export async function runDevKitBackendProcess(root: string, id: string): Promise
   process.once('SIGINT', stop);
   let backend: Awaited<ReturnType<typeof createDevKitBackend>> | undefined;
   try {
-    backend = await createDevKitBackend(root, hostPack === undefined ? {} : { hostPack });
-    await (await backend.host.context.plugin(devKitBackendServerPlugin, { stop })).await();
+    backend = await traceBackendStartup('backend-create', () =>
+      createDevKitBackend(root, hostPack === undefined ? {} : { hostPack }),
+    );
+    const startedBackend = backend;
+    await traceBackendStartup('server-listen', async () => {
+      await (await startedBackend.host.context.plugin(devKitBackendServerPlugin, { stop })).await();
+    });
     writeState({
       root,
       id,

@@ -59,13 +59,18 @@ function externalizeFields(
   )) {
     if (value === undefined) continue;
     const kind = sharedKind(schema?.[fieldName]);
-    if (kind === 'one' && typeof value === 'string') {
+    if (kind === 'one' && value === 0) {
+      // Null distinguishes an empty shared handle from refs[0] on the wire.
+      fields[fieldName] = null;
+    } else if (kind === 'one' && typeof value === 'string') {
       fields[fieldName] = addRef(context, value, { componentName, fieldName }, sceneEntityKey);
     } else if (kind === 'many' && Array.isArray(value)) {
       fields[fieldName] = value.map((item, arrayIndex) =>
         typeof item === 'string'
           ? addRef(context, item, { componentName, fieldName, arrayIndex }, sceneEntityKey)
-          : item,
+          : item === 0
+            ? null
+            : item,
       );
     } else {
       fields[fieldName] = value;

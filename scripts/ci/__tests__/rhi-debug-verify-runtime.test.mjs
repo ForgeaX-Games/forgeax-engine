@@ -49,7 +49,7 @@ test('rhi-debug verify runtime bindings expose typed failures and bounded browse
 
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
-  let closeCalls = 0;
+  const closeCalls = [];
   let clearCalls = 0;
   globalThis.setTimeout = (...args) => originalSetTimeout(...args);
   globalThis.clearTimeout = (timer) => {
@@ -59,13 +59,25 @@ test('rhi-debug verify runtime bindings expose typed failures and bounded browse
   try {
     await closeBrowserBounded(
       {
+        contexts: () => [
+          {
+            pages: () => [
+              {
+                close: async (options) => {
+                  assert.deepEqual(options, { runBeforeUnload: false });
+                  closeCalls.push('page');
+                },
+              },
+            ],
+          },
+        ],
         close: async () => {
-          closeCalls += 1;
+          closeCalls.push('browser');
         },
       },
       50,
     );
-    assert.equal(closeCalls, 1);
+    assert.deepEqual(closeCalls, ['page', 'browser']);
     assert.equal(clearCalls, 1);
   } finally {
     globalThis.setTimeout = originalSetTimeout;
@@ -84,7 +96,7 @@ test('rhi-debug verify browser cleanup reports a bounded timeout and clears its 
   };
   try {
     await assert.rejects(
-      closeBrowserBounded({ close: () => new Promise(() => {}) }, 20),
+      closeBrowserBounded({ contexts: () => [], close: () => new Promise(() => {}) }, 20),
       /browser close timed out after 20ms/,
     );
     assert.equal(clearCalls, 1);

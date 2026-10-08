@@ -1,76 +1,27 @@
-// pick-vertex.ts — per-entity + full-scene vertex-level picking (feat-20260630-vertex-snapping-picking).
-//
-// `pickVertexOnEntity(world, cameraEntity, screenX, screenY, vpW, vpH, entity, options?)`
-// returns the vertex(es) on a single entity nearest to the supplied screen coordinate.
-//
-// `pickVertex(world, cameraEntity, screenX, screenY, vpW, vpH, options?)`
-// walks all renderable archetypes (AABB coarse cull), calls pickVertexOnEntity on each
-// ray-intersecting entity, and returns the globally-nearest vertex hits sorted by screenDist.
-//
-// M2 scope (w5): single-entity query with overloaded three-state return (D-2).
-// M3 scope (w8): degradation branches (D-4/D-5/AC-07/R-3) + pickVertex full-scene (R-2).
-//
-// Overload contract:
-//   - No options / no limit → VertexHit | undefined
-//   - { limit: N }       → VertexHit[]
-//
-// Reuses pick()'s full skeleton (camera validation / view=invert(world) / projection branch /
-// screenToRay / resolveAssetHandle / GlobalTransform.world / AABB coarse cull), then for each
-// triangle-list submesh that passes the AABB test, iterates every triangle and collects
-// vertex candidates via rayTriangleIntersects.
-//
-// Key design points:
-//   - D-7: worldPos uses Vec3Like (not branded Vec3), mirroring PickHit.point.
-//   - D-8: reuses PickError with ZERO new error codes — the sole throw remains
-//     camera-component-missing; all other miss conditions return undefined / [].
-//   - D-9: caller MUST propagateTransforms(world) before calling — the function reads
-//     GlobalTransform.world directly.
-//   - AC-08: deformed = isSkinned (attributes.skinIndex && attributes.skinWeight both
-//     defined, SSOT at asset-registry.ts:1417-1418).
-//   - R-3: behind-camera vertices (worldToScreen returns behind=true) are excluded.
-//   - D-4: position three-branch narrow (Float32Array → use; ArrayBuffer → new Float32Array;
-//     Uint16Array / undefined → skip mesh), mirrors computeAABB asset-registry.ts:1898-1929.
-//   - D-5: only triangle-list topology participates; triangle-strip / line-list /
-//     line-strip / point-list → skip submesh.
-//   - AC-07: builtin mesh with aabb===undefined → fallback to walk-all-vertices
-//     (not continue like pick.ts:184).
-//
-// Related: requirements AC-01/AC-02/AC-03/AC-04/AC-05/AC-07/AC-08/AC-09/AC-10/AC-13;
-//          plan-strategy D-2/D-3/D-4/D-5/D-7/D-8/D-9 §4 R-2/R-3;
-//          research Finding 1 (reuse pick skeleton) / Finding 2 (PickError) /
-//          Finding 4 (computeAABB three-branch) / Finding 5 (builtin withoutAabb) /
-//          Finding 6 (non-indexed sequence) / Finding 8 (GlobalTransform.world) /
-//          Finding 9 (behind flag) / Finding 10 (isSkinned);
-//          plan-tasks.json w5/w8 acceptanceCheck.
+// Screen vertex queries use the same current Morph -> Skin projection as exact
+// triangle picking. Only vertices of ray-intersected triangle-list primitives
+// participate; unavailable CPU poses and explicit instances yield no candidates.
 
 import { resolveAssetHandle } from '@forgeax/engine-assets-runtime';
 import type { EntityHandle, World } from '@forgeax/engine-ecs';
-import { mat4, ray, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
-import { MeshFilter, MeshRenderer } from '@forgeax/engine-render';
+import { box3, mat4, ray, type Vec3Like, vec2, vec3 } from '@forgeax/engine-math';
+import { Instances, MeshFilter, MeshRenderer } from '@forgeax/engine-render';
 import { GlobalTransform, Transform } from '@forgeax/engine-scene';
 import type { MeshAsset } from '@forgeax/engine-types';
 import { toShared } from '@forgeax/engine-types';
-import { computeScreenRay, readWorldMatrix, type ScreenRay } from './pick-core';
+import { currentMeshPositions } from './current-positions';
+import { transformMeshVertex, visitSubmeshTriangles } from './mesh-triangles';
+import {
+  computeScreenRay,
+  readWorldMatrix,
+  type ScreenRay,
+  visitMeshBoundsCorners,
+} from './pick-core';
 
 // ── types ────────────────────────────────────────────────────────────────
 
-/**
- * Result of a successful vertex pick: the mesh vertex nearest to the
- * supplied screen-space coordinate.
- *
- * Field set:
- *   - `entity`      — the entity this vertex belongs to.
- *   - `vertexIndex` — index into the vertex position buffer (0-based).
- *   - `worldPos`    — world-space position of the vertex (Vec3Like; rest-pose when
- *                     deformed=true). D-7: Vec3Like avoids math brand cast lint in
- *                     the runtime package.
- *   - `screenDist`  — screen-space pixel distance from the query coordinate to the
- *                     projected vertex position (non-negative).
- *   - `worldDist`   — perpendicular 3D distance from the vertex world position to
- *                     the pick ray (non-negative). Orthogonal counterpart to screenDist.
- *   - `deformed`    — true when the mesh is skinned (skinIndex + skinWeight attributes
- *                     both present), indicating worldPos reflects rest-pose, not GPU
- *                     skinning output.
+/** A current-pose vertex on a ray-intersected triangle, sorted in screen space.
+ * deformed is true when Morph or Skin was evaluated, never a rest-pose fallback.
  */
 export interface VertexHit {
   readonly entity: EntityHandle;
@@ -110,82 +61,20 @@ function pointToRayDist(
   return Math.sqrt(cx * cx + cy * cy + cz * cz);
 }
 
-/**
- * Test whether a ray intersects a local-space AABB transformed by a world matrix.
- * Returns false when the ray misses the box; returns true when the box is
- * inverted (empty) — caller falls through to walk-all-vertices (AC-07).
- *
- * Extracted from collectVertexHits and pickVertex (review I-3, ~48 lines x2).
- */
-function rayHitsWorldAabb(
-  r: Float32Array,
-  localAabb: Float32Array,
-  worldMat: mat4.Mat4Like,
-): boolean {
-  // skip inverted-infinity empty box — fall through to walk-all-vertices
+/** Vertex bounds preserve their comparison-based invalid-coordinate behavior. */
+function rayHitsWorldAabb(r: ray.Ray, localAabb: Float32Array, worldMat: mat4.Mat4Like): boolean {
   if ((localAabb[0] as number) > (localAabb[3] as number)) return true;
-
-  const corners = [
-    [localAabb[0] as number, localAabb[1] as number, localAabb[2] as number],
-    [localAabb[3] as number, localAabb[1] as number, localAabb[2] as number],
-    [localAabb[0] as number, localAabb[4] as number, localAabb[2] as number],
-    [localAabb[3] as number, localAabb[4] as number, localAabb[2] as number],
-    [localAabb[0] as number, localAabb[1] as number, localAabb[5] as number],
-    [localAabb[3] as number, localAabb[1] as number, localAabb[5] as number],
-    [localAabb[0] as number, localAabb[4] as number, localAabb[5] as number],
-    [localAabb[3] as number, localAabb[4] as number, localAabb[5] as number],
-  ];
-  let minX = Infinity,
-    minY = Infinity,
-    minZ = Infinity;
-  let maxX = -Infinity,
-    maxY = -Infinity,
-    maxZ = -Infinity;
-  const tmpP = vec3.create();
-  for (const c of corners) {
-    mat4.transformPoint(tmpP, worldMat, c as unknown as Vec3Like);
-    const cx = tmpP[0] as number;
-    const cy = tmpP[1] as number;
-    const cz = tmpP[2] as number;
-    if (cx < minX) minX = cx;
-    if (cy < minY) minY = cy;
-    if (cz < minZ) minZ = cz;
-    if (cx > maxX) maxX = cx;
-    if (cy > maxY) maxY = cy;
-    if (cz > maxZ) maxZ = cz;
-  }
-  const worldAabb = new Float32Array(6);
-  worldAabb[0] = minX;
-  worldAabb[1] = minY;
-  worldAabb[2] = minZ;
-  worldAabb[3] = maxX;
-  worldAabb[4] = maxY;
-  worldAabb[5] = maxZ;
-
-  const aabbResult = ray.rayAabbIntersects(
-    r,
-    worldAabb as unknown as import('@forgeax/engine-math').box3.Box3Like,
-  );
-  return aabbResult.hit;
-}
-
-/**
- * Narrow the position attribute per the three-branch contract (D-4),
- * mirrors computeAABB asset-registry.ts:1898-1908.
- * Returns the Float32Array position data, or undefined when the position
- * is Uint16Array / undefined / too short (skip this mesh).
- */
-function narrowPosition(
-  positionAttr: ArrayBuffer | Float32Array | Uint16Array | undefined,
-): Float32Array | undefined {
-  if (positionAttr instanceof Float32Array) {
-    return positionAttr;
-  }
-  if (positionAttr instanceof ArrayBuffer) {
-    return new Float32Array(positionAttr);
-  }
-  // Uint16Array or undefined → skip (no usable float-coordinate vertex data)
-  return undefined;
+  const worldAabb = box3.create();
+  worldAabb[0] = worldAabb[1] = worldAabb[2] = Infinity;
+  worldAabb[3] = worldAabb[4] = worldAabb[5] = -Infinity;
+  visitMeshBoundsCorners(localAabb, worldMat, (point) => {
+    for (let axis = 0; axis < 3; axis++) {
+      const coordinate = point[axis] as number;
+      if (coordinate < (worldAabb[axis] as number)) worldAabb[axis] = coordinate;
+      if (coordinate > (worldAabb[axis + 3] as number)) worldAabb[axis + 3] = coordinate;
+    }
+  });
+  return ray.rayAabbIntersects(r, worldAabb).hit;
 }
 
 // ── internal: per-entity vertex hit collection (extracted for pickVertex reuse) ──
@@ -197,25 +86,13 @@ function narrowPosition(
  */
 function collectVertexHits(
   world: World,
-  cameraEntity: EntityHandle | undefined,
+  screenRay: ScreenRay,
   screenX: number,
   screenY: number,
   viewportWidth: number,
   viewportHeight: number,
   entity: EntityHandle,
-  screenRayOverride?: ScreenRay,
 ): VertexHit[] {
-  // ── camera validation + view/projection + screen->world ray (pick-core skeleton) ──
-  // Throws PickError('camera-component-missing') when cameraEntity has no Camera;
-  // returns undefined when the camera has no resolvable GlobalTransform.world (D-9 preamble miss).
-  const screenRay =
-    screenRayOverride ??
-    (cameraEntity === undefined
-      ? undefined
-      : computeScreenRay(world, cameraEntity, screenX, screenY, viewportWidth, viewportHeight));
-  if (screenRay === undefined) {
-    return [];
-  }
   const { ray: r, view, proj } = screenRay;
 
   // ── viewProj = proj * view (precompute for worldToScreen calls) ──
@@ -243,32 +120,15 @@ function collectVertexHits(
   }
   const mesh = meshRes.value;
 
-  // ── position attribute narrow (D-4: three-branch, mirrors computeAABB) ──
-  const positions = narrowPosition(mesh.attributes.position);
-  if (positions === undefined || positions.length < 3) {
-    return [];
-  }
-
-  // ── entity world transform (D-9: requires propagateTransforms preamble) ──
+  // VertexHit has no instance ordinal; explicit instances are untestable here.
+  if (world.hasComponent(entity, Instances)) return [];
+  const pose = currentMeshPositions(world, entity, mesh);
+  if ('reason' in pose) return [];
+  const { positions, bounds, deformed, worldSpace } = pose;
   const entityWorld = readWorldMatrix(world, entity);
-  if (entityWorld === undefined) {
-    return [];
-  }
-
-  // ── deformed flag (AC-08: isSkinned, SSOT at asset-registry.ts:1417-1418) ──
-  const attrs = mesh.attributes;
-  const deformed: boolean =
-    attrs !== undefined && attrs.skinIndex !== undefined && attrs.skinWeight !== undefined;
-
-  // ── AABB coarse cull (if aabb present) ──
-  // AC-07: if aabb is undefined, DO NOT continue — fallthrough to walk-all-vertices.
-  // This is the key behavioral difference from pick.ts:184.
-  const entityWMLike = entityWorld as unknown as mat4.Mat4Like;
-
-  if (mesh.aabb !== undefined && !rayHitsWorldAabb(r, mesh.aabb, entityWMLike)) {
-    return [];
-  }
-  // AC-07: aabb===undefined → fall through to walk-all-vertices (builtin no-AABB fallback).
+  if (!entityWorld) return [];
+  const entityWMLike = worldSpace ? mat4.identity(mat4.create()) : entityWorld;
+  if (bounds !== undefined && !rayHitsWorldAabb(r, bounds, entityWMLike)) return [];
 
   // ── iterate submeshes + triangles ──
   const candidates: VertexHit[] = [];
@@ -280,39 +140,28 @@ function collectVertexHits(
   // Shared vertex-emit closure: given 3 vertex indices for a hit triangle,
   // compute worldPos + screenDist + worldDist and push candidates.
   // Extracted from the duplicated ~45-line indexed/non-indexed body (review I-2).
+  const worldA = vec3.create();
+  const worldB = vec3.create();
+  const worldC = vec3.create();
   const emitTriangleVertices = (i0: number, i1: number, i2: number): void => {
-    const ax = positions[i0 * 3 + 0] as number;
-    const ay = positions[i0 * 3 + 1] as number;
-    const az = positions[i0 * 3 + 2] as number;
-    const bx = positions[i1 * 3 + 0] as number;
-    const by = positions[i1 * 3 + 1] as number;
-    const bz = positions[i1 * 3 + 2] as number;
-    const cx = positions[i2 * 3 + 0] as number;
-    const cy = positions[i2 * 3 + 1] as number;
-    const cz = positions[i2 * 3 + 2] as number;
-
-    // The screen ray is in world space. Transform the triangle into that same
-    // space before testing it; testing local positions against a world ray
-    // makes translated/rotated/non-uniform instances return false hits.
-    const worldA = vec3.create();
-    const worldB = vec3.create();
-    const worldC = vec3.create();
-    mat4.transformPoint(worldA, entityWMLike, [ax, ay, az] as unknown as Vec3Like);
-    mat4.transformPoint(worldB, entityWMLike, [bx, by, bz] as unknown as Vec3Like);
-    mat4.transformPoint(worldC, entityWMLike, [cx, cy, cz] as unknown as Vec3Like);
+    transformMeshVertex(worldA, positions, i0, entityWMLike);
+    transformMeshVertex(worldB, positions, i1, entityWMLike);
+    transformMeshVertex(worldC, positions, i2, entityWMLike);
     const triResult = ray.rayTriangleIntersects(r, worldA, worldB, worldC);
 
     if (!triResult.hit) return;
 
-    for (const [vi, lx, ly, lz] of [
-      [i0, ax, ay, az],
-      [i1, bx, by, bz],
-      [i2, cx, cy, cz],
-    ] as [number, number, number, number][]) {
-      if (Number.isNaN(lx) || Number.isNaN(ly) || Number.isNaN(lz)) continue;
-      if (!Number.isFinite(lx) || !Number.isFinite(ly) || !Number.isFinite(lz)) continue;
-
-      const worldVec = vi === i0 ? worldA : vi === i1 ? worldB : worldC;
+    for (const [vi, worldVec] of [
+      [i0, worldA],
+      [i1, worldB],
+      [i2, worldC],
+    ] as const) {
+      if (
+        !Number.isFinite(positions[vi * 3]) ||
+        !Number.isFinite(positions[vi * 3 + 1]) ||
+        !Number.isFinite(positions[vi * 3 + 2])
+      )
+        continue;
       const wx = worldVec[0] as number;
       const wy = worldVec[1] as number;
       const wz = worldVec[2] as number;
@@ -354,34 +203,10 @@ function collectVertexHits(
     // D-5: only triangle-list participates
     if (submesh.topology !== 'triangle-list') continue;
 
-    const idxOffset = submesh.indexOffset;
-    const idxCount = submesh.indexCount;
-
-    if (indices !== undefined && indices.length > 0 && idxCount > 0) {
-      // indexed draw
-      const triCount = Math.floor(idxCount / 3);
-      for (let ti = 0; ti < triCount; ti++) {
-        const i0 = indices[idxOffset + ti * 3 + 0] as number;
-        const i1 = indices[idxOffset + ti * 3 + 1] as number;
-        const i2 = indices[idxOffset + ti * 3 + 2] as number;
-
-        if (i0 > maxVertexIndex || i1 > maxVertexIndex || i2 > maxVertexIndex) continue;
-        emitTriangleVertices(i0, i1, i2);
-      }
-    } else {
-      // AC-09: no index buffer → non-indexed triangle sequence
-      const submeshVertexCount = submesh.vertexCount;
-      const triCount = Math.floor(submeshVertexCount / 3);
-
-      for (let ti = 0; ti < triCount; ti++) {
-        const i0 = ti * 3;
-        const i1 = ti * 3 + 1;
-        const i2 = ti * 3 + 2;
-
-        if (i0 > maxVertexIndex || i1 > maxVertexIndex || i2 > maxVertexIndex) continue;
-        emitTriangleVertices(i0, i1, i2);
-      }
-    }
+    visitSubmeshTriangles(submesh, indices, 0, (i0, i1, i2) => {
+      if (i0 > maxVertexIndex || i1 > maxVertexIndex || i2 > maxVertexIndex) return;
+      emitTriangleVertices(i0, i1, i2);
+    });
   }
 
   return candidates;
@@ -470,24 +295,15 @@ export function pickVertexOnEntityWithScreenRay(
   if (screenRay === undefined) return options === undefined ? undefined : [];
   const candidates = collectVertexHits(
     world,
-    undefined,
+    screenRay,
     screenX,
     screenY,
     viewportWidth,
     viewportHeight,
     entity,
-    screenRay,
   );
 
-  // ── sort by screenDist ascending ──
-  candidates.sort((a, b) => a.screenDist - b.screenDist);
-
-  // ── apply limit / return shape ──
-  const limit = options?.limit;
-  if (limit !== undefined) {
-    return candidates.slice(0, limit);
-  }
-  return candidates[0];
+  return selectVertexHits(candidates, options);
 }
 
 // ── overload signatures: pickVertex (full-scene, D-2: three-state static dispatch) ──
@@ -557,7 +373,7 @@ export function pickVertex(
     viewportWidth,
     viewportHeight,
   );
-  return pickVertexFromScreenRay(
+  return pickVertexWithScreenRay(
     world,
     screenRay,
     screenX,
@@ -578,31 +394,10 @@ export function pickVertexWithScreenRay(
   viewportHeight: number,
   options?: { limit: number },
 ): VertexHit | VertexHit[] | undefined {
-  return pickVertexFromScreenRay(
-    world,
-    screenRay,
-    screenX,
-    screenY,
-    viewportWidth,
-    viewportHeight,
-    options,
-  );
-}
-
-function pickVertexFromScreenRay(
-  world: World,
-  screenRay: ScreenRay | undefined,
-  screenX: number,
-  screenY: number,
-  viewportWidth: number,
-  viewportHeight: number,
-  options?: { limit: number },
-): VertexHit | VertexHit[] | undefined {
   if (screenRay === undefined) {
     if (options) return [];
     return undefined;
   }
-  const r = screenRay.ray;
 
   // ── walk renderable archetypes (Transform + MeshFilter + MeshRenderer) ──
   // Reuse pick.ts archetype walk skeleton (research Finding 1).
@@ -613,51 +408,29 @@ function pickVertexFromScreenRay(
   const allCandidates: VertexHit[] = [];
 
   for (const row of query) {
-    const assetHandleRaw = Math.round(row.get(MeshFilter).assetHandle as number);
-    if (assetHandleRaw === 0) continue;
-    const meshRes = resolveAssetHandle<MeshAsset>(world, toShared<'MeshAsset'>(assetHandleRaw));
-    if (!meshRes.ok) continue;
-
-    // read entity (mirrors pick.ts:190)
     const entity = row.entity;
-
-    // read entity world matrix
-    const entityWorld = readWorldMatrix(world, entity);
-    if (entityWorld === undefined) continue;
-
-    // AABB coarse cull (R-2): if aabb present, test ray intersection.
-    // If aabb===undefined (builtin), fall through to collectVertexHits (AC-07).
-    const mesh = meshRes.value;
-    if (
-      mesh.aabb !== undefined &&
-      !rayHitsWorldAabb(r, mesh.aabb, entityWorld as unknown as mat4.Mat4Like)
-    ) {
-      continue;
-    }
-
     // Collect vertices for this entity
     const entityHits = collectVertexHits(
       world,
-      undefined,
+      screenRay,
       screenX,
       screenY,
       viewportWidth,
       viewportHeight,
       entity,
-      screenRay,
     );
     for (const h of entityHits) {
       allCandidates.push(h);
     }
   }
 
-  // ── global sort by screenDist ascending ──
-  allCandidates.sort((a, b) => a.screenDist - b.screenDist);
+  return selectVertexHits(allCandidates, options);
+}
 
-  // ── apply limit / return shape ──
-  const limit = options?.limit;
-  if (limit !== undefined) {
-    return allCandidates.slice(0, limit);
-  }
-  return allCandidates[0];
+function selectVertexHits(
+  candidates: VertexHit[],
+  options: { limit: number } | undefined,
+): VertexHit | VertexHit[] | undefined {
+  candidates.sort((a, b) => a.screenDist - b.screenDist);
+  return options?.limit === undefined ? candidates[0] : candidates.slice(0, options.limit);
 }

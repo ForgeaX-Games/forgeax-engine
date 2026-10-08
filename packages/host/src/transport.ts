@@ -622,7 +622,8 @@ export async function createHostWebSocketClient(
       payload: TPayload,
       options: HostRequestOptions = {},
     ): Promise<TResult> {
-      if (!connected) return Promise.reject(disconnectError('socket is closed'));
+      if (!connected || (socket.readyState !== undefined && socket.readyState !== 1))
+        return Promise.reject(disconnectError('socket is closed'));
       if (options.signal?.aborted)
         return Promise.reject(
           new HostAssemblyError(
@@ -641,7 +642,8 @@ export async function createHostWebSocketClient(
           pending.delete(id);
           request.cleanup();
           try {
-            sendWire(socket, { kind: 'cancel', id });
+            if (socket.readyState === undefined || socket.readyState === 1)
+              sendWire(socket, { kind: 'cancel', id });
           } catch {
             // The close/error listener reports the transport failure separately.
           }
@@ -682,7 +684,8 @@ export async function createHostWebSocketClient(
       });
     },
     subscribe(topic, listener) {
-      if (!connected) return () => {};
+      if (!connected || (socket.readyState !== undefined && socket.readyState !== 1))
+        return () => {};
       const listeners = subscriptions.get(topic) ?? new Set();
       listeners.add(listener as (payload: unknown) => void);
       subscriptions.set(topic, listeners);

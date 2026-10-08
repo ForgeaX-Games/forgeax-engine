@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { writeSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { inspect } from 'node:util';
 import { type BackendHost, createBackendHost, type HostAssembly } from '@forgeax/engine-host';
 import { attachHostWebSocketServer } from '@forgeax/engine-host/transport';
 import {
@@ -44,22 +46,79 @@ declare module '@forgeax/engine-plugin' {
   }
 }
 
+/** Best-effort internal diagnostics must never change startup or disposal outcomes. */
+export function logBackendStartup(
+  record: Readonly<Record<string, string | number | undefined>>,
+  descriptor = 2,
+): void {
+  try {
+    writeSync(descriptor, `${JSON.stringify({ scope: 'backend-startup', ...record })}\n`);
+  } catch {
+    // Startup ownership and its original error remain authoritative if logging fails.
+  }
+}
+
+/** Internal daemon diagnostics; ordinary API/CLI consumers keep their existing output. */
+export async function traceBackendStartup<T>(
+  stage: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (process.argv[2] !== '--__forgeax-backend') return operation();
+  const started = performance.now();
+  const log = (event: 'begin' | 'end') => {
+    logBackendStartup({ stage, event, elapsedMs: performance.now() - started });
+  };
+  log('begin');
+  try {
+    return await operation();
+  } catch (cause) {
+    try {
+      logBackendStartup({
+        stage,
+        event: 'failed',
+        elapsedMs: performance.now() - started,
+        // Node's existing diagnostic formatter preserves typed/nested causes.
+        // Do not execute author getters or custom inspection hooks while logging.
+        error: inspect(cause, {
+          depth: 4,
+          maxArrayLength: 32,
+          maxStringLength: 2000,
+          customInspect: false,
+          getters: false,
+          breakLength: Infinity,
+        }).slice(0, 16384),
+      });
+    } catch {
+      // Diagnostic failure must never replace the original operation's reason.
+    }
+    throw cause;
+  } finally {
+    log('end');
+  }
+}
+
 /** The resident workspace owns domain plugins; a Pack-owned host root remains optional. */
 export async function createDevKitBackend(
   rootInput: string,
   options: { readonly hostPack?: string } = {},
 ) {
   const root = resolve(rootInput);
-  const hostPack = options.hostPack === undefined ? undefined : await realpath(options.hostPack);
+  const requestedHostPack = options.hostPack;
+  const hostPack =
+    requestedHostPack === undefined
+      ? undefined
+      : await traceBackendStartup('host-pack-path', () => realpath(requestedHostPack));
   const hostPackageRoot = hostPack === undefined ? undefined : dirname(hostPack);
-  const project = await readFile(resolve(root, 'forge.json'), 'utf8').then(
-    (value) => GameProjectSchema.parse(JSON.parse(value)),
-    (error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-      return undefined;
-    },
+  const project = await traceBackendStartup('project-config', () =>
+    readFile(resolve(root, 'forge.json'), 'utf8').then(
+      (value) => GameProjectSchema.parse(JSON.parse(value)),
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return undefined;
+      },
+    ),
   );
-  const host = await createBackendHost();
+  const host = await traceBackendStartup('host-create', () => createBackendHost());
   let hostInventory: PluginSourceInventory | undefined;
   let hostSourceRoot: string | undefined;
   const assertCurrent = async () => {
@@ -87,21 +146,25 @@ export async function createDevKitBackend(
         ctx.provide('devkitBackend', { host, root, hostPackageRoot, assertCurrent });
       },
     };
-    await (await host.context.plugin(owner)).await();
-    const workspace = await host.context.plugin(devKitWorkspacePlugin, {
-      hostBinding: {
-        backend: host,
-        get frontendAssembly() {
-          return host.context.get('devkitWorkspaceFrontend')?.assembly;
-        },
-        get frontendModule() {
-          return host.context.get('devkitWorkspaceFrontend')?.module;
-        },
-      },
+    await traceBackendStartup('host-owner', async () => {
+      await (await host.context.plugin(owner)).await();
     });
-    await workspace.await();
+    await traceBackendStartup('workspace-plugin', async () => {
+      const workspace = await host.context.plugin(devKitWorkspacePlugin, {
+        hostBinding: {
+          backend: host,
+          get frontendAssembly() {
+            return host.context.get('devkitWorkspaceFrontend')?.assembly;
+          },
+          get frontendModule() {
+            return host.context.get('devkitWorkspaceFrontend')?.module;
+          },
+        },
+      });
+      await workspace.await();
+    });
     if (hostPack || project?.roots.host) {
-      const projectFacts = await readProjectFacts(root);
+      const projectFacts = await traceBackendStartup('project-facts', () => readProjectFacts(root));
       let facts: ProjectFacts;
       if (hostPack) {
         facts = {
@@ -114,7 +177,7 @@ export async function createDevKitBackend(
         };
       } else if (projectFacts.ok) facts = projectFacts.value;
       else throw projectFacts.error;
-      const inventory = await discoverPluginAssets(facts);
+      const inventory = await traceBackendStartup('host-assets', () => discoverPluginAssets(facts));
       const hostRoot = hostPack
         ? [...inventory.assets.values()].find(
             (record) => record.sourcePath === hostPack && record.sourceKey === 'plugin/main',
@@ -129,7 +192,16 @@ export async function createDevKitBackend(
       const hostFacts = { ...facts, roots: { ...facts.roots, host: hostRoot } };
       await host.context.effect(async function* () {
         yield () => rm(temporary, { recursive: true, force: true });
-        const compiled = await compileNodePluginPrograms(hostFacts, 'host', inventory, temporary);
+        const compiled = await traceBackendStartup('host-compile', () =>
+          compileNodePluginPrograms(
+            hostFacts,
+            'host',
+            inventory,
+            temporary,
+            {},
+            traceBackendStartup,
+          ),
+        );
         if (hostPackageRoot !== undefined) {
           const localDependencies = resolve(hostPackageRoot, 'node_modules');
           const parentDependencies = dirname(hostPackageRoot);
@@ -142,7 +214,10 @@ export async function createDevKitBackend(
             throw new Error(`Host package dependencies are unavailable: ${hostPackageRoot}`);
           await symlink(dependencies, resolve(temporary, 'compiled', 'node_modules'), 'dir');
         }
-        const module = await import(pathToFileURL(compiled.entry).href);
+        const module = await traceBackendStartup(
+          'host-import',
+          () => import(pathToFileURL(compiled.entry).href),
+        );
         const programs: PluginPrograms = module.createPrograms(randomUUID(), 'host', 1);
         host.context.provide('pluginPrograms', programs);
         host.context.provide('assets', {
@@ -158,7 +233,9 @@ export async function createDevKitBackend(
                 });
           },
         });
-        const started = await startPluginAsset(host.context, hostRoot);
+        const started = await traceBackendStartup('host-plugin-start', () =>
+          startPluginAsset(host.context, hostRoot),
+        );
         if (!started.ok) throw Object.assign(new Error(started.error.hint), started.error);
         // Service withdrawal can begin native unload before this effect runs.
         // Join that transition even when a concurrent disposer is already a no-op.
@@ -203,7 +280,9 @@ export const devKitBackendServerPlugin = {
         });
         const close = () => {
           detach();
-          ws.close();
+          // Authority is already detached; shutdown must release the native
+          // socket even when a vanished peer never completes a close handshake.
+          ws.terminate();
           connections.delete(close);
         };
         connections.add(close);

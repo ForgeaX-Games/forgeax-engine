@@ -22,7 +22,9 @@ describe('VFX fog composition contract', () => {
       'utf8',
     );
     expect(shaderSource('mesh')).toContain('evaluateStandardSurface(');
-    expect(surface).toContain('translucent_fog(view, in.worldPos, color, alpha)');
+    expect(surface).toContain(
+      'translucent_fog_transmission(view, in.worldPos, color, alpha, transmittedContribution, transmittedCoefficient)',
+    );
   });
 
   it('keeps VFX coverage on the current graphics feature lane', () => {

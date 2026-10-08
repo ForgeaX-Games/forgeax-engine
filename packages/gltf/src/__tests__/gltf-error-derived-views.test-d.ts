@@ -6,6 +6,8 @@ import {
   type GltfBufferOutOfBoundsDetail,
   type GltfColorAccessorMalformedDetail,
   type GltfColorAccessorUnsupportedDetail,
+  type GltfDracoDecodeFailedDetail,
+  type GltfDracoDetail,
   type GltfError,
   type GltfErrorCode,
   type GltfErrorDetail,
@@ -32,6 +34,14 @@ import {
 } from '../errors.js';
 
 type ExpectedDetails = {
+  readonly 'gltf-camera-invalid': { readonly cameraIndex: number };
+  readonly 'gltf-animation-sampler-invalid': {
+    readonly animationIndex: number;
+    readonly samplerIndex: number;
+    readonly reason: 'times' | 'values' | 'interpolation';
+  };
+  readonly 'gltf-draco-decoder-required': GltfDracoDetail;
+  readonly 'gltf-draco-decode-failed': GltfDracoDecodeFailedDetail;
   readonly 'gltf-malformed-header': GltfMalformedHeaderDetail;
   readonly 'gltf-version-unsupported': GltfVersionUnsupportedDetail;
   readonly 'gltf-buffer-out-of-bounds': GltfBufferOutOfBoundsDetail;
@@ -71,6 +81,10 @@ type ExpectedError = {
 
 function exhaustive(error: GltfError): string {
   switch (error.code) {
+    case 'gltf-camera-invalid':
+      return String(error.detail.cameraIndex);
+    case 'gltf-animation-sampler-invalid':
+      return error.detail.reason;
     case 'gltf-malformed-header':
       return `${error.detail.filePath}:${error.detail.byteOffset}`;
     case 'gltf-version-unsupported':
@@ -105,6 +119,10 @@ function exhaustive(error: GltfError): string {
       return `${error.detail.meshIndex}:${error.detail.primitiveIndex}`;
     case 'gltf-animation-target-invalid':
       return error.detail.reason;
+    case 'gltf-draco-decoder-required':
+      return String(error.detail.bufferView);
+    case 'gltf-draco-decode-failed':
+      return error.detail.reason;
     case 'gltf-meshopt-decoder-required':
       return `${error.detail.bufferView}:${error.detail.actual}`;
     case 'gltf-meshopt-decode-failed':
@@ -126,7 +144,7 @@ function exhaustive(error: GltfError): string {
 }
 
 describe('GltfError derived public views', () => {
-  it('keeps the exact twenty-two-code vocabulary and correlated union', () => {
+  it('keeps the exact closed code vocabulary and correlated union', () => {
     expectTypeOf<GltfErrorCode>().toEqualTypeOf<ExpectedCodes>();
     expectTypeOf<GltfError>().toEqualTypeOf<ExpectedError>();
     expectTypeOf<GltfErrorCode>().toEqualTypeOf<GltfError['code']>();

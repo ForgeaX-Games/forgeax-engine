@@ -33,7 +33,7 @@ const browser = await chromium.launch({
     '--use-angle=swiftshader',
     '--ignore-gpu-blocklist',
     '--disable-gpu-driver-bug-workarounds',
-    '--disable-dawn-features=disallow_unsafe_apis',
+    '--disable-dawn-features=disallow_unsafe_apis,tiered_adapter_limits',
     '--autoplay-policy=no-user-gesture-required',
   ],
 });

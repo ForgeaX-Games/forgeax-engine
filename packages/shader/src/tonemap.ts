@@ -11,3 +11,17 @@ export const TONEMAP_SHADER_MODE = {
 } as const;
 
 export type TonemapShaderMode = (typeof TONEMAP_SHADER_MODE)[keyof typeof TONEMAP_SHADER_MODE];
+
+/**
+ * Byte layout of the built-in `TonemapParams` uniform (tonemap.wgsl). The
+ * extract provider packs exposure/whitePoint/mode, the Output Transform pass
+ * writes dither, and the renderer writes the output gamut at record time.
+ */
+export const TONEMAP_PARAMS_LAYOUT = {
+  byteSize: 32,
+  exposureOffset: 0,
+  whitePointOffset: 4,
+  modeOffset: 8,
+  ditherOffset: 12,
+  outputGamutOffset: 16,
+} as const;

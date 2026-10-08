@@ -46,6 +46,7 @@ const TEXTURE_VIEW_TYPES: ReadonlySet<MaterialParamType> = new Set<MaterialParam
   'texture_cube',
   'texture_depth_2d',
   'texture_cube_array',
+  'texture_external',
 ]);
 
 const SAMPLER_TYPES: ReadonlySet<MaterialParamType> = new Set<MaterialParamType>([
@@ -88,22 +89,25 @@ function alignUp(value: number, alignment: number): number {
 interface TextureBglDescriptor {
   readonly sampleType: GPUTextureSampleType;
   readonly viewDimension: GPUTextureViewDimension;
+  readonly external: boolean;
 }
 
 function textureBglDescriptor(t: TextureBindingParamType): TextureBglDescriptor {
   switch (t) {
     case 'texture2d':
-      return { sampleType: 'float', viewDimension: '2d' };
+      return { sampleType: 'float', viewDimension: '2d', external: false };
     case 'texture2d_array':
-      return { sampleType: 'float', viewDimension: '2d-array' };
+      return { sampleType: 'float', viewDimension: '2d-array', external: false };
     case 'texture3d':
-      return { sampleType: 'float', viewDimension: '3d' };
+      return { sampleType: 'float', viewDimension: '3d', external: false };
     case 'texture_cube':
-      return { sampleType: 'float', viewDimension: 'cube' };
+      return { sampleType: 'float', viewDimension: 'cube', external: false };
     case 'texture_depth_2d':
-      return { sampleType: 'depth', viewDimension: '2d' };
+      return { sampleType: 'depth', viewDimension: '2d', external: false };
     case 'texture_cube_array':
-      return { sampleType: 'float', viewDimension: 'cube-array' };
+      return { sampleType: 'float', viewDimension: 'cube-array', external: false };
+    case 'texture_external':
+      return { sampleType: 'float', viewDimension: '2d', external: true };
     case 'sampler':
     case 'sampler_comparison':
       // Not a texture view — caller must dispatch separately. Falling through
@@ -525,8 +529,9 @@ function derivePure(
       const textureDescriptor = textureBglDescriptor(texType);
       const sampleType = shape.sampleTypes[index] ?? textureDescriptor.sampleType;
       if (
-        sampleType !== textureDescriptor.sampleType &&
-        !(sampleType === 'unfilterable-float' && textureDescriptor.sampleType === 'float')
+        (sampleType !== textureDescriptor.sampleType &&
+          !(sampleType === 'unfilterable-float' && textureDescriptor.sampleType === 'float')) ||
+        (textureDescriptor.external && sampleType !== 'float')
       ) {
         throw new Error(`derive: invalid texture sample type '${sampleType}' for '${name}'`);
       }
@@ -560,15 +565,19 @@ function derivePure(
 
       const texBinding = nextBinding;
       nextBinding += 1;
-      bglEntries.push({
-        binding: texBinding,
-        visibility: FRAGMENT,
-        texture: {
-          sampleType: sampleType as GPUTextureSampleType,
-          viewDimension,
-          multisampled: false,
-        },
-      });
+      bglEntries.push(
+        textureDescriptor.external
+          ? { binding: texBinding, visibility: FRAGMENT, externalTexture: {} }
+          : {
+              binding: texBinding,
+              visibility: FRAGMENT,
+              texture: {
+                sampleType: sampleType as GPUTextureSampleType,
+                viewDimension,
+                multisampled: false,
+              },
+            },
+      );
       bindingSpans.push({ group: 1, binding: texBinding, start: 0, end: 0 });
       resourceBindings.push({
         name,

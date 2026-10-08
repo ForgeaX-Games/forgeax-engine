@@ -258,7 +258,7 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
       });
 
       it('returns Result.ok(reflectionJson) and forwards (validated, options_json) verbatim', async () => {
-        const validatedHandle = { _tag: 'ValidatedModule' };
+        const validatedHandle = { free: vi.fn() };
         const expectedJson = '[{"label":"@group(0)","entries":[]}]';
         _emit_reflection.mockReturnValueOnce(expectedJson);
         const optionsJson = JSON.stringify({ dynamicOffsets: [{ group: 0, binding: 0 }] });
@@ -276,7 +276,7 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
           throw new Error('reflection serialize failed: cyclic type graph');
         });
         const { emit_reflection } = await import('../index.js');
-        const r = await emit_reflection({ _tag: 'ValidatedModule' }, '{}');
+        const r = await emit_reflection({ free: vi.fn() }, '{}');
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shader-compile-failed');
@@ -333,7 +333,7 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
       });
 
       it('returns Result.ok(opaque handle) when raw wasm parse succeeds', async () => {
-        const opaqueHandle = { _tag: 'ParsedModule' };
+        const opaqueHandle = { free: vi.fn() };
         _parse.mockReturnValueOnce(opaqueHandle);
         const { parse } = await import('../index.js');
         const r = await parse(
@@ -401,8 +401,8 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
       });
 
       it('returns Result.ok(opaque handle) when raw wasm validate succeeds', async () => {
-        const parsedHandle = { _tag: 'ParsedModule' };
-        const validatedHandle = { _tag: 'ValidatedModule' };
+        const parsedHandle = { free: vi.fn() };
+        const validatedHandle = { free: vi.fn() };
         _validate.mockReturnValueOnce(validatedHandle);
         const { validate } = await import('../index.js');
         const r = await validate(parsedHandle);
@@ -419,7 +419,7 @@ vi.mock('@forgeax/engine-wgpu-wasm', () => ({
           throw new Error('validate failed: type mismatch in @location(0)');
         });
         const { validate } = await import('../index.js');
-        const r = await validate({ _tag: 'ParsedModule' });
+        const r = await validate({ free: vi.fn() });
         expect(r.ok).toBe(false);
         if (!r.ok) {
           expect(r.error.code).toBe('shader-compile-failed');

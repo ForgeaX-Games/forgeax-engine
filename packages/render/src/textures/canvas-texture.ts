@@ -1,4 +1,5 @@
 import type { RenderTargetTextureSource } from '../targets/contracts';
+import type { ExternalTextureSource } from './external-texture';
 
 /** Runtime material reference. Keep it in a World shared ref, never in a Pack. */
 export interface CanvasTextureSource {
@@ -41,7 +42,10 @@ export class CanvasTexture {
   }
 }
 
-export type MaterialTextureSource = RenderTargetTextureSource | CanvasTextureSource;
+export type MaterialTextureSource =
+  | RenderTargetTextureSource
+  | CanvasTextureSource
+  | ExternalTextureSource;
 
 export function isCanvasTextureSource(source: unknown): source is CanvasTextureSource {
   return (

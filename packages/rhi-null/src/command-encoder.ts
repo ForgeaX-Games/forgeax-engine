@@ -14,6 +14,7 @@
 // encoders); research Finding A1 row 5; plan-strategy §3.1.
 
 import type {
+  BlasBuildEntry,
   Buffer,
   BufferCopyDestination,
   CommandBuffer,
@@ -26,6 +27,7 @@ import type {
   RhiError as RhiErrorType,
   RhiRenderPassEncoder,
   TextureCopySource,
+  TlasBuildEntry,
 } from '@forgeax/engine-rhi';
 import { RhiError } from '@forgeax/engine-rhi';
 import { err, ok } from '@forgeax/engine-types';
@@ -81,11 +83,20 @@ function readPassLabel(desc: { readonly label?: string | undefined } | undefined
 export class RhiNullCommandEncoder implements RhiCommandEncoder {
   private readonly bookkeeper: Bookkeeper;
   private readonly counter: PassCounter;
+  private readonly device: RhiNullDevice;
   private finished = false;
 
   constructor(bookkeeper: Bookkeeper, device: RhiNullDevice) {
     this.bookkeeper = bookkeeper;
+    this.device = device;
     this.counter = new DeviceCounter(device);
+  }
+
+  buildAccelerationStructures(
+    blas: readonly BlasBuildEntry[],
+    tlas: readonly TlasBuildEntry[],
+  ): Result<void, RhiErrorType> {
+    return this.device._accelerationStructures.build(blas, tlas);
   }
 
   beginRenderPass(desc: RenderPassDescriptor): RhiRenderPassEncoder {

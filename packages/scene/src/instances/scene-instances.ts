@@ -44,11 +44,11 @@ import {
   isPrimitiveScalarFieldType,
   mountOverrideStateKey,
   primitiveJsType,
-  type SceneInstanceStatePayload,
+  type SceneInstanceState,
   sceneWorldState,
 } from './state.js';
 
-export type { SceneInstanceStatePayload } from './state.js';
+export type { SceneInstanceOverrideRecord, SceneInstanceState } from './state.js';
 
 const entityIndex = (entity: EntityHandle): number => (entity as number) & 0x00ffffff;
 const entityGeneration = (entity: EntityHandle): number => ((entity as number) >>> 24) & 0xff;
@@ -158,7 +158,7 @@ function collectSceneEntityBindings(
   const rootRaw = root as unknown as number;
   if (visited.has(rootRaw)) return;
   visited.add(rootRaw);
-  const state = worldResolveSceneInstanceStatePayload(world, root);
+  const state = worldGetSceneInstanceState(world, root);
   if (!state.ok) return;
   const sceneInstance = world.components.resolve('SceneInstance');
   if (sceneInstance === undefined) return;
@@ -173,7 +173,7 @@ function collectSceneEntityBindings(
     bindings.set(sceneEntityAddressKey(address), raw as unknown as EntityHandle);
   }
   for (const childRoot of state.value.mountRoots) {
-    const childState = worldResolveSceneInstanceStatePayload(world, childRoot);
+    const childState = worldGetSceneInstanceState(world, childRoot);
     const childKey = childState.ok ? childState.value.instanceKey : undefined;
     if (childKey === undefined) continue;
     collectSceneEntityBindings(world, childRoot, [...prefix, childKey], bindings, visited);
@@ -630,6 +630,30 @@ export function worldSpawnSceneMembers(
     }
   }
 
+  // Hierarchy order cannot order arbitrary entity references (including
+  // cycles). Once every slot is live, rebind schema-declared entity fields
+  // through the same projection used at spawn. No asset-specific fixups.
+  for (const node of [
+    ...ownEntities,
+    ...ownMounts.map((mount) => ({ localId: mount.localId, components: mount.components ?? {} })),
+  ]) {
+    const entity = mapping[node.localId as unknown as number] as EntityHandle;
+    const componentDatas = worldBuildSceneEntityComponentDatas(world, node, mapping, diagnostics);
+    if (!componentDatas.ok) return componentDatas;
+    for (const { component, data } of componentDatas.value) {
+      const references = Object.fromEntries(
+        Object.entries(data).filter(
+          ([field]) =>
+            Object.hasOwn(node.components[component.name] ?? {}, field) &&
+            classifyEntityField(component, field) !== null,
+        ),
+      );
+      if (Object.keys(references).length === 0) continue;
+      const rebound = world.set(entity, component, references as never);
+      if (!rebound.ok) return rebound;
+    }
+  }
+
   // 2b. D-8 (feat-20260707): wire deferred owned-parent mount ChildOf edges.
   //     Owned entities are now live (step 2 above), so mapping[parentSlot]
   //     resolves. Same shape as the mountEntitiesNeedingRootParent wiring in
@@ -711,14 +735,25 @@ export function worldInstantiateSceneAsset(
   const { mountInstances } = membersRes.value;
   const ownMounts = compiledAsset.mounts ?? [];
 
-  // 3. Spawn the synthetic root entity carrying SceneInstance.
-  //    First alloc the state ref so the SceneInstance.state column has a
-  //    live u32; then attach SceneInstance to a fresh entity.
-  let stateRef: Handle<'SceneInstanceState', 'unique'>;
-  stateRef = world.allocUniqueRef('SceneInstanceState', null, () => {
-    releaseSourceReferences();
-    sceneWorldState(world).statePayloads.delete(Number(stateRef));
-  });
+  // Allocate the actual instance state once. The managed store owns payload
+  // identity and release; Scene holds no parallel handle-to-state registry.
+  const detached = new Set<LocalEntityId>();
+  const bindings = new Map<string, EntityHandle>();
+  const state: SceneInstanceState = {
+    source: handle,
+    ...(sceneSourceKey === undefined ? {} : { sceneSourceKey }),
+    keyByLocalId: new Map(compiled.value.keyByLocalId),
+    ...(instanceKey === undefined ? {} : { instanceKey }),
+    bindings,
+    entityToLocalId,
+    detachedLocalIds: detached,
+    overrides: new Map(),
+    rootEntities,
+    mountRoots: mountInstances.map(({ root }) => root),
+    totalSlots,
+    mountTimeOverrides: ownMounts.flatMap((m) => m.overrides ?? []),
+  };
+  const stateRef = world.allocUniqueRef('SceneInstanceState', state, releaseSourceReferences);
   // Spawn the root with SceneInstance component, mapping snapshot, and
   // state ref. The mapping is a Uint32Array (array<entity> field shape).
   // Convert mapping Uint32Array to plain number[] for spawn write — the
@@ -760,10 +795,7 @@ export function worldInstantiateSceneAsset(
   }
   const rootEntity = rootSpawn.value;
 
-  // 4. Build SceneInstanceState payload + register it in the UniqueRefStore
-  //    under the same handle. We use the public `_setUniqueRefPayload`
-  //    helper (added below) so the alloc -> populate sequence stays atomic.
-  const overrides = new Map<LocalEntityId, Map<string, MountOverride>>();
+  // Apply mount overrides after the synthetic root has been spawned.
   for (const mount of ownMounts) {
     for (const ov of mount.overrides ?? []) {
       // feat-20260713 M2 / w8: `MountOverride.field` is optional (add-or-patch
@@ -772,12 +804,13 @@ export function worldInstantiateSceneAsset(
       // (field-patch), then apply it to the live member column via the shared
       // add-or-patch helper.
       const lid = ov.localId as unknown as LocalEntityId;
-      let fieldMap = overrides.get(lid);
+      let fieldMap = state.overrides.get(lid);
       if (fieldMap === undefined) {
         fieldMap = new Map();
-        overrides.set(lid, fieldMap);
+        state.overrides.set(lid, fieldMap);
       }
-      fieldMap.set(mountOverrideStateKey(ov), ov);
+      const { localId: _localId, ...record } = ov;
+      fieldMap.set(mountOverrideStateKey(ov), record);
       // Apply override to the live member entity column.
       const memberEntityRaw = mapping[lid as unknown as number];
       if (memberEntityRaw !== undefined && memberEntityRaw !== ENTITY_NULL_RAW) {
@@ -794,28 +827,6 @@ export function worldInstantiateSceneAsset(
     }
   }
 
-  const detached = new Set<LocalEntityId>();
-  const bindings = new Map<string, EntityHandle>();
-  const state: Record<string, unknown> = {
-    source: handle,
-    ...(sceneSourceKey === undefined ? {} : { sceneSourceKey }),
-    keyByLocalId: new Map(compiled.value.keyByLocalId),
-    ...(instanceKey === undefined ? {} : { instanceKey }),
-    bindings,
-    entityToLocalId,
-    detachedLocalIds: detached,
-    // Convert overrides Map<LocalEntityId, Map<string, MountOverride>>
-    // into Map<LocalEntityId, Map<string, SceneInstanceOverrideRecord>>
-    overrides: worldMountOverridesToStateMap(overrides),
-    rootEntities,
-    mountRoots: mountInstances.map(({ root }) => root),
-    totalSlots,
-    mountTimeOverrides: ownMounts.flatMap((m) => m.overrides ?? []),
-  };
-  // Stuff the state into the UniqueRefStore under the existing slot. We
-  // re-use the slot we allocated above by writing directly into the
-  // payloads map via a `_setUniqueRefPayload` shim.
-  worldSetUniqueRefPayload(world, stateRef, state);
   // Populate direct and nested keyed addresses only after this root state is
   // visible. Child SceneInstance states were published by the recursive spawn
   // above, so the same walk can project the complete address closure.
@@ -1270,52 +1281,18 @@ export function worldResolveMountSource(
   }
   return ok(r.value);
 }
-/** @internal Convert mount.overrides Map shape to the SceneInstanceState shape.
- *
- * feat-20260713 M1 / w4: `field` is optional (add-or-patch discriminant). In
- * M1 only the field-patch form reaches this builder (the component-add form
- * fails fast in the apply loops); the record type stays `field?: string` so
- * the M2 add path can flow through untouched. `exactOptionalPropertyTypes`
- * forbids writing an explicit `field: undefined`, so omit the key when absent.
- */
-export function worldMountOverridesToStateMap(
-  src: Map<LocalEntityId, Map<string, MountOverride>>,
-): Map<LocalEntityId, Map<string, { comp: string; field?: string; value: unknown }>> {
-  const out = new Map<
-    LocalEntityId,
-    Map<string, { comp: string; field?: string; value: unknown }>
-  >();
-  for (const [lid, fields] of src) {
-    const m = new Map<string, { comp: string; field?: string; value: unknown }>();
-    for (const [k, v] of fields) {
-      m.set(k, {
-        comp: v.comp,
-        value: v.value,
-        ...(v.field !== undefined ? { field: v.field } : {}),
-      });
-    }
-    out.set(lid, m);
-  }
-  return out;
-}
-/** @internal Set the payload of an already-allocated SceneInstance state ref. */
-export function worldSetUniqueRefPayload<T>(
-  world: World,
-  handle: Handle<string, 'unique'>,
-  payload: T,
-): void {
-  sceneWorldState(world).statePayloads.set(Number(handle), payload);
-}
-
 /**
- * @internal Resolve the SceneInstanceState payload behind the
- * `SceneInstance.state` ref column on `root`. Returns Err when `root`
- * does not carry SceneInstance or the ref slot is dead.
+ * Public sugar — get the SceneInstanceState (Map / Set view) for
+ * `root`. Equivalent to `world.get(root, SceneInstance)` followed by a
+ * managed-ref resolution; provided so AI users do not have to learn the
+ * `ref<T>` slot resolution mechanic for the common read path.
+ *
+ * Returns Err when `root` does not carry SceneInstance or the ref slot is dead.
  */
-export function worldResolveSceneInstanceStatePayload(
+export function worldGetSceneInstanceState(
   world: World,
   root: EntityHandle,
-): Result<SceneInstanceStatePayload, EcsError> {
+): Result<SceneInstanceState, EcsError> {
   const sceneInstanceToken = world.components.resolve('SceneInstance');
   if (sceneInstanceToken === undefined) {
     return err(new ComponentNotDefinedError('SceneInstance'));
@@ -1324,8 +1301,8 @@ export function worldResolveSceneInstanceStatePayload(
   if (!r.ok) return r;
   const stateRefRaw = (r.value as unknown as { state: number }).state;
   const stateRefHandle = toUnique<'SceneInstanceState'>(stateRefRaw);
-  const payload = sceneWorldState(world).statePayloads.get(Number(stateRefHandle));
-  if (payload === undefined) {
+  const payload = world.resolveUniqueRef<SceneInstanceState>(stateRefHandle);
+  if (!payload.ok) {
     return err(
       new StaleEntityError(root as unknown as number, entityIndex(root), entityGeneration(root), {
         operation: 'resolveSceneInstanceState',
@@ -1335,19 +1312,7 @@ export function worldResolveSceneInstanceStatePayload(
       }),
     );
   }
-  return ok(payload as SceneInstanceStatePayload);
-}
-/**
- * Public sugar — get the SceneInstanceState payload (Map / Set view) for
- * `root`. Equivalent to `world.get(root, SceneInstance)` followed by a
- * managed-ref resolution; provided so AI users do not have to learn the
- * `ref<T>` slot resolution mechanic for the common read path.
- */
-export function worldGetSceneInstanceState(
-  world: World,
-  root: EntityHandle,
-): Result<SceneInstanceStatePayload, EcsError> {
-  return worldResolveSceneInstanceStatePayload(world, root);
+  return payload;
 }
 
 /** Resolve a generated SceneEntityRef against one concrete SceneInstance. */
@@ -1356,7 +1321,7 @@ export function worldResolveSceneEntity(
   root: EntityHandle,
   ref: SceneEntityRef,
 ): Result<EntityHandle, EcsError> {
-  const state = worldResolveSceneInstanceStatePayload(world, root);
+  const state = worldGetSceneInstanceState(world, root);
   if (!state.ok) return state;
   // Anonymous POD scenes remain addressable with an explicit empty source key.
   // Never let the caller supply the identity used for the comparison: that
@@ -1406,7 +1371,7 @@ export function worldDespawnDescendants(
   let detached: Set<LocalEntityId> | null = null;
   let entityToLocalId: Map<EntityHandle, LocalEntityId> | null = null;
   if (opts?.keepDetached === true) {
-    const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+    const stateRes = worldGetSceneInstanceState(world, root);
     if (stateRes.ok) {
       detached = stateRes.value.detachedLocalIds;
       entityToLocalId = stateRes.value.entityToLocalId;
@@ -1427,7 +1392,7 @@ export function worldDespawnDescendants(
         list.push(e);
       }
     }
-    const stateRes = worldResolveSceneInstanceStatePayload(world, anchor);
+    const stateRes = worldGetSceneInstanceState(world, anchor);
     if (!stateRes.ok) return;
     for (const e of stateRes.value.entityToLocalId.keys()) {
       const raw = e as unknown as number;
@@ -1502,7 +1467,7 @@ export function worldSetSceneOverride<S extends ComponentSchema>(
   field: keyof ShapeOf<S> & string,
   value: unknown,
 ): Result<void, EcsError> {
-  const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return stateRes;
   const state = stateRes.value;
   const lid = state.entityToLocalId.get(member);
@@ -1573,7 +1538,7 @@ export function worldRemoveSceneOverride<S extends ComponentSchema>(
   component: Component<string, S>,
   field: keyof ShapeOf<S> & string,
 ): Result<void, EcsError> {
-  const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return stateRes;
   const state = stateRes.value;
   const lid = state.entityToLocalId.get(member);
@@ -1605,7 +1570,7 @@ export function worldDetachSceneMember(
   if (sceneInstanceToken === undefined) {
     return err(new ComponentNotDefinedError('SceneInstance'));
   }
-  const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return stateRes;
   const state = stateRes.value;
   const lid = state.entityToLocalId.get(member);
@@ -1619,7 +1584,7 @@ export function worldReattachSceneMember(
   root: EntityHandle,
   member: EntityHandle,
 ): Result<void, EcsError> {
-  const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return stateRes;
   const state = stateRes.value;
   const lid = state.entityToLocalId.get(member);
@@ -1635,7 +1600,7 @@ export function worldGetSceneAssetForInstance(
   world: World,
   root: EntityHandle,
 ): Result<Handle<'SceneAsset', 'shared'>, EcsError> {
-  const stateRes = worldResolveSceneInstanceStatePayload(world, root);
+  const stateRes = worldGetSceneInstanceState(world, root);
   if (!stateRes.ok) return stateRes;
   return ok(stateRes.value.source);
 }

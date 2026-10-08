@@ -18,7 +18,7 @@ Physics is component-driven: attach components instead of calling a body-creatio
 | Name | Package | Form | Purpose |
 |:--|:--|:--|:--|
 | `RigidBody` | physics | Component | Body `type` (`RigidBodyTypeValue.{dynamic,static,kinematic}`), `mass`, and other parameters. |
-| `Collider` | physics | Component | `shape` (`ColliderShapeValue.{sphere,cuboid,capsule}`) and shape parameters. |
+| `Collider` | physics | Component | `shape` (see `ColliderShapeValue`), dimensions, and ordinary `mesh` shared ref. |
 | `CollidingEntities` | physics | Read-only component | Entities touching this entity in the current frame. |
 | `CharacterController` | physics | Component | Offset, slope, autostep, snap; angles in degrees; engine-written boolean `grounded`. |
 | `PhysicsWorld.moveAndSlide` | physics | Method (3D `Vec3` / 2D `Vec2`) | Collision-aware movement: resolve `desiredDelta`, then write `Transform` and `grounded`. |
@@ -124,3 +124,15 @@ the record, restore transaction, trace, report, tolerance, and error contract.
 Keep Rapier handles and native values inside the backend; never expose them to
 App, Preview, or Remote. Recover by switching on the error code and following
 its `expected`, `hint`, and `detail`.
+
+## Mesh collision
+
+Use `Collider.mesh` with a cooked MeshAsset and `ColliderShapeValue.convexHull`
+or `.trimesh` in Rapier 3D. Convex hulls allow dynamic bodies; triangle meshes
+allow static/kinematic bodies. Rapier 2D rejects these shapes and cylinder/cone.
+Opt into glTF/FBX `importSettings.meshCollision: true`, or call Geometry's
+`buildMeshCollision` for Scriptable Packs. Source/scale changes rebuild native
+shapes; stable ticks and pose-only motion reuse them. Runtime vertex edits
+invalidate the cooked attachment. Repair and recook the producer, then rebind
+the ordinary mesh ref. Contract and lifetime: `packages/physics/README.md`,
+Source mesh collision; `packages/import/README.md`, Mesh collision cooking.

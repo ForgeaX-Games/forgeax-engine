@@ -20,7 +20,7 @@ import type {
   RenderableSnapshot,
 } from '../render-system-extract';
 import { RenderScene } from '../scene/render-scene';
-import type { OcclusionFrameProjection } from '../scene/visibility/occlusion-runtime';
+import { createTemporalFrameTransaction } from '../temporal/frame';
 
 const material = {
   baseColor: new Float32Array([1, 1, 1]),
@@ -77,7 +77,9 @@ function preparedFrame(view: GpuDrivenView): PreparedGpuDrivenFrame {
     _commitResourceReplacement: () => view._commitResourceReplacement(),
     project: (graph) => {
       const projected = view.addPasses(graph);
-      return projected.ok ? ok({ accesses: [], encode: () => undefined }) : projected;
+      return projected.ok
+        ? ok({ accesses: [], hasWork: () => false, encode: () => undefined })
+        : projected;
     },
   };
 }
@@ -153,7 +155,7 @@ describe('GpuDrivenView graph projection', () => {
     }
   });
 
-  it('reuses the compiled graph when an occlusion reservation rotates pages', async () => {
+  it('rebuilds the compiled graph only when GPU projection presence changes', async () => {
     const adapter = (await rhi.requestAdapter()).unwrap();
     const device = (await adapter.requestDevice()).unwrap();
     const activePipeline: RenderPipeline = {
@@ -163,8 +165,8 @@ describe('GpuDrivenView graph projection', () => {
       },
     };
     const frameState = {
+      temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
       compiledFrameGraph: null,
-      compiledFrameGraphTopologyKey: null,
       retiredCompiledFrameGraphs: new Set(),
       activePipeline,
       installedPipelineConfig: undefined,
@@ -182,13 +184,6 @@ describe('GpuDrivenView graph projection', () => {
       pointShadow: [],
       spot: [],
     } as unknown as ExtractedLights;
-    let pageIndex = 0;
-    const projection = {
-      get pageIndex() {
-        return pageIndex;
-      },
-      sampleCount: 1,
-    } as unknown as OcclusionFrameProjection;
     const compile = (prepared?: PreparedGpuDrivenFrame) =>
       ensureCompiledFrameGraph(
         internals,
@@ -200,11 +195,6 @@ describe('GpuDrivenView graph projection', () => {
         1,
         undefined,
         prepared,
-        undefined,
-        undefined,
-        false,
-        undefined,
-        projection,
       );
 
     const first = compile();
@@ -227,14 +217,12 @@ describe('GpuDrivenView graph projection', () => {
           accesses: [],
           encode: () => undefined,
         });
-        return pass.ok ? ok({ accesses: [], encode: () => undefined }) : pass;
+        return pass.ok ? ok({ accesses: [], hasWork: () => false, encode: () => undefined }) : pass;
       },
     };
     const gpu = compile(prepared);
     expect(gpu).not.toBe(first);
     expect(gpu?.inspect().passes.map(({ name }) => name)).toContain('gpu-driven-test');
-    expect(compile(prepared)).toBe(gpu);
-    pageIndex = 1;
     expect(compile(prepared)).toBe(gpu);
     const second = compile();
     expect(second).not.toBe(gpu);
@@ -273,7 +261,7 @@ describe('GpuDrivenView graph projection', () => {
       bufferRebuilds: 1,
       candidateUploadBytes: 304,
       batchUploadBytes: 32,
-      viewConstantsUploadBytes: 304,
+      viewConstantsUploadBytes: 528,
       bindGroupCreates: 1,
     });
 
@@ -289,7 +277,7 @@ describe('GpuDrivenView graph projection', () => {
       bufferRebuilds: 1,
       candidateUploadBytes: 0,
       batchUploadBytes: 0,
-      viewConstantsUploadBytes: 304,
+      viewConstantsUploadBytes: 528,
       bindGroupCreates: 0,
     });
 
@@ -370,8 +358,8 @@ describe('GpuDrivenView graph projection', () => {
       },
     };
     const frameState = {
+      temporalFrameTransaction: createTemporalFrameTransaction({ deviceEpoch: 0 }),
       compiledFrameGraph: null,
-      compiledFrameGraphTopologyKey: null,
       compiledFrameGraphGeneration: 0,
       retiredCompiledFrameGraphs: new Set(),
       activePipeline,

@@ -24,6 +24,12 @@ export type RayPathSettings = {
   readonly seed: number;
   readonly environment: readonly [number, number, number];
   readonly maxDistance: number;
+  /**
+   * First-surface response. `'full'` (default) evaluates the complete BSDF;
+   * `'diffuse'` evaluates only the raster diffuse-GI receiver term, so indirect
+   * estimates compare directly with the diffuse lane.
+   */
+  readonly receiver?: 'full' | 'diffuse';
 } & (
   | { readonly camera: RayPathCamera; readonly rays?: never; readonly rayBuffer?: never }
   | {
@@ -70,8 +76,12 @@ export function packSettings(s: RayPathSettings): Result<Uint8Array, RayReferenc
     return rayReferenceFailure(
       'expected one exclusive camera, initial-ray array or GPU ray buffer',
     );
+  if (s.receiver !== undefined && s.receiver !== 'full' && s.receiver !== 'diffuse')
+    return rayReferenceFailure("expected receiver 'full' or 'diffuse'");
+  const receiver = s.receiver === 'diffuse' ? 1 : 0;
   const bytes = new Uint8Array(96);
   new Float32Array(bytes.buffer).set([...s.environment, s.maxDistance], 16);
+  new Float32Array(bytes.buffer)[15] = receiver;
   new Uint32Array(bytes.buffer, 80).set([s.width, s.height, s.maxBounces, s.seed]);
   if (s.rayBuffer !== undefined) {
     if (s.rayBuffer === null || typeof s.rayBuffer !== 'object')
@@ -122,7 +132,7 @@ export function packSettings(s: RayPathSettings): Result<Uint8Array, RayReferenc
     ...right.map((v) => v * tan * aspect),
     0,
     ...up.map((v) => v * tan),
-    0,
+    receiver,
     ...s.environment,
     s.maxDistance,
   ];
@@ -148,7 +158,8 @@ export function packLights(
       return rayReferenceFailure('spot modifiers are not admitted');
     const position = l.kind === 'directional' ? [0, 0, 0] : Array.from(l.position);
     const direction = l.kind === 'point' ? [0, 0, -1] : normalize(Array.from(l.direction));
-    const color = Array.from(l.color).map((v) => v * l.intensity);
+    // LightSnapshot.color is already radiance: extraction pre-multiplies intensity.
+    const color = Array.from(l.color);
     const range = l.kind === 'directional' ? 0 : l.invRangeSquared;
     const cone = l.kind === 'spot' ? [l.cosInner, l.cosOuter] : [1, 0];
     const row = [

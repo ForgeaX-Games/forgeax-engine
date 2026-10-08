@@ -13,9 +13,15 @@ import { PackError } from './errors.js';
 import { isValidAssetGuidString, PackageId } from './guid.js';
 import {
   type AnyScriptablePackDefinition,
+  type PackAuthoringError,
+  type PackParameterInheritanceSubject,
+  type PackParameterValue,
+  type ParsedPackInstanceJson,
+  type ParsedPackJson,
   parsePackSourceJson,
   projectDirectPackJson,
   projectScriptablePackMeta,
+  resolvePackParameterInheritance,
   type ScriptablePackSourceMeta,
 } from './pack-authoring.js';
 import { validateProducerContract, validateProducerOutputs } from './producer-contract.js';
@@ -89,6 +95,17 @@ export interface ScanInventory {
   readonly inventory: readonly InventoryDeclaration[];
   /** Complete parsed source declarations captured by the validated scan pass. */
   readonly declarations: ReadonlyMap<string, ScanSourceDeclaration>;
+  /** Validated v3 instance chains keyed by instance source path. */
+  readonly instances: ReadonlyMap<string, PackInstanceResolution>;
+}
+
+export interface PackInstanceResolution {
+  readonly packageId: PackageId;
+  readonly sourceRevision: string;
+  /** The ScriptablePack source that executes the instance. */
+  readonly root: Extract<ScanSourceDeclaration, { readonly format: 'pack.ts' }>;
+  /** Instance values merged child-over-parent along the parent chain. */
+  readonly values: Readonly<Record<string, unknown>>;
 }
 
 export interface ScriptablePackInventoryDeclaration {
@@ -134,15 +151,8 @@ export interface LegacyPackInventoryDocument {
   readonly assets: readonly PackInventoryAsset[];
 }
 
-export interface PackSourceInventoryDocument {
-  readonly schemaVersion: '3.0.0';
-  readonly packageId: string;
-  readonly assets?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-  readonly parent?: string;
-  readonly values?: Readonly<Record<string, unknown>>;
-}
-
-export type PackInventoryDocument = LegacyPackInventoryDocument | PackSourceInventoryDocument;
+/** Producer-owned legacy package, or the v3 authored source already parsed by the scanner. */
+export type PackInventoryDocument = LegacyPackInventoryDocument | ParsedPackJson;
 
 export interface PackInventoryAsset {
   readonly guid: string;
@@ -154,6 +164,35 @@ export interface PackInventoryAsset {
   readonly payload: Readonly<Record<string, unknown>>;
   readonly refs: readonly string[];
   readonly artifacts?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+}
+
+/**
+ * Asset rows a pack.json document declares itself. A v3 instance declares none:
+ * its ScriptablePack parent builds those outputs.
+ */
+export function declaredPackAssets(document: PackInventoryDocument): readonly PackInventoryAsset[] {
+  if (document.schemaVersion !== '3.0.0') return document.assets;
+  switch (document.format) {
+    case 'instance':
+      return [];
+    case 'direct':
+      return projectDirectPackJson(document).assets;
+  }
+}
+
+/**
+ * Asset GUIDs a source declaration declares before any build. A ScriptablePack
+ * source declares none: its outputs exist only after a build generation.
+ */
+export function declaredSourceGuids(declaration: ScanSourceDeclaration): readonly string[] {
+  switch (declaration.format) {
+    case 'meta.json':
+      return declaration.value.subAssets.map((asset) => asset.guid);
+    case 'pack.json':
+      return declaredPackAssets(declaration.value).map((asset) => asset.guid);
+    case 'pack.ts':
+      return [];
+  }
 }
 
 export type ScanSourceDeclaration =
@@ -179,8 +218,103 @@ export type ScanSourceDeclaration =
       readonly sourceClosure: readonly ScriptablePackSourceClosureEntry[];
     };
 
+/** Canonical package-id text of any declaration; parsed v3 sources carry `PackageId` bytes. */
+export function declarationPackageId(
+  declaration: ScanSourceDeclaration | undefined,
+): string | undefined {
+  const packageId = declaration?.value.packageId;
+  return packageId === undefined || typeof packageId === 'string'
+    ? packageId
+    : PackageId.format(packageId);
+}
+
+export type ScriptablePackSourceDeclaration = Extract<
+  ScanSourceDeclaration,
+  { readonly format: 'pack.ts' }
+>;
+
+/** One v3 Pack JSON instance resolved through its parent chain to the executing source. */
+export interface ResolvedPackSourceInstance {
+  readonly sourcePath: string;
+  readonly packageId: PackageId;
+  readonly root: ScriptablePackSourceDeclaration;
+  readonly values: Readonly<Record<string, PackParameterValue>>;
+}
+
+/** Executable Pack subjects of one declaration snapshot, each ordered by source path. */
+export interface PackSourceSubjects {
+  readonly sources: readonly ScriptablePackSourceDeclaration[];
+  readonly instances: readonly ResolvedPackSourceInstance[];
+}
+
+/**
+ * Resolve every ScriptablePack source and v3 instance in a declaration snapshot.
+ * Parameter inheritance is validated by `resolvePackParameterInheritance`; the
+ * first failing instance fails the snapshot.
+ */
+export async function resolvePackSourceSubjects(
+  declarations: ReadonlyMap<string, ScanSourceDeclaration>,
+): Promise<ScanResult<PackSourceSubjects, PackAuthoringError>> {
+  const subjects = new Map<
+    string,
+    {
+      readonly subject: PackParameterInheritanceSubject;
+      readonly declaration: ScanSourceDeclaration;
+    }
+  >();
+  for (const declaration of declarations.values()) {
+    if (declaration.format === 'pack.ts') {
+      const { packageId } = declaration.definition;
+      const parameters =
+        'parameters' in declaration.definition ? declaration.definition.parameters : [];
+      subjects.set(PackageId.format(packageId).toLowerCase(), {
+        subject: { format: 'source', packageId, parameters },
+        declaration,
+      });
+    } else if (declaration.format === 'pack.json' && declaration.value.schemaVersion === '3.0.0') {
+      const parsed = declaration.value;
+      subjects.set(PackageId.format(parsed.packageId).toLowerCase(), {
+        subject:
+          parsed.format === 'direct'
+            ? { format: 'direct', packageId: parsed.packageId }
+            : {
+                format: 'instance',
+                packageId: parsed.packageId,
+                parent: parsed.parent,
+                values: parsed.values,
+              },
+        declaration,
+      });
+    }
+  }
+  const ordered = [...subjects.values()].sort((left, right) =>
+    left.declaration.sourcePath.localeCompare(right.declaration.sourcePath),
+  );
+  const readSubject = (packageId: PackageId) =>
+    subjects.get(PackageId.format(packageId).toLowerCase())?.subject;
+  const sources: ScriptablePackSourceDeclaration[] = [];
+  const instances: ResolvedPackSourceInstance[] = [];
+  for (const { subject, declaration } of ordered) {
+    if (declaration.format === 'pack.ts') sources.push(declaration);
+    if (subject.format !== 'instance') continue;
+    const resolved = await resolvePackParameterInheritance(subject, readSubject);
+    if (!resolved.ok) return resolved;
+    const root = subjects.get(PackageId.format(resolved.value.rootPackageId).toLowerCase());
+    if (root?.declaration.format !== 'pack.ts')
+      throw new TypeError('resolved Pack inheritance root must be a ScriptablePack source');
+    instances.push({
+      sourcePath: declaration.sourcePath,
+      packageId: subject.packageId,
+      root: root.declaration,
+      values: resolved.value.values,
+    });
+  }
+  return ok({ sources, instances });
+}
+
 interface ScanCapture {
   readonly declarations: Map<string, ScanSourceDeclaration>;
+  readonly instances: Map<string, PackInstanceResolution>;
 }
 
 /**
@@ -386,14 +520,14 @@ async function scanValidated(
   // Step 2 + 3: parse + schema validate + GUID format validate each pack file
   // One normalized GUID map covers pack assets and meta subAssets. The source
   // kind stays in the path/detail evidence; identity is the normalized GUID.
-  const guidToPath = new Map<string, string>();
-  const packRefs = new Map<string, string[]>(); // guid -> refs[]
-  const packageIdToPath = new Map<string, string>();
-  const packageKind = new Map<string, 'legacy' | 'direct' | 'instance' | 'scriptable'>();
+  const assets = new Map<string, { path: string; refs: readonly string[] }>();
+  const packages = new Map<
+    string,
+    { path: string; kind: 'legacy' | 'direct' | 'instance' | 'scriptable' }
+  >();
   const instanceParents: {
     readonly path: string;
-    readonly packageId: string;
-    readonly parent: string;
+    readonly source: ParsedPackInstanceJson;
   }[] = [];
 
   function registerPackage(
@@ -403,15 +537,30 @@ async function scanValidated(
   ): PackError | undefined {
     if (packageId === undefined) return undefined;
     const normalized = packageId.toLowerCase();
-    const existing = packageIdToPath.get(normalized);
+    const existing = packages.get(normalized);
     if (existing !== undefined) {
       return makePackError('pack-guid-collision', {
-        paths: [existing, path],
+        paths: [existing.path, path],
         guid: normalized,
       });
     }
-    packageIdToPath.set(normalized, path);
-    packageKind.set(normalized, kind);
+    packages.set(normalized, { path, kind });
+    return undefined;
+  }
+
+  function registerAsset(
+    guid: string,
+    path: string,
+    refs: readonly string[] = [],
+  ): PackError | undefined {
+    const normalized = guid.toLowerCase();
+    const existing = assets.get(normalized);
+    if (existing !== undefined)
+      return makePackError('pack-guid-collision', {
+        paths: [existing.path, path],
+        guid: normalized,
+      });
+    assets.set(normalized, { path, refs });
     return undefined;
   }
 
@@ -440,35 +589,15 @@ async function scanValidated(
       if (authoring.value.format === 'instance') {
         instanceParents.push({
           path: packPath,
-          packageId: PackageId.format(authoring.value.packageId),
-          parent: PackageId.format(authoring.value.parent),
+          source: authoring.value,
         });
       } else {
-        const projected = projectDirectPackJson(authoring.value);
-        if (!projected.ok) {
-          return packErr(
-            makePackError('pack-malformed-pack', {
-              path: packPath,
-              ajvErrors: [{ instancePath: '/assets', message: projected.error.code }],
-            }),
-          );
-        }
-        for (const asset of projected.value.assets) {
-          const normalizedGuid = asset.guid.toLowerCase();
-          const existing = guidToPath.get(normalizedGuid);
-          if (existing !== undefined) {
-            return packErr(
-              makePackError('pack-guid-collision', {
-                paths: [existing, packPath],
-                guid: normalizedGuid,
-              }),
-            );
-          }
-          guidToPath.set(normalizedGuid, packPath);
-          packRefs.set(normalizedGuid, [
+        for (const asset of projectDirectPackJson(authoring.value).assets) {
+          const collision = registerAsset(asset.guid, packPath, [
             ...asset.refs.map((ref) => ref.toLowerCase()),
             ...extractInstanceSourceGuids(asset),
           ]);
+          if (collision !== undefined) return packErr(collision);
         }
       }
       capture?.declarations.set(packPath, {
@@ -476,7 +605,7 @@ async function scanValidated(
         sourcePath: packPath,
         sourceRevision: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
         sourceText: raw,
-        value: parsed as unknown as PackSourceInventoryDocument,
+        value: authoring.value,
       });
       continue;
     }
@@ -567,26 +696,12 @@ async function scanValidated(
         }
       }
 
-      // Step 4: collision check
-      const normalizedGuid = asset.guid.toLowerCase();
-      const existing = guidToPath.get(normalizedGuid);
-      if (existing !== undefined) {
-        return packErr(
-          makePackError('pack-guid-collision', {
-            paths: [existing, packPath],
-            guid: normalizedGuid,
-          }),
-        );
-      }
-      guidToPath.set(normalizedGuid, packPath);
-
-      // Keyed scene instances are explicit dependency edges. Keep the
-      // producer source in the cycle graph alongside ordinary asset refs so
-      // recursive SceneAsset declarations fail before publication.
-      packRefs.set(normalizedGuid, [
+      // Keyed scene instances are dependency edges in the same identity row.
+      const collision = registerAsset(asset.guid, packPath, [
         ...asset.refs.map((ref) => ref.toLowerCase()),
         ...extractInstanceSourceGuids(asset),
       ]);
+      if (collision !== undefined) return packErr(collision);
     }
     capture?.declarations.set(packPath, {
       format: 'pack.json',
@@ -634,17 +749,8 @@ async function scanValidated(
           }),
         );
       }
-      const normalizedGuid = sub.guid.toLowerCase();
-      const existing = guidToPath.get(normalizedGuid);
-      if (existing !== undefined) {
-        return packErr(
-          makePackError('pack-guid-collision', {
-            paths: [existing, metaPath],
-            guid: normalizedGuid,
-          }),
-        );
-      }
-      guidToPath.set(normalizedGuid, metaPath);
+      const collision = registerAsset(sub.guid, metaPath);
+      if (collision !== undefined) return packErr(collision);
     }
     const producerSubAssets = metaObj.subAssets.length > 1 ? metaObj.subAssets : [];
     if (producerSubAssets.length > 0) {
@@ -764,12 +870,15 @@ async function scanValidated(
   // v3 instance parent validation happens after all declarations have been
   // registered, so scan order cannot change missing-parent or cycle results.
   const parentByPackageId = new Map(
-    instanceParents.map((instance) => [instance.packageId.toLowerCase(), instance]),
+    instanceParents.map((instance) => [
+      PackageId.format(instance.source.packageId).toLowerCase(),
+      instance,
+    ]),
   );
   for (const instance of instanceParents) {
-    const parentId = instance.parent.toLowerCase();
-    const parentPath = packageIdToPath.get(parentId);
-    if (parentPath === undefined) {
+    const parentId = PackageId.format(instance.source.parent).toLowerCase();
+    const parent = packages.get(parentId);
+    if (parent === undefined) {
       return packErr(
         makePackError('pack-malformed-pack', {
           path: instance.path,
@@ -777,13 +886,13 @@ async function scanValidated(
           ajvErrors: [
             {
               instancePath: '/parent',
-              message: `parent packageId ${instance.parent} was not found`,
+              message: `parent packageId ${PackageId.format(instance.source.parent)} was not found`,
             },
           ],
         }),
       );
     }
-    const kind = packageKind.get(parentId);
+    const kind = parent.kind;
     if (kind !== 'scriptable' && kind !== 'instance') {
       return packErr(
         makePackError('pack-malformed-pack', {
@@ -792,7 +901,7 @@ async function scanValidated(
           ajvErrors: [
             {
               instancePath: '/parent',
-              message: `parent ${instance.parent} is not a ScriptablePack source with parameters`,
+              message: `parent ${PackageId.format(instance.source.parent)} is not a ScriptablePack source with parameters`,
             },
           ],
         }),
@@ -801,7 +910,8 @@ async function scanValidated(
   }
   for (const instance of instanceParents) {
     const chain = new Set<string>();
-    let current = instance.packageId.toLowerCase();
+    let current = PackageId.format(instance.source.packageId).toLowerCase();
+    let values: Readonly<Record<string, unknown>> = {};
     while (true) {
       if (chain.has(current)) {
         return packErr(
@@ -817,36 +927,43 @@ async function scanValidated(
       chain.add(current);
       const next = parentByPackageId.get(current);
       if (next === undefined) break;
-      current = next.parent.toLowerCase();
+      values = { ...next.source.values, ...values };
+      current = PackageId.format(next.source.parent).toLowerCase();
     }
+    const declaration = capture?.declarations.get(instance.path);
+    const root = capture?.declarations.get(packages.get(current)?.path ?? '');
+    if (declaration !== undefined && root?.format === 'pack.ts')
+      capture?.instances.set(instance.path, {
+        packageId: instance.source.packageId,
+        sourceRevision: declaration.sourceRevision,
+        root,
+        values,
+      });
   }
 
   // Step 6: cyclic reference detection via hand-written DFS (no graphlib dep)
-  // visited: nodes fully processed; recStack: nodes in current DFS path
-  const visited = new Set<string>();
-  const recStack = new Set<string>();
+  const visitState = new Map<string, 'visiting' | 'visited'>();
 
   function dfs(guid: string, path: string[]): string[] | null {
-    visited.add(guid);
-    recStack.add(guid);
+    visitState.set(guid, 'visiting');
 
-    for (const ref of packRefs.get(guid) ?? []) {
-      if (!visited.has(ref)) {
+    for (const ref of assets.get(guid)?.refs ?? []) {
+      if (!visitState.has(ref)) {
         const cycle = dfs(ref, [...path, ref]);
         if (cycle !== null) return cycle;
-      } else if (recStack.has(ref)) {
+      } else if (visitState.get(ref) === 'visiting') {
         // Found a back-edge: reconstruct cycle from the repeated node
         const cycleStart = path.indexOf(ref);
         return cycleStart >= 0 ? [...path.slice(cycleStart), ref] : [...path, ref];
       }
     }
 
-    recStack.delete(guid);
+    visitState.set(guid, 'visited');
     return null;
   }
 
-  for (const guid of guidToPath.keys()) {
-    if (!visited.has(guid)) {
+  for (const guid of assets.keys()) {
+    if (!visitState.has(guid)) {
       const cycle = dfs(guid, [guid]);
       if (cycle !== null) {
         return packErr(
@@ -889,56 +1006,23 @@ export async function scanInventory(
   opts: ScanOptions = {},
 ): Promise<ScanResult<ScanInventory, PackError>> {
   const declarations = new Map<string, ScanSourceDeclaration>();
-  const scanned = await scanValidated(roots, opts, { declarations });
+  const instances = new Map<string, PackInstanceResolution>();
+  const scanned = await scanValidated(roots, opts, { declarations, instances });
   if (!scanned.ok) return scanned;
   const inventory: InventoryDeclaration[] = [];
   for (const sourcePath of scanned.value) {
     const declaration = declarations.get(sourcePath);
     if (declaration?.format !== 'pack.json') continue;
-    if (declaration.value.schemaVersion === '3.0.0') {
-      const parsed = parsePackSourceJson(declaration.value);
-      if (!parsed.ok) {
-        return packErr(
-          makePackError('pack-malformed-pack', {
-            path: sourcePath,
-            ajvErrors: [{ instancePath: '', message: parsed.error.code }],
-          }),
-        );
-      }
-      if (parsed.value.format !== 'direct') continue;
-      const projected = projectDirectPackJson(parsed.value);
-      if (!projected.ok) {
-        return packErr(
-          makePackError('pack-malformed-pack', {
-            path: sourcePath,
-            ajvErrors: [{ instancePath: '/assets', message: projected.error.code }],
-          }),
-        );
-      }
-      for (const [index, asset] of projected.value.assets.entries()) {
-        inventory.push({
-          guid: asset.guid,
-          kind: asset.kind,
-          sourcePath,
-          sourceRevision: declaration.sourceRevision,
-          sourceKey: asset.sourceKey,
-          sourceIndex: index,
-        });
-      }
-      continue;
-    }
-    for (const [index, asset] of declaration.value.assets.entries()) {
+    for (const [index, asset] of declaredPackAssets(declaration.value).entries()) {
       inventory.push({
         guid: asset.guid,
         kind: asset.kind,
         sourcePath,
         sourceRevision: declaration.sourceRevision,
         ...(asset.sourceKey === undefined ? {} : { sourceKey: asset.sourceKey }),
-        ...(asset.sourceIndex === undefined
-          ? { sourceIndex: index }
-          : { sourceIndex: asset.sourceIndex }),
+        sourceIndex: asset.sourceIndex ?? index,
       });
     }
   }
-  return ok({ paths: scanned.value, inventory, declarations });
+  return ok({ paths: scanned.value, inventory, declarations, instances });
 }

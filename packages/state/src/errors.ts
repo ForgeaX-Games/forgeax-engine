@@ -1,6 +1,6 @@
 // @forgeax/engine-state -- error model SSOT (feat-20260616-engine-state-and-state-scoped-entities M1 / m1w4)
 //
-// Closed union StateErrorCode (4 members), discriminated detail union,
+// Closed union StateErrorCode (4 members), code-indexed detail payloads,
 // and structured StateError carrying .code / .expected / .hint / .detail.
 //
 // Decision anchors:
@@ -12,20 +12,17 @@
 
 /** {@link state-already-defined} payload: carries the conflicting name and optional first-definition site. */
 export interface StateAlreadyDefinedDetail {
-  readonly code: 'state-already-defined';
   readonly name: string;
   readonly firstDefinedAt: string | undefined;
 }
 
 /** {@link state-not-registered} payload: carries the token name that has no plugin registration. */
 export interface StateNotRegisteredDetail {
-  readonly code: 'state-not-registered';
   readonly name: string;
 }
 
 /** {@link invalid-variant} payload: carries the token name, the invalid variant string, and the valid variants list. */
 export interface InvalidVariantDetail {
-  readonly code: 'invalid-variant';
   readonly name: string;
   readonly got: string;
   readonly valid: readonly string[];
@@ -33,7 +30,6 @@ export interface InvalidVariantDetail {
 
 /** {@link state-default-required} payload: carries the token name whose variants array was empty. */
 export interface StateDefaultRequiredDetail {
-  readonly code: 'state-default-required';
   readonly name: string;
 }
 
@@ -58,7 +54,7 @@ interface StateErrorDetailByCode {
 export type StateErrorCode = keyof StateErrorDetailByCode;
 
 /**
- * Discriminated detail union for {@link StateError}, narrowed per
+ * Detail payload union for {@link StateError}, narrowed per
  * `StateError.code`. AI users obtain the concrete shape via
  * `switch (err.code)` without a fallback `as` cast.
  */
@@ -109,21 +105,12 @@ export function throwStateError<C extends StateErrorCode>(
   throw makeError(code, expected, hint, detail);
 }
 
-export function stateAlreadyDefined(name: string, firstDefinedAt?: string): StateError {
-  return makeError(
-    'state-already-defined',
-    'Each StateToken name must be registered exactly once at module level',
-    `State "${name}" is already defined${firstDefinedAt ? ` (first defined at ${firstDefinedAt})` : ''}. Use the existing token.`,
-    { code: 'state-already-defined', name, firstDefinedAt },
-  );
-}
-
 export function stateNotRegistered(name: string): StateError {
   return makeError(
     'state-not-registered',
     'registerStatesPlugin(world) must be called before using setNextState / getState',
     `State "${name}" has not been registered via registerStatesPlugin. createApp auto-registers the plugin in both canvas and assemble forms.`,
-    { code: 'state-not-registered', name },
+    { name },
   );
 }
 
@@ -133,15 +120,6 @@ export function invalidVariant(name: string, got: string, valid: readonly string
     'invalid-variant',
     `Variant must be one of: ${validSnapshot.join(', ')}`,
     `"${got}" is not a valid variant for state "${name}". Did you mean one of: ${validSnapshot.join(', ')}? Check for typos.`,
-    { code: 'invalid-variant', name, got, valid: validSnapshot },
-  );
-}
-
-export function stateDefaultRequired(name: string): StateError {
-  return makeError(
-    'state-default-required',
-    'defineState requires at least one variant (non-empty array)',
-    `State "${name}" was defined with an empty variants array. Provide at least one variant, e.g. defineState("${name}", ["default"] as const).`,
-    { code: 'state-default-required', name },
+    { name, got, valid: validSnapshot },
   );
 }

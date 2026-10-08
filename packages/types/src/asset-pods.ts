@@ -213,7 +213,7 @@ export interface AnimationSamplerPod {
   /** Keyframe values (packed per-element stride). */
   readonly output: Float32Array;
   /** Interpolation mode. */
-  readonly interpolation: 'LINEAR' | 'STEP';
+  readonly interpolation: 'LINEAR' | 'STEP' | 'CUBICSPLINE';
 }
 
 /** Animation channel (one target-property pair). */

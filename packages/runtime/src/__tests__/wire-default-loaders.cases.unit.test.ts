@@ -404,6 +404,8 @@ type __MergedKeep =
   // --- from wire-default-loaders.test.ts ---
   const REGISTERED_KINDS = [
     'mesh',
+    'navigation-mesh',
+    'terrain',
     'scene',
     'sampler',
     'material',

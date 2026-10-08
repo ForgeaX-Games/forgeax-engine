@@ -93,7 +93,7 @@ it('preserves asymmetric world directions through cube capture, PMREM and probe 
     usage: GPU_BUFFER_USAGE_VERTEX | GPU_BUFFER_USAGE_COPY_DST,
   });
   try {
-    const shared = shader('ibl-shared.wgsl');
+    const shared = shader('brdf.wgsl') + shader('ibl-shared.wgsl');
     const background = device.createShaderModule({
       code: shared + shader('ibl-probe-background.wgsl'),
     });

@@ -27,14 +27,14 @@ describe('shadow stress workload', () => {
     const defaults = parseWorkloadOptions(new URLSearchParams());
     expect(defaults).toEqual({
       ok: true,
-      value: { staticCasterCount: 4000, moverCount: 128, activeMoverCount: 128, moverWrite: 'rows', characterCount: 4, debrisCount: 0, pointCount: 0, camera: 'static', capsuleShadow: false, renderPath: 'forward', gpuOcclusion: true, occasionalCount: 0, occasionalPeriod: 300, spawnStormCount: 0, lodOscillate: false, transparentCount: 0, taa: false, mobilityStatic: false },
+      value: { staticCasterCount: 4000, moverCount: 128, activeMoverCount: 128, moverWrite: 'rows', characterCount: 4, debrisCount: 0, pointCount: 0, camera: 'static', capsuleShadow: false, renderPath: 'forward', gpuOcclusion: true, occasionalCount: 0, occasionalPeriod: 300, spawnStormCount: 0, lodOscillate: false, transparentCount: 0, taa: false, mobilityStatic: false, lodGridSide: 0, gpuPassTiming: false },
     });
     const explicit = parseWorkloadOptions(
       new URLSearchParams('statics=1200&movers=0&activeMovers=0&moverWrite=set&characters=2&debris=900&points=2&camera=orbit&capsuleShadow=1&renderPath=deferred&gpuOcclusion=0&occasional=64&occasionalPeriod=150&spawnStorm=8&lodOscillate=1&transparent=256&taa=1&mobilityStatic=1'),
     );
     expect(explicit).toEqual({
       ok: true,
-      value: { staticCasterCount: 1200, moverCount: 0, activeMoverCount: 0, moverWrite: 'set', characterCount: 2, debrisCount: 900, pointCount: 2, camera: 'orbit', capsuleShadow: true, renderPath: 'deferred', gpuOcclusion: false, occasionalCount: 64, occasionalPeriod: 150, spawnStormCount: 8, lodOscillate: true, transparentCount: 256, taa: true, mobilityStatic: true },
+      value: { staticCasterCount: 1200, moverCount: 0, activeMoverCount: 0, moverWrite: 'set', characterCount: 2, debrisCount: 900, pointCount: 2, camera: 'orbit', capsuleShadow: true, renderPath: 'deferred', gpuOcclusion: false, occasionalCount: 64, occasionalPeriod: 150, spawnStormCount: 8, lodOscillate: true, transparentCount: 256, taa: true, mobilityStatic: true, lodGridSide: LOD_GRID_SIDE, gpuPassTiming: false },
     });
   });
 
@@ -100,6 +100,8 @@ describe('shadow stress workload', () => {
       transparentCount: 0,
       taa: false,
       mobilityStatic: false,
+      lodGridSide: 0,
+      gpuPassTiming: false,
     };
     const debris = debrisChunks(options);
     expect(debris.map((chunk) => chunk.length / 16)).toEqual([STATIC_CHUNK_SIZE, 3]);
@@ -134,6 +136,26 @@ describe('shadow stress workload', () => {
     const staticPose = cameraPose('static', 10);
     expect(staticPose).toEqual(cameraPose('static', 0));
     expect(cameraPose('orbit', 10).pos).not.toEqual(staticPose.pos);
+    const low = cameraPose('low', 3);
+    expect(low.pos[1]).toBe(1.5);
+    expect(Math.hypot(low.pos[0], low.pos[2])).toBeCloseTo(56);
+    expect(low.pos).not.toEqual(cameraPose('low', 0).pos);
+  });
+
+  it('parses the occlusion A/B knobs and rejects malformed values', () => {
+    const parsed = parseWorkloadOptions(new URLSearchParams('camera=low&lodGrid=40&gpuTiming=1'));
+    if (!parsed.ok) throw new Error('occlusion knobs must parse');
+    expect(parsed.value).toMatchObject({ camera: 'low', lodGridSide: 40, gpuPassTiming: true });
+    expect(lodGridPositions(40)).toHaveLength(40 * 40 * 3);
+    expect(workloadFingerprint(parsed.value)).toContain('|camera=low|');
+    expect(workloadFingerprint(parsed.value)).toContain('|lodGrid=40');
+    const oscillate = parseWorkloadOptions(new URLSearchParams('lodOscillate=1'));
+    expect(oscillate.ok && oscillate.value.lodGridSide).toBe(LOD_GRID_SIDE);
+    expect(oscillate.ok && workloadFingerprint(oscillate.value)).not.toContain('lodGrid=');
+    const badGrid = parseWorkloadOptions(new URLSearchParams('lodGrid=65'));
+    expect(!badGrid.ok && badGrid.error.code).toBe('workload-count-out-of-range');
+    const badTiming = parseWorkloadOptions(new URLSearchParams('gpuTiming=yes'));
+    expect(!badTiming.ok && badTiming.error.code).toBe('workload-gpu-timing-invalid');
   });
 
   it('pushes each occasional caster exactly once per period, staggered', () => {

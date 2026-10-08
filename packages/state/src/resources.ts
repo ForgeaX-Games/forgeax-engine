@@ -43,3 +43,9 @@ export function nextStateResourceKey(token: StateToken): string {
 export function previousStateResourceKey(token: StateToken): string {
   return `${PREVIOUS_STATE_PREFIX}${token.name}`;
 }
+
+/** Pending transition stored in the per-token NextState resource. */
+export interface NextStatePayload {
+  value: number;
+  force: boolean;
+}

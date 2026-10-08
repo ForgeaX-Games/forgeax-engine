@@ -102,7 +102,8 @@ Renderer/WebGPU; source plugins inject World/Assets and use bootstrap
 `configureRenderer` for GPU setup. Declare Feature implementations through the
 bootstrap. Logic N+1 overlaps render N; admission of N+2 waits for N's GPU receipt.
 Kernel workers receive eligible shared numeric spans, independently of render
-placement. Missing isolation disables auto kernels only. Canvas/assemble calls
+placement. Their initialization and module preflight inherit App `startupTimeoutMs`;
+this startup budget does not extend the running kernel dispatch deadline. Missing isolation disables auto kernels only. Canvas/assemble calls
 without a bootstrap explicitly construct local objects and remain local. DevKit generates that bootstrap for ordinary projects automatically; both templates therefore default to auto with browser UI (`roots.frontend`) and Engine gameplay (`roots.engine`) assets. `roots.host` remains the resident Node backend.
 Use the [App contract](../../packages/app/README.md#worker-execution) for placement,
 recovery and the report schema, and [ECS](../forgeax-engine-ecs/SKILL.md) for kernel eligibility.
@@ -181,6 +182,10 @@ const created = await createRenderer(canvas, { features: [feature] });
 if (!created.ok) throw created.error;
 const renderer = created.value;
 ```
+
+`createApp(canvas, { outputColorSpace: 'display-p3' })` forwards the same option unchanged,
+including under Worker execution. App owns no colour policy: read the negotiated result, or the
+structured sRGB fallback, from `renderer.inspect().output.colorSpace` in the Renderer's realm.
 
 ### Declarative graphics and recovery
 
@@ -324,6 +329,15 @@ app.world.addSystem(FixedUpdate, {
 ```
 
 ## Input and plugin wiring
+
+For ordinary gamepad dual-rumble, read `feedbackTarget` and `dualRumble` from the
+frozen gamepad reader, then use the optional `GamepadFeedback` World resource
+under `GAMEPAD_FEEDBACK_KEY`. Poll its bounded results and branch on admission
+capacity. Host input owns the actuator; App transports POD through existing
+Worker frames. Read the [Input feedback contract](../../packages/input/README.md#gamepad-feedback)
+for target fencing, replacement, cancellation and native timeout. API completion
+does not establish physical vibration; acceptance needs a real controller.
+
 
 The canvas form inserts the input backend and activates the input scan on `Update` before user systems. User systems read the frozen `InputSnapshot`; they do not install gameplay DOM listeners.
 

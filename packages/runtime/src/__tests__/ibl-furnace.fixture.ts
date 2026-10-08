@@ -235,7 +235,7 @@ export async function renderFurnace(renderer: Renderer, renderPath: RenderPath) 
   const lease = unwrap(renderer.attach(world));
   const original = renderer.inspect().profile;
   try {
-    unwrap(renderer.setProfile({ ...original, renderPath, shadows: 'off' }));
+    unwrap(renderer.setProfile({ ...original, renderPath }));
     const receipt = await drawUntilIblActive(renderer, world, lease, true);
     const observed = unwrap(
       await renderer.observe(receipt, { include: ['linear-hdr'] }),
@@ -279,7 +279,7 @@ export async function replayFurnace(
   const lease = unwrap(renderer.attach(world));
   const original = renderer.inspect().profile;
   try {
-    unwrap(renderer.setProfile({ ...original, renderPath: 'forward', shadows: 'off' }));
+    unwrap(renderer.setProfile({ ...original, renderPath: 'forward' }));
     await drawUntilIblActive(renderer, world, lease, false);
     const capture = recorder.captureFrame();
     (await recorder.frameBoundary()).unwrap();
@@ -349,7 +349,7 @@ export async function measureFurnaceCost(
   const original = renderer.inspect().profile;
   const samples = new Map<string, number[]>();
   try {
-    unwrap(renderer.setProfile({ ...original, renderPath, shadows: 'off' }));
+    unwrap(renderer.setProfile({ ...original, renderPath }));
     await drawUntilIblActive(renderer, world, lease, false);
     for (let index = 0; index < frames + 4; index++) {
       world.update(1 / 60).unwrap();

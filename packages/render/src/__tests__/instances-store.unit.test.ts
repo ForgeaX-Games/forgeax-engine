@@ -31,13 +31,49 @@ describe('renderer instance projection', () => {
     const before = project(first, world, 1, matrices(0));
     project(late, world, 1, matrices(0));
     project(first, world, 1, matrices(1));
+    // The retained revision stays intact while its successor is in flight;
+    // the store recycles it two revisions later (RenderScene treats a lag
+    // beyond one revision as a temporal cut).
+    expect(before.transforms[12]).toBe(0);
     project(first, world, 1, matrices(2));
     const latest = project(late, world, 1, matrices(2));
-    expect(before.transforms[12]).toBe(0);
     expect(latest.transforms[12]).toBe(2);
     const stable = project(late, world, 1, matrices(2));
     expect(stable.transforms).toBe(latest.transforms);
     expect(stable.revision).toBe(latest.revision);
+  });
+
+  it('ping-pongs two owned buffers when a whole column changes every frame', () => {
+    const world = new World();
+    const store = new InstanceProjectionStore();
+    const a = project(store, world, 1, matrices(1));
+    const b = project(store, world, 1, matrices(2));
+    expect(b.transforms).not.toBe(a.transforms);
+    expect(a.transforms[12]).toBe(1);
+    const c = project(store, world, 1, matrices(3));
+    const d = project(store, world, 1, matrices(4));
+    expect(c.transforms).toBe(a.transforms);
+    expect(d.transforms).toBe(b.transforms);
+    expect(c.transforms[12]).toBe(3);
+    expect(d.transforms[12]).toBe(4);
+    expect(d.revision).toBe(4);
+    expect(d.generations).toBe(a.generations);
+    // A caller-owned accepted buffer never becomes writable back storage.
+    const caller = matrices(5);
+    store.accept(world, 1, { ...d, transforms: caller, revision: 5 });
+    const e = projected(store.project(world, 1, matrices(6)));
+    expect(e.transforms).not.toBe(caller);
+    store.accept(world, 1, e);
+    const f = project(store, world, 1, matrices(7));
+    expect(f.transforms).not.toBe(caller);
+    expect(caller[12]).toBe(5);
+    // An unaccepted candidate is overwritten by the next projection, never the front.
+    const front = project(store, world, 1, matrices(8));
+    projected(store.project(world, 1, matrices(9)));
+    const g = project(store, world, 1, matrices(10));
+    expect(front.transforms[12]).toBe(8);
+    expect(g.transforms[12]).toBe(10);
+    expect(g.transforms).not.toBe(front.transforms);
   });
 
   it('does not alias identical entity numbers across World identities', () => {

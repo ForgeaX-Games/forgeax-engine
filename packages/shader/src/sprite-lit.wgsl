@@ -1,10 +1,12 @@
 #pragma variant_axis STORAGE_BUFFER_AVAILABLE
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 #pragma variant_axis CLUSTER_FORWARD_AVAILABLE
 #pragma variant_axis PER_INSTANCE_REGION
 #define_import_path forgeax_material::sprite-lit
 
 #import forgeax_clipping::planes::{applyViewClipping}
 #import forgeax_view::common::{View, Mesh, meshMotionValid, InstanceData, view, meshes, instances, sampleMaterialTexture, packSceneTemporal}
+#import forgeax_view::atmosphere::{view_apply_direct_solar}
 #import forgeax_view::fog::{translucent_fog}
 #import forgeax_scene_temporal::{packSceneTemporalV1WithValidity, sceneViewZ}
 #ifdef CLUSTER_FORWARD_AVAILABLE
@@ -201,12 +203,12 @@ fn spriteLitShadeAccum(
   viewZ : f32,
 ) -> vec3<f32> {
   // Directional contribution (1 light, View UBO).
-  var lit = spriteLitDirectional(albedo);
+  var lit = view_apply_direct_solar(view,spriteLitDirectional(albedo),worldPos);
 #ifdef CLUSTER_FORWARD_AVAILABLE
   let viewDir = normalize(view.cameraPos - worldPos);
   lit = lit + evaluateStandardClusterLights(
     ndc, viewZ, worldPos, vec3<f32>(0.0, 0.0, 1.0),
-    viewDir, albedo, 0.0, 1.0, vec3<f32>(0.04), vec3<f32>(0.0), true, true,
+    viewDir, albedo, 0.0, 1.0, vec3<f32>(0.04), vec3<f32>(0.0), true, true, 0xffffffffu,
   );
 #endif
   return lit;

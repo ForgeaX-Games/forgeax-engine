@@ -1,7 +1,7 @@
 import { mat4, vec3 } from '@forgeax/engine-math';
 import type { RenderGraphBuilder, RenderGraphFrame } from '@forgeax/engine-render-graph';
 import type { TextureView } from '@forgeax/engine-rhi';
-import type { RenderFeatureResourceDeclaration } from '../features/plan';
+import type { RenderFeatureSceneResource } from '../features/plan';
 import type { RenderFeatureGraphTarget } from '../features/render-graph-raster';
 import { createRenderFeatureTarget, type RenderFeatureTargetHandle } from '../features/targets';
 import { makeZeroCameraFallbackSnapshot } from '../record/frame-snapshot';
@@ -14,11 +14,6 @@ import {
   type RenderTargetPhysical,
   retireRenderTargetPhysical,
 } from '../targets/physical';
-
-export type RenderFeatureSceneResource = Extract<
-  RenderFeatureResourceDeclaration,
-  { kind: 'scene-depth' | 'scene-noise' }
->;
 
 interface DepthInput {
   readonly identity: string;
@@ -96,8 +91,7 @@ export function createFeatureSceneInputs(
             true,
           ),
         );
-        const depth = physical.depthTextures[0];
-        if (depth === undefined) throw new Error('Renderer scene depth attachment is missing');
+        const depth = physical.depthTexture;
         let view: TextureView;
         try {
           view = value(device.createTextureView(depth, { dimension: '2d', aspect: 'depth-only' }));
@@ -147,7 +141,7 @@ export function createFeatureSceneInputs(
         work: {
           target: input.target,
           physical: input.physical,
-          faceIndex: 0,
+          layer: 0,
           sceneInput: true,
           faceCamera: {
             ...makeZeroCameraFallbackSnapshot(),
@@ -177,8 +171,7 @@ export function createFeatureSceneInputs(
     import<Frame extends RenderGraphFrame>(builder: RenderGraphBuilder<Frame>) {
       const targets = new Map<RenderFeatureTargetHandle, RenderFeatureGraphTarget>();
       for (const [key, { input }] of requested) {
-        const depth = input.physical.depthTextures[0];
-        if (depth === undefined) throw new Error('Renderer scene depth attachment is missing');
+        const depth = input.physical.depthTexture;
         const texture = value(
           builder.importTexture(
             `feature-scene-depth:${key}`,

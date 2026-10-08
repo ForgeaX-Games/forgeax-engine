@@ -139,19 +139,23 @@ export interface ProbeBlendTerm {
   readonly alpha: number;
 }
 
-export interface ProbeBlendResult {
+/** Normal-independent contributor blend; the evaluated result adds sky and diffuse. */
+export interface ProbeBlendCoefficients {
   readonly terms: readonly ProbeBlendTerm[];
   readonly rStar: number;
   readonly Q: number;
   readonly C: number;
   readonly S: number;
   readonly SHPreblend: readonly number[];
+  readonly receipt: ProbeAdmissionReceipt;
+  readonly finite: boolean;
+  readonly scaledQLogOffset: number;
+}
+
+export interface ProbeBlendResult extends ProbeBlendCoefficients {
   readonly skyIrradiance: readonly [number, number, number];
   readonly diffuse: readonly [number, number, number];
-  readonly finite: boolean;
-  readonly receipt: ProbeAdmissionReceipt;
   readonly error?: ProbeAdmissionError;
-  readonly scaledQLogOffset: number;
 }
 
 const SH_C0 = 0.28209479177387814;
@@ -331,18 +335,6 @@ function vectorNeumaierSum(values: readonly (readonly number[])[], width: number
   return Array.from({ length: width }, (_, channel) =>
     neumaierSum(values.map((value) => value[channel] ?? 0)),
   );
-}
-
-interface ProbeBlendCoefficients {
-  readonly terms: readonly ProbeBlendTerm[];
-  readonly rStar: number;
-  readonly Q: number;
-  readonly C: number;
-  readonly S: number;
-  readonly SHPreblend: readonly number[];
-  readonly receipt: ProbeAdmissionReceipt;
-  readonly finite: boolean;
-  readonly scaledQLogOffset: number;
 }
 
 function blendProbeCoefficients(

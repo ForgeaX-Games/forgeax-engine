@@ -1,4 +1,5 @@
 #define_import_path forgeax::vfx-render.particles.mesh
+#pragma variant_axis ATMOSPHERE_AVAILABLE
 #import forgeax_view::common::{View, view}
 #import forgeax_scene_temporal::{sceneViewZ}
 #import forgeax_material::standard_surface::{VsOut, StandardSurfaceFactors, evaluateStandardSurface, material}
